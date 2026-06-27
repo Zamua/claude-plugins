@@ -81,13 +81,48 @@ ab_uuid() { uuidgen | tr 'A-Z' 'a-z'; }
 
 # ---- session map: "owner/repo#N" -> session uuid ----
 ab_map_init() { [ -f "$AB_STATE" ] || { mkdir -p "$(dirname "$AB_STATE")"; printf '{}\n' >"$AB_STATE"; }; }
-ab_map_get()  { ab_map_init; jq -r --arg k "$1" '.[$k] // empty' "$AB_STATE"; }
-ab_map_set()  {
-  ab_map_init; local tmp; tmp=$(mktemp)
-  jq --arg k "$1" --arg v "$2" '.[$k]=$v' "$AB_STATE" >"$tmp" && mv "$tmp" "$AB_STATE"
+# Map value is "<sid>" or "<sid>|<worktree-path>". ab_map_get returns the sid
+# (back-compat: a bare "<sid>" has no pipe), ab_map_wt the worktree path (so
+# cleanup can find + prune the worktree even after the session is gone).
+ab_map_get()  { ab_map_init; local v; v="$(jq -r --arg k "$1" '.[$k] // empty' "$AB_STATE")"; printf '%s' "${v%%|*}"; }
+ab_map_wt()   { ab_map_init; local v; v="$(jq -r --arg k "$1" '.[$k] // empty' "$AB_STATE")"; case "$v" in *"|"*) printf '%s' "${v#*|}" ;; esac; }
+ab_map_set()  {  # key sid [worktree]
+  ab_map_init; local tmp v; v="$2"; [ -n "${3:-}" ] && v="$2|$3"
+  tmp=$(mktemp)
+  jq --arg k "$1" --arg v "$v" '.[$k]=$v' "$AB_STATE" >"$tmp" && mv "$tmp" "$AB_STATE"
 }
 ab_map_keys() { ab_map_init; jq -r 'keys[]' "$AB_STATE"; }
 ab_map_vals() { ab_map_init; jq -r '.[]' "$AB_STATE"; }
+ab_map_del()  {
+  ab_map_init; local tmp; tmp=$(mktemp)
+  jq --arg k "$1" 'del(.[$k])' "$AB_STATE" >"$tmp" && mv "$tmp" "$AB_STATE"
+}
+
+# ---- cleanup-on-stop ----
+# When an issue is done (closed), tear the worker's footprint all the way down:
+# stop the agent, remove its git worktree, delete the feature branch, remove the
+# agent session, and drop the map entry. Idempotent + best-effort: a missing
+# piece is logged, not fatal. Args: key (owner/repo#N), sid (agent short id).
+ab_cleanup_worker() {
+  local key="$1" sid="$2" slug repo wt br
+  slug="${key%#*}"; repo="$(ab_workdir)/$slug"
+  # Worktree path: prefer the one recorded in the map at launch (survives the
+  # session going away); fall back to the live agent's cwd if not recorded.
+  wt="$(ab_map_wt "$key")"
+  [ -n "$wt" ] || wt="$(claude agents --json 2>/dev/null | jq -r --arg id "$sid" '.[] | select(.id==$id) | .cwd' 2>/dev/null | head -1)"
+  claude stop "$sid" >/dev/null 2>&1 || true
+  if [ -n "$wt" ] && [ -d "$wt" ] && [ -d "$repo/.git" ]; then
+    br="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 || ab_log "cleanup: worktree remove failed: $wt"
+    if [ -n "$br" ] && [ "$br" != "HEAD" ]; then
+      git -C "$repo" branch -D "$br" >/dev/null 2>&1 || true
+    fi
+    git -C "$repo" worktree prune >/dev/null 2>&1 || true
+  fi
+  claude rm "$sid" >/dev/null 2>&1 || true
+  ab_map_del "$key"
+  ab_log "cleaned up $key: stopped + removed session $sid, pruned worktree${br:+ + branch $br}"
+}
 
 # ---- live background agents (by short id) ----
 # `--session-id` is ignored by `--bg`; claude assigns the agent its own short
@@ -100,6 +135,7 @@ ab_is_running() { ab_live_sessions | grep -qxF "$1"; }            # arg: agent s
 ab_running_count() {                                              # our mapped sessions that are live
   local live n=0 sid; live=$(ab_live_sessions)
   while IFS= read -r sid; do
+    sid="${sid%%|*}"   # map values may be "<sid>|<worktree>"; compare on the sid
     [ -n "$sid" ] && grep -qxF "$sid" <<<"$live" && n=$((n+1))
   done < <(ab_map_vals)
   printf '%s' "$n"

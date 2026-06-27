@@ -24,7 +24,11 @@ ab_launch() {  # repo_path slug number url
   # for an issue. If one with this exact name is already running, adopt its id.
   local existing
   existing="$(claude agents --json 2>/dev/null | jq -r --arg n "$name" '.[]|select(.kind=="background" and .name==$n)|.id' | head -1)"
-  if [ -n "$existing" ]; then ab_log "$key already has a running agent ($existing); adopting, no relaunch"; ab_map_set "$key" "$existing"; return 0; fi
+  if [ -n "$existing" ]; then
+    ab_log "$key already has a running agent ($existing); adopting, no relaunch"
+    local ewt; ewt="$(claude agents --json 2>/dev/null | jq -r --arg n "$name" '.[]|select(.kind=="background" and .name==$n)|.cwd' | head -1)"
+    ab_map_set "$key" "$existing" "$ewt"; return 0
+  fi
   perm="$(ab_get permission_mode acceptEdits)"
   house="$(ab_get house_rules "")"
   pdir="$(ab_get plugin_dir "")"
@@ -45,14 +49,17 @@ the PR for new comments and respond to each. Do NOT merge and do NOT deploy. Beg
   ab_log "dispatch $key -> launching bg agent (name $name)"
   ( cd "$repo" && "${cmd[@]}" >/dev/null 2>&1 ) || { ab_log "launch failed for $key"; return 1; }
   # --session-id is ignored by --bg; capture the agent's assigned short id by name.
-  local id="" tries=0
+  local id="" wt="" tries=0
   while [ -z "$id" ] && [ "$tries" -lt 12 ]; do
     sleep 1; tries=$((tries + 1))
     id="$(claude agents --json 2>/dev/null | jq -r --arg n "$name" '.[] | select(.kind=="background" and .name==$n) | .id' | head -1)"
   done
   [ -n "$id" ] || { ab_log "$key launched but agent id not found (see 'claude agents')"; return 1; }
-  ab_map_set "$key" "$id"
-  ab_log "$key -> agent id $id"
+  # Record the worktree path (agent cwd) alongside the id so cleanup-on-stop can
+  # prune the worktree + branch deterministically, even after the session is gone.
+  wt="$(claude agents --json 2>/dev/null | jq -r --arg n "$name" '.[] | select(.kind=="background" and .name==$n) | .cwd' | head -1)"
+  ab_map_set "$key" "$id" "$wt"
+  ab_log "$key -> agent id $id${wt:+ (worktree $wt)}"
 }
 
 cmd_once() {
@@ -89,10 +96,13 @@ cmd_once() {
     slug="${key%#*}"; num="${key##*#}"
     st="$(ab_issue_state "$slug" "$num")"
     if [ "$st" = "CLOSED" ]; then
-      if ab_is_running "$sid"; then
-        ab_log "issue $key closed -> stop $sid"; claude stop "$sid" >/dev/null 2>&1 || true
-        running=$((running > 0 ? running - 1 : 0))
-      fi
+      # Issue done -> full cleanup (stop + worktree + branch + session + map entry).
+      # Runs whether or not the agent is still up, so a closed issue never leaves a
+      # stray worktree/session behind. map_del here means a later reopen is picked
+      # up fresh by Loop 2 (not resumed) - consistent with closed = done.
+      if ab_is_running "$sid"; then running=$((running > 0 ? running - 1 : 0)); fi
+      ab_log "issue $key closed -> cleaning up $sid"
+      ab_cleanup_worker "$key" "$sid"
     elif [ "$st" = "OPEN" ] && ! ab_is_running "$sid"; then
       if [ "$running" -ge "$cap" ]; then ab_log "cap $cap reached; resume of $key queued"
       else

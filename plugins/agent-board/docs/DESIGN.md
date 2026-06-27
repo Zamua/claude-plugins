@@ -10,8 +10,10 @@ issue. Coordination, progress, and review all happen on the issue + its PR.
 - Keep ONE long continuous chat (the orchestrator) while dispatching many
   independent work sessions.
 - Dispatch is driven by the issue board: an eligible issue becomes a running
-  background agent; a closed issue tears its agent down; a reopened issue
-  resumes the exact session that was working it.
+  background agent; a closed issue (the issue is done) triggers full cleanup of
+  its agent - the session, its git worktree, and its branch are all removed. A
+  worker that stops while its issue is still OPEN (e.g. a crash) is respawned by
+  the poller; a previously-closed issue that is reopened is picked up fresh.
 - Everything runs LOCALLY on the operator's machine (no cloud agents), visible
   and manageable in one place via `claude agents`.
 - Package the whole thing as a Claude Code **plugin** vended from a personal
@@ -47,8 +49,8 @@ the plugin's `board` skill (`/agent-board:board ...`).
 3. Does the work in its own worktree/branch, posting progress as issue comments.
 4. Opens a PR (draft until it believes it's done), links it to the issue.
 5. Addresses review comments in a loop; NEVER merges, NEVER deploys.
-6. Ends when the issue is closed (its session is stopped by the poller; the
-   transcript is retained for later resume).
+6. Ends when the issue is closed (done): the poller stops the agent and cleans
+   up after it - removes the session, the git worktree, and the feature branch.
 
 ## Eligibility (the poller's filter)
 
@@ -82,10 +84,11 @@ issue opened (agent label, by me, open)
           ▼  (operator reviews PR; comments wake the worker; it iterates)
    operator merges PR + closes issue        (point 8 — merge is the orchestrator's)
           ▼
-   poller sees issue closed → claude stop <id>   (transcript retained)
+   poller sees issue closed (done) → stop + CLEAN UP
+       (remove the session, the git worktree, and the feature branch)
 
-   issue reopened ──────────────────────────────> poller: claude respawn <saved-id>
-                                                    (resumes the same session — point 7)
+   worker stops while issue still OPEN (crash) ──> poller: claude respawn <saved-id>
+                                                    (auto-recovery; resumes that session)
 ```
 
 The issue→session-id map is persisted at `~/.config/agent-board/sessions.json`
