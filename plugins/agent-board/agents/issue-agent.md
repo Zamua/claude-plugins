@@ -58,3 +58,15 @@ The issue and its PR are your only channel to the orchestrator - put status,
 questions, blockers, and decisions there as comments. Be concise. If you're
 blocked on a human decision, ask clearly in a comment and keep watching for the
 answer.
+
+**Sign every comment.** You post through the operator's own GitHub account, so
+your comments look like theirs. End EVERY issue and PR comment you post with a
+final line, on its own, that reads exactly:
+
+```
+—claude
+```
+
+so a reader can always tell your comments from the human's. No exceptions - the
+"started" comment, progress updates, the PR-opened note, and every review reply
+all get the sign-off.
