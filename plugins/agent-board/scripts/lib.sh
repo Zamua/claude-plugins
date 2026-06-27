@@ -59,11 +59,14 @@ ab_map_set()  {
 ab_map_keys() { ab_map_init; jq -r 'keys[]' "$AB_STATE"; }
 ab_map_vals() { ab_map_init; jq -r '.[]' "$AB_STATE"; }
 
-# ---- live background agents (by sessionId) ----
+# ---- live background agents (by short id) ----
+# `--session-id` is ignored by `--bg`; claude assigns the agent its own short
+# `id` (also the sessionId prefix). That short id is what stop/respawn/logs take
+# and what `claude agents --json` reports, so it is the lifecycle key we track.
 ab_live_sessions() {
-  claude agents --json 2>/dev/null | jq -r '.[] | select(.kind=="background") | .sessionId' 2>/dev/null
+  claude agents --json 2>/dev/null | jq -r '.[] | select(.kind=="background") | .id' 2>/dev/null
 }
-ab_is_running() { ab_live_sessions | grep -qxF "$1"; }            # arg: session uuid
+ab_is_running() { ab_live_sessions | grep -qxF "$1"; }            # arg: agent short id
 ab_running_count() {                                              # our mapped sessions that are live
   local live n=0 sid; live=$(ab_live_sessions)
   while IFS= read -r sid; do

@@ -13,6 +13,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$HERE/lib.sh"
 
+AB_LOCK_DIR=""   # global so the EXIT trap can release the poll lock after cmd_once returns
+
 # map a configured repo path from a slug
 ab_repo_for_slug() {
   local repo
@@ -24,69 +26,102 @@ ab_repo_for_slug() {
 # launch a fresh background worker for an issue; record key -> session uuid
 ab_launch() {  # repo_path slug number url
   local repo="$1" slug="$2" num="$3" url="$4"
-  local key="$slug#$num" uuid name perm house
-  uuid="$(ab_uuid)"
+  local key="$slug#$num" name perm house pdir
   name="$(ab_get agent_name_prefix agent-board)-$(ab_safe "$slug")-$num"
+  # Dedup (belt + suspenders with the poll lock): never launch a second agent
+  # for an issue. If one with this exact name is already running, adopt its id.
+  local existing
+  existing="$(claude agents --json 2>/dev/null | jq -r --arg n "$name" '.[]|select(.kind=="background" and .name==$n)|.id' | head -1)"
+  if [ -n "$existing" ]; then ab_log "$key already has a running agent ($existing); adopting, no relaunch"; ab_map_set "$key" "$existing"; return 0; fi
   perm="$(ab_get permission_mode acceptEdits)"
   house="$(ab_get house_rules "")"
-  local wt=();    [ "$(ab_get worktree true)" = "true" ] && wt=(--worktree)
-  local danger=(); [ "$(ab_get dangerously_skip false)" = "true" ] && danger=(--dangerously-skip-permissions)
-  local extra=(); [ -n "$house" ] && extra=(--append-system-prompt "$house")
+  pdir="$(ab_get plugin_dir "")"
+  # Build ONE argv array (never empty) so it is safe under `set -u` on bash 3.2,
+  # the macOS /bin/bash the launchd job runs (empty "${a[@]}" errors there).
+  local cmd=(claude --bg --agent issue-agent --name "$name" --add-dir "$repo" --permission-mode "$perm")
+  [ "$(ab_get worktree true)" = "true" ]          && cmd+=(--worktree)
+  [ -n "$pdir" ]                                  && cmd+=(--plugin-dir "$pdir")
+  [ "$(ab_get dangerously_skip false)" = "true" ] && cmd+=(--dangerously-skip-permissions)
+  [ -n "$house" ]                                 && cmd+=(--append-system-prompt "$house")
 
   local prompt="You are an agent-board worker assigned to GitHub issue ${url} (repo ${slug}). \
 Follow your issue-agent operating instructions exactly: post a comment that you've started, do the \
 work on a branch in this worktree, push and open a PR linked to the issue, then watch the issue and \
 the PR for new comments and respond to each. Do NOT merge and do NOT deploy. Begin now."
+  cmd+=("$prompt")
 
-  ab_log "dispatch $key -> bg session $uuid (name $name)"
-  ( cd "$repo" && claude --bg --agent issue-agent --session-id "$uuid" \
-      "${wt[@]}" --name "$name" --add-dir "$repo" --permission-mode "$perm" \
-      "${danger[@]}" "${extra[@]}" "$prompt" >/dev/null 2>&1 ) \
-    || { ab_log "launch failed for $key"; return 1; }
-  ab_map_set "$key" "$uuid"
+  ab_log "dispatch $key -> launching bg agent (name $name)"
+  ( cd "$repo" && "${cmd[@]}" >/dev/null 2>&1 ) || { ab_log "launch failed for $key"; return 1; }
+  # --session-id is ignored by --bg; capture the agent's assigned short id by name.
+  local id="" tries=0
+  while [ -z "$id" ] && [ "$tries" -lt 12 ]; do
+    sleep 1; tries=$((tries + 1))
+    id="$(claude agents --json 2>/dev/null | jq -r --arg n "$name" '.[] | select(.kind=="background" and .name==$n) | .id' | head -1)"
+  done
+  [ -n "$id" ] || { ab_log "$key launched but agent id not found (see 'claude agents')"; return 1; }
+  ab_map_set "$key" "$id"
+  ab_log "$key -> agent id $id"
 }
 
 cmd_once() {
-  ab_need claude gh jq git uuidgen || return 1
+  ab_need claude gh jq git || return 1
+  # Global single-flight lock: only one pass runs at a time, so two overlapping
+  # passes can never both launch an agent for the same issue. Atomic mkdir works
+  # everywhere (no flock on macOS); a stale lock from a dead pass is reclaimed.
+  local lock="${AGENT_BOARD_LOCK:-$HOME/.config/agent-board/.poll.lock}"
+  mkdir -p "$(dirname "$lock")"
+  if ! mkdir "$lock" 2>/dev/null; then
+    local holder=""; [ -f "$lock/pid" ] && holder="$(< "$lock/pid")"
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      ab_log "another pass (pid $holder) holds the lock; skipping this run"; return 0
+    fi
+    ab_log "reclaiming stale poll lock (holder '${holder:-?}' gone)"
+    rm -rf "$lock"; mkdir "$lock" 2>/dev/null || { ab_log "lost lock race; skipping"; return 0; }
+  fi
+  echo "$$" > "$lock/pid"
+  AB_LOCK_DIR="$lock"
+  trap 'rm -rf "$AB_LOCK_DIR"' EXIT
   local label login cap running
   label="$(ab_get label agent)"; login="$(ab_gh_login)"; cap="$(ab_get cap 3)"
   [ -n "$login" ] || { ab_log "no gh_login configured and gh auto-detect failed"; return 1; }
   running="$(ab_running_count)"
   ab_log "pass start: login=$login label=$label cap=$cap running=$running"
 
-  # 1. teardown: stop agents whose issue is now CLOSED (transcript kept for reopen)
+  # Loop 1: reconcile KNOWN issues (in the map) via the FRESH per-issue endpoint
+  # (gh issue view), which - unlike `gh issue list` - has no read-after-write lag.
+  # CLOSED + running -> stop; OPEN + stopped -> respawn (lag-free reopen/resume).
   local key sid slug num repo st
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     sid="$(ab_map_get "$key")"; [ -n "$sid" ] || continue
-    ab_is_running "$sid" || continue
     slug="${key%#*}"; num="${key##*#}"; repo="$(ab_repo_for_slug "$slug")"; [ -n "$repo" ] || continue
     st="$(ab_issue_state "$repo" "$num")"
     if [ "$st" = "CLOSED" ]; then
-      ab_log "issue $key closed -> stop $sid"
-      claude stop "$sid" >/dev/null 2>&1 || true
-      running=$((running > 0 ? running-1 : 0))
+      if ab_is_running "$sid"; then
+        ab_log "issue $key closed -> stop $sid"; claude stop "$sid" >/dev/null 2>&1 || true
+        running=$((running > 0 ? running - 1 : 0))
+      fi
+    elif [ "$st" = "OPEN" ] && ! ab_is_running "$sid"; then
+      if [ "$running" -ge "$cap" ]; then ab_log "cap $cap reached; resume of $key queued"
+      else
+        ab_log "issue $key reopened/stopped -> respawn $sid"
+        claude respawn "$sid" >/dev/null 2>&1 && running=$((running + 1)) || ab_log "respawn failed for $key"
+      fi
     fi
   done < <(ab_map_keys)
 
-  # 2. dispatch new / resume reopened, eligible OPEN issues, up to the cap
+  # Loop 2: dispatch NEW eligible issues (present in the list, absent from the map).
   local url
   while IFS= read -r repo; do
     [ -n "$repo" ] || continue
     slug="$(ab_slug "$repo")"; [ -n "$slug" ] || { ab_log "no git remote slug for $repo"; continue; }
     while IFS=$'\t' read -r num url; do
       [ -n "$num" ] || continue
-      key="$slug#$num"; sid="$(ab_map_get "$key")"
-      if [ -n "$sid" ] && ab_is_running "$sid"; then continue; fi          # already working
+      key="$slug#$num"
+      [ -n "$(ab_map_get "$key")" ] && continue                  # known -> Loop 1 owns it
+      [ "$(ab_issue_state "$repo" "$num")" = "OPEN" ] || continue # list lags; confirm fresh
       if [ "$running" -ge "$cap" ]; then ab_log "cap $cap reached; queue $key"; continue; fi
-      if [ -n "$sid" ]; then
-        ab_log "reopen/restart $key -> respawn $sid"
-        claude respawn "$sid" >/dev/null 2>&1 \
-          || { ab_log "respawn failed; relaunching $key"; ab_launch "$repo" "$slug" "$num" "$url" || continue; }
-      else
-        ab_launch "$repo" "$slug" "$num" "$url" || continue
-      fi
-      running=$((running+1))
+      ab_launch "$repo" "$slug" "$num" "$url" && running=$((running + 1))
     done < <(ab_eligible_issues "$repo" "$label" "$login")
   done < <(ab_repos)
   ab_log "pass done: running=$running"

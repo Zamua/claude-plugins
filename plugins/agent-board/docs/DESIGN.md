@@ -94,6 +94,30 @@ running agents via `claude agents --json` and only launches while `running <
 cap`; the rest wait for the next tick. A future refinement could add a separate
 "heavy work" semaphore distinct from the raw agent count.
 
+## Concurrency, locking, and GitHub consistency
+
+Two agents must never run for the same issue. Two guards enforce it:
+
+- **Single-flight poll lock.** Each `poll.sh once` acquires an atomic `mkdir`
+  lock (`~/.config/agent-board/.poll.lock`) and holds it for the whole pass, so
+  an overlapping scheduled pass (or a manual run) skips rather than racing. A
+  lock left by a crashed pass (pid gone) is reclaimed.
+- **Name dedup.** Each issue's agent has a deterministic name
+  (`<prefix>-<slug>-<number>`); before launching, the poller checks
+  `claude agents` for that name and adopts the existing agent instead of
+  starting a second one.
+
+**Agent identity.** `--session-id` is ignored by `--bg` (claude assigns its own),
+so after launch the poller captures the agent's short `id` from
+`claude agents --json` by name and stores `key -> id`. That short id drives
+stop / respawn / resume for the agent's whole life.
+
+**GitHub read-after-write lag.** `gh issue list` (the eligible scan) lags
+`gh issue view` (per-issue) by seconds after a close/reopen. So a pass runs two
+loops: Loop 1 reconciles KNOWN issues (the map) via the fresh per-issue endpoint,
+making close->stop and reopen->respawn lag-free; Loop 2 scans the list only for
+NEW issues (a brand-new issue may be picked up one pass later, which is fine).
+
 ## Components (all inside the plugin)
 
 ```
