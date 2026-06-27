@@ -32,13 +32,24 @@ ab_gh_login() {
   if [ -n "$v" ]; then printf '%s' "$v"; else gh api user --jq .login 2>/dev/null; fi
 }
 
-# configured local repo paths, one per line (empty if unset)
-ab_repos() {
-  [ -f "$AB_CONFIG" ] || return 0
-  jq -r '.repos[]? // empty' "$AB_CONFIG" 2>/dev/null
+# the managed directory that holds agent-board's own clones (one per repo), kept
+# separate from the user's working checkouts. Configurable; sensible XDG default.
+ab_workdir() {
+  local w; w="$(ab_get workdir "")"
+  if [ -n "$w" ]; then printf '%s' "$w"; else printf '%s' "${XDG_DATA_HOME:-$HOME/.local/share}/agent-board/repos"; fi
 }
 
-# owner/repo slug from a local repo's origin remote
+# ensure a managed clone of owner/repo exists; echo its path (clone if missing)
+ab_ensure_clone() {  # owner/repo
+  local slug="$1" dir; dir="$(ab_workdir)/$slug"
+  if [ ! -d "$dir/.git" ]; then
+    mkdir -p "$(dirname "$dir")"
+    gh repo clone "$slug" "$dir" -- --quiet >/dev/null 2>&1 || { ab_log "clone failed: $slug"; return 1; }
+  fi
+  printf '%s' "$dir"
+}
+
+# owner/repo slug from a local repo's origin remote (used to label worktrees)
 ab_slug() {
   git -C "$1" config --get remote.origin.url 2>/dev/null \
     | sed -E 's#^(git@[^:]+:|https?://[^/]+/)##; s#\.git$##' | head -1
@@ -75,12 +86,15 @@ ab_running_count() {                                              # our mapped s
   printf '%s' "$n"
 }
 
-# ---- gh issue helpers (run inside a repo path) ----
-# eligible OPEN issues: "<number>\t<url>" lines
-ab_eligible_issues() {  # args: repo_path label login
-  ( cd "$1" 2>/dev/null && gh issue list --label "$2" --author "$3" --state open \
-      --json number,url --jq '.[] | "\(.number)\t\(.url)"' 2>/dev/null )
+# ---- gh issue helpers (cross-repo; no allowlist) ----
+# all eligible OPEN issues the user authored with the label, across EVERY repo:
+# "owner/repo\t<number>\t<url>" lines. Excludes PRs.
+ab_search_issues() {  # args: label login
+  gh search issues --author "$2" --label "$1" --state open --limit 50 \
+    --json repository,number,url,isPullRequest \
+    --jq '.[] | select(.isPullRequest | not) | "\(.repository.nameWithOwner)\t\(.number)\t\(.url)"' 2>/dev/null
 }
-ab_issue_state() {  # args: repo_path number  -> OPEN|CLOSED|""
-  ( cd "$1" 2>/dev/null && gh issue view "$2" --json state --jq '.state' 2>/dev/null )
+# fresh per-issue state (no read-after-write lag, unlike search): OPEN|CLOSED|""
+ab_issue_state() {  # args: owner/repo number
+  gh issue view "$2" --repo "$1" --json state --jq '.state' 2>/dev/null
 }

@@ -50,17 +50,24 @@ the plugin's `board` skill (`/agent-board:board ...`).
 6. Ends when the issue is closed (its session is stopped by the poller; the
    transcript is retained for later resume).
 
-## Eligibility (the poller's filter — operator point 4)
+## Eligibility (the poller's filter)
 
 An issue is dispatched only if ALL hold:
-- authored by the operator (`--author <GH_LOGIN>`) — never run agents on issues
+- authored by the operator (`--author <login>`) — never run agents on issues
   opened by other people;
 - carries the single `agent` label;
-- is OPEN (not "done").
+- is OPEN.
 
-`gh issue list --repo <r> --label agent --author <GH_LOGIN> --state open --json number,title,url,...`
+Discovery is a single CROSS-REPO search across every repo the operator can see -
+no allowlist to maintain:
 
-(No multi-state label machine — operator point 3. Just `agent` + open/closed.)
+`gh search issues --author <login> --label agent --state open` (excludes PRs)
+
+The operator can only add the `agent` label on repos they have write access to,
+so the label requirement naturally scopes dispatch to their own repos. Each repo
+is cloned on demand into the managed `workdir` and the worker's worktree is made
+there, isolated from the operator's working checkouts. NB GitHub search indexes a
+new issue within a few seconds, so discovery is picked up on the next pass.
 
 ## Lifecycle
 
@@ -141,7 +148,7 @@ plugins/agent-board/
 The worker is launched with `claude --bg --agent issue-agent` so its protocol is
 the subagent's system prompt; the poller passes a short kickoff prompt naming the
 issue. Config: `~/.config/agent-board/config.json` — `label`, `gh_login` (empty =
-auto-detect via `gh api user`), `repos` (a list of LOCAL repo paths to watch),
+auto-detect via `gh api user`), `workdir` (where per-repo clones live),
 `cap`, `poll_seconds`, `worktree`, `permission_mode`, `dangerously_skip`,
 `house_rules`, `agent_name_prefix`. See `config.example.json`.
 

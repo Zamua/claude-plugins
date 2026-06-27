@@ -59,7 +59,8 @@ resumes the exact same session that worked it.
 ## Setup / lifecycle
 
 - First-time setup: `"$P" config-init` then edit `~/.config/agent-board/config.json`
-  (`repos` = local repo paths, optional `gh_login`, `cap`, `poll_seconds`).
+  (optional `gh_login`, `workdir`, `cap`, `poll_seconds`; no repo list - it
+  watches all your repos via cross-repo search).
 - Arm the scheduler: `"$P" install` (launchd on macOS, prints a cron line otherwise).
 - Stop the scheduler: `"$P" uninstall`.
 

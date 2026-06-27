@@ -23,8 +23,10 @@ you review + merge the PR  ─────▶  issue closes  ─▶  poller stop
 you reopen the issue       ─────▶  poller resumes the SAME session that worked it
 ```
 
-- **Eligibility:** an issue is dispatched only if it's authored by the
-  configured user, carries the configured label (default `agent`), and is open.
+- **Eligibility:** any issue in **any of your repos** that's authored by you,
+  carries the label (default `agent`), and is open. Discovery is a cross-repo
+  GitHub search - no repo list to maintain; the repo is cloned on demand into a
+  managed `workdir`.
 - **Concurrency:** a configurable cap bounds how many agents run at once.
 - **Resume:** the issue→session map means reopening an issue resumes its exact
   agent; stopping never deletes a transcript.
@@ -40,8 +42,8 @@ you reopen the issue       ─────▶  poller resumes the SAME session t
 
 Or develop locally: `claude --plugin-dir /path/to/agent-board`.
 
-Requires: `claude`, `gh` (authenticated), `jq`, `git`, `uuidgen`, and a Bash
-shell. macOS uses launchd for scheduling; other platforms use cron.
+Requires: `claude`, `gh` (authenticated), `jq`, `git`, and a Bash shell. macOS
+uses launchd for scheduling; other platforms use cron.
 
 ## Configure
 
@@ -55,7 +57,7 @@ Edit `~/.config/agent-board/config.json`:
 | --- | --- | --- |
 | `label` | `agent` | only issues with this label are dispatched |
 | `gh_login` | `""` | whose issues to run; empty = auto-detect via `gh api user` |
-| `repos` | `[]` | **local paths** to the git repos to watch (required) |
+| `workdir` | `""` | where agent-board keeps its own per-repo clones; empty = `~/.local/share/agent-board/repos` |
 | `cap` | `3` | max concurrent agents |
 | `poll_seconds` | `90` | how often the scheduler runs a pass |
 | `worktree` | `true` | give each agent its own git worktree |

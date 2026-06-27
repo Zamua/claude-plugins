@@ -1,7 +1,7 @@
 {
   "label": "agent",
   "gh_login": "",
-  "repos": [],
+  "workdir": "",
   "cap": 3,
   "poll_seconds": 90,
   "worktree": true,
