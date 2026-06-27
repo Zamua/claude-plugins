@@ -41,10 +41,29 @@ ab_workdir() {
 
 # ensure a managed clone of owner/repo exists; echo its path (clone if missing)
 ab_ensure_clone() {  # owner/repo
-  local slug="$1" dir; dir="$(ab_workdir)/$slug"
+  local slug="$1" dir def; dir="$(ab_workdir)/$slug"
   if [ ! -d "$dir/.git" ]; then
     mkdir -p "$(dirname "$dir")"
     gh repo clone "$slug" "$dir" -- --quiet >/dev/null 2>&1 || { ab_log "clone failed: $slug"; return 1; }
+  fi
+  # Always refresh to the remote default branch before a worker branches off it.
+  # Without this, a clone left over from an earlier dispatch keeps a STALE default
+  # branch, and the worker's --worktree forks from that stale base - producing a
+  # PR that conflicts with (or silently reverts) work merged since. Fetch, then
+  # hard-reset the default branch to its remote tip. The default branch is read
+  # from origin/HEAD (set at clone time, no network); a worker's feature worktree
+  # is on its own branch, so resetting the default branch here does not touch it.
+  if git -C "$dir" fetch --quiet origin >/dev/null 2>&1; then
+    def="$(git -C "$dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+    [ -z "$def" ] && { git -C "$dir" remote set-head origin -a >/dev/null 2>&1; def="$(git -C "$dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"; }
+    [ -z "$def" ] && def=main
+    if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$def"; then
+      git -C "$dir" checkout --quiet "$def" >/dev/null 2>&1 \
+        && git -C "$dir" reset --hard --quiet "origin/$def" >/dev/null 2>&1 \
+        || ab_log "could not refresh $slug to origin/$def (using current base)"
+    fi
+  else
+    ab_log "fetch failed for $slug (using cached clone)"
   fi
   printf '%s' "$dir"
 }
