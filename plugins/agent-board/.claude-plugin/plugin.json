@@ -1,0 +1,9 @@
+{
+  "name": "agent-board",
+  "description": "Orchestrate background Claude Code agents through a GitHub issue board. A local poller dispatches your `agent`-labelled issues to background workers (one worktree each) that comment progress and open PRs; you review and merge.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Zamua"
+  },
+  "keywords": ["orchestration", "agents", "github", "issues", "automation"]
+}

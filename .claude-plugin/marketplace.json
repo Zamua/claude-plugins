@@ -1,0 +1,14 @@
+{
+  "name": "zamua",
+  "owner": {
+    "name": "Zamua"
+  },
+  "description": "Zamua's personal Claude Code plugin marketplace.",
+  "plugins": [
+    {
+      "name": "agent-board",
+      "source": "./plugins/agent-board",
+      "description": "Issue-driven orchestration of background Claude Code agents: a local poller turns your GitHub issues into background workers (one git worktree each) that comment progress and open PRs; you review and merge."
+    }
+  ]
+}

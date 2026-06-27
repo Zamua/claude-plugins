@@ -1,0 +1,12 @@
+{
+  "label": "agent",
+  "gh_login": "",
+  "repos": [],
+  "cap": 3,
+  "poll_seconds": 90,
+  "worktree": true,
+  "permission_mode": "acceptEdits",
+  "dangerously_skip": false,
+  "house_rules": "",
+  "agent_name_prefix": "agent-board"
+}
