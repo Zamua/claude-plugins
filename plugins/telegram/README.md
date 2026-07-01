@@ -45,14 +45,17 @@ and each conversation is a real foreground REPL:
   and does no polling. Inbound, it long-polls `GET /poll?topic=<topic>` and
   injects each message as a `<channel>` turn. Outbound, the four tools POST to
   the proxy (`/send`, `/react`, `/edit`, `/download`), each carrying its topic.
-  It also relays permission prompts: a tool outside the pre-allowed four raises
-  a permission request, which the MCP forwards to the proxy and answers from the
-  approve/deny the user taps or types back in the topic.
+  It also carries a permission-relay path (forward a prompt to the proxy, answer
+  from an approve/deny in the topic), but that path is DORMANT under the current
+  auto mode - see the launcher below.
 - **Launcher** (`scripts/launch-topic.sh`): spawns one detached tmux session
-  per topic running a foreground `claude`, with the channel loaded and the four
-  channel tools pre-allowed. Other tools (Bash, WebFetch, ...) are NOT
-  auto-allowed - they prompt, and the prompt is relayed to Telegram for a human
-  approve/deny, so topic-Claudes stay fully capable but human-gated.
+  per topic running a foreground `claude` with the channel loaded, in full AUTO
+  mode (`--dangerously-skip-permissions`) so there are no permission prompts - a
+  detached pane has no one to answer them. Every topic-Claude can run
+  Bash/WebFetch/etc. without asking. It also handles session continuity: it mints
+  a claude session id on the first spawn and `--resume`s that same id on every
+  later spawn, so a topic is one continuous conversation across kills / crashes /
+  proxy restarts.
 
 ## Prerequisites
 
@@ -71,8 +74,15 @@ and each conversation is a real foreground REPL:
 /plugin install telegram@zamua
 ```
 
-Installing + enabling `telegram@zamua` mutates the global `~/.claude/settings.json`;
-that is the operator activation step. This plugin does not do it for you.
+(The equivalent CLI form is `claude plugin marketplace add Zamua/claude-plugins`,
+or point it at a local checkout path.)
+
+Registering the `zamua` marketplace is REQUIRED, not optional: the launcher spawns
+each topic-Claude with `--dangerously-load-development-channels=plugin:telegram@zamua`,
+which only resolves if that marketplace is known. Registering it mutates the global
+`~/.claude/settings.json` (adds `extraKnownMarketplaces`); installing + enabling
+`telegram@zamua` mutates it further. Those are the operator activation steps. This
+plugin does not do them for you.
 
 > **One-token caveat.** The proxy and any other poller on the same token (for
 > example the single-session `claude-telegram` bridge) cannot both run
@@ -92,6 +102,7 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_TOPICS_SPAWN_DIR` | no | `$HOME` | cwd for every spawned topic-Claude |
 | `TELEGRAM_PROXY_PORT` | no | `8790` | HTTP port for the MCP clients |
 | `TELEGRAM_TOPICS_MARKETPLACE` | no | `plugin:telegram@zamua` | channel ref for the launcher |
+| `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` | no | `5000` | MCP-side: how long the first inbound poll is held so the booting REPL is idle before the first message is delivered |
 
 ## Run the proxy
 
@@ -122,6 +133,10 @@ Health check while it runs: `curl -s localhost:8790/health`.
 
 Attach to any topic's session to watch it: `tmux attach -t tg-<chatid>-<threadid>`.
 
+Each topic is one continuous conversation. If its session dies (you kill it, it
+crashes, the proxy restarts), the next message to that topic re-spawns Claude and
+resumes the same conversation with its history intact.
+
 ## Proxy <-> MCP HTTP protocol
 
 Loopback only (`127.0.0.1:8790`).
@@ -139,16 +154,26 @@ Loopback only (`127.0.0.1:8790`).
 
 `topic` is the `message_thread_id` as a string, or `"general"`. On `/send`,
 long text is split into 4096-char chunks (each a message); `message_ids` lists
-all of them. `POST /permission-request` posts an approve/deny prompt into the
-topic; the user's answer is routed back over `GET /permission-poll` as
-`{request_id, behavior}` (`behavior` is `"allow"` or `"deny"`).
+all of them.
+
+The two permission endpoints (`/permission-request`, `/permission-poll`) are
+DORMANT under the current auto mode: topic-Claudes run with
+`--dangerously-skip-permissions`, so the harness never raises a permission
+request and the MCP never calls them. They are retained for a possible future
+non-auto mode. When active, `POST /permission-request` posts an approve/deny
+prompt into the topic and the user's answer is routed back over
+`GET /permission-poll` as `{request_id, behavior}` (`behavior` is `"allow"` or
+`"deny"`).
 
 ## Scope (v1)
 
 No deletion / reaping / TTL of sessions, no per-topic directory config (every
 topic uses `TELEGRAM_TOPICS_SPAWN_DIR`), and no pairing / allowlist beyond the
-single group-chat-id gate. A proxy restart re-adopts still-live tmux sessions
-and forgets dead ones (registry reconcile against `tmux ls`).
+single group-chat-id gate. Auto mode only (`--dangerously-skip-permissions`); the
+non-auto permission-relay path is coded but dormant. A proxy restart re-adopts
+still-live tmux sessions and, for topics whose session has died, keeps the
+recorded claude session id so the next message resumes the same conversation
+(registry reconcile against `tmux ls`, session id persisted in `registry.json`).
 
 ## Safety notes
 
@@ -157,10 +182,13 @@ and forgets dead ones (registry reconcile against `tmux ls`).
   agent. Start with a handful of topics.
 - The proxy binds loopback only and drops every update whose chat id is not the
   configured group.
-- Tools outside the four channel tools are human-gated: their permission prompt
-  is relayed to the topic for an approve/deny, so a topic-Claude cannot run
-  Bash/WebFetch/etc. without your tap. Only members of the configured group can
-  answer (the same group gate that admits inbound messages).
+- Topic-Claudes run in full AUTO mode (`--dangerously-skip-permissions`): there
+  are NO permission prompts, so a topic-Claude can run Bash/WebFetch/etc. without
+  a tap. A detached pane could not answer a prompt anyway, and the operator wanted
+  zero prompts. Treat every topic as an un-gated local agent; only start topics
+  you would trust with unattended shell access. (The permission-relay path that
+  would gate non-channel tools is coded but dormant; it is retained for a possible
+  future non-auto mode.)
 - Outbound file sends refuse the proxy's own state and the token-bearing `.env`,
   so a prompt-injected topic-Claude cannot ship the bot token to the group.
 
