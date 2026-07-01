@@ -48,9 +48,13 @@ fi
 # IMPORTANT: --dangerously-load-development-channels is VARIADIC so it MUST use
 # the =form; the space form would greedy-consume the following arg as another
 # channel entry. Pass it INSTEAD of --channels (both would double-register).
-# --dangerously-skip-permissions runs the detached session in full auto (no
-# permission prompts - a detached pane has no one to answer them). `exec` so the
-# pane dies with claude and the proxy's tmux-ls reconcile drops the topic.
+# --permission-mode auto = checked auto-approve: a guard model vets each command
+# and auto-approves the safe ones, so routine work runs without a prompt (chosen
+# over --dangerously-skip-permissions, which skips ALL checks). Caveat: a
+# detached pane cannot answer an interactive confirm, so if auto mode ever
+# escalates a genuinely risky command it will block until attended; re-activate
+# the permission relay (below) to route such escalations to Telegram if needed.
+# `exec` so the pane dies with claude and the proxy's tmux-ls reconcile drops it.
 #
 # Session continuity: the proxy mints a claude session id per topic and passes
 # it here. A FIRST spawn uses --session-id <id> + the kickoff (creates the
@@ -67,11 +71,11 @@ tmux new-session -d -s "$TG_SESSION" -c "$TG_SPAWN_DIR" \
   -e TELEGRAM_PROXY_URL="$TELEGRAM_PROXY_URL" \
   'if [ -n "$TG_RESUME" ]; then \
      exec claude --dangerously-load-development-channels="$TG_MARKETPLACE" \
-       --settings "$TG_SETTINGS" --dangerously-skip-permissions \
+       --settings "$TG_SETTINGS" --permission-mode auto \
        --resume "$TG_CLAUDE_SESSION_ID"; \
    else \
      exec claude --dangerously-load-development-channels="$TG_MARKETPLACE" \
-       --settings "$TG_SETTINGS" --dangerously-skip-permissions \
+       --settings "$TG_SETTINGS" --permission-mode auto \
        --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
    fi'
 
