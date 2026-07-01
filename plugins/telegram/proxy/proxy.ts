@@ -259,6 +259,12 @@ type TopicState = {
   session: string
   spawnedAt: number
   spawning: boolean
+  // The claude session id for this topic, minted on the FIRST spawn (passed via
+  // --session-id) and reused via --resume on every later spawn. This is what
+  // makes a topic one continuous conversation across kills / crashes / proxy
+  // restarts: all topics share one spawn dir, so bare --continue (most-recent
+  // session in a dir) cannot tell them apart - we track the id explicitly.
+  claudeSessionId?: string
 }
 
 const topics = new Map<string, TopicState>()
@@ -362,18 +368,23 @@ type RegistryEntry = {
   thread_id: number | null
   name: string
   spawned_at: number
+  claude_session_id: string | null
 }
 
 function saveRegistry(): void {
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
   const out: Record<string, RegistryEntry> = {}
   for (const [topic, st] of topics) {
-    if (!st.session || !st.spawnedAt) continue
+    // Persist any topic that has been spawned at least once (has a claude
+    // session id), even if its tmux session is currently dead - we need the id
+    // to --resume the SAME conversation on the next message.
+    if (!st.claudeSessionId) continue
     out[topic] = {
       tmux_session: st.session,
       thread_id: st.threadId ?? null,
       name: st.name,
       spawned_at: st.spawnedAt,
+      claude_session_id: st.claudeSessionId,
     }
   }
   const tmp = REGISTRY_FILE + '.tmp'
@@ -393,16 +404,21 @@ function loadAndReconcileRegistry(): void {
   }
   const live = liveTmuxSessions()
   for (const [topic, entry] of Object.entries(raw)) {
-    if (live.has(entry.tmux_session)) {
-      const st = getTopic(topic)
+    const st = getTopic(topic)
+    st.threadId = entry.thread_id ?? undefined
+    st.name = entry.name
+    st.claudeSessionId = entry.claude_session_id ?? undefined
+    if (entry.name) topicNames.set(topic, entry.name)
+    if (entry.tmux_session && live.has(entry.tmux_session)) {
       st.session = entry.tmux_session
-      st.threadId = entry.thread_id ?? undefined
-      st.name = entry.name
       st.spawnedAt = entry.spawned_at
-      if (entry.name) topicNames.set(topic, entry.name)
       log(`re-adopted live topic ${topic} "${entry.name}" (${entry.tmux_session})`)
     } else {
-      log(`forgetting dead topic ${topic} (${entry.tmux_session})`)
+      // Session is dead, but KEEP the claude session id so the next message
+      // re-spawns and --resumes the SAME conversation instead of starting fresh.
+      st.session = ''
+      st.spawnedAt = 0
+      log(`topic ${topic} "${entry.name}" not live; will resume claude session ${entry.claude_session_id ?? '(none)'} on next message`)
     }
   }
   saveRegistry()
@@ -441,6 +457,12 @@ function ensureSession(topic: string): void {
   try {
     const label = st.name || topicNames.get(topic) || topic
     st.name = label
+    // First spawn: mint a session id and create the session with it (passing
+    // the kickoff). Every later spawn RESUMES that same id (no kickoff), so the
+    // topic stays one continuous conversation. The id is persisted in the
+    // registry, so it survives proxy restarts too.
+    const resuming = !!st.claudeSessionId
+    if (!st.claudeSessionId) st.claudeSessionId = crypto.randomUUID()
     const env = {
       ...process.env,
       TG_SESSION: name,
@@ -450,6 +472,8 @@ function ensureSession(topic: string): void {
       TG_MARKETPLACE: MARKETPLACE,
       TG_SETTINGS: OVERRIDE_SETTINGS,
       TG_KICKOFF: kickoffPrompt(label),
+      TG_CLAUDE_SESSION_ID: st.claudeSessionId,
+      TG_RESUME: resuming ? '1' : '',
     }
     const r = spawnSync('bash', [LAUNCH_SCRIPT], { env, encoding: 'utf8' })
     if (r.status !== 0) {
@@ -458,7 +482,7 @@ function ensureSession(topic: string): void {
     st.session = name
     st.spawnedAt = Date.now()
     saveRegistry()
-    log(`spawned topic ${topic} "${label}" -> tmux ${name}`)
+    log(`${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" (claude ${st.claudeSessionId}) -> tmux ${name}`)
   } catch (e) {
     log(`spawn failed for topic ${topic}: ${e}`)
   } finally {

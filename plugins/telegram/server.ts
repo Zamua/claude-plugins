@@ -290,6 +290,14 @@ process.on('SIGHUP', shutdown)
 // and the topic would go deaf. A 30s AbortSignal caps each request; an abort is
 // the normal "held too long / no data" case, so we just re-poll immediately.
 const POLL_TIMEOUT_MS = 30000
+// Cold-start guard: hold the FIRST inbound poll this long. The very first
+// message for a topic is enqueued during the ~1-2s spawn window, so it is ready
+// the instant the MCP connects - but a channel notification fired while the
+// Claude REPL is still booting (processing its kickoff turn) is silently dropped
+// by the harness. Waiting here lets the REPL finish booting + go idle before we
+// deliver that first message, so it injects cleanly. Only the first poll waits;
+// the loop is immediate thereafter, and warm messages are unaffected.
+const FIRST_POLL_DELAY_MS = Number(process.env.TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS ?? 5000)
 
 function isAbort(err: unknown): boolean {
   return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')
@@ -298,6 +306,9 @@ function isAbort(err: unknown): boolean {
 async function inboundLoop(): Promise<void> {
   let backoff = 500
   process.stderr.write(`telegram-topics: serving topic "${TOPIC}" via proxy ${PROXY}\n`)
+  // Cold-start guard (see FIRST_POLL_DELAY_MS): let the REPL finish booting and
+  // process its kickoff turn before we deliver the first spawn-window message.
+  if (FIRST_POLL_DELAY_MS > 0) await new Promise(r => setTimeout(r, FIRST_POLL_DELAY_MS))
   while (running) {
     try {
       const res = await fetch(`${PROXY}/poll?topic=${encodeURIComponent(TOPIC)}`, {
