@@ -37,7 +37,7 @@ proxy/proxy.ts ── grammy inbound ── group-chat gate ── topic = messa
 
 scripts/launch-topic.sh ── tmux new-session -d -s tg-<cid>-<tid> (per-topic vars via -e) ──
    exec claude --dangerously-load-development-channels=plugin:telegram@zamua
-               --settings override-settings.json --dangerously-skip-permissions
+               --settings override-settings.json --permission-mode auto
                first spawn: --session-id <id> "<kickoff>"   (mints the session)
                re-spawn:    --resume <id>                    (no kickoff, keeps history)
    + a short-lived detached watcher answers the "local development" confirm dialog
@@ -46,7 +46,8 @@ server.ts (the MCP, one per tmux session)
    ├── inbound     long-poll GET /poll -> notifications/claude/channel {content, meta}
    │               (first poll held FIRST_POLL_DELAY_MS so the booting REPL is idle)
    ├── outbound    reply/react/edit/download -> POST to the proxy (each carries TOPIC)
-   └── permission  DORMANT under skip-permissions (retained for a future non-auto mode):
+   └── permission  DORMANT under --permission-mode auto (guard-checked auto-approve
+                   raises no prompt for routine commands); retained for re-activation:
                    permission_request -> POST /permission-request;
                    long-poll GET /permission-poll -> notifications/claude/channel/permission
 ```
@@ -125,24 +126,28 @@ server.ts (the MCP, one per tmux session)
   topic == `String(message_thread_id)`, thread id == `Number(topic)`.
 - **Topic names.** Learned from `forum_topic_created` service messages (cached
   in `topicNames`) for the kickoff prompt; falls back to the thread id.
-- **Auto mode (skip-permissions), NO permission prompts.** The launcher runs
-  every topic-Claude with `--dangerously-skip-permissions` (full auto). The
-  operator explicitly wanted zero permission prompts: a detached pane has no one
-  to answer them anyway. So the harness never generates permission requests, and
-  a topic-Claude runs Bash/WebFetch/etc. without asking. `override-settings.json`
-  still ENABLES the plugin for the session (its four-tool pre-allow is now
-  harmless - skip-permissions already allows everything). `bypassPermissions`
-  was avoided because the classifier blocks it; `--dangerously-skip-permissions`
-  is the launch flag instead.
+- **`--permission-mode auto`: checked auto-approve, no prompts for routine work.**
+  The launcher runs every topic-Claude with `--permission-mode auto`. This is NOT
+  skip-all-checks: a guard model vets each command and auto-approves the SAFE ones,
+  so routine work (edits, builds, tests, normal bash) runs with NO prompt. Verified
+  live: a test topic-Claude ran a bash command with no prompt and the status bar
+  read "auto mode on". The operator wanted this precisely because a detached pane
+  has no one to answer prompts. Caveat: if auto mode ever escalates a genuinely
+  RISKY command to an interactive confirm, a detached pane cannot answer it, so
+  that call BLOCKS until someone attaches to the tmux pane. `override-settings.json`
+  still ENABLES the plugin for the session (its four-tool pre-allow is redundant
+  under auto mode - the guard already approves the channel tools).
 - **Permission relay: PRESENT but DORMANT.** The whole permission round-trip
   (the `claude/channel/permission` capability, the MCP's `permission_request`
   handler, `POST /permission-request`, `GET /permission-poll`, `pendingPerms`,
   and the inline Allow/Deny buttons + `yes <id>` / `no <id>` text-reply handling)
-  is still in the code but NEVER FIRES under skip-permissions: the harness emits
-  no permission requests, so the MCP never POSTs one and the proxy never prompts.
-  It is retained for a possible future non-auto mode (drop skip-permissions and
-  let non-pre-allowed tools relay their prompt to the topic for a human
-  tap/reply). What it would do when active: the MCP forwards a
+  is still in the code but does not fire in normal operation: under
+  `--permission-mode auto` the guard auto-approves routine commands, so the harness
+  raises no permission request for them and the MCP never POSTs one. It is retained
+  for re-activation: if auto mode escalates a genuinely risky command to a confirm,
+  the relay could route that escalation to the Telegram topic for a human tap/reply
+  instead of blocking the detached pane. What it would do when active: the MCP
+  forwards a
   `permission_request` as `{topic, request_id, tool, input}` to
   `POST /permission-request`; the proxy remembers `request_id -> topic`
   (`pendingPerms`), posts an approve/deny prompt (inline buttons +
@@ -180,8 +185,8 @@ server.ts (the MCP, one per tmux session)
 - `scripts/launch-topic.sh`: the tmux launcher (invoked by the proxy).
 - `scripts/start-proxy.sh`: foreground proxy starter.
 - `override-settings.json`: enables `telegram@zamua` for the session. (Its
-  four-tool pre-allow is now harmless: the launcher runs
-  `--dangerously-skip-permissions`, so everything is already allowed.)
+  four-tool pre-allow is redundant under `--permission-mode auto`, which the
+  launcher passes: the guard already approves the channel tools.)
 - `.env.example`: the config contract (deny-list of known keys).
 - `launchd/com.telegram-topics.proxy.plist`: durability template (NOT installed).
 
@@ -204,8 +209,9 @@ mutates the global `~/.claude/settings.json` (adds `extraKnownMarketplaces`).
 ## Not in v1
 
 No session reaping/TTL, no per-topic cwd, no pairing/allowlist beyond the
-group-chat-id gate. Auto mode only (`--dangerously-skip-permissions`); the
-non-auto permission-relay path is coded but dormant (see above).
+group-chat-id gate. Runs under `--permission-mode auto` (guard-checked
+auto-approve); the permission-relay path that would route an escalated confirm to
+Telegram is coded but dormant (see above).
 
 The inbound + permission queues are IN-MEMORY per topic: if the proxy crashes
 between enqueue and the MCP's first drain, those undelivered messages/answers

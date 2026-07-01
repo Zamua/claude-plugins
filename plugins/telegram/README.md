@@ -49,13 +49,14 @@ and each conversation is a real foreground REPL:
   from an approve/deny in the topic), but that path is DORMANT under the current
   auto mode - see the launcher below.
 - **Launcher** (`scripts/launch-topic.sh`): spawns one detached tmux session
-  per topic running a foreground `claude` with the channel loaded, in full AUTO
-  mode (`--dangerously-skip-permissions`) so there are no permission prompts - a
-  detached pane has no one to answer them. Every topic-Claude can run
-  Bash/WebFetch/etc. without asking. It also handles session continuity: it mints
-  a claude session id on the first spawn and `--resume`s that same id on every
-  later spawn, so a topic is one continuous conversation across kills / crashes /
-  proxy restarts.
+  per topic running a foreground `claude` with the channel loaded, under
+  `--permission-mode auto`. That is checked auto-approve, not skip-all-checks: a
+  guard model vets each command and auto-approves the SAFE ones, so routine work
+  runs with no prompt (a detached pane could not answer one). A genuinely risky
+  command can still escalate to a confirm, which would block the pane until
+  someone attaches. It also handles session continuity: it mints a claude session
+  id on the first spawn and `--resume`s that same id on every later spawn, so a
+  topic is one continuous conversation across kills / crashes / proxy restarts.
 
 ## Prerequisites
 
@@ -157,10 +158,11 @@ long text is split into 4096-char chunks (each a message); `message_ids` lists
 all of them.
 
 The two permission endpoints (`/permission-request`, `/permission-poll`) are
-DORMANT under the current auto mode: topic-Claudes run with
-`--dangerously-skip-permissions`, so the harness never raises a permission
-request and the MCP never calls them. They are retained for a possible future
-non-auto mode. When active, `POST /permission-request` posts an approve/deny
+DORMANT in normal operation: topic-Claudes run under `--permission-mode auto`,
+whose guard auto-approves routine commands, so the harness raises no permission
+request for them and the MCP never calls these. They are retained for
+re-activation (route an escalated risky-command confirm to Telegram instead of
+blocking the pane). When active, `POST /permission-request` posts an approve/deny
 prompt into the topic and the user's answer is routed back over
 `GET /permission-poll` as `{request_id, behavior}` (`behavior` is `"allow"` or
 `"deny"`).
@@ -169,11 +171,12 @@ prompt into the topic and the user's answer is routed back over
 
 No deletion / reaping / TTL of sessions, no per-topic directory config (every
 topic uses `TELEGRAM_TOPICS_SPAWN_DIR`), and no pairing / allowlist beyond the
-single group-chat-id gate. Auto mode only (`--dangerously-skip-permissions`); the
-non-auto permission-relay path is coded but dormant. A proxy restart re-adopts
-still-live tmux sessions and, for topics whose session has died, keeps the
-recorded claude session id so the next message resumes the same conversation
-(registry reconcile against `tmux ls`, session id persisted in `registry.json`).
+single group-chat-id gate. Runs under `--permission-mode auto` (guard-checked
+auto-approve); the permission-relay path that would route an escalated confirm to
+Telegram is coded but dormant. A proxy restart re-adopts still-live tmux sessions
+and, for topics whose session has died, keeps the recorded claude session id so
+the next message resumes the same conversation (registry reconcile against
+`tmux ls`, session id persisted in `registry.json`).
 
 ## Safety notes
 
@@ -182,13 +185,14 @@ recorded claude session id so the next message resumes the same conversation
   agent. Start with a handful of topics.
 - The proxy binds loopback only and drops every update whose chat id is not the
   configured group.
-- Topic-Claudes run in full AUTO mode (`--dangerously-skip-permissions`): there
-  are NO permission prompts, so a topic-Claude can run Bash/WebFetch/etc. without
-  a tap. A detached pane could not answer a prompt anyway, and the operator wanted
-  zero prompts. Treat every topic as an un-gated local agent; only start topics
-  you would trust with unattended shell access. (The permission-relay path that
-  would gate non-channel tools is coded but dormant; it is retained for a possible
-  future non-auto mode.)
+- Topic-Claudes run under `--permission-mode auto`: guard-verified auto-approve,
+  not skip-all-checks. A guard model vets each command and auto-approves the safe
+  ones, so routine Bash/WebFetch/etc. runs with no tap; a genuinely risky command
+  can still escalate to a confirm (which a detached pane cannot answer, so it
+  blocks until someone attaches). Treat every topic as a capable auto-approving
+  local agent; only start topics you would trust with largely unattended shell
+  access. (The permission-relay path that could route an escalated confirm to
+  Telegram is coded but dormant.)
 - Outbound file sends refuse the proxy's own state and the token-bearing `.env`,
   so a prompt-injected topic-Claude cannot ship the bot token to the group.
 
