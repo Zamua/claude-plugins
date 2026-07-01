@@ -1,0 +1,11 @@
+# Secrets - never commit the filled-in env (the bot token lives here).
+.env
+
+# Bun / node deps.
+node_modules/
+
+# Runtime state, if a STATE_DIR is ever pointed inside the repo (default is
+# ~/.claude/channels/telegram-topics/, outside the repo).
+inbox/
+registry.json
+registry.json.tmp

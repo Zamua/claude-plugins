@@ -9,6 +9,11 @@
       "name": "agent-board",
       "source": "./plugins/agent-board",
       "description": "Issue-driven orchestration of background Claude Code agents: a local poller turns your GitHub issues into background workers (one git worktree each) that comment progress and open PRs; you review and merge."
+    },
+    {
+      "name": "telegram",
+      "source": "./plugins/telegram",
+      "description": "Telegram forum-topics channel: multiplex ONE bot token across MANY concurrent Claude sessions, one foreground Claude per Telegram topic, via a local proxy. Drop-in for the single-session telegram channel."
     }
   ]
 }

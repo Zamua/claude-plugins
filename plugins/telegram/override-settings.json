@@ -1,0 +1,14 @@
+{
+  "_comment": "Passed via `claude --settings <this-file>` by scripts/launch-topic.sh when the proxy spawns a topic session. Enables telegram@zamua JUST for that session (keep the global ~/.claude/settings.json's telegram disabled so no other claude invocation spawns a competing getUpdates poller), and pre-allows the 4 channel tools because a detached tmux session cannot answer a permission prompt. Pre-allow is used instead of bypassPermissions, which the classifier blocks.",
+  "enabledPlugins": {
+    "telegram@zamua": true
+  },
+  "permissions": {
+    "allow": [
+      "mcp__plugin_telegram_telegram__reply",
+      "mcp__plugin_telegram_telegram__react",
+      "mcp__plugin_telegram_telegram__download_attachment",
+      "mcp__plugin_telegram_telegram__edit_message"
+    ]
+  }
+}
