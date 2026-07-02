@@ -35,7 +35,7 @@ proxy/proxy.ts ── grammy inbound ── group-chat gate ── topic = messa
    ├── POST /permission-request       {topic,request_id,tool,input} -> prompt in topic
    └── GET  /health                   {ok, topics, port, polling, polling_since}
 
-scripts/launch-topic.sh ── tmux new-session -d -s tg-<cid>-<tid> (per-topic vars via -e) ──
+scripts/launch-topic.sh ── tmux new-session -d -s claude-<slug>-<tid> (per-topic vars via -e) ──
    exec claude --dangerously-load-development-channels=plugin:telegram@zamua
                --settings override-settings.json --permission-mode auto
                first spawn: --session-id <id> "<kickoff>"   (mints the session)
@@ -101,9 +101,27 @@ server.ts (the MCP, one per tmux session)
   tracking existed recorded no id and cannot auto-resume; recover it manually by
   writing its claude session id into `registry.json` under that topic, then
   restarting the proxy.
-- **Exact session match.** Dedup uses `tmux has-session -t "=$name"` and
-  `liveTmuxSessions().has(name)` (from `tmux ls -F`) so `tg-<cid>-4` never
-  matches `tg-<cid>-45`.
+- **Readable, stable session names.** A topic's tmux session is
+  `claude-<slug>-<thread_id>` (e.g. `claude-hostthis-34`), with the numeric thread
+  id as a short, collision-proof, stable suffix; the General topic is just
+  `claude-general`. `sessionNameFor(topic, label)` slugifies the topic name
+  (lowercase, non-alphanumeric -> `-`, trimmed, capped 24 chars; empty ->
+  `topic`), so it is always tmux-safe (no `.`/`:`/whitespace). The name is
+  computed from the topic's LABEL at spawn and then RECORDED in `st.session`;
+  dedup + kill use that RECORDED string (`st.session && liveTmuxSessions().has(st.session)`),
+  they do NOT re-derive it - because the name now depends on the mutable label,
+  re-deriving after a rename would miss the running (old-named) session and
+  double-spawn. Renames are learned from `forum_topic_edited` (update `st.name` +
+  `topicNames`, persist); a rename takes effect on the next RESPAWN (fresh name),
+  never mid-life. An unknown name (label falls back to the numeric id) yields just
+  `claude-<id>`, not `claude-<id>-<id>`. The thread-id suffix keeps names unique so
+  `st.session` maps 1:1 to a topic. **Migration (old scheme `tg-<cid>-<tid>`):**
+  registry-tracked live sessions are re-adopted by their old name on reconcile and
+  renamed on their next respawn; for an UNtracked live old-scheme session (predates
+  session-id tracking / registry lost) `ensureSession` has a migration bridge that
+  ADOPTS it by `legacySessionNameFor(topic)` instead of spawning a second one under
+  the new name (the launcher's has-session guard keys off the new name, so it can't
+  catch an old-named orphan). Removable once no `tg-*` sessions remain.
 - **Single-flight spawn.** `ensureSession` runs the launcher via `spawnSync`,
   which blocks the event loop for the whole (fast, detached) launch; grammy
   processes messages sequentially, so two rapid messages for a brand-new topic

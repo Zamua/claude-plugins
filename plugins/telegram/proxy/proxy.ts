@@ -319,12 +319,43 @@ const topics = new Map<string, TopicState>()
 // forum_topic_created names learned before a topic's session is spawned.
 const topicNames = new Map<string, string>()
 
-// tmux session names cannot contain '.' or ':'; strip the group id's sign and
-// any punctuation so a negative supergroup id (e.g. -1001234567890) is safe.
-function sessionNameFor(topic: string): string {
+// A readable, tmux-safe slug from a topic name (tmux names cannot contain '.' or
+// ':', so collapse every non-alphanumeric run to '-', trim, and cap the length).
+function slugify(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 24)
+      .replace(/-+$/g, '') || 'topic'
+  )
+}
+
+// The tmux session name. Readable: `claude-<slug>-<thread_id>` (e.g.
+// `claude-hostthis-34`), with the numeric thread id as a short, stable,
+// collision-proof suffix; the General topic (no thread id) is just
+// `claude-general`. Computed from the topic's LABEL at spawn time and then
+// RECORDED in st.session (dedup/kill use the recorded string, never re-derive) so
+// a later rename can't orphan the running session.
+function sessionNameFor(topic: string, label?: string): string {
+  if (topic === 'general') return 'claude-general'
+  const id = topic.replace(/[^A-Za-z0-9]/g, '')
+  const slug = slugify(label ?? '')
+  // Unknown/degenerate name (the label fell back to the numeric id, or slugified
+  // to the 'topic' placeholder) -> just `claude-<id>`, not `claude-<id>-<id>`.
+  if (slug === id || slug === 'topic') return `claude-${id}`
+  return `claude-${slug}-${id}`
+}
+
+// The pre-2026-07 `tg-<cid>-<tid>` name. Used ONLY by the migration bridge in
+// ensureSession to ADOPT a still-live old-scheme session (rather than spawning a
+// second one under the new name) - the launcher's has-session guard keys off the
+// NEW name so it cannot catch an old-named orphan. Removable once no `tg-*`
+// sessions remain in the wild.
+function legacySessionNameFor(topic: string): string {
   const cid = String(GROUP_CHAT_ID).replace(/[^0-9]/g, '')
-  const t = topic.replace(/[^A-Za-z0-9]/g, '') || 'x'
-  return `tg-${cid}-${t}`
+  return `tg-${cid}-${topic.replace(/[^A-Za-z0-9]/g, '') || 'x'}`
 }
 
 function getTopic(topic: string): TopicState {
@@ -337,7 +368,9 @@ function getTopic(topic: string): TopicState {
       permWaiters: [],
       threadId: topic === 'general' ? undefined : Number(topic),
       name: '',
-      session: sessionNameFor(topic),
+      // Empty until the first spawn computes it from the resolved label; the
+      // reconcile / spawn paths fill it in. Dedup treats '' as "no live session".
+      session: '',
       spawnedAt: 0,
       spawning: false,
     }
@@ -492,14 +525,35 @@ function kickoffPrompt(topicLabel: string): string {
 function ensureSession(topic: string): void {
   const st = getTopic(topic)
   if (st.spawning) return
-  const name = sessionNameFor(topic)
-  if (liveTmuxSessions().has(name)) {
-    st.session = name
+  const live = liveTmuxSessions()
+  // Dedup on the RECORDED session name (stable for a live session's whole life;
+  // '' for a brand-new / dead topic, so we fall through and spawn). We do NOT
+  // re-derive the name here: it now depends on the topic's mutable label, and
+  // re-deriving after a rename would miss the running (old-named) session and
+  // double-spawn. `live.has(...)` also confirms it is actually up, so a stale
+  // recorded name (session died) correctly falls through to a respawn.
+  if (st.session && live.has(st.session)) {
     if (!st.spawnedAt) {
       st.spawnedAt = Date.now()
       saveRegistry()
     }
     return
+  }
+  // Migration bridge: an OLD-scheme `tg-<cid>-<tid>` session may be live but
+  // UNTRACKED (predates session-id tracking, or the registry was lost), so
+  // reconcile never recorded it in st.session. Adopt it by its legacy name
+  // instead of spawning a SECOND session under the new name (the launcher's
+  // has-session guard keys off the new name, so it would not catch the old one).
+  // It gets the new name on its next respawn. Removable once no `tg-*` remain.
+  if (!st.session) {
+    const legacy = legacySessionNameFor(topic)
+    if (live.has(legacy)) {
+      st.session = legacy
+      if (!st.spawnedAt) st.spawnedAt = Date.now()
+      saveRegistry()
+      log(`adopted legacy-named session ${legacy} for topic ${topic}; renames on next respawn`)
+      return
+    }
   }
   st.spawning = true
   try {
@@ -511,6 +565,10 @@ function ensureSession(topic: string): void {
     // registry, so it survives proxy restarts too.
     const resuming = !!st.claudeSessionId
     if (!st.claudeSessionId) st.claudeSessionId = crypto.randomUUID()
+    // Name the tmux session from the CURRENT label (fresh each spawn, so a rename
+    // takes effect on the next respawn); recorded in st.session after a successful
+    // spawn so dedup + kill target this exact string.
+    const name = sessionNameFor(topic, label)
     // Regenerate the effective settings for THIS spawn so it reflects the current
     // committed base + the ultracode config (fresh on every respawn).
     const settingsPath = resolveSettings()
@@ -588,6 +646,24 @@ bot.on('message', async ctx => {
     const st = topics.get(topic)
     if (st && !st.name) st.name = nm
     log(`learned topic ${topic} name "${nm}"`)
+    return
+  }
+
+  // A rename (forum_topic_edited carries the new name when the title changed;
+  // it is absent for an icon-only edit). Update the learned name + persist it, so
+  // the session picks up `claude-<new-slug>-<tid>` on its next respawn (the live
+  // session keeps its current name until then). Do not relay the service message.
+  if (msg.forum_topic_edited) {
+    const nm = msg.forum_topic_edited.name
+    if (nm) {
+      topicNames.set(topic, nm)
+      const st = topics.get(topic)
+      if (st) {
+        st.name = nm
+        saveRegistry()
+      }
+      log(`topic ${topic} renamed to "${nm}"`)
+    }
     return
   }
 
