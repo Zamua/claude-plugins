@@ -54,6 +54,10 @@ const INBOX_DIR = join(STATE_DIR, 'inbox')
 const REGISTRY_FILE = join(STATE_DIR, 'registry.json')
 const PID_FILE = join(STATE_DIR, 'proxy.pid')
 const OVERRIDE_SETTINGS = join(PLUGIN_ROOT, 'override-settings.json')
+// The Stop hook that keeps replies out of the transcript. override-settings.json
+// references it as $TG_HOOK (passed to the session via `tmux new-session -e`) so
+// that committed file needs no hardcoded path.
+const STOP_HOOK = join(PLUGIN_ROOT, 'hooks', 'stop-reply-guard.py')
 const LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-topic.sh')
 // The token-bearing .env files. assertSendable refuses to ship these so a
 // prompt-injected topic-Claude cannot exfil the bot token via reply(files:[...]).
@@ -471,6 +475,7 @@ function ensureSession(topic: string): void {
       TELEGRAM_PROXY_URL: PROXY_URL,
       TG_MARKETPLACE: MARKETPLACE,
       TG_SETTINGS: OVERRIDE_SETTINGS,
+      TG_HOOK: STOP_HOOK,
       TG_KICKOFF: kickoffPrompt(label),
       TG_CLAUDE_SESSION_ID: st.claudeSessionId,
       TG_RESUME: resuming ? '1' : '',

@@ -1,5 +1,6 @@
 {
   "_comment": "Passed via `claude --settings <this-file>` by scripts/launch-topic.sh when the proxy spawns a topic session. Enables telegram@zamua JUST for that session (the global settings.json keeps its own telegram disabled so no other claude spawns a competing getUpdates poller). The permissions.allow of the 4 channel tools is redundant under --permission-mode auto (which auto-approves routine calls) but harmless. NB: AskUserQuestion is removed via the launcher's --disallowedTools= CLI flag, NOT a settings key here - the disallowedTools SETTINGS key is not honored for it (verified live: the model still rendered the tool); only the CLI flag (= form) removes it.",
+  "_comment_hook": "The Stop hook keeps replies out of the transcript: if a turn triggered by an inbound Telegram <channel> message ends WITHOUT calling the reply tool, hooks/stop-reply-guard.py blocks the stop and reminds Claude to resend via the reply MCP (once per turn). The command references $TG_HOOK (an absolute path the launcher sets via `tmux new-session -e TG_HOOK=...`) instead of a hardcoded path, so this committed file stays portable. Hook commands are shell-run so the env var expands. The plugin's own hooks/hooks.json is NOT used - --dangerously-load-development-channels loads only the channel/MCP part of a plugin, not its hooks (verified), so the hook must live here in the --settings override.",
   "enabledPlugins": {
     "telegram@zamua": true
   },
@@ -9,6 +10,18 @@
       "mcp__plugin_telegram_telegram__react",
       "mcp__plugin_telegram_telegram__download_attachment",
       "mcp__plugin_telegram_telegram__edit_message"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$TG_HOOK\""
+          }
+        ]
+      }
     ]
   }
 }

@@ -22,6 +22,10 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 : "${TELEGRAM_PROXY_URL:?TELEGRAM_PROXY_URL required}"
 : "${TG_MARKETPLACE:?TG_MARKETPLACE required}"
 : "${TG_SETTINGS:?TG_SETTINGS required}"
+# TG_HOOK: absolute path to the Stop hook (hooks/stop-reply-guard.py). The
+# session's --settings override references it as $TG_HOOK so that committed file
+# needs no hardcoded path; passed to the pane via `new-session -e` like the rest.
+: "${TG_HOOK:?TG_HOOK required}"
 : "${TG_KICKOFF:?TG_KICKOFF required}"
 : "${TG_CLAUDE_SESSION_ID:?TG_CLAUDE_SESSION_ID required}"
 # TG_RESUME is optional: "1" = resume the topic's existing claude session (no
@@ -70,6 +74,7 @@ fi
 tmux new-session -d -s "$TG_SESSION" -c "$TG_SPAWN_DIR" \
   -e TG_MARKETPLACE="$TG_MARKETPLACE" \
   -e TG_SETTINGS="$TG_SETTINGS" \
+  -e TG_HOOK="$TG_HOOK" \
   -e TG_KICKOFF="$TG_KICKOFF" \
   -e TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
   -e TG_RESUME="$TG_RESUME" \

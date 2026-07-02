@@ -198,6 +198,12 @@ the next message resumes the same conversation (registry reconcile against
   Telegram is coded but dormant.)
 - Outbound file sends refuse the proxy's own state and the token-bearing `.env`,
   so a prompt-injected topic-Claude cannot ship the bot token to the group.
+- A Stop hook (`hooks/stop-reply-guard.py`) keeps replies from getting stranded
+  in the transcript: if a turn triggered by a Telegram message ends without
+  calling the `reply` tool, it blocks the stop and reminds Claude to resend via
+  Telegram (at most once per turn). It is wired through the session's `--settings`
+  override, not a plugin hook - `--dangerously-load-development-channels` loads a
+  plugin's channel/MCP part but not its `hooks/`.
 
 ## License
 

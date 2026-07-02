@@ -157,6 +157,33 @@ server.ts (the MCP, one per tmux session)
   chat) routes `{request_id, behavior}` to the ORIGIN topic's `GET /permission-poll`,
   which fires `notifications/claude/channel/permission` to unblock the call.
   `pendingPerms` entries are pruned after 1h so the map cannot grow unbounded.
+- **Stop hook: replies can't get stranded in the transcript.**
+  `hooks/stop-reply-guard.py` runs on every Stop. If a turn was triggered by an
+  inbound Telegram `<channel>` message but never called the `reply` tool, the
+  answer is stranded in the transcript (the user never sees it - the classic
+  "you there?" failure). The hook BLOCKS the stop
+  (`{"decision":"block","reason":...}`) with a short reminder ("send it via the
+  reply tool now"), so Claude re-sends through Telegram. It reminds at most ONCE
+  per turn (loop guard: the `stop_hook_active` input flag AND a marker string it
+  leaves in its own reason, detected in the transcript), then lets the stop
+  through - no infinite loop. It parses only the last ~2MB of the transcript
+  (fail-open past that) so it stays fast on huge sessions. **Wiring gotcha:** it
+  is NOT shipped as a plugin `hooks/hooks.json` -
+  `--dangerously-load-development-channels` loads ONLY the channel/MCP part of a
+  plugin, NOT its hooks (verified: a plugin hooks.json never fired; a `--settings`
+  hook did). So the hook lives in the `--settings` override. The topic-Claude
+  path: `override-settings.json` references it as `python3 "$TG_HOOK"`; the proxy
+  sets `TG_HOOK` to the absolute script path (`STOP_HOOK`, a `PLUGIN_ROOT`-derived
+  const) in the spawn env and the launcher forwards it to the pane via
+  `new-session -e TG_HOOK=...` - so that COMMITTED file needs no hardcoded path
+  (hook `command`s are shell-run, so `$TG_HOOK` expands). The single-session
+  bridge wires the SAME script via its own LOCAL `--settings` override
+  (`~/.claude/channels/telegram/claude-settings-override.json`, absolute path -
+  fine there, that file is not committed). Verified live: a channel-marked turn
+  with no reply blocked the stop and made Claude call the reply tool; the loop
+  guard fired exactly once. Complements (does not replace) the CLAUDE.md
+  channel-discipline instruction - the instruction nudges the first reply, the
+  hook backstops a miss.
 - **Resilience: retry poll + PID guard + graceful shutdown.** `pollWithRetry`
   wraps `bot.start` in a backoff retry loop (ported from the single-session
   server): a rejection of `bot.start()` itself (ETIMEDOUT/ECONNRESET/DNS or a
@@ -184,9 +211,16 @@ server.ts (the MCP, one per tmux session)
 - `proxy/proxy.ts` + `proxy/package.json`: the daemon (dep: `grammy`).
 - `scripts/launch-topic.sh`: the tmux launcher (invoked by the proxy).
 - `scripts/start-proxy.sh`: foreground proxy starter.
-- `override-settings.json`: enables `telegram@zamua` for the session. (Its
-  four-tool pre-allow is redundant under `--permission-mode auto`, which the
-  launcher passes: the guard already approves the channel tools.)
+- `hooks/stop-reply-guard.py`: the Stop hook (reply guard). Blocks a
+  Telegram-triggered turn that ended without a `reply` call and reminds Claude to
+  resend via the reply tool (once per turn). Wired via `override-settings.json`
+  (`$TG_HOOK`, set by the proxy + forwarded by the launcher), NOT a plugin
+  `hooks/hooks.json` (`--dangerously-load-development-channels` doesn't load
+  those). See the Stop-hook gotcha above.
+- `override-settings.json`: enables `telegram@zamua` for the session AND wires the
+  Stop hook (`hooks.Stop` -> `python3 "$TG_HOOK"`). (Its four-tool pre-allow is
+  redundant under `--permission-mode auto`, which the launcher passes: the guard
+  already approves the channel tools.)
 - `.env.example`: the config contract (deny-list of known keys).
 - `scripts/install-launchd.sh` + `launchd/com.telegram-topics.proxy.plist`: the
   DURABILITY path. Installs the proxy as a native launchd agent (RunAtLoad =
