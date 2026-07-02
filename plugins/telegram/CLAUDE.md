@@ -194,9 +194,19 @@ server.ts (the MCP, one per tmux session)
 
 Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 (required); `TELEGRAM_TOPICS_SPAWN_DIR` (default `$HOME`), `TELEGRAM_PROXY_PORT`
-(default `8790`), `TELEGRAM_TOPICS_MARKETPLACE` (default `plugin:telegram@zamua`).
+(default `8790`), `TELEGRAM_TOPICS_MARKETPLACE` (default `plugin:telegram@zamua`),
+`TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled).
 Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
+
+**Passive nightly restart.** If `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` is set
+(0-23, LOCAL), the proxy checks once a minute and, once a day at that hour, kills
+every LIVE topic session (deduped by local date). Each one re-spawns with
+`--resume` on its next inbound message (fresh claude + latest launcher config,
+full conversation kept). Passive by design: idle sessions are NOT kept running -
+the proxy polls Telegram, the topic-Claudes don't, so they only need to be up
+when in use. Mirrors the single-session bridge's nightly restart (pick up claude
+updates + clear accumulated process state) without the idle cost.
 
 The MCP client also reads `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` (default `5000`)
 for the cold-start first-poll delay above.

@@ -949,3 +949,53 @@ async function pollWithRetry(): Promise<void> {
 
 await serveWithRetry()
 void pollWithRetry()
+
+// ---- nightly restart (passive) ---------------------------------------------
+//
+// If TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR is set (0-23, LOCAL time), once a day
+// at that hour kill every live topic session. Each one then re-spawns with
+// --resume on its NEXT inbound message (fresh claude + latest launcher config,
+// full conversation kept). Passive by design: we do NOT keep idle sessions
+// running - the proxy polls Telegram, the topic-Claudes don't, so they only
+// need to be up when actually in use. Mirrors the single-session bridge's
+// nightly restart (pick up claude updates + clear accumulated process state)
+// without paying to keep refreshed-but-idle sessions alive overnight.
+function nightlyRestart(): void {
+  const live = liveTmuxSessions()
+  let killed = 0
+  for (const [topic, st] of topics) {
+    if (!st.session || !live.has(st.session)) continue
+    const r = spawnSync('tmux', ['kill-session', '-t', `=${st.session}`], { encoding: 'utf8' })
+    if (r.status === 0) {
+      killed++
+      log(`nightly restart: killed topic ${topic} "${st.name}" (${st.session}); will --resume on next message`)
+    } else {
+      log(`nightly restart: failed to kill ${st.session}: ${(r.stderr || '').trim()}`)
+    }
+    st.session = ''
+    st.spawnedAt = 0
+  }
+  saveRegistry()
+  log(`nightly restart complete: ${killed} topic session(s) killed`)
+}
+
+const NIGHTLY_HOUR_RAW = process.env.TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR ?? ''
+if (NIGHTLY_HOUR_RAW !== '') {
+  const nightlyHour = Number(NIGHTLY_HOUR_RAW)
+  if (Number.isInteger(nightlyHour) && nightlyHour >= 0 && nightlyHour <= 23) {
+    let lastRestartDay = ''
+    // Check once a minute; fire once when the local hour first matches, deduped
+    // by local date so a clock nudge cannot double-fire within the same hour.
+    setInterval(() => {
+      const now = new Date()
+      const day = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`
+      if (now.getHours() === nightlyHour && lastRestartDay !== day) {
+        lastRestartDay = day
+        nightlyRestart()
+      }
+    }, 60_000)
+    log(`nightly restart enabled: ${String(nightlyHour).padStart(2, '0')}:00 local`)
+  } else {
+    log(`TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR="${NIGHTLY_HOUR_RAW}" is not an integer 0-23; nightly restart disabled`)
+  }
+}
