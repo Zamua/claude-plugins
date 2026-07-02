@@ -90,6 +90,50 @@ function log(m: string): void {
   process.stderr.write(`${new Date().toISOString()} telegram-topics-proxy: ${m}\n`)
 }
 
+// ---- effort (ultracode) ----------------------------------------------------
+// Every topic-Claude runs at ultracode (xhigh) effort by default. `ultracode` is
+// a SETTINGS key (`"ultracode": true`), NOT a CLI flag (--effort rejects the
+// value), and repeated --settings is last-wins rather than merged - so we bake it
+// into the ONE settings file the launcher passes: an effective-settings.json =
+// the committed override-settings.json base + `ultracode` from
+// TELEGRAM_TOPICS_ULTRACODE (default on). Regenerated on every proxy start, so a
+// config change lands on the next restart. Set TELEGRAM_TOPICS_ULTRACODE=false to
+// run topics at the default (medium) effort. (Measured: ultracode:true flips the
+// hook-reported effort.level medium -> xhigh.)
+// Recognized true/false tokens; an UNRECOGNIZED non-empty value (a typo like
+// "ture") falls back to the default and logs, rather than silently reading as
+// false - for a default-ON flag a silent-OFF typo is exactly the "wrong effort"
+// footgun we want to avoid.
+function envBool(v: string | undefined, dflt: boolean, name: string): boolean {
+  const s = (v ?? '').trim().toLowerCase()
+  if (s === '') return dflt
+  if (s === '1' || s === 'true' || s === 'yes' || s === 'on') return true
+  if (s === '0' || s === 'false' || s === 'no' || s === 'off') return false
+  log(`${name}="${v}" is not a recognized boolean; using default (${dflt})`)
+  return dflt
+}
+const ULTRACODE = envBool(process.env.TELEGRAM_TOPICS_ULTRACODE, true, 'TELEGRAM_TOPICS_ULTRACODE')
+const EFFECTIVE_SETTINGS = join(STATE_DIR, 'effective-settings.json')
+// Called PER SPAWN (not once at module load) so each (re)spawn reflects the
+// CURRENT committed override-settings.json - a base-settings edit (e.g. a git
+// pull) then reaches topics on their next respawn (the nightly restart, a kill),
+// matching the pre-generation behavior where spawns read the base file live. Also
+// self-heals if the generated file is removed. On any read/write error it falls
+// back to the committed base un-generated (topics still spawn, just without the
+// ultracode override).
+function resolveSettings(): string {
+  try {
+    mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+    const base = JSON.parse(readFileSync(OVERRIDE_SETTINGS, 'utf8'))
+    base.ultracode = ULTRACODE
+    writeFileSync(EFFECTIVE_SETTINGS, JSON.stringify(base, null, 2) + '\n')
+    return EFFECTIVE_SETTINGS
+  } catch (e) {
+    log(`could not generate effective settings (${e}); using override-settings.json - ultracode NOT applied`)
+    return OVERRIDE_SETTINGS
+  }
+}
+
 if (!TOKEN) {
   process.stderr.write(
     'telegram-topics proxy: TELEGRAM_BOT_TOKEN required\n' +
@@ -467,6 +511,9 @@ function ensureSession(topic: string): void {
     // registry, so it survives proxy restarts too.
     const resuming = !!st.claudeSessionId
     if (!st.claudeSessionId) st.claudeSessionId = crypto.randomUUID()
+    // Regenerate the effective settings for THIS spawn so it reflects the current
+    // committed base + the ultracode config (fresh on every respawn).
+    const settingsPath = resolveSettings()
     const env = {
       ...process.env,
       TG_SESSION: name,
@@ -474,7 +521,7 @@ function ensureSession(topic: string): void {
       TELEGRAM_TOPIC_ID: topic,
       TELEGRAM_PROXY_URL: PROXY_URL,
       TG_MARKETPLACE: MARKETPLACE,
-      TG_SETTINGS: OVERRIDE_SETTINGS,
+      TG_SETTINGS: settingsPath,
       TG_HOOK: STOP_HOOK,
       TG_KICKOFF: kickoffPrompt(label),
       TG_CLAUDE_SESSION_ID: st.claudeSessionId,
@@ -919,7 +966,7 @@ async function pollWithRetry(): Promise<void> {
           // and only after a stably-up run (see below).
           pollingSince = Date.now()
           log(
-            `polling as @${info.username}; group ${GROUP_CHAT_ID}; spawn dir ${SPAWN_DIR}; marketplace ${MARKETPLACE}`,
+            `polling as @${info.username}; group ${GROUP_CHAT_ID}; spawn dir ${SPAWN_DIR}; marketplace ${MARKETPLACE}; ultracode ${ULTRACODE ? 'on' : 'off'}`,
           )
         },
       })

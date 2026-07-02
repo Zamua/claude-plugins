@@ -217,10 +217,13 @@ server.ts (the MCP, one per tmux session)
   (`$TG_HOOK`, set by the proxy + forwarded by the launcher), NOT a plugin
   `hooks/hooks.json` (`--dangerously-load-development-channels` doesn't load
   those). See the Stop-hook gotcha above.
-- `override-settings.json`: enables `telegram@zamua` for the session AND wires the
-  Stop hook (`hooks.Stop` -> `python3 "$TG_HOOK"`). (Its four-tool pre-allow is
-  redundant under `--permission-mode auto`, which the launcher passes: the guard
-  already approves the channel tools.)
+- `override-settings.json`: the BASE session settings - enables `telegram@zamua`
+  AND wires the Stop hook (`hooks.Stop` -> `python3 "$TG_HOOK"`). The proxy does
+  NOT hand this to the launcher directly; it generates
+  `~/.claude/channels/telegram-topics/effective-settings.json` from it (adding
+  `ultracode`, see Config) and passes THAT as `TG_SETTINGS`. (Its four-tool
+  pre-allow is redundant under `--permission-mode auto`, which the launcher
+  passes: the guard already approves the channel tools.)
 - `.env.example`: the config contract (deny-list of known keys).
 - `scripts/install-launchd.sh` + `launchd/com.telegram-topics.proxy.plist`: the
   DURABILITY path. Installs the proxy as a native launchd agent (RunAtLoad =
@@ -235,9 +238,26 @@ server.ts (the MCP, one per tmux session)
 Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 (required); `TELEGRAM_TOPICS_SPAWN_DIR` (default `$HOME`), `TELEGRAM_PROXY_PORT`
 (default `8790`), `TELEGRAM_TOPICS_MARKETPLACE` (default `plugin:telegram@zamua`),
-`TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled).
+`TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled),
+`TELEGRAM_TOPICS_ULTRACODE` (default ON, see below).
 Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
+
+**Topic effort / ultracode.** Every topic-Claude runs at ultracode (xhigh) effort
+by default. `ultracode` is a SETTINGS key (`"ultracode": true`), NOT a CLI flag
+(`--effort` rejects the value), and repeated `--settings` is last-wins not merged
+- so the proxy `resolveSettings()` bakes it into the ONE settings file the
+launcher passes: on each start it writes
+`~/.claude/channels/telegram-topics/effective-settings.json` = the committed
+`override-settings.json` base + `"ultracode": <TELEGRAM_TOPICS_ULTRACODE>`
+(default true; `false`/`0`/`no`/`off` -> the default medium effort), and hands
+that path to the launcher as `TG_SETTINGS` (falls back to `override-settings.json`
+un-generated if the read/write fails). A change takes effect on the NEXT proxy
+restart; LIVE topics keep their current effort until they re-spawn (nightly 3am or
+a kill). Measured via the Stop-hook input's `effort.level` field: `ultracode:true`
+flips it `medium` -> `xhigh` (verified end-to-end through a real proxy-style
+spawn). NB the single-session bridge sets `ultracode` in its OWN `--settings`
+override, independent of this.
 
 **Passive nightly restart.** If `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` is set
 (0-23, LOCAL), the proxy checks once a minute and, once a day at that hour, kills
