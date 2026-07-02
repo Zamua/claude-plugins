@@ -54,6 +54,12 @@ fi
 # detached pane cannot answer an interactive confirm, so if auto mode ever
 # escalates a genuinely risky command it will block until attended; re-activate
 # the permission relay (below) to route such escalations to Telegram if needed.
+# --disallowedTools=AskUserQuestion REMOVES the AskUserQuestion tool: a detached
+# pane cannot answer its interactive multiple-choice UI, so a call to it would
+# hang the session with no way to unstick it remotely. NB the =form is required
+# (the flag is variadic, like --channels, and the space form eats the next arg),
+# and the disallowedTools SETTINGS key does NOT work for it - only this CLI flag
+# does (verified: with the settings key the model still rendered the tool).
 # `exec` so the pane dies with claude and the proxy's tmux-ls reconcile drops it.
 #
 # Session continuity: the proxy mints a claude session id per topic and passes
@@ -72,10 +78,12 @@ tmux new-session -d -s "$TG_SESSION" -c "$TG_SPAWN_DIR" \
   'if [ -n "$TG_RESUME" ]; then \
      exec claude --dangerously-load-development-channels="$TG_MARKETPLACE" \
        --settings "$TG_SETTINGS" --permission-mode auto \
+       --disallowedTools=AskUserQuestion \
        --resume "$TG_CLAUDE_SESSION_ID"; \
    else \
      exec claude --dangerously-load-development-channels="$TG_MARKETPLACE" \
        --settings "$TG_SETTINGS" --permission-mode auto \
+       --disallowedTools=AskUserQuestion \
        --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
    fi'
 

@@ -1,5 +1,5 @@
 {
-  "_comment": "Passed via `claude --settings <this-file>` by scripts/launch-topic.sh when the proxy spawns a topic session. Enables telegram@zamua JUST for that session (keep the global ~/.claude/settings.json's telegram disabled so no other claude invocation spawns a competing getUpdates poller), and pre-allows the 4 channel tools because a detached tmux session cannot answer a permission prompt. Pre-allow is used instead of bypassPermissions, which the classifier blocks.",
+  "_comment": "Passed via `claude --settings <this-file>` by scripts/launch-topic.sh when the proxy spawns a topic session. Enables telegram@zamua JUST for that session (the global settings.json keeps its own telegram disabled so no other claude spawns a competing getUpdates poller). The permissions.allow of the 4 channel tools is redundant under --permission-mode auto (which auto-approves routine calls) but harmless. NB: AskUserQuestion is removed via the launcher's --disallowedTools= CLI flag, NOT a settings key here - the disallowedTools SETTINGS key is not honored for it (verified live: the model still rendered the tool); only the CLI flag (= form) removes it.",
   "enabledPlugins": {
     "telegram@zamua": true
   },
