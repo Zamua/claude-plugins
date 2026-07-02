@@ -1,18 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- TEMPLATE, not installed by this plugin. The durability path for the proxy.
-     Fill @STARTPROXY@ (absolute path to scripts/start-proxy.sh) and @LOG@
-     (absolute log path), then load with:
-
-       cp launchd/com.telegram-topics.proxy.plist \
-          ~/Library/LaunchAgents/com.telegram-topics.proxy.plist
-       # edit the two placeholders
-       launchctl load ~/Library/LaunchAgents/com.telegram-topics.proxy.plist
-
-     The proxy reads its token from a .env (this plugin dir or
-     ~/.claude/channels/telegram-topics/), so no secret goes in this plist.
-     Only run this once you are ready for the proxy to OWN the token's
-     getUpdates slot (stop any other poller on the same token first). -->
+<!-- LaunchAgent template for the durable proxy: native-macOS auto-start
+     (RunAtLoad) + auto-restart on crash (KeepAlive), so the plugin needs NO
+     external service manager. Install with scripts/install-launchd.sh, which
+     fills the two placeholders below (the start-proxy.sh path + a log path) and
+     loads it. The proxy reads its token from a .env (this plugin dir or
+     ~/.claude/channels/telegram-topics/), so no secret goes in this plist. It
+     OWNS the token's getUpdates slot - stop any other poller on the same token
+     first. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>

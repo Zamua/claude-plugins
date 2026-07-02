@@ -117,10 +117,13 @@ or directly:
 cd proxy && bun run start
 ```
 
-For durability there is a LaunchAgent template at
-`launchd/com.telegram-topics.proxy.plist` (fill the two placeholders, copy into
-`~/Library/LaunchAgents/`, `launchctl load`). It is a template only; nothing
-here installs it.
+For durability, run `scripts/install-launchd.sh` once. It installs the proxy as
+a native launchd agent (`RunAtLoad` = auto-start on login, `KeepAlive` =
+auto-restart on crash) from the template at
+`launchd/com.telegram-topics.proxy.plist`, so the plugin needs no external
+service manager (no pm2/systemd). Logs go to
+`~/Library/Logs/telegram-topics-proxy.log`. Uninstall = `launchctl unload` the
+plist in `~/Library/LaunchAgents/` and remove it.
 
 Health check while it runs: `curl -s localhost:8790/health`.
 

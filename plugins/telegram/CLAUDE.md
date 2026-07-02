@@ -188,7 +188,13 @@ server.ts (the MCP, one per tmux session)
   four-tool pre-allow is redundant under `--permission-mode auto`, which the
   launcher passes: the guard already approves the channel tools.)
 - `.env.example`: the config contract (deny-list of known keys).
-- `launchd/com.telegram-topics.proxy.plist`: durability template (NOT installed).
+- `scripts/install-launchd.sh` + `launchd/com.telegram-topics.proxy.plist`: the
+  DURABILITY path. Installs the proxy as a native launchd agent (RunAtLoad =
+  auto-start on login, KeepAlive = auto-restart on crash) - NO external service
+  manager, so the plugin stays self-contained. Run `scripts/install-launchd.sh`
+  once. Verified: kill the proxy and launchd respawns it. Logs go to
+  `~/Library/Logs/telegram-topics-proxy.log`. Uninstall = `launchctl unload` the
+  plist + remove it.
 
 ## Config
 
