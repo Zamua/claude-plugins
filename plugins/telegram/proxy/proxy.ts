@@ -113,6 +113,21 @@ function envBool(v: string | undefined, dflt: boolean, name: string): boolean {
   return dflt
 }
 const ULTRACODE = envBool(process.env.TELEGRAM_TOPICS_ULTRACODE, true, 'TELEGRAM_TOPICS_ULTRACODE')
+
+// Default model for every topic-Claude. `model` is a settings key (verified: it
+// pins the transcript's assistant `model` to the given id, same as the `--model`
+// flag), baked into the same effective-settings.json. Default `claude-fable-5`;
+// TELEGRAM_TOPICS_MODEL=<id> pins another model, and `default`/`inherit`/empty
+// leaves it unset so the account default applies. (The single-session bridge
+// chooses its own model separately - this is topic-Claudes only.)
+function resolveModel(): string {
+  const raw = process.env.TELEGRAM_TOPICS_MODEL
+  if (raw === undefined) return 'claude-fable-5'
+  const s = raw.trim()
+  if (s === '' || s.toLowerCase() === 'default' || s.toLowerCase() === 'inherit') return ''
+  return s
+}
+const MODEL = resolveModel()
 const EFFECTIVE_SETTINGS = join(STATE_DIR, 'effective-settings.json')
 // Called PER SPAWN (not once at module load) so each (re)spawn reflects the
 // CURRENT committed override-settings.json - a base-settings edit (e.g. a git
@@ -126,6 +141,7 @@ function resolveSettings(): string {
     mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
     const base = JSON.parse(readFileSync(OVERRIDE_SETTINGS, 'utf8'))
     base.ultracode = ULTRACODE
+    if (MODEL) base.model = MODEL
     writeFileSync(EFFECTIVE_SETTINGS, JSON.stringify(base, null, 2) + '\n')
     return EFFECTIVE_SETTINGS
   } catch (e) {
@@ -1042,7 +1058,7 @@ async function pollWithRetry(): Promise<void> {
           // and only after a stably-up run (see below).
           pollingSince = Date.now()
           log(
-            `polling as @${info.username}; group ${GROUP_CHAT_ID}; spawn dir ${SPAWN_DIR}; marketplace ${MARKETPLACE}; ultracode ${ULTRACODE ? 'on' : 'off'}`,
+            `polling as @${info.username}; group ${GROUP_CHAT_ID}; spawn dir ${SPAWN_DIR}; marketplace ${MARKETPLACE}; ultracode ${ULTRACODE ? 'on' : 'off'}; model ${MODEL || '(account default)'}`,
           )
         },
       })

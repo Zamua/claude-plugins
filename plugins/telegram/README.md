@@ -105,6 +105,7 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_TOPICS_MARKETPLACE` | no | `plugin:telegram@zamua` | channel ref for the launcher |
 | `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` | no | (disabled) | 0-23 local; once a day at this hour the proxy kills live topic sessions (each `--resume`s on its next message) |
 | `TELEGRAM_TOPICS_ULTRACODE` | no | `true` | run every topic-Claude at ultracode (xhigh) effort; `false` = default medium. Baked into the generated settings; takes effect on the next proxy restart |
+| `TELEGRAM_TOPICS_MODEL` | no | `claude-fable-5` | default model id for every topic-Claude; `default`/`inherit`/empty = the account default. Baked into the generated settings; takes effect on the next proxy restart |
 | `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` | no | `5000` | MCP-side: how long the first inbound poll is held so the booting REPL is idle before the first message is delivered |
 
 ## Run the proxy

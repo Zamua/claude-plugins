@@ -257,7 +257,8 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 (required); `TELEGRAM_TOPICS_SPAWN_DIR` (default `$HOME`), `TELEGRAM_PROXY_PORT`
 (default `8790`), `TELEGRAM_TOPICS_MARKETPLACE` (default `plugin:telegram@zamua`),
 `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled),
-`TELEGRAM_TOPICS_ULTRACODE` (default ON, see below).
+`TELEGRAM_TOPICS_ULTRACODE` (default ON, see below),
+`TELEGRAM_TOPICS_MODEL` (default `claude-fable-5`, see below).
 Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
 
@@ -276,6 +277,15 @@ a kill). Measured via the Stop-hook input's `effort.level` field: `ultracode:tru
 flips it `medium` -> `xhigh` (verified end-to-end through a real proxy-style
 spawn). NB the single-session bridge sets `ultracode` in its OWN `--settings`
 override, independent of this.
+
+**Topic model.** `resolveSettings()` also bakes `"model"` into
+effective-settings.json from `TELEGRAM_TOPICS_MODEL` (default `claude-fable-5`;
+`default`/`inherit`/empty leaves it unset -> the account default; any other value
+is a model id like `claude-opus-4-8` / `claude-sonnet-5` or an alias). Verified:
+the `model` settings key pins the transcript's assistant `model` exactly like the
+`--model` flag (measured `claude-fable-5` end-to-end through a real spawn). A bad
+model id fails the spawn loudly (launcher non-zero -> logged), it is not silently
+ignored. The bridge chooses its own model separately.
 
 **Passive nightly restart.** If `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` is set
 (0-23, LOCAL), the proxy checks once a minute and, once a day at that hour, kills
