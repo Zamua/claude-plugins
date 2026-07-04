@@ -114,9 +114,11 @@ function envBool(v: string | undefined, dflt: boolean, name: string): boolean {
 }
 const ULTRACODE = envBool(process.env.TELEGRAM_TOPICS_ULTRACODE, true, 'TELEGRAM_TOPICS_ULTRACODE')
 
-// Default model for every topic-Claude. `model` is a settings key (verified: it
-// pins the transcript's assistant `model` to the given id, same as the `--model`
-// flag), baked into the same effective-settings.json. Default `claude-fable-5`;
+// Default model for every topic-Claude, passed to the launcher (TG_MODEL) as the
+// `--model` FLAG. NOT a settings `model` key: that is only a DEFAULT and is
+// IGNORED by a --resume'd interactive session (it restores its own baked-in
+// model), so an existing topic would keep its old model forever; the --model flag
+// overrides even on resume (verified end-to-end). Default `claude-fable-5`;
 // TELEGRAM_TOPICS_MODEL=<id> pins another model, and `default`/`inherit`/empty
 // leaves it unset so the account default applies. (The single-session bridge
 // chooses its own model separately - this is topic-Claudes only.)
@@ -141,7 +143,9 @@ function resolveSettings(): string {
     mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
     const base = JSON.parse(readFileSync(OVERRIDE_SETTINGS, 'utf8'))
     base.ultracode = ULTRACODE
-    if (MODEL) base.model = MODEL
+    // NB the MODEL is NOT baked in here: a settings `model` is only a default and
+    // is ignored by a --resume'd interactive session. The launcher passes MODEL as
+    // the --model FLAG (via TG_MODEL) instead, which overrides even on resume.
     writeFileSync(EFFECTIVE_SETTINGS, JSON.stringify(base, null, 2) + '\n')
     return EFFECTIVE_SETTINGS
   } catch (e) {
@@ -597,6 +601,7 @@ function ensureSession(topic: string): void {
       TG_MARKETPLACE: MARKETPLACE,
       TG_SETTINGS: settingsPath,
       TG_HOOK: STOP_HOOK,
+      TG_MODEL: MODEL,
       TG_KICKOFF: kickoffPrompt(label),
       TG_CLAUDE_SESSION_ID: st.claudeSessionId,
       TG_RESUME: resuming ? '1' : '',

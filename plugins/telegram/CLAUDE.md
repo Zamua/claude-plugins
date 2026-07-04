@@ -278,14 +278,23 @@ flips it `medium` -> `xhigh` (verified end-to-end through a real proxy-style
 spawn). NB the single-session bridge sets `ultracode` in its OWN `--settings`
 override, independent of this.
 
-**Topic model.** `resolveSettings()` also bakes `"model"` into
-effective-settings.json from `TELEGRAM_TOPICS_MODEL` (default `claude-fable-5`;
-`default`/`inherit`/empty leaves it unset -> the account default; any other value
-is a model id like `claude-opus-4-8` / `claude-sonnet-5` or an alias). Verified:
-the `model` settings key pins the transcript's assistant `model` exactly like the
-`--model` flag (measured `claude-fable-5` end-to-end through a real spawn). A bad
-model id fails the spawn loudly (launcher non-zero -> logged), it is not silently
-ignored. The bridge chooses its own model separately.
+**Topic model (the `--model` FLAG, NOT a settings key).** The proxy passes
+`TELEGRAM_TOPICS_MODEL` (default `claude-fable-5`; `default`/`inherit`/empty =
+account default; else a model id like `claude-opus-4-8` / `claude-sonnet-5` or an
+alias) to the launcher as `TG_MODEL`, which adds `--model <id>` to the claude
+command. **Why a flag, not a settings `model` key** (learned 2026-07-04 from a
+topic coming up on the wrong model): a settings `model` is only a DEFAULT and is
+IGNORED by a `--resume`d INTERACTIVE session, which restores its OWN baked-in
+model - so a pre-existing topic (created on an older default) would keep that old
+model forever, and baking `model` into effective-settings.json did NOT fix it
+(measured: hostthis resumed to opus despite `model: claude-fable-5` in the
+settings). The `--model` FLAG overrides even on resume (measured: an opus session
+resumed with `--model claude-fable-5` came up fable-5). Effect is per-respawn (the
+flag applies on every spawn). The launcher builds args with `set --` so a
+bracketed id like `claude-fable-5[1m]` is one properly-quoted arg. The bridge
+chooses its own model separately (the global `~/.claude/settings.json` `model` is
+`claude-fable-5[1m]`, but the bridge session was created on opus and keeps it on
+`--continue` - same resume-keeps-its-model behavior).
 
 **Passive nightly restart.** If `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` is set
 (0-23, LOCAL), the proxy checks once a minute and, once a day at that hour, kills

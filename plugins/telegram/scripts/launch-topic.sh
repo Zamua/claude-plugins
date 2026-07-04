@@ -31,6 +31,9 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 # TG_RESUME is optional: "1" = resume the topic's existing claude session (no
 # kickoff, keeps history); empty = first spawn (mint the session + send kickoff).
 : "${TG_RESUME:=}"
+# TG_MODEL is optional: a model id passed as the --model FLAG (empty = account
+# default). Set by the proxy from TELEGRAM_TOPICS_MODEL.
+: "${TG_MODEL:=}"
 
 # Dedup: never spawn a second session for a topic. The '=' forces an EXACT
 # match so tg-<cid>-4 cannot match tg-<cid>-45.
@@ -71,25 +74,31 @@ fi
 # session); a re-spawn (TG_RESUME=1) uses --resume <id> and NO kickoff, so the
 # topic stays one continuous conversation across kills / crashes / restarts. The
 # branch runs INSIDE the pane command so the pane shell picks the right form.
+# TG_MODEL: the model FLAG (`--model <id>`), NOT a settings key. A settings-file
+# `model` is only a DEFAULT and is IGNORED by a `--resume`d interactive session
+# (which restores its own baked-in model), so an existing topic would keep its old
+# model forever. The `--model` FLAG overrides even on resume (verified), so every
+# (re)spawn lands on the configured model. Empty TG_MODEL = no flag = account
+# default. Built with `set --` so a bracketed id (e.g. claude-fable-5[1m]) is
+# passed as ONE properly-quoted arg (no glob/word-split).
 tmux new-session -d -s "$TG_SESSION" -c "$TG_SPAWN_DIR" \
   -e TG_MARKETPLACE="$TG_MARKETPLACE" \
   -e TG_SETTINGS="$TG_SETTINGS" \
   -e TG_HOOK="$TG_HOOK" \
+  -e TG_MODEL="$TG_MODEL" \
   -e TG_KICKOFF="$TG_KICKOFF" \
   -e TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
   -e TG_RESUME="$TG_RESUME" \
   -e TELEGRAM_TOPIC_ID="$TELEGRAM_TOPIC_ID" \
   -e TELEGRAM_PROXY_URL="$TELEGRAM_PROXY_URL" \
-  'if [ -n "$TG_RESUME" ]; then \
-     exec claude --dangerously-load-development-channels="$TG_MARKETPLACE" \
-       --settings "$TG_SETTINGS" --permission-mode auto \
-       --disallowedTools=AskUserQuestion \
-       --resume "$TG_CLAUDE_SESSION_ID"; \
+  'set -- --dangerously-load-development-channels="$TG_MARKETPLACE" \
+          --settings "$TG_SETTINGS" --permission-mode auto \
+          --disallowedTools=AskUserQuestion; \
+   [ -n "$TG_MODEL" ] && set -- "$@" --model "$TG_MODEL"; \
+   if [ -n "$TG_RESUME" ]; then \
+     exec claude "$@" --resume "$TG_CLAUDE_SESSION_ID"; \
    else \
-     exec claude --dangerously-load-development-channels="$TG_MARKETPLACE" \
-       --settings "$TG_SETTINGS" --permission-mode auto \
-       --disallowedTools=AskUserQuestion \
-       --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
+     exec claude "$@" --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
    fi'
 
 # --dangerously-load-development-channels shows a one-key "local development"
