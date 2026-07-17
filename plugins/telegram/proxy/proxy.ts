@@ -147,6 +147,18 @@ function resolveMux(): 'tmux' | 'herdr' {
   return 'tmux'
 }
 const MUX_KIND = resolveMux()
+
+// ---- the square (inter-Claude collaboration) --------------------------------
+// One designated forum topic hosts ALL agent-to-agent conversations (design:
+// "private rooms + one commons"). Empty/unset = the square is disabled and
+// every square endpoint 404s. The topic is identified by thread id, created
+// once by the operator (or the bot - it has can_manage_topics).
+const SQUARE_TOPIC = (process.env.TELEGRAM_TOPICS_SQUARE_TOPIC_ID ?? '').trim()
+// Idle conversations are pruned from the ROUTING registry after this many
+// hours (the Telegram thread itself stays readable forever - closing only
+// stops routing). No hop caps / rate limits by design: discipline is the
+// per-delivery norm line; Telegram's per-group limits are the only throttle.
+const CONV_TTL_HOURS = Number(process.env.TELEGRAM_TOPICS_CONV_TTL_HOURS ?? '48')
 const EFFECTIVE_SETTINGS = join(STATE_DIR, 'effective-settings.json')
 // Called PER SPAWN (not once at module load) so each (re)spawn reflects the
 // CURRENT committed override-settings.json - a base-settings edit (e.g. a git
@@ -608,6 +620,311 @@ function loadAndReconcileRegistry(): void {
   saveRegistry()
 }
 
+// ---- conversations (the square's routing registry) ---------------------------
+//
+// Durable + rederivable, content-free. One JSON file beside registry.json,
+// atomic writes, bounded (LRU cap), TTL-pruned. The conv id is the root
+// message id in the square thread; every non-root square message carries
+// "#<conv>" in its header, so a lost file rebuilds lazily from
+// reply_to_message payloads as replies arrive (self-describing messages).
+
+type Conv = {
+  participants: string[] // topic keys ("34", "general"); the operator is an implicit participant of every conv
+  last_msg_id: number
+  origin_topic: string
+  depth: number // DELIVERED claude messages since the last human message. Logged, never enforced.
+  updated_at: number
+}
+
+const CONV_FILE = join(STATE_DIR, 'conversations.json')
+const CONV_CAP = 50
+const convs = new Map<string, Conv>()
+
+function pruneConvs(): void {
+  const cutoff = Date.now() - CONV_TTL_HOURS * 3600_000
+  for (const [id, c] of convs) if (c.updated_at < cutoff) convs.delete(id)
+  // LRU-close beyond the cap (oldest first).
+  if (convs.size > CONV_CAP) {
+    const sorted = [...convs.entries()].sort((a, b) => a[1].updated_at - b[1].updated_at)
+    for (const [id] of sorted.slice(0, convs.size - CONV_CAP)) convs.delete(id)
+  }
+}
+
+function saveConvs(): void {
+  pruneConvs()
+  try {
+    mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+    const tmp = CONV_FILE + '.tmp'
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(convs), null, 2) + '\n')
+    renameSync(tmp, CONV_FILE)
+  } catch (e) {
+    log(`could not save conversations.json: ${e}`)
+  }
+}
+
+function loadConvs(): void {
+  try {
+    const raw = JSON.parse(readFileSync(CONV_FILE, 'utf8')) as Record<string, Conv>
+    for (const [id, c] of Object.entries(raw)) convs.set(id, c)
+    pruneConvs()
+    log(`loaded ${convs.size} conversation(s)`)
+  } catch {}
+}
+
+// ---- the square: directory, formatting, delivery ----------------------------
+
+// Topic directory: every known topic (live or dormant) addressable by slug.
+// The square itself and never-spawned unnamed topics are excluded.
+function topicDirectory(): Array<{ slug: string; name: string; topic: string; live: boolean }> {
+  const live = mux.liveSessions()
+  const out: Array<{ slug: string; name: string; topic: string; live: boolean }> = []
+  for (const [topic, st] of topics) {
+    if (topic === SQUARE_TOPIC) continue
+    const name = st.name || topicNames.get(topic) || ''
+    const slug = topic === 'general' ? 'general' : slugify(name) !== 'topic' ? slugify(name) : topic
+    out.push({ slug, name: name || topic, topic, live: !!(st.session && live.has(st.session)) })
+  }
+  return out
+}
+
+function resolvePeer(peer: string): string | null {
+  const p = peer.trim().toLowerCase().replace(/^@/, '')
+  for (const e of topicDirectory()) {
+    if (e.slug === p || e.topic === p) return e.topic
+  }
+  return null
+}
+
+function slugForTopic(topic: string): string {
+  for (const e of topicDirectory()) if (e.topic === topic) return e.slug
+  return topic
+}
+
+// Deep link to a message in the square thread (private supergroup form:
+// t.me/c/<chat id without -100>/<thread id>/<message id>).
+function squareLink(msgId: number): string {
+  const internal = String(GROUP_CHAT_ID).replace(/^-100/, '')
+  return `https://t.me/c/${internal}/${SQUARE_TOPIC}/${msgId}`
+}
+
+// The standing per-delivery norm (the "pre-message hook"): conversation
+// discipline is behavioral, not enforced - see the design doc. Appended to
+// every square delivery's content.
+const SQUARE_NORM =
+  '[square norm: reply via square_reply ONLY if it moves the work forward; ' +
+  'a closing courtesy is fine, courtesy-for-courtesy is not; if no reply is ' +
+  'warranted, do nothing - silence politely ends a conversation here.]'
+
+// Deliver a square message to a set of topics (recipient set = participants
+// or tagged claudes, NEVER broadcast). Wakes dormant claudes (a tag counts as
+// a first message).
+function deliverSquare(
+  recipients: string[],
+  text: string,
+  meta: { conv: string; reply_token: number; from: string; origin_topic: string; depth: number },
+): void {
+  for (const topic of recipients) {
+    if (topic === SQUARE_TOPIC) continue
+    ensureSession(topic)
+    enqueue(topic, {
+      content: `${text}\n\n${SQUARE_NORM}`,
+      meta: {
+        chat_id: String(GROUP_CHAT_ID),
+        square: '1',
+        conv: meta.conv,
+        reply_token: String(meta.reply_token),
+        from: meta.from,
+        origin_topic: meta.origin_topic,
+        depth: String(meta.depth),
+        message_id: String(meta.reply_token),
+        ts: new Date().toISOString(),
+      },
+    })
+  }
+}
+
+// POST /square/tag {topic, peer, text} - open a conversation. Posts the root
+// message in the square, registers the conv, breadcrumbs the caller's topic,
+// delivers to (and wakes) the peer.
+async function handleSquareTag(req: Request): Promise<Response> {
+  if (!SQUARE_TOPIC) return new Response('square not configured', { status: 404 })
+  const b = (await req.json()) as any
+  const caller = String(b.topic ?? '')
+  const peer = resolvePeer(String(b.peer ?? ''))
+  const text = String(b.text ?? '').trim()
+  if (!peer) {
+    const dir = topicDirectory().map(e => e.slug).join(', ')
+    return new Response(`unknown peer; known topics: ${dir}`, { status: 400 })
+  }
+  if (peer === caller) return new Response('cannot tag yourself', { status: 400 })
+  if (!text) return new Response('text required', { status: 400 })
+
+  const callerSlug = caller === 'operator' ? 'operator' : slugForTopic(caller)
+  const peerSlug = slugForTopic(peer)
+  const header = `🤖 ${callerSlug} → @${peerSlug}`
+  const sent = await bot.api.sendMessage(String(GROUP_CHAT_ID), `${header}\n${text}`, {
+    message_thread_id: Number(SQUARE_TOPIC),
+  })
+  const conv = String(sent.message_id)
+  convs.set(conv, {
+    participants: [...new Set([caller, peer])].filter(t => t !== 'operator'),
+    last_msg_id: sent.message_id,
+    origin_topic: caller,
+    depth: 1,
+    updated_at: Date.now(),
+  })
+  saveConvs()
+
+  // Breadcrumb in the caller's own room (claude callers only), with a deep link.
+  if (caller !== 'operator') {
+    const tid = threadIdForTopic(caller)
+    bot.api
+      .sendMessage(String(GROUP_CHAT_ID), `↪️ asked @${peerSlug} in #square: ${squareLink(sent.message_id)}`, {
+        ...(tid != null ? { message_thread_id: tid } : {}),
+      })
+      .catch(e => log(`breadcrumb failed for ${caller}: ${e}`))
+  }
+
+  deliverSquare([peer], `(square conversation #${conv}, opened by ${callerSlug}) ${text}`, {
+    conv,
+    reply_token: sent.message_id,
+    from: callerSlug,
+    origin_topic: caller,
+    depth: 1,
+  })
+  log(`square: ${callerSlug} tagged ${peerSlug} -> conv ${conv}`)
+  return json({ conv, message_id: sent.message_id })
+}
+
+// POST /square/reply {topic, conv, reply_token?, text} - continue a
+// conversation this claude participates in. Threads under the message being
+// answered (reply_token from the notification meta) or the conv root as the
+// safe fallback - a stray unthreaded message is not expressible.
+async function handleSquareReply(req: Request): Promise<Response> {
+  if (!SQUARE_TOPIC) return new Response('square not configured', { status: 404 })
+  const b = (await req.json()) as any
+  const caller = String(b.topic ?? '')
+  const conv = String(b.conv ?? '')
+  const text = String(b.text ?? '').trim()
+  const c = convs.get(conv)
+  if (!c) {
+    return new Response('conversation not found (expired or never existed); use square_tag to start a new one', {
+      status: 404,
+    })
+  }
+  if (caller !== 'operator' && !c.participants.includes(caller)) {
+    return new Response('not a participant of this conversation; use square_tag to start your own', { status: 403 })
+  }
+  if (!text) return new Response('text required', { status: 400 })
+
+  const replyToRaw = Number(b.reply_token)
+  const replyTo = Number.isFinite(replyToRaw) && replyToRaw > 0 ? replyToRaw : Number(conv)
+  const callerSlug = caller === 'operator' ? 'operator' : slugForTopic(caller)
+  const sent = await bot.api.sendMessage(String(GROUP_CHAT_ID), `🤖 ${callerSlug} · #${conv}\n${text}`, {
+    message_thread_id: Number(SQUARE_TOPIC),
+    reply_parameters: { message_id: replyTo },
+  })
+  c.last_msg_id = sent.message_id
+  c.depth += 1
+  c.updated_at = Date.now()
+  saveConvs()
+
+  const recipients = c.participants.filter(t => t !== caller)
+  deliverSquare(recipients, text, {
+    conv,
+    reply_token: sent.message_id,
+    from: callerSlug,
+    origin_topic: c.origin_topic,
+    depth: c.depth,
+  })
+  log(`square: ${callerSlug} replied in conv ${conv} (depth ${c.depth})`)
+  return json({ message_id: sent.message_id })
+}
+
+// GET /topics - the directory tool's backing endpoint.
+function handleTopics(): Response {
+  return json({ square: SQUARE_TOPIC || null, topics: topicDirectory() })
+}
+
+// Inbound handling for USER messages posted in the square topic. Reply-chain
+// membership or an explicit @tag addresses claudes; an untagged non-reply is
+// visible text delivered to no one. A human message in a conv RESETS its
+// depth (human presence re-authorizes budget) and re-registers a conv lazily
+// if conversations.json was lost (the self-describing "#<conv>" header in the
+// replied-to message).
+function handleSquareUserMessage(msg: any, text: string): void {
+  const uname = msg.from?.username ?? String(msg.from?.id ?? 'operator')
+  // 1. Reply within a chain?
+  const parent = msg.reply_to_message
+  if (parent) {
+    const parentText = String(parent.text ?? '')
+    let conv = convs.has(String(parent.message_id)) ? String(parent.message_id) : ''
+    if (!conv) {
+      const m = parentText.match(/#(\d+)/)
+      if (m && convs.has(m[1])) conv = m[1]
+      else if (m) {
+        // Lazy rederivation: rebuild a minimal conv entry from the footer.
+        conv = m[1]
+        convs.set(conv, {
+          participants: [],
+          last_msg_id: parent.message_id,
+          origin_topic: 'unknown',
+          depth: 0,
+          updated_at: Date.now(),
+        })
+        log(`square: rederived conv ${conv} from message footer`)
+      }
+    }
+    if (conv) {
+      const c = convs.get(conv)!
+      // Participants may also be rederivable from the parent header (slugs).
+      if (c.participants.length === 0) {
+        const slugs = parentText.match(/🤖 ([a-z0-9-]+)(?: → @([a-z0-9-]+))?/)
+        for (const s of [slugs?.[1], slugs?.[2]]) {
+          const t = s ? resolvePeer(s) : null
+          if (t) c.participants.push(t)
+        }
+      }
+      c.depth = 0 // human message resets the budget clock
+      c.last_msg_id = msg.message_id
+      c.updated_at = Date.now()
+      saveConvs()
+      deliverSquare(c.participants, text, {
+        conv,
+        reply_token: msg.message_id,
+        from: `operator (${uname})`,
+        origin_topic: 'square',
+        depth: 0,
+      })
+      log(`square: operator replied in conv ${conv}`)
+      return
+    }
+  }
+  // 2. Fresh @tags open new conversation(s).
+  const tags = [...text.matchAll(/@([a-z0-9-]+)/gi)].map(m => m[1])
+  const peers = [...new Set(tags.map(t => resolvePeer(t)).filter((t): t is string => !!t))]
+  if (peers.length > 0) {
+    const conv = String(msg.message_id)
+    convs.set(conv, {
+      participants: peers,
+      last_msg_id: msg.message_id,
+      origin_topic: 'square',
+      depth: 0,
+      updated_at: Date.now(),
+    })
+    saveConvs()
+    deliverSquare(peers, text, {
+      conv,
+      reply_token: msg.message_id,
+      from: `operator (${uname})`,
+      origin_topic: 'square',
+      depth: 0,
+    })
+    log(`square: operator opened conv ${conv} with ${peers.join(',')}`)
+  }
+  // 3. Untagged non-reply: visible text, delivered to no one.
+}
+
 // ---- spawn (single-flight) -------------------------------------------------
 
 function kickoffPrompt(topicLabel: string): string {
@@ -617,7 +934,17 @@ function kickoffPrompt(topicLabel: string): string {
     `<channel> turn - and respond to THAT via the telegram MCP (it targets this topic). Your working ` +
     `dir is ${SPAWN_DIR}. IMPORTANT: other Claudes may be running concurrently on this same machine, ` +
     `un-sandboxed and possibly in overlapping dirs, so be careful with destructive or global actions ` +
-    `and with shared state, and do not assume you are alone.`
+    `and with shared state, and do not assume you are alone.` +
+    (SQUARE_TOPIC
+      ? ` THE SQUARE: a shared #square topic hosts agent-to-agent conversations. To ask a peer Claude ` +
+        `for help, use the square_tag tool (see list_topics for peers); continue conversations with ` +
+        `square_reply using the conv + reply_token from the notification meta. Norms: tag a peer only ` +
+        `when you genuinely need them; every message must move the work forward; do long work in shared ` +
+        `files and post summaries + paths; a closing courtesy is fine but never reply to a courtesy with ` +
+        `a courtesy; if a square notification warrants no reply, do nothing - silence politely ends a ` +
+        `conversation and is explicitly sanctioned there (the reply requirement applies to YOUR topic's ` +
+        `user messages, not square deliveries).`
+      : '')
   )
 }
 
@@ -626,6 +953,8 @@ function kickoffPrompt(topicLabel: string): string {
 // inbound messages for a brand-new topic cannot spawn two sessions; the
 // spawning flag + the live-session dedup are belt and suspenders.
 function ensureSession(topic: string): void {
+  // The square topic hosts conversations, not a claude of its own.
+  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
   const st = getTopic(topic)
   if (st.spawning) return
   const live = mux.liveSessions()
@@ -743,6 +1072,15 @@ bot.on('message', async ctx => {
   if (String(ctx.chat.id) !== String(GROUP_CHAT_ID)) return
 
   const topic = msg.message_thread_id != null ? String(msg.message_thread_id) : 'general'
+
+  // Square-topic USER messages route by conversation membership / @tags -
+  // there is no claude "for" the square, so they never hit the normal path.
+  // (Service messages fall through to the name-learning handlers below.)
+  if (SQUARE_TOPIC && topic === SQUARE_TOPIC && !msg.forum_topic_created && !msg.forum_topic_edited) {
+    const text = msg.text ?? msg.caption ?? ''
+    if (text) handleSquareUserMessage(msg, String(text))
+    return
+  }
 
   // Learn topic names from the creation service message; do not relay it.
   if (msg.forum_topic_created) {
@@ -1054,6 +1392,7 @@ try {
 writeFileSync(PID_FILE, String(process.pid))
 
 loadAndReconcileRegistry()
+loadConvs()
 
 // polling liveness for /health. Set on each (re)start of the poll, cleared if
 // polling stops. A monitor can tell "process up but deaf" from this alone.
@@ -1099,6 +1438,9 @@ async function serveWithRetry(): Promise<void> {
                 polling_since: pollingSince != null ? new Date(pollingSince).toISOString() : null,
               })
             }
+            if (req.method === 'GET' && url.pathname === '/topics') return handleTopics()
+            if (req.method === 'POST' && url.pathname === '/square/tag') return await handleSquareTag(req)
+            if (req.method === 'POST' && url.pathname === '/square/reply') return await handleSquareReply(req)
             if (req.method === 'POST' && url.pathname === '/send') return await handleSend(req)
             if (req.method === 'POST' && url.pathname === '/react') return await handleReact(req)
             if (req.method === 'POST' && url.pathname === '/edit') return await handleEdit(req)

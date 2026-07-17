@@ -175,6 +175,39 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['chat_id', 'message_id', 'text'],
       },
     },
+    {
+      name: 'list_topics',
+      description:
+        'Directory of peer Claude topics (for the #square). Returns each topic\'s slug (use with square_tag), display name, and whether its Claude is currently live. Dormant peers are fine to tag — a tag wakes them.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'square_tag',
+      description:
+        'Open a collaboration with a peer Claude in the shared #square topic. Use ONLY when you genuinely need that peer (their domain, their codebase). The peer receives your message and can reply; the whole conversation is visible to the operator in #square. Returns the conversation id. Norms: every message must move the work forward; do long work in shared files and post summaries + paths.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          peer: { type: 'string', description: 'Peer topic slug from list_topics (e.g. "shale", "hostthis").' },
+          text: { type: 'string', description: 'Your opening message to the peer.' },
+        },
+        required: ['peer', 'text'],
+      },
+    },
+    {
+      name: 'square_reply',
+      description:
+        'Continue a #square conversation you participate in. Pass conv and reply_token VERBATIM from the square notification meta. Reply ONLY if it moves the work forward — a closing courtesy is fine, courtesy-for-courtesy is not; if no reply is warranted simply do not call this (silence politely ends a conversation and is sanctioned).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          conv: { type: 'string', description: 'Conversation id from the notification meta.' },
+          reply_token: { type: 'string', description: 'reply_token from the notification meta (threads your reply correctly).' },
+          text: { type: 'string' },
+        },
+        required: ['conv', 'text'],
+      },
+    },
   ],
 }))
 
@@ -249,6 +282,36 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         })
         const id = data?.message_id ?? args.message_id
         return { content: [{ type: 'text', text: `edited (id: ${id})` }] }
+      }
+      case 'list_topics': {
+        const res = await fetch(`${PROXY}/topics`)
+        const raw = await res.text()
+        if (!res.ok) throw new Error(raw || `HTTP ${res.status}`)
+        return { content: [{ type: 'text', text: raw }] }
+      }
+      case 'square_tag': {
+        const data = await postJSON('/square/tag', {
+          topic: TOPIC,
+          peer: args.peer,
+          text: args.text,
+        })
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `conversation ${data.conv} opened (root message ${data.message_id}). The peer will reply via a square notification; you do not need to wait.`,
+            },
+          ],
+        }
+      }
+      case 'square_reply': {
+        const data = await postJSON('/square/reply', {
+          topic: TOPIC,
+          conv: args.conv,
+          ...(args.reply_token != null ? { reply_token: args.reply_token } : {}),
+          text: args.text,
+        })
+        return { content: [{ type: 'text', text: `replied in conversation ${args.conv} (id: ${data.message_id})` }] }
       }
       default:
         return {

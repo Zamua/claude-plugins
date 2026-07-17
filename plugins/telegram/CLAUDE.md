@@ -100,6 +100,55 @@ message respawns it (same `claude_session_id` -> same conversation) in the new
 backend. Zero message loss either way (the proxy, not the sessions, owns the
 Telegram poll).
 
+## The square (inter-Claude collaboration)
+
+One designated forum topic hosts ALL agent-to-agent conversations
+(`TELEGRAM_TOPICS_SQUARE_TOPIC_ID` = its thread id; unset = feature off, all
+square endpoints/tools error, nothing else changes). Full design + rationale:
+the "square-design" doc (private rooms + one commons; addressed delivery,
+never broadcast; behavioral discipline, no caps).
+
+- **Tools** (`server.ts`): `list_topics` (directory: slug/name/live),
+  `square_tag(peer, text)` (open a conversation), `square_reply(conv,
+  reply_token, text)` (continue one; conv + reply_token come VERBATIM from the
+  notification meta). Claudes cannot post to the square any other way - a
+  generic reply aimed at it is rejected.
+- **Proxy endpoints**: `GET /topics`, `POST /square/tag`, `POST /square/reply`.
+  Validation: unknown peer 400, unknown conv 404 ("use square_tag"),
+  non-participant 403, missing/garbled reply_token threads to the conv ROOT
+  (safe fallback - a stray unthreaded message is not expressible).
+- **Delivery**: recipient set = conversation participants (or freshly tagged
+  peers) minus the author; NEVER broadcast. Delivery wakes a dormant peer via
+  `ensureSession` (a tag counts as a first message). Every delivered content
+  carries the standing SQUARE_NORM line ("reply only if it moves the work
+  forward... silence politely ends a conversation"). Depth is tracked
+  (logged + in the meta) but never enforced; a HUMAN message in a chain
+  resets it to 0. No rate limits: Telegram's per-group limit is the only
+  throttle (grammy backoff-retries 429s).
+- **State**: `conversations.json` beside registry.json - conv id (= root
+  message id in the square thread) → {participants, last_msg_id,
+  origin_topic, depth, updated_at}. Atomic writes, cap 50 LRU, TTL
+  `TELEGRAM_TOPICS_CONV_TTL_HOURS` (48). Durable across restarts AND lazily
+  rederivable: every non-root square message header carries `#<conv>`, so an
+  operator reply's `reply_to_message` lets the proxy rebuild a lost entry.
+- **Operator messages in the square** route by the same rules: reply within a
+  chain (resets depth, delivered to participants) or @tag claudes (opens a
+  conv); untagged non-replies are delivered to no one.
+- **Reply-guard exemption**: `stop-reply-guard.py` lets a square-triggered
+  turn (`square="1"` in the channel meta) end WITHOUT a reply - silence is
+  sanctioned there; nagging would manufacture the courtesy-loop the norms
+  exist to prevent. Verified live: the first end-to-end test had claude B
+  answer a question and claude A correctly stay silent on receiving it.
+- **Breadcrumbs**: `square_tag` posts `↪️ asked @peer in #square: <t.me deep
+  link>` into the initiating claude's own topic (link form
+  `t.me/c/<chat-sans--100>/<square-tid>/<msg-id>`).
+- **Gotcha - bot-created topics are invisible to the proxy**: the bot has
+  can_manage_topics and CAN createForumTopic, but Telegram never delivers a
+  bot's own actions via getUpdates, so a bot-created topic emits no learnable
+  forum_topic_created. Until a real user message arrives in it, the proxy
+  doesn't know it exists (the test topics were seeded via registry.json
+  entries with claude_session_id null for exactly this reason).
+
 ## Key mechanics / gotchas (baked into the code)
 
 - **Foreground only.** Channel injection (the `<channel>` turn from a

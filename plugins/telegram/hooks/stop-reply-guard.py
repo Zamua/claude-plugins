@@ -76,6 +76,7 @@ def main() -> None:
 
     # Index of the LAST inbound Telegram <channel> message (a string user turn).
     last_ch = -1
+    last_blob = ""
     for i, o in enumerate(entries):
         if o.get("type") != "user":
             continue
@@ -83,8 +84,16 @@ def main() -> None:
         blob = c if isinstance(c, str) else json.dumps(c or "")
         if CHANNEL_MARKER in blob:
             last_ch = i
+            last_blob = blob
     if last_ch < 0:
         return  # this turn was not triggered by a Telegram message
+
+    # SQUARE EXEMPTION: a #square delivery (meta square="1") sanctions silence -
+    # the norm is "reply only if it moves the work forward; if no reply is
+    # warranted, do nothing". Nagging here would manufacture exactly the
+    # courtesy-loop the square design avoids, so let the stop through.
+    if 'square="1"' in last_blob:
+        return
 
     # Since then: did we already reply, or already remind (our marker)?
     replied = reminded = False
