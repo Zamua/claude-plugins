@@ -416,6 +416,14 @@ One-time operator setup: the `zamua` marketplace must be registered once
 `--dangerously-load-development-channels=plugin:telegram@zamua` resolves. That
 mutates the global `~/.claude/settings.json` (adds `extraKnownMarketplaces`).
 
+**Forking to your own marketplace**: the plugin is deliberately free of
+hardcoded paths/ids (everything flows from env; the launchd plist is templated
+at install). The ONE as-shipped identity is the marketplace name
+`telegram@zamua`, in exactly two places: the `TELEGRAM_TOPICS_MARKETPLACE`
+default (override via env) and the `enabledPlugins` key in the committed
+`override-settings.json` (edit to `telegram@<your-marketplace>`). Change both
+and everything else ports as-is.
+
 ## Not in v1
 
 No session reaping/TTL, no per-topic cwd, no pairing/allowlist beyond the
