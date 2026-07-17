@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
-# telegram-topics: spawn ONE detached tmux session running a FOREGROUND Claude
-# bound to a single Telegram forum topic. Invoked by the proxy (proxy/proxy.ts)
-# with the topic's parameters in the environment.
+# telegram-topics: spawn ONE detached multiplexer session running a FOREGROUND
+# Claude bound to a single Telegram forum topic. Invoked by the proxy
+# (proxy/proxy.ts) with the topic's parameters in the environment.
 #
 # Channel injection only works foreground, so each topic gets its own
-# foreground Claude in its own tmux session (a --bg agent silently drops
-# channel notifications). This mirrors the proven single-session bridge. The
-# per-topic vars are handed to the new session EXPLICITLY via `new-session -e`
-# (see the note above the tmux call) so the pane shell + the claude child + its
-# MCP inherit TELEGRAM_TOPIC_ID / TELEGRAM_PROXY_URL regardless of whether a
-# tmux server was already running.
+# foreground Claude in its own detached session (a --bg agent silently drops
+# channel notifications). This mirrors the proven single-session bridge.
+#
+# TWO BACKENDS, selected by TG_MUX (set by the proxy from
+# TELEGRAM_TOPICS_MULTIPLEXER; default tmux):
+#   tmux   the original backend. Per-topic vars are handed to the new session
+#          EXPLICITLY via `new-session -e` (see the note in spawn_tmux) so the
+#          pane shell + the claude child + its MCP inherit them regardless of
+#          whether a tmux server was already running.
+#   herdr  the herdr.dev agent multiplexer. Vars are injected with a
+#          `/usr/bin/env VAR=...` prefix on the pane command - REQUIRED because
+#          a herdr pane inherits the herdr SERVER's environment (often a
+#          minimal launchd one), never this launcher's. PATH is forwarded the
+#          same way so `claude` resolves under the server's env too.
+# The claude invocation itself (PANE_CMD below) is byte-identical for both.
 set -u
 
-# Schedulers / detached parents run with a minimal PATH; make claude/tmux/bun
-# discoverable however they were installed.
+# Schedulers / detached parents run with a minimal PATH; make claude/tmux/
+# herdr/bun discoverable however they were installed.
 export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 : "${TG_SESSION:?TG_SESSION required}"
@@ -24,7 +33,7 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 : "${TG_SETTINGS:?TG_SETTINGS required}"
 # TG_HOOK: absolute path to the Stop hook (hooks/stop-reply-guard.py). The
 # session's --settings override references it as $TG_HOOK so that committed file
-# needs no hardcoded path; passed to the pane via `new-session -e` like the rest.
+# needs no hardcoded path; forwarded into the pane like the rest.
 : "${TG_HOOK:?TG_HOOK required}"
 : "${TG_KICKOFF:?TG_KICKOFF required}"
 : "${TG_CLAUDE_SESSION_ID:?TG_CLAUDE_SESSION_ID required}"
@@ -34,24 +43,13 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 # TG_MODEL is optional: a model id passed as the --model FLAG (empty = account
 # default). Set by the proxy from TELEGRAM_TOPICS_MODEL.
 : "${TG_MODEL:=}"
+# TG_MUX is optional: which multiplexer hosts the session (default tmux).
+: "${TG_MUX:=tmux}"
 
-# Dedup: never spawn a second session for a topic. The '=' forces an EXACT
-# match so tg-<cid>-4 cannot match tg-<cid>-45.
-if tmux has-session -t "=$TG_SESSION" 2>/dev/null; then
-  echo "telegram-topics: session $TG_SESSION already exists; not spawning" >&2
-  exit 0
-fi
-
-# Pass every var the session needs EXPLICITLY via `tmux new-session -e`. Do NOT
-# rely on new-session inheriting this launcher's environment: when the tmux
-# server is ALREADY running (e.g. the single-session bridge's server), a new
-# session takes the SERVER's environment (seeded at server start), NOT the
-# launcher's, so freshly-set vars are empty - the command's $-refs expand to ""
-# and claude rejects the untagged `--dangerously-load-development-channels=`,
-# killing the pane instantly. `-e` sets them on the session so the pane shell
-# can expand $TG_MARKETPLACE/$TG_SETTINGS/$TG_KICKOFF and claude + its MCP child
-# inherit TELEGRAM_TOPIC_ID / TELEGRAM_PROXY_URL. (Requires tmux >= 3.2.)
-
+# The pane command, IDENTICAL for both backends. Runs under a shell INSIDE the
+# pane with the TG_*/TELEGRAM_* vars present in its environment (each backend
+# has its own way of getting them there - see spawn_tmux / spawn_herdr).
+#
 # IMPORTANT: --dangerously-load-development-channels is VARIADIC so it MUST use
 # the =form; the space form would greedy-consume the following arg as another
 # channel entry. Pass it INSTEAD of --channels (both would double-register).
@@ -59,65 +57,142 @@ fi
 # and auto-approves the safe ones, so routine work runs without a prompt (chosen
 # over --dangerously-skip-permissions, which skips ALL checks). Caveat: a
 # detached pane cannot answer an interactive confirm, so if auto mode ever
-# escalates a genuinely risky command it will block until attended; re-activate
-# the permission relay (below) to route such escalations to Telegram if needed.
+# escalates a genuinely risky command it will block until attended.
 # --disallowedTools=AskUserQuestion REMOVES the AskUserQuestion tool: a detached
-# pane cannot answer its interactive multiple-choice UI, so a call to it would
-# hang the session with no way to unstick it remotely. NB the =form is required
-# (the flag is variadic, like --channels, and the space form eats the next arg),
-# and the disallowedTools SETTINGS key does NOT work for it - only this CLI flag
-# does (verified: with the settings key the model still rendered the tool).
-# `exec` so the pane dies with claude and the proxy's tmux-ls reconcile drops it.
+# pane cannot answer its interactive multiple-choice UI. NB the =form is
+# required (variadic, like --channels), and the disallowedTools SETTINGS key
+# does NOT work for it - only the CLI flag does.
+# `exec` so the pane dies with claude and the proxy's reconcile drops it.
 #
-# Session continuity: the proxy mints a claude session id per topic and passes
-# it here. A FIRST spawn uses --session-id <id> + the kickoff (creates the
-# session); a re-spawn (TG_RESUME=1) uses --resume <id> and NO kickoff, so the
-# topic stays one continuous conversation across kills / crashes / restarts. The
-# branch runs INSIDE the pane command so the pane shell picks the right form.
-# TG_MODEL: the model FLAG (`--model <id>`), NOT a settings key. A settings-file
-# `model` is only a DEFAULT and is IGNORED by a `--resume`d interactive session
-# (which restores its own baked-in model), so an existing topic would keep its old
-# model forever. The `--model` FLAG overrides even on resume (verified), so every
-# (re)spawn lands on the configured model. Empty TG_MODEL = no flag = account
-# default. Built with `set --` so a bracketed id (e.g. claude-fable-5[1m]) is
-# passed as ONE properly-quoted arg (no glob/word-split).
-tmux new-session -d -s "$TG_SESSION" -c "$TG_SPAWN_DIR" \
-  -e TG_MARKETPLACE="$TG_MARKETPLACE" \
-  -e TG_SETTINGS="$TG_SETTINGS" \
-  -e TG_HOOK="$TG_HOOK" \
-  -e TG_MODEL="$TG_MODEL" \
-  -e TG_KICKOFF="$TG_KICKOFF" \
-  -e TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
-  -e TG_RESUME="$TG_RESUME" \
-  -e TELEGRAM_TOPIC_ID="$TELEGRAM_TOPIC_ID" \
-  -e TELEGRAM_PROXY_URL="$TELEGRAM_PROXY_URL" \
-  'set -- --dangerously-load-development-channels="$TG_MARKETPLACE" \
-          --settings "$TG_SETTINGS" --permission-mode auto \
-          --disallowedTools=AskUserQuestion; \
-   [ -n "$TG_MODEL" ] && set -- "$@" --model "$TG_MODEL"; \
-   if [ -n "$TG_RESUME" ]; then \
-     exec claude "$@" --resume "$TG_CLAUDE_SESSION_ID"; \
-   else \
-     exec claude "$@" --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
-   fi'
+# Session continuity: a FIRST spawn uses --session-id <id> + the kickoff; a
+# re-spawn (TG_RESUME=1) uses --resume <id> and NO kickoff. TG_MODEL is the
+# --model FLAG (a settings `model` is ignored by a --resume'd session; the flag
+# overrides even on resume). Args built with `set --` so a bracketed id like
+# claude-fable-5[1m] stays ONE properly-quoted arg.
+PANE_CMD='set -- --dangerously-load-development-channels="$TG_MARKETPLACE" \
+        --settings "$TG_SETTINGS" --permission-mode auto \
+        --disallowedTools=AskUserQuestion; \
+ [ -n "$TG_MODEL" ] && set -- "$@" --model "$TG_MODEL"; \
+ if [ -n "$TG_RESUME" ]; then \
+   exec claude "$@" --resume "$TG_CLAUDE_SESSION_ID"; \
+ else \
+   exec claude "$@" --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
+ fi'
 
 # --dangerously-load-development-channels shows a one-key "local development"
-# confirmation dialog in an interactive session (third-party channel plugins are
-# not first-party-approved, and allowedChannelPlugins is only honored in managed
-# settings). A detached pane has no one to answer it, so the session would hang
-# before connecting. Auto-confirm with a short-lived DETACHED watcher: poll the
-# pane for the dialog text, send "1"+Enter when it appears, then exit. Its fds
-# are detached from this script so the proxy's synchronous spawn returns at once.
-# NB: pane-target commands (capture-pane/send-keys) do NOT accept the "=name"
-# exact-match prefix that has-session does; an exact session name already
-# resolves to that session (an exact match beats a prefix match), so pass the
-# bare name.
-(
-  for _ in $(seq 1 60); do
-    if tmux capture-pane -t "$TG_SESSION" -p 2>/dev/null | grep -q 'local development'; then
-      tmux send-keys -t "$TG_SESSION" 1 Enter
-      break
-    fi
-    sleep 0.25
-  done
-) </dev/null >/dev/null 2>&1 &
+# confirmation dialog in an interactive session (third-party channel plugins
+# are not first-party-approved, and allowedChannelPlugins is only honored in
+# managed settings). A detached pane has no one to answer it, so each backend
+# runs a short-lived DETACHED watcher: poll the pane text for the dialog,
+# send "1"+Enter when it appears, then exit. The watcher's fds are detached so
+# the proxy's synchronous spawn returns at once.
+DIALOG_TEXT='local development'
+
+spawn_tmux() {
+  # Dedup: never spawn a second session for a topic. The '=' forces an EXACT
+  # match so claude-x-4 cannot match claude-x-45.
+  if tmux has-session -t "=$TG_SESSION" 2>/dev/null; then
+    echo "telegram-topics: session $TG_SESSION already exists; not spawning" >&2
+    exit 0
+  fi
+
+  # Pass every var the session needs EXPLICITLY via `tmux new-session -e`. Do
+  # NOT rely on new-session inheriting this launcher's environment: when the
+  # tmux server is ALREADY running, a new session takes the SERVER's
+  # environment (seeded at server start), NOT the launcher's, so freshly-set
+  # vars would be empty - the command's $-refs expand to "" and claude rejects
+  # the untagged --dangerously-load-development-channels=, killing the pane
+  # instantly. (Requires tmux >= 3.2.)
+  tmux new-session -d -s "$TG_SESSION" -c "$TG_SPAWN_DIR" \
+    -e TG_MARKETPLACE="$TG_MARKETPLACE" \
+    -e TG_SETTINGS="$TG_SETTINGS" \
+    -e TG_HOOK="$TG_HOOK" \
+    -e TG_MODEL="$TG_MODEL" \
+    -e TG_KICKOFF="$TG_KICKOFF" \
+    -e TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
+    -e TG_RESUME="$TG_RESUME" \
+    -e TELEGRAM_TOPIC_ID="$TELEGRAM_TOPIC_ID" \
+    -e TELEGRAM_PROXY_URL="$TELEGRAM_PROXY_URL" \
+    "$PANE_CMD"
+
+  # Auto-confirm watcher. NB: pane-target commands (capture-pane/send-keys) do
+  # NOT accept the "=name" exact-match prefix that has-session does; an exact
+  # session name already resolves exactly, so pass the bare name.
+  (
+    for _ in $(seq 1 60); do
+      if tmux capture-pane -t "$TG_SESSION" -p 2>/dev/null | grep -q "$DIALOG_TEXT"; then
+        tmux send-keys -t "$TG_SESSION" 1 Enter
+        break
+      fi
+      sleep 0.25
+    done
+  ) </dev/null >/dev/null 2>&1 &
+}
+
+spawn_herdr() {
+  local herdr_bin sock pane_id
+  herdr_bin=$(command -v herdr || echo /opt/homebrew/bin/herdr)
+  # Default-session socket; HERDR_SOCKET_PATH overrides (matches herdr's own
+  # resolution order for the default session).
+  sock="${HERDR_SOCKET_PATH:-$HOME/.config/herdr/herdr.sock}"
+
+  # Dedup: a live pane with this label = the session exists. Labels are
+  # slugified (no quotes/escapes), so a plain substring match is exact enough.
+  if "$herdr_bin" pane list 2>/dev/null | grep -q "\"label\":\"$TG_SESSION\""; then
+    echo "telegram-topics: session $TG_SESSION already exists; not spawning" >&2
+    exit 0
+  fi
+
+  # Spawn. A herdr pane inherits the herdr SERVER's environment (not this
+  # launcher's), so every var - PATH included, or `claude` may not resolve
+  # under a launchd-started server - is injected with a /usr/bin/env prefix on
+  # the pane command (the herdr equivalent of tmux's `new-session -e`).
+  local out
+  out=$("$herdr_bin" agent start "$TG_SESSION" --cwd "$TG_SPAWN_DIR" -- \
+    /usr/bin/env \
+    PATH="$PATH" \
+    TG_MARKETPLACE="$TG_MARKETPLACE" \
+    TG_SETTINGS="$TG_SETTINGS" \
+    TG_HOOK="$TG_HOOK" \
+    TG_MODEL="$TG_MODEL" \
+    TG_KICKOFF="$TG_KICKOFF" \
+    TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
+    TG_RESUME="$TG_RESUME" \
+    TELEGRAM_TOPIC_ID="$TELEGRAM_TOPIC_ID" \
+    TELEGRAM_PROXY_URL="$TELEGRAM_PROXY_URL" \
+    bash -c "$PANE_CMD") || {
+    echo "telegram-topics: herdr agent start failed (is the herdr server running?)" >&2
+    exit 1
+  }
+  # agent start echoes one JSON object; the pane_id is the handle the watcher
+  # needs for pane.read / send-keys.
+  pane_id=$(printf '%s' "$out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -1)
+
+  # Auto-confirm watcher: poll the pane's visible text over the socket API
+  # (newline-delimited JSON; pane.read requires source=visible), answer the
+  # dialog with send-keys, exit. Skipped if the pane_id could not be parsed -
+  # the session still runs; a human can answer the dialog via `herdr`.
+  if [ -n "$pane_id" ]; then
+    (
+      for _ in $(seq 1 60); do
+        if printf '{"id":"w","method":"pane.read","params":{"pane_id":"%s","source":"visible"}}\n' "$pane_id" \
+          | nc -U "$sock" 2>/dev/null | grep -q "$DIALOG_TEXT"; then
+          "$herdr_bin" pane send-keys "$pane_id" 1 Enter
+          break
+        fi
+        sleep 0.25
+      done
+    ) </dev/null >/dev/null 2>&1 &
+  else
+    echo "telegram-topics: could not parse herdr pane_id; dialog watcher skipped" >&2
+  fi
+}
+
+case "$TG_MUX" in
+  tmux) spawn_tmux ;;
+  herdr) spawn_herdr ;;
+  *)
+    echo "telegram-topics: unknown TG_MUX '$TG_MUX' (expected tmux|herdr)" >&2
+    exit 1
+    ;;
+esac

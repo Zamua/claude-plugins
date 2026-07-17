@@ -35,7 +35,9 @@ proxy/proxy.ts ── grammy inbound ── group-chat gate ── topic = messa
    ├── POST /permission-request       {topic,request_id,tool,input} -> prompt in topic
    └── GET  /health                   {ok, topics, port, polling, polling_since}
 
-scripts/launch-topic.sh ── tmux new-session -d -s claude-<slug>-<tid> (per-topic vars via -e) ──
+scripts/launch-topic.sh ── spawn in the selected multiplexer (TG_MUX: tmux new-session -d
+   with vars via -e, or herdr agent start with vars via /usr/bin/env; see
+   "Multiplexer backends") ── session claude-<slug>-<tid> ──
    exec claude --dangerously-load-development-channels=plugin:telegram@zamua
                --settings override-settings.json --permission-mode auto
                first spawn: --session-id <id> "<kickoff>"   (mints the session)
@@ -51,6 +53,52 @@ server.ts (the MCP, one per tmux session)
                    permission_request -> POST /permission-request;
                    long-poll GET /permission-poll -> notifications/claude/channel/permission
 ```
+
+## Multiplexer backends (tmux | herdr)
+
+The detached topic-Claudes are hosted by a terminal multiplexer, selectable via
+`TELEGRAM_TOPICS_MULTIPLEXER=tmux|herdr` (default `tmux`; read at proxy boot).
+The code follows a ports-and-adapters split so neither backend leaks into the
+core:
+
+- **The port** (`proxy.ts`, "multiplexer" section): `interface Multiplexer
+  { kind; liveSessions(); kill(session) }` - the ONLY two operations the proxy
+  core needs. `TmuxMux` shells to `tmux ls` / `tmux kill-session`; `HerdrMux`
+  shells to `herdr pane list` (JSON; the pane `label` is our session name) /
+  `herdr pane close <pane_id>`. Session NAMES are the shared currency: a tmux
+  session name == a herdr agent/pane label (`claude-<slug>-<tid>`), so the
+  registry (`tmux_session` field - name kept for back-compat, it stores "the
+  mux session name") works unchanged for both.
+- **Spawning** lives in `scripts/launch-topic.sh` (branch on `TG_MUX`, set by
+  the proxy), because spawning is where the backend-specific ceremony is:
+  - tmux: `new-session -e VAR=...` for env (see the env-propagation gotcha
+    below), `capture-pane`/`send-keys` for the dialog watcher.
+  - herdr: `herdr agent start <name> --cwd ... -- /usr/bin/env VAR=... bash -c
+    "$PANE_CMD"`. The env prefix is REQUIRED (a herdr pane inherits the herdr
+    SERVER's environment - often a minimal launchd one - never the launcher's),
+    and PATH is forwarded the same way so `claude` resolves. The dialog watcher
+    polls the socket API (`pane.read`, newline-delimited JSON over
+    `~/.config/herdr/herdr.sock`; NB `source` is required and must be
+    `visible`) and answers with `herdr pane send-keys <pane_id> 1 Enter`.
+  - The claude invocation (`PANE_CMD`) is byte-identical for both backends.
+
+**herdr prerequisites:** (1) the herdr server must be running - e.g. a launchd
+agent with `ProgramArguments: [herdr, server]`, `KeepAlive: true` (herdr is
+`brew install herdr`); (2) on macOS, grant Full Disk Access to the herdr BINARY
+(System Settings -> Privacy & Security -> FDA -> `/opt/homebrew/bin/herdr`) if
+topic-Claudes need protected paths - the multiplexer server is the TCC
+"responsible process" for everything under it, exactly like tmux is on the tmux
+backend; (3) one herdr server crash takes ALL its panes down together (unlike
+independent tmux sessions) - KeepAlive + the proxy's respawn-on-next-message
+covers recovery, and each topic `--resume`s its same conversation.
+
+**Switching backends** (either direction): set the env, restart the proxy.
+Live sessions in the OLD backend keep running and stay re-adopted via the
+registry, but the selected backend cannot see or kill them - so drain them
+deliberately: kill each old-backend session yourself; the topic's next inbound
+message respawns it (same `claude_session_id` -> same conversation) in the new
+backend. Zero message loss either way (the proxy, not the sessions, owns the
+Telegram poll).
 
 ## Key mechanics / gotchas (baked into the code)
 
@@ -258,7 +306,9 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 (default `8790`), `TELEGRAM_TOPICS_MARKETPLACE` (default `plugin:telegram@zamua`),
 `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled),
 `TELEGRAM_TOPICS_ULTRACODE` (default ON, see below),
-`TELEGRAM_TOPICS_MODEL` (default `claude-fable-5`, see below).
+`TELEGRAM_TOPICS_MODEL` (default `claude-fable-5`, see below),
+`TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
+backends" above).
 Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
 

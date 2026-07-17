@@ -37,6 +37,7 @@ import {
   rmSync,
   statSync,
   realpathSync,
+  existsSync,
 } from 'fs'
 import { homedir } from 'os'
 import { join, extname, sep } from 'path'
@@ -130,6 +131,22 @@ function resolveModel(): string {
   return s
 }
 const MODEL = resolveModel()
+
+// Which terminal multiplexer hosts the detached topic-Claude sessions.
+// `tmux` (default, the original backend) or `herdr` (herdr.dev, the agent
+// multiplexer - adds per-agent state visibility + a socket API). Selected once
+// at boot; the port/adapter split lives in the "multiplexer" section below and
+// the spawn mechanics live in scripts/launch-topic.sh (branch on TG_MUX).
+// Prereqs for herdr are documented in the plugin CLAUDE.md (server running,
+// e.g. via a launchd agent; Full Disk Access granted to the herdr binary so
+// topic-Claudes inherit it - the same grant tmux holds today).
+function resolveMux(): 'tmux' | 'herdr' {
+  const raw = (process.env.TELEGRAM_TOPICS_MULTIPLEXER ?? 'tmux').trim().toLowerCase()
+  if (raw === 'tmux' || raw === 'herdr') return raw
+  log(`TELEGRAM_TOPICS_MULTIPLEXER="${raw}" is not tmux|herdr; using tmux`)
+  return 'tmux'
+}
+const MUX_KIND = resolveMux()
 const EFFECTIVE_SETTINGS = join(STATE_DIR, 'effective-settings.json')
 // Called PER SPAWN (not once at module load) so each (re)spawn reflects the
 // CURRENT committed override-settings.json - a base-settings edit (e.g. a git
@@ -449,18 +466,84 @@ function resolvePermission(requestId: string, behavior: 'allow' | 'deny'): boole
   return true
 }
 
-// ---- tmux -----------------------------------------------------------------
+// ---- multiplexer (port + adapters) ------------------------------------------
+//
+// The proxy's core is multiplexer-agnostic: it needs exactly two operations on
+// the host that keeps detached topic-Claudes alive - "which sessions are live"
+// (by name) and "kill this session" (by name). This PORT captures that; the
+// two ADAPTERS below implement it for tmux and herdr. Spawning is NOT part of
+// the port: scripts/launch-topic.sh owns spawn mechanics for both backends
+// (branching on TG_MUX), because spawning is where all the backend-specific
+// ceremony lives (env propagation, the dev-channel dialog watcher).
+// Session NAMES are the shared currency: `claude-<slug>-<tid>` strings recorded
+// in st.session / the registry work identically for both backends (a tmux
+// session name == a herdr agent/pane label).
 
-function liveTmuxSessions(): Set<string> {
-  const r = spawnSync('tmux', ['ls', '-F', '#{session_name}'], { encoding: 'utf8' })
-  if (r.status !== 0) return new Set() // no server running -> no sessions
-  return new Set(
-    (r.stdout ?? '')
-      .split('\n')
-      .map(s => s.trim())
-      .filter(Boolean),
-  )
+interface Multiplexer {
+  readonly kind: 'tmux' | 'herdr'
+  liveSessions(): Set<string>
+  kill(session: string): boolean
 }
+
+class TmuxMux implements Multiplexer {
+  readonly kind = 'tmux' as const
+
+  liveSessions(): Set<string> {
+    const r = spawnSync('tmux', ['ls', '-F', '#{session_name}'], { encoding: 'utf8' })
+    if (r.status !== 0) return new Set() // no server running -> no sessions
+    return new Set(
+      (r.stdout ?? '')
+        .split('\n')
+        .map(s => s.trim())
+        .filter(Boolean),
+    )
+  }
+
+  kill(session: string): boolean {
+    // '=' forces an exact-name match (claude-x-4 must not match claude-x-45).
+    const r = spawnSync('tmux', ['kill-session', '-t', `=${session}`], { encoding: 'utf8' })
+    return r.status === 0
+  }
+}
+
+class HerdrMux implements Multiplexer {
+  readonly kind = 'herdr' as const
+  // launchd/detached parents run with a minimal PATH; prefer the brew path.
+  private readonly bin = existsSync('/opt/homebrew/bin/herdr') ? '/opt/homebrew/bin/herdr' : 'herdr'
+
+  // `herdr pane list` emits one JSON object; panes carry the agent NAME as
+  // `label` (set by `herdr agent start <name>` in the launcher), which is our
+  // session-name currency. pane_id is a herdr-internal handle we only need
+  // transiently for kill().
+  private panes(): Map<string, string> {
+    const out = new Map<string, string>() // label -> pane_id
+    const r = spawnSync(this.bin, ['pane', 'list'], { encoding: 'utf8' })
+    if (r.status !== 0) return out // server not running -> no sessions
+    try {
+      const parsed = JSON.parse(r.stdout ?? '{}')
+      for (const p of parsed?.result?.panes ?? []) {
+        if (p?.label) out.set(String(p.label), String(p.pane_id ?? ''))
+      }
+    } catch {
+      // Unparseable output = treat as no live sessions; callers re-spawn, and
+      // the launcher's own dedup guard prevents doubles if herdr was just slow.
+    }
+    return out
+  }
+
+  liveSessions(): Set<string> {
+    return new Set(this.panes().keys())
+  }
+
+  kill(session: string): boolean {
+    const paneId = this.panes().get(session)
+    if (!paneId) return false
+    const r = spawnSync(this.bin, ['pane', 'close', paneId], { encoding: 'utf8' })
+    return r.status === 0
+  }
+}
+
+const mux: Multiplexer = MUX_KIND === 'herdr' ? new HerdrMux() : new TmuxMux()
 
 // ---- registry --------------------------------------------------------------
 
@@ -503,7 +586,7 @@ function loadAndReconcileRegistry(): void {
   } catch {
     raw = {}
   }
-  const live = liveTmuxSessions()
+  const live = mux.liveSessions()
   for (const [topic, entry] of Object.entries(raw)) {
     const st = getTopic(topic)
     st.threadId = entry.thread_id ?? undefined
@@ -545,7 +628,7 @@ function kickoffPrompt(topicLabel: string): string {
 function ensureSession(topic: string): void {
   const st = getTopic(topic)
   if (st.spawning) return
-  const live = liveTmuxSessions()
+  const live = mux.liveSessions()
   // Dedup on the RECORDED session name (stable for a live session's whole life;
   // '' for a brand-new / dead topic, so we fall through and spawn). We do NOT
   // re-derive the name here: it now depends on the topic's mutable label, and
@@ -595,6 +678,7 @@ function ensureSession(topic: string): void {
     const env = {
       ...process.env,
       TG_SESSION: name,
+      TG_MUX: mux.kind,
       TG_SPAWN_DIR: SPAWN_DIR,
       TELEGRAM_TOPIC_ID: topic,
       TELEGRAM_PROXY_URL: PROXY_URL,
@@ -613,7 +697,7 @@ function ensureSession(topic: string): void {
     st.session = name
     st.spawnedAt = Date.now()
     saveRegistry()
-    log(`${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" (claude ${st.claudeSessionId}) -> tmux ${name}`)
+    log(`${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" (claude ${st.claudeSessionId}) -> ${mux.kind} ${name}`)
   } catch (e) {
     log(`spawn failed for topic ${topic}: ${e}`)
   } finally {
@@ -1110,16 +1194,15 @@ void pollWithRetry()
 // nightly restart (pick up claude updates + clear accumulated process state)
 // without paying to keep refreshed-but-idle sessions alive overnight.
 function nightlyRestart(): void {
-  const live = liveTmuxSessions()
+  const live = mux.liveSessions()
   let killed = 0
   for (const [topic, st] of topics) {
     if (!st.session || !live.has(st.session)) continue
-    const r = spawnSync('tmux', ['kill-session', '-t', `=${st.session}`], { encoding: 'utf8' })
-    if (r.status === 0) {
+    if (mux.kill(st.session)) {
       killed++
       log(`nightly restart: killed topic ${topic} "${st.name}" (${st.session}); will --resume on next message`)
     } else {
-      log(`nightly restart: failed to kill ${st.session}: ${(r.stderr || '').trim()}`)
+      log(`nightly restart: failed to kill ${st.session}`)
     }
     st.session = ''
     st.spawnedAt = 0
