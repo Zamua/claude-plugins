@@ -572,9 +572,11 @@ function saveRegistry(): void {
   const out: Record<string, RegistryEntry> = {}
   for (const [topic, st] of topics) {
     // Persist any topic that has been spawned at least once (has a claude
-    // session id), even if its tmux session is currently dead - we need the id
-    // to --resume the SAME conversation on the next message.
-    if (!st.claudeSessionId) continue
+    // session id - needed to --resume the SAME conversation on the next
+    // message) OR that has a known NAME with no session yet (a proxy-created
+    // topic, registered at creation time; without persisting it here a proxy
+    // restart would make it invisible again until a human messaged it).
+    if (!st.claudeSessionId && !st.name) continue
     out[topic] = {
       tmux_session: st.session,
       thread_id: st.threadId ?? null,
@@ -844,6 +846,26 @@ async function handleSquareReply(req: Request): Promise<Response> {
 // GET /topics - the directory tool's backing endpoint.
 function handleTopics(): Response {
   return json({ square: SQUARE_TOPIC || null, topics: topicDirectory() })
+}
+
+// POST /topic/create {name} - create a forum topic AND register it. Telegram
+// never echoes a bot's own actions via getUpdates, so a bot-created topic is
+// otherwise invisible to the proxy until a human messages it. Routing creation
+// through the proxy closes that hole: the createForumTopic RESPONSE carries the
+// thread id, and we register + persist immediately - no user action needed.
+// (Requires the bot to be a group admin with can_manage_topics.)
+async function handleTopicCreate(req: Request): Promise<Response> {
+  const b = (await req.json()) as any
+  const name = String(b.name ?? '').trim()
+  if (!name) return new Response('name required', { status: 400 })
+  const created = await bot.api.createForumTopic(String(GROUP_CHAT_ID), name)
+  const topic = String(created.message_thread_id)
+  const st = getTopic(topic)
+  st.name = name
+  topicNames.set(topic, name)
+  saveRegistry()
+  log(`created + registered topic ${topic} "${name}"`)
+  return json({ topic, thread_id: created.message_thread_id, name, slug: slugForTopic(topic) })
 }
 
 // Inbound handling for USER messages posted in the square topic. Reply-chain
@@ -1439,6 +1461,7 @@ async function serveWithRetry(): Promise<void> {
               })
             }
             if (req.method === 'GET' && url.pathname === '/topics') return handleTopics()
+            if (req.method === 'POST' && url.pathname === '/topic/create') return await handleTopicCreate(req)
             if (req.method === 'POST' && url.pathname === '/square/tag') return await handleSquareTag(req)
             if (req.method === 'POST' && url.pathname === '/square/reply') return await handleSquareReply(req)
             if (req.method === 'POST' && url.pathname === '/send') return await handleSend(req)

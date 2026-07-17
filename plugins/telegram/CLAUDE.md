@@ -142,12 +142,16 @@ never broadcast; behavioral discipline, no caps).
 - **Breadcrumbs**: `square_tag` posts `↪️ asked @peer in #square: <t.me deep
   link>` into the initiating claude's own topic (link form
   `t.me/c/<chat-sans--100>/<square-tid>/<msg-id>`).
-- **Gotcha - bot-created topics are invisible to the proxy**: the bot has
-  can_manage_topics and CAN createForumTopic, but Telegram never delivers a
-  bot's own actions via getUpdates, so a bot-created topic emits no learnable
-  forum_topic_created. Until a real user message arrives in it, the proxy
-  doesn't know it exists (the test topics were seeded via registry.json
-  entries with claude_session_id null for exactly this reason).
+- **Bot-created topics + the `create_topic` tool**: Telegram never delivers a
+  bot's own actions via getUpdates, so a topic created by raw
+  `createForumTopic` emits no learnable forum_topic_created and stays
+  invisible until a human messages it. FIX: route creation through the proxy
+  (`POST /topic/create` / the `create_topic` MCP tool) - the API RESPONSE
+  carries the thread id, so the proxy registers + persists the topic at
+  creation time (registry.json now also persists name-only, never-spawned
+  topics for exactly this reason). A proxy-created topic is in the directory
+  and taggable immediately; its claude spawns on first message or tag. Only
+  topics created OUTSIDE the proxy still need a first human message.
 
 ## Key mechanics / gotchas (baked into the code)
 

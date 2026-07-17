@@ -182,6 +182,16 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: 'object', properties: {} },
     },
     {
+      name: 'create_topic',
+      description:
+        'Create a new forum topic in the group (e.g. to spin a sub-project into its own room). The topic is registered immediately and taggable via the square; its own Claude spawns on its first message or tag. Requires the bot to be a group admin with Manage Topics.',
+      inputSchema: {
+        type: 'object',
+        properties: { name: { type: 'string', description: 'Topic display name.' } },
+        required: ['name'],
+      },
+    },
+    {
       name: 'square_tag',
       description:
         'Open a collaboration with a peer Claude in the shared #square topic. Use ONLY when you genuinely need that peer (their domain, their codebase). The peer receives your message and can reply; the whole conversation is visible to the operator in #square. Returns the conversation id. Norms: every message must move the work forward; do long work in shared files and post summaries + paths.',
@@ -288,6 +298,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const raw = await res.text()
         if (!res.ok) throw new Error(raw || `HTTP ${res.status}`)
         return { content: [{ type: 'text', text: raw }] }
+      }
+      case 'create_topic': {
+        const data = await postJSON('/topic/create', { topic: TOPIC, name: args.name })
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `topic created: "${data.name}" (thread ${data.thread_id}, slug "${data.slug}") - registered and taggable now`,
+            },
+          ],
+        }
       }
       case 'square_tag': {
         const data = await postJSON('/square/tag', {
