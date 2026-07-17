@@ -88,11 +88,38 @@ def main() -> None:
     if last_ch < 0:
         return  # this turn was not triggered by a Telegram message
 
-    # SQUARE EXEMPTION: a #square delivery (meta square="1") sanctions silence -
-    # the norm is "reply only if it moves the work forward; if no reply is
-    # warranted, do nothing". Nagging here would manufacture exactly the
-    # courtesy-loop the square design avoids, so let the stop through.
+    # SQUARE turns (meta square="1"): silence is sanctioned - the norm is
+    # "reply only if it moves the work forward; if no reply is warranted, do
+    # nothing" - so we never nag for a missing reply. But the OPPOSITE failure
+    # is real (observed 2026-07-17): a long-lived resumed session answers a
+    # square message via the generic reply tool out of habit, posting into its
+    # OWN topic (the wrong room). Catch exactly that: replied-with-reply but
+    # not square_reply -> one corrective block.
     if 'square="1"' in last_blob:
+        used_reply = used_square = False
+        for o in entries[last_ch:]:
+            c = content_of(o)
+            if isinstance(c, list):
+                for b in c:
+                    if isinstance(b, dict) and b.get("type") == "tool_use":
+                        if b.get("name") == REPLY_TOOL:
+                            used_reply = True
+                        if b.get("name", "").endswith("square_reply"):
+                            used_square = True
+        if used_reply and not used_square and not any(
+            GUARD_MARKER in json.dumps(o) for o in entries[last_ch:]
+        ):
+            log("blocking stop: square turn answered via the reply tool (wrong room)")
+            print(json.dumps({
+                "decision": "block",
+                "reason": (
+                    "REPLY-GUARD: this turn was a #square message (square=\"1\" in its meta), but you "
+                    "answered with the generic reply tool - that posted into YOUR OWN topic, which the "
+                    "square conversation participants cannot see. Re-send your answer NOW via the "
+                    "square_reply tool using the conv and reply_token from the square message's meta/norm "
+                    "line, and note that the message in your own topic was misdirected."
+                ),
+            }))
         return
 
     # Since then: did we already reply, or already remind (our marker)?

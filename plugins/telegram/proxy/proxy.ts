@@ -712,10 +712,15 @@ function squareLink(msgId: number): string {
 // The standing per-delivery norm (the "pre-message hook"): conversation
 // discipline is behavioral, not enforced - see the design doc. Appended to
 // every square delivery's content.
-const SQUARE_NORM =
-  '[square norm: reply via square_reply ONLY if it moves the work forward; ' +
-  'a closing courtesy is fine, courtesy-for-courtesy is not; if no reply is ' +
-  'warranted, do nothing - silence politely ends a conversation here.]'
+function squareNorm(conv: string, replyToken: number): string {
+  return (
+    `[square message - NOT from your topic's user. To respond, use the square_reply tool with ` +
+    `conv="${conv}" and reply_token="${replyToken}" - do NOT use the reply tool (it posts to your ` +
+    `own topic, the wrong room; this message did not come from there). Reply ONLY if it moves the ` +
+    `work forward; a closing courtesy is fine, courtesy-for-courtesy is not; if no reply is ` +
+    `warranted, do nothing - silence politely ends a conversation here and no reply-guard will nag you.]`
+  )
+}
 
 // Deliver a square message to a set of topics (recipient set = participants
 // or tagged claudes, NEVER broadcast). Wakes dormant claudes (a tag counts as
@@ -728,17 +733,22 @@ function deliverSquare(
   for (const topic of recipients) {
     if (topic === SQUARE_TOPIC) continue
     ensureSession(topic)
+    // NB deliberately NO chat_id / message_id keys in this meta: the channel
+    // instructions train "reply via the reply tool with chat_id from the
+    // inbound block", and a resumed long-lived session follows that habit
+    // straight into posting square answers in its OWN topic (observed live,
+    // 2026-07-17). Omitting those keys removes the affordance - the only
+    // executable recipe in the meta is square_reply's (conv + reply_token),
+    // and the norm line says so explicitly.
     enqueue(topic, {
-      content: `${text}\n\n${SQUARE_NORM}`,
+      content: `${text}\n\n${squareNorm(meta.conv, meta.reply_token)}`,
       meta: {
-        chat_id: String(GROUP_CHAT_ID),
         square: '1',
         conv: meta.conv,
         reply_token: String(meta.reply_token),
         from: meta.from,
         origin_topic: meta.origin_topic,
         depth: String(meta.depth),
-        message_id: String(meta.reply_token),
         ts: new Date().toISOString(),
       },
     })
