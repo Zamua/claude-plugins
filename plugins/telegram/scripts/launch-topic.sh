@@ -46,6 +46,20 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 # TG_MUX is optional: which multiplexer hosts the session (default tmux).
 : "${TG_MUX:=tmux}"
 
+# Resolve claude NOW, under this launcher's explicit PATH, and pass the
+# ABSOLUTE path into the pane (TG_CLAUDE_BIN). The pane's shell re-runs its
+# init files, and a managed /etc/zshenv (e.g. nix-darwin's) can REPLACE PATH
+# wholesale - which silently dropped ~/.local/bin and killed every spawn with
+# exit 127 when the mini moved to nix-darwin (2026-07-17). Exec'ing the
+# absolute path is immune to any shell-init PATH games; TG_PATH additionally
+# restores the full PATH inside the pane so claude's OWN children (its Bash
+# tool) inherit a working environment.
+TG_CLAUDE_BIN=$(command -v claude) || {
+  echo "telegram-topics: claude not found on the launcher PATH" >&2
+  exit 1
+}
+TG_PATH="$PATH"
+
 # The pane command, IDENTICAL for both backends. Runs under a shell INSIDE the
 # pane with the TG_*/TELEGRAM_* vars present in its environment (each backend
 # has its own way of getting them there - see spawn_tmux / spawn_herdr).
@@ -69,14 +83,15 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 # --model FLAG (a settings `model` is ignored by a --resume'd session; the flag
 # overrides even on resume). Args built with `set --` so a bracketed id like
 # claude-fable-5[1m] stays ONE properly-quoted arg.
-PANE_CMD='set -- --dangerously-load-development-channels="$TG_MARKETPLACE" \
+PANE_CMD='export PATH="$TG_PATH"; \
+ set -- --dangerously-load-development-channels="$TG_MARKETPLACE" \
         --settings "$TG_SETTINGS" --permission-mode auto \
         --disallowedTools=AskUserQuestion; \
  [ -n "$TG_MODEL" ] && set -- "$@" --model "$TG_MODEL"; \
  if [ -n "$TG_RESUME" ]; then \
-   exec claude "$@" --resume "$TG_CLAUDE_SESSION_ID"; \
+   exec "$TG_CLAUDE_BIN" "$@" --resume "$TG_CLAUDE_SESSION_ID"; \
  else \
-   exec claude "$@" --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
+   exec "$TG_CLAUDE_BIN" "$@" --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
  fi'
 
 # --dangerously-load-development-channels shows a one-key "local development"
@@ -104,6 +119,8 @@ spawn_tmux() {
   # the untagged --dangerously-load-development-channels=, killing the pane
   # instantly. (Requires tmux >= 3.2.)
   tmux new-session -d -s "$TG_SESSION" -c "$TG_SPAWN_DIR" \
+    -e TG_PATH="$TG_PATH" \
+    -e TG_CLAUDE_BIN="$TG_CLAUDE_BIN" \
     -e TG_MARKETPLACE="$TG_MARKETPLACE" \
     -e TG_SETTINGS="$TG_SETTINGS" \
     -e TG_HOOK="$TG_HOOK" \
@@ -151,6 +168,8 @@ spawn_herdr() {
   out=$("$herdr_bin" agent start "$TG_SESSION" --cwd "$TG_SPAWN_DIR" -- \
     /usr/bin/env \
     PATH="$PATH" \
+    TG_PATH="$TG_PATH" \
+    TG_CLAUDE_BIN="$TG_CLAUDE_BIN" \
     TG_MARKETPLACE="$TG_MARKETPLACE" \
     TG_SETTINGS="$TG_SETTINGS" \
     TG_HOOK="$TG_HOOK" \
