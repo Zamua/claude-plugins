@@ -19,10 +19,19 @@ Fires and forgets: any failure here is swallowed, because a hook that throws
 must never make a already-failing turn worse.
 """
 
+# macOS ships python3.9 as /usr/bin/python3 and that is what the hook
+# command resolves to, so `int | None` / `list[int]` annotations would blow up
+# at runtime (they are evaluated at def time) exactly when a rate limit hits.
+# This makes every annotation lazy, keeping the hook 3.7+ safe.
+from __future__ import annotations
+
 import json
 import os
+import re
 import sys
+import time
 import urllib.request
+from datetime import datetime
 
 LOG = os.path.expanduser("~/Library/Logs/telegram-rate-limit-failover.log")
 
@@ -33,6 +42,33 @@ def log(msg: str) -> None:
             f.write(msg + "\n")
     except Exception:
         pass
+
+
+def parse_reset(details: str) -> int | None:
+    """Best-effort: pull a quota-reset time out of a rate-limit error message.
+
+    Claude's limit errors have carried the reset moment in several shapes over
+    time (a `|<unix>` suffix, a `resets at <ISO>` phrase, a bare epoch). Rather
+    than depend on one format, accept any of them and sanity-check the result:
+    a reset must be in the future and within a week, so a random number in the
+    message text cannot pin a topic to the fallback model for a month.
+    """
+    now = int(time.time())
+    horizon = now + 7 * 24 * 3600
+    candidates: list[int] = []
+
+    for m in re.finditer(r"\b(\d{10})\b", details):  # bare unix seconds
+        candidates.append(int(m.group(1)))
+    for m in re.finditer(r"\b(\d{13})\b", details):  # unix millis
+        candidates.append(int(m.group(1)) // 1000)
+    for m in re.finditer(r"(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?)", details):
+        try:
+            candidates.append(int(datetime.fromisoformat(m.group(1)).timestamp()))
+        except ValueError:
+            pass
+
+    future = [c for c in candidates if now < c <= horizon]
+    return min(future) if future else None
 
 
 def main() -> None:
@@ -53,11 +89,18 @@ def main() -> None:
         log(f"rate_limit hit but no topic/proxy env (topic={topic!r})")
         return
 
+    details = str(hook.get("error_details", ""))[:500]
     payload = json.dumps(
         {
             "topic": topic,
             "error": hook.get("error"),
-            "details": str(hook.get("error_details", ""))[:500],
+            "details": details,
+            # Opportunistic: the limit error often carries WHEN the quota
+            # resets. Pass it along so the proxy can revert to the primary
+            # model exactly then instead of probing blindly. Absent/garbled =
+            # the proxy falls back to its probe interval, so this is a
+            # best-effort optimization, never a dependency.
+            **({"reset_at": r} if (r := parse_reset(details)) else {}),
         }
     ).encode()
     req = urllib.request.Request(

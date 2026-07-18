@@ -198,12 +198,34 @@ Details that matter:
   so a burst of hook calls cannot cause a respawn loop.
 - **Persisted** in registry.json (`fallback_model`), so a proxy restart cannot
   silently drop a topic back onto an exhausted model.
-- **Reverted at the nightly restart** (quotas reset on their own schedule): a
-  topic still over its limit simply fails over again on its next turn.
-- Verified live 2026-07-18 with synthetic StopFailure payloads: a
-  non-rate-limit error is ignored, a `rate_limit` error fails the topic over
-  (log + registry + a respawn whose args carry `--model claude-opus-4-8` while
-  other topics stay on the primary), and a repeat report no-ops.
+- **Reverted when the quota window passes, lazily at SPAWN time**
+  (`maybeRevertFallback`, called from `ensureSession`). The window is the reset
+  time parsed out of the limit error when it carries one
+  (`parse_reset` in the hook: accepts `|<unix>`, unix millis, or an ISO
+  timestamp, and rejects anything past or >7 days out so a stray number in an
+  error string cannot pin a topic for a month), else failover time +
+  `TELEGRAM_TOPICS_FALLBACK_PROBE_MINUTES` (default 60). Probing early is
+  cheap: if the quota is still gone the topic just fails over again.
+  Deliberately lazy - a topic whose session is LIVE is skipped, because
+  killing a running Claude mid-task to upgrade its model would be worse than
+  the problem being solved; it picks the primary up at its next natural
+  respawn. The nightly restart remains a backstop.
+- **Both transitions are announced in the topic's own thread** by the PROXY
+  (the topic-Claude is being killed at that moment, so it cannot speak):
+  "⚠️ Hit the usage limit on X - resuming on Y. Will retry X after <time>."
+  and "✅ Usage window elapsed - back on X for this topic."
+- **The hook must stay python3.9-compatible**: macOS ships 3.9 as
+  `/usr/bin/python3` and that is what the hook command resolves to, so
+  `int | None` / `list[int]` annotations would raise at runtime - exactly when
+  a rate limit hits. `from __future__ import annotations` keeps them lazy.
+  (Caught in testing 2026-07-18; the same applies to stop-reply-guard.py.)
+- Verified live 2026-07-18, both directions: a non-rate-limit StopFailure is
+  ignored; a `rate_limit` one fails the topic over (log + registry pin +
+  respawn carrying `--model claude-opus-4-8` while other topics stay on the
+  primary) and posts the notice into the real topic thread; a repeat report
+  no-ops; `parse_reset` unit-tested under real 3.9 across all accepted formats
+  plus the past/far-future rejections; and with the window forced elapsed, the
+  next spawn reverted to `--model claude-fable-5` with the ✅ notice.
 
 ## Key mechanics / gotchas (baked into the code)
 

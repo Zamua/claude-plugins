@@ -146,6 +146,12 @@ const MODEL = resolveModel()
 // (the topic stalls as before). Reset back to the primary at the nightly
 // restart, so a fallback is never permanent.
 const MODEL_FALLBACK = (process.env.TELEGRAM_TOPICS_MODEL_FALLBACK ?? 'claude-opus-4-8').trim()
+// How long a failed-over topic waits before RE-TRYING its primary model when
+// the limit error carried no reset time. The retry is free: if the quota is
+// still exhausted the topic just fails over again (one notice, conversation
+// continues), so this is a "probe optimistically" knob, not a guess that has
+// to be right. Ignored when a reset time IS known - that is exact.
+const FALLBACK_PROBE_MIN = Number(process.env.TELEGRAM_TOPICS_FALLBACK_PROBE_MINUTES ?? '60')
 
 // Which terminal multiplexer hosts the detached topic-Claude sessions.
 // `tmux` (default, the original backend) or `herdr` (herdr.dev, the agent
@@ -382,6 +388,9 @@ type TopicState = {
   // the nightly restart clears it, so a proxy restart cannot silently drop
   // the topic back onto an exhausted model.
   fallbackModel?: string
+  // When the primary model may be retried: the quota reset time parsed from
+  // the limit error, or (absent that) failover time + FALLBACK_PROBE_MIN.
+  fallbackUntil?: number
 }
 
 const topics = new Map<string, TopicState>()
@@ -586,6 +595,7 @@ type RegistryEntry = {
   spawned_at: number
   claude_session_id: string | null
   fallback_model?: string | null
+  fallback_until?: number | null
 }
 
 function saveRegistry(): void {
@@ -604,7 +614,7 @@ function saveRegistry(): void {
       name: st.name,
       spawned_at: st.spawnedAt,
       claude_session_id: st.claudeSessionId,
-      ...(st.fallbackModel ? { fallback_model: st.fallbackModel } : {}),
+      ...(st.fallbackModel ? { fallback_model: st.fallbackModel, fallback_until: st.fallbackUntil ?? null } : {}),
     }
   }
   const tmp = REGISTRY_FILE + '.tmp'
@@ -629,6 +639,7 @@ function loadAndReconcileRegistry(): void {
     st.name = entry.name
     st.claudeSessionId = entry.claude_session_id ?? undefined
     st.fallbackModel = entry.fallback_model ?? undefined
+    st.fallbackUntil = entry.fallback_until ?? undefined
     if (entry.name) topicNames.set(topic, entry.name)
     if (entry.tmux_session && live.has(entry.tmux_session)) {
       st.session = entry.tmux_session
@@ -904,9 +915,21 @@ async function handleRateLimit(req: Request): Promise<Response> {
     return json({ ok: true, already: st.fallbackModel })
   }
 
+  // When may we retry the primary? Prefer the reset time the error carried
+  // (exact); otherwise probe after FALLBACK_PROBE_MIN.
+  const resetAt = Number(b.reset_at)
+  const until =
+    Number.isFinite(resetAt) && resetAt * 1000 > Date.now()
+      ? resetAt * 1000
+      : Date.now() + FALLBACK_PROBE_MIN * 60_000
   st.fallbackModel = MODEL_FALLBACK
+  st.fallbackUntil = until
   saveRegistry()
-  log(`rate limit on topic ${topic} "${label}": failing over ${MODEL || '(account default)'} -> ${MODEL_FALLBACK}`)
+  log(
+    `rate limit on topic ${topic} "${label}": failing over ${MODEL || '(account default)'} -> ${MODEL_FALLBACK}; ` +
+      `will retry primary after ${new Date(until).toISOString()}` +
+      (Number.isFinite(resetAt) ? ' (reset time from the error)' : ' (probe interval; error carried no reset time)'),
+  )
 
   // Tell the operator IN the affected topic's thread - a silent model swap
   // would leave them wondering why the voice changed mid-conversation. Sent
@@ -916,7 +939,8 @@ async function handleRateLimit(req: Request): Promise<Response> {
   bot.api
     .sendMessage(
       String(GROUP_CHAT_ID),
-      `⚠️ Hit the usage limit on ${MODEL || 'the default model'} - resuming this conversation on ${MODEL_FALLBACK}.`,
+      `⚠️ Hit the usage limit on ${MODEL || 'the default model'} - resuming this conversation on ${MODEL_FALLBACK}. ` +
+        `Will retry ${MODEL || 'the primary model'} after ${new Date(until).toLocaleTimeString()}.`,
       { ...(tid != null ? { message_thread_id: tid } : {}) },
     )
     .catch(e => log(`failover notice failed for topic ${topic}: ${e}`))
@@ -1071,6 +1095,36 @@ function kickoffPrompt(topicLabel: string): string {
   )
 }
 
+// Drop a topic's usage-limit failover once its retry window has passed, so the
+// next SPAWN uses the primary model again.
+//
+// Deliberately lazy - checked at spawn time, never on a timer:
+//   - A topic whose session is already LIVE is left alone. Killing a running
+//     Claude mid-task to upgrade its model would be a worse bug than the one
+//     this feature fixes; it picks the primary up at its next natural respawn.
+//   - Idle topics cost nothing to revert, matching the plugin's passive design
+//     (sessions exist only when in use).
+// If the quota turns out to still be exhausted, the very next turn fails over
+// again - one notice, conversation continues - so probing early is cheap.
+function maybeRevertFallback(st: TopicState, topic: string): void {
+  if (!st.fallbackModel) return
+  if (st.fallbackUntil && Date.now() < st.fallbackUntil) return
+  if (st.session && mux.liveSessions().has(st.session)) return // live: leave it be
+  const was = st.fallbackModel
+  st.fallbackModel = undefined
+  st.fallbackUntil = undefined
+  saveRegistry()
+  log(`topic ${topic} "${st.name}": retry window elapsed, reverting ${was} -> ${MODEL || '(account default)'}`)
+  const tid = threadIdForTopic(topic)
+  bot.api
+    .sendMessage(
+      String(GROUP_CHAT_ID),
+      `✅ Usage window elapsed - back on ${MODEL || 'the default model'} for this topic.`,
+      { ...(tid != null ? { message_thread_id: tid } : {}) },
+    )
+    .catch(e => log(`revert notice failed for topic ${topic}: ${e}`))
+}
+
 // Ensure a live tmux Claude session exists for a topic. Single-flight: the
 // synchronous spawnSync blocks the event loop for the whole launch, so two
 // inbound messages for a brand-new topic cannot spawn two sessions; the
@@ -1080,6 +1134,7 @@ function ensureSession(topic: string): void {
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
   const st = getTopic(topic)
   if (st.spawning) return
+  maybeRevertFallback(st, topic)
   const live = mux.liveSessions()
   // Dedup on the RECORDED session name (stable for a live session's whole life;
   // '' for a brand-new / dead topic, so we fall through and spawn). We do NOT
