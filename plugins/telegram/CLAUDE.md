@@ -73,13 +73,23 @@ core:
   the proxy), because spawning is where the backend-specific ceremony is:
   - tmux: `new-session -e VAR=...` for env (see the env-propagation gotcha
     below), `capture-pane`/`send-keys` for the dialog watcher.
-  - herdr: `herdr agent start <name> --cwd ... -- /usr/bin/env VAR=... bash -c
-    "$PANE_CMD"`. The env prefix is REQUIRED (a herdr pane inherits the herdr
-    SERVER's environment - often a minimal launchd one - never the launcher's),
-    and PATH is forwarded the same way so `claude` resolves. The dialog watcher
-    polls the socket API (`pane.read`, newline-delimited JSON over
-    `~/.config/herdr/herdr.sock`; NB `source` is required and must be
-    `visible`) and answers with `herdr pane send-keys <pane_id> 1 Enter`.
+  - herdr: one WORKSPACE per topic-Claude (labeled with the session name,
+    `--no-focus`; the workspace's auto-created empty root pane is closed after
+    the agent lands, and a create failure falls back to a shared-workspace
+    spawn), then `herdr agent start <name> --workspace <id> --cwd ... --
+    /usr/bin/env VAR=... bash -c "$PANE_CMD"`. The env prefix is REQUIRED (a
+    herdr pane inherits the herdr SERVER's environment - often a minimal
+    launchd one - never the launcher's), and PATH is forwarded the same way so
+    `claude` resolves. The dialog watcher polls the socket API (`pane.read`,
+    newline-delimited JSON over `~/.config/herdr/herdr.sock`; NB `source` is
+    required and must be `visible`) and answers with
+    `herdr pane send-keys <pane_id> 1 Enter`.
+  - **Subagent poller guard** (`server.ts`): a background agent spawned by a
+    topic-Claude (Agent tool / claude daemon) inherits the pane env -
+    `TELEGRAM_TOPIC_ID` included - and loads this plugin, which would make it
+    a SECOND poller round-robining the topic's queue (observed 2026-07-18).
+    Bg sessions are identified by `CLAUDE_CODE_SESSION_KIND=bg`; they keep the
+    outbound tools but never start the inbound/permission polls.
   - The claude invocation (`PANE_CMD`) is byte-identical for both backends.
 
 **herdr prerequisites:** (1) the herdr server must be running - e.g. a launchd
@@ -173,17 +183,20 @@ never broadcast; behavioral discipline, no caps).
   claude rejects the untagged `--dangerously-load-development-channels=` and dies
   instantly. Passing them via `-e` makes the pane shell expand the `$`-refs and
   makes claude + its MCP child inherit them regardless. (Requires tmux >= 3.2.)
-- **Dev-channel confirm dialog auto-dismiss (obsolete as of claude 2.1.214).**
-  Claude <= 2.1.212 showed a one-key "local development" confirmation dialog for
-  `--dangerously-load-development-channels`; the launcher's short-lived DETACHED
-  watcher polls the pane for the dialog text and sends `1`+Enter. **2.1.214
-  REMOVED the dialog** (channels load directly with a banner), so the watcher is
-  now a harmless no-op kept only for older claude versions. Historical trap the
-  dialog caused (2026-07-17): on a BIG-transcript `--resume`, the dialog rendered
-  AFTER the watcher's 15s window, sat unanswered, and was eventually dismissed as
-  a DECLINE - REPL up but no channel plugin/MCP, messages queueing at the proxy
-  undrained. If you ever run a pre-2.1.214 claude again, lengthen the watcher
-  window for resume spawns. NB: pane-target tmux commands
+- **Dev-channel confirm dialog auto-dismiss (still needed; window now 2 min).**
+  `--dangerously-load-development-channels` can show a one-key "local
+  development" confirmation dialog; the launcher's short-lived DETACHED watcher
+  polls the pane for the dialog text and sends `1`+Enter. The dialog does NOT
+  appear on every boot on claude >= 2.1.214 (many boots go straight to a
+  channels banner) but it STILL APPEARS on some (observed on a 2.1.214
+  big-transcript resume, 2026-07-18) - do not assume it is gone. The trap it
+  causes when unanswered: on a BIG-transcript `--resume` the dialog renders
+  AFTER the transcript loads - the original 15s watcher window lost that race
+  twice (2026-07-17/18), leaving sessions REPL-alive but plugin-less with
+  messages queueing undrained at the proxy. The window is now WATCHER_TRIES=480
+  (2 minutes); most watchers see no dialog and just exit quietly. Manual
+  unstick if it ever recurs: send `1`+Enter to the pane (tmux send-keys /
+  herdr pane send-keys). NB: pane-target tmux commands
   (`capture-pane` / `send-keys`) do NOT accept the `=name` exact-match prefix that
   `has-session` does; an exact session name already resolves exactly, so the
   watcher passes the bare name.

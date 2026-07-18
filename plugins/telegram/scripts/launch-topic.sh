@@ -94,14 +94,21 @@ PANE_CMD='export PATH="$TG_PATH"; \
    exec "$TG_CLAUDE_BIN" "$@" --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
  fi'
 
-# --dangerously-load-development-channels shows a one-key "local development"
-# confirmation dialog in an interactive session (third-party channel plugins
-# are not first-party-approved, and allowedChannelPlugins is only honored in
-# managed settings). A detached pane has no one to answer it, so each backend
-# runs a short-lived DETACHED watcher: poll the pane text for the dialog,
-# send "1"+Enter when it appears, then exit. The watcher's fds are detached so
-# the proxy's synchronous spawn returns at once.
+# --dangerously-load-development-channels can show a one-key "local
+# development" confirmation dialog (third-party channel plugins are not
+# first-party-approved, and allowedChannelPlugins is only honored in managed
+# settings). A detached pane has no one to answer it, so each backend runs a
+# short-lived DETACHED watcher: poll the pane text for the dialog, send
+# "1"+Enter when it appears, then exit. The watcher's fds are detached so the
+# proxy's synchronous spawn returns at once.
+# WATCHER WINDOW: 2 minutes (480 x 0.25s). A BIG-transcript --resume renders
+# the dialog long after spawn (the transcript loads first); the original 15s
+# window lost that race twice (2026-07-17/18: sessions came up REPL-alive but
+# plugin-less, with messages queueing undrained at the proxy). The dialog does
+# not appear on every boot (claude >= 2.1.214 often skips it), so most
+# watchers just poll quietly and exit.
 DIALOG_TEXT='local development'
+WATCHER_TRIES=480
 
 spawn_tmux() {
   # Dedup: never spawn a second session for a topic. The '=' forces an EXACT
@@ -136,7 +143,7 @@ spawn_tmux() {
   # NOT accept the "=name" exact-match prefix that has-session does; an exact
   # session name already resolves exactly, so pass the bare name.
   (
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 "$WATCHER_TRIES"); do
       if tmux capture-pane -t "$TG_SESSION" -p 2>/dev/null | grep -q "$DIALOG_TEXT"; then
         tmux send-keys -t "$TG_SESSION" 1 Enter
         break
@@ -147,7 +154,7 @@ spawn_tmux() {
 }
 
 spawn_herdr() {
-  local herdr_bin sock pane_id
+  local herdr_bin sock pane_id ws_id root_pane
   herdr_bin=$(command -v herdr || echo /opt/homebrew/bin/herdr)
   # Default-session socket; HERDR_SOCKET_PATH overrides (matches herdr's own
   # resolution order for the default session).
@@ -160,12 +167,24 @@ spawn_herdr() {
     exit 0
   fi
 
+  # One WORKSPACE per topic-Claude (operator preference: agents as workspace
+  # tabs, not side-by-side splits in one shared workspace). Create it labeled
+  # with the session name, remember its auto-created empty ROOT pane (closed
+  # after the agent lands - `agent start` always splits a NEW pane, it never
+  # reuses the root), and never steal UI focus. If workspace creation fails
+  # (older herdr, server hiccup) fall back to spawning without --workspace -
+  # a shared-workspace pane beats no session.
+  local ws_out
+  ws_out=$("$herdr_bin" workspace create --cwd "$TG_SPAWN_DIR" --label "$TG_SESSION" --no-focus 2>/dev/null) || ws_out=''
+  ws_id=$(printf '%s' "$ws_out" | sed -n 's/.*"workspace_id":"\([^"]*\)".*/\1/p' | head -1)
+  root_pane=$(printf '%s' "$ws_out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -1)
+
   # Spawn. A herdr pane inherits the herdr SERVER's environment (not this
   # launcher's), so every var - PATH included, or `claude` may not resolve
   # under a launchd-started server - is injected with a /usr/bin/env prefix on
   # the pane command (the herdr equivalent of tmux's `new-session -e`).
   local out
-  out=$("$herdr_bin" agent start "$TG_SESSION" --cwd "$TG_SPAWN_DIR" -- \
+  out=$("$herdr_bin" agent start "$TG_SESSION" ${ws_id:+--workspace "$ws_id"} --no-focus --cwd "$TG_SPAWN_DIR" -- \
     /usr/bin/env \
     PATH="$PATH" \
     TG_PATH="$TG_PATH" \
@@ -187,13 +206,19 @@ spawn_herdr() {
   # needs for pane.read / send-keys.
   pane_id=$(printf '%s' "$out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -1)
 
+  # Close the workspace's empty root pane so the agent is the workspace's sole
+  # pane. Guard: never close the pane the agent itself landed in.
+  if [ -n "$root_pane" ] && [ "$root_pane" != "$pane_id" ]; then
+    "$herdr_bin" pane close "$root_pane" >/dev/null 2>&1 || true
+  fi
+
   # Auto-confirm watcher: poll the pane's visible text over the socket API
   # (newline-delimited JSON; pane.read requires source=visible), answer the
   # dialog with send-keys, exit. Skipped if the pane_id could not be parsed -
   # the session still runs; a human can answer the dialog via `herdr`.
   if [ -n "$pane_id" ]; then
     (
-      for _ in $(seq 1 60); do
+      for _ in $(seq 1 "$WATCHER_TRIES"); do
         if printf '{"id":"w","method":"pane.read","params":{"pane_id":"%s","source":"visible"}}\n' "$pane_id" \
           | nc -U "$sock" 2>/dev/null | grep -q "$DIALOG_TEXT"; then
           "$herdr_bin" pane send-keys "$pane_id" 1 Enter

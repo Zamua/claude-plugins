@@ -471,5 +471,22 @@ async function permissionLoop(): Promise<void> {
   }
 }
 
-void inboundLoop()
-void permissionLoop()
+// SUBAGENT GUARD: a background agent spawned by a topic-Claude (Agent tool /
+// claude daemon) inherits the pane environment - TELEGRAM_TOPIC_ID included -
+// and loads this plugin, so without this guard it becomes a SECOND poller on
+// the topic's queue and steals messages from the real session (observed live
+// 2026-07-18: a hostthis bg agent round-robining topic 34's deliveries). Bg
+// sessions are identifiable by CLAUDE_CODE_SESSION_KIND=bg; for them we keep
+// the outbound tools (a subagent may legitimately reply on its parent's
+// behalf) but never start the inbound/permission polls.
+const IS_BG_SESSION =
+  process.env.CLAUDE_CODE_SESSION_KIND === 'bg' || !!process.env.CLAUDE_BG_BACKEND
+if (IS_BG_SESSION) {
+  process.stderr.write(
+    `telegram-topics: background-agent session detected (CLAUDE_CODE_SESSION_KIND=bg); ` +
+      `outbound tools available, inbound polling DISABLED for topic "${TOPIC}"\n`,
+  )
+} else {
+  void inboundLoop()
+  void permissionLoop()
+}
