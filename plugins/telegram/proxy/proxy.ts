@@ -908,6 +908,19 @@ async function handleRateLimit(req: Request): Promise<Response> {
   saveRegistry()
   log(`rate limit on topic ${topic} "${label}": failing over ${MODEL || '(account default)'} -> ${MODEL_FALLBACK}`)
 
+  // Tell the operator IN the affected topic's thread - a silent model swap
+  // would leave them wondering why the voice changed mid-conversation. Sent
+  // by the proxy (not the topic-Claude): the session is being killed right
+  // now, so it is in no position to announce anything.
+  const tid = threadIdForTopic(topic)
+  bot.api
+    .sendMessage(
+      String(GROUP_CHAT_ID),
+      `⚠️ Hit the usage limit on ${MODEL || 'the default model'} - resuming this conversation on ${MODEL_FALLBACK}.`,
+      { ...(tid != null ? { message_thread_id: tid } : {}) },
+    )
+    .catch(e => log(`failover notice failed for topic ${topic}: ${e}`))
+
   // Kill the stalled session; the nudge below re-spawns it via ensureSession
   // on the fallback model, --resuming the same conversation.
   if (st.session && mux.liveSessions().has(st.session)) mux.kill(st.session)
