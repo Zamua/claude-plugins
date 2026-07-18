@@ -173,13 +173,17 @@ never broadcast; behavioral discipline, no caps).
   claude rejects the untagged `--dangerously-load-development-channels=` and dies
   instantly. Passing them via `-e` makes the pane shell expand the `$`-refs and
   makes claude + its MCP child inherit them regardless. (Requires tmux >= 3.2.)
-- **Dev-channel confirm dialog auto-dismiss.**
-  `--dangerously-load-development-channels` shows a one-key "local development"
-  confirmation dialog in an interactive session (third-party channel plugins are
-  not first-party-approved; `allowedChannelPlugins` is honored only in MANAGED
-  settings, which we avoid). A detached pane has no one to answer it, so the
-  launcher runs a short-lived DETACHED watcher that polls the pane for the dialog
-  text and sends `1`+Enter, then exits. NB: pane-target tmux commands
+- **Dev-channel confirm dialog auto-dismiss (obsolete as of claude 2.1.214).**
+  Claude <= 2.1.212 showed a one-key "local development" confirmation dialog for
+  `--dangerously-load-development-channels`; the launcher's short-lived DETACHED
+  watcher polls the pane for the dialog text and sends `1`+Enter. **2.1.214
+  REMOVED the dialog** (channels load directly with a banner), so the watcher is
+  now a harmless no-op kept only for older claude versions. Historical trap the
+  dialog caused (2026-07-17): on a BIG-transcript `--resume`, the dialog rendered
+  AFTER the watcher's 15s window, sat unanswered, and was eventually dismissed as
+  a DECLINE - REPL up but no channel plugin/MCP, messages queueing at the proxy
+  undrained. If you ever run a pre-2.1.214 claude again, lengthen the watcher
+  window for resume spawns. NB: pane-target tmux commands
   (`capture-pane` / `send-keys`) do NOT accept the `=name` exact-match prefix that
   `has-session` does; an exact session name already resolves exactly, so the
   watcher passes the bare name.
