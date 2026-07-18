@@ -59,6 +59,9 @@ const OVERRIDE_SETTINGS = join(PLUGIN_ROOT, 'override-settings.json')
 // references it as $TG_HOOK (passed to the session via `tmux new-session -e`) so
 // that committed file needs no hardcoded path.
 const STOP_HOOK = join(PLUGIN_ROOT, 'hooks', 'stop-reply-guard.py')
+// The StopFailure hook that reports a usage-limit stall so we can fail the
+// topic over to the fallback model (see MODEL_FALLBACK / handleRateLimit).
+const FAILOVER_HOOK = join(PLUGIN_ROOT, 'hooks', 'rate-limit-failover.py')
 const LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-topic.sh')
 // The token-bearing .env files. assertSendable refuses to ship these so a
 // prompt-injected topic-Claude cannot exfil the bot token via reply(files:[...]).
@@ -131,6 +134,18 @@ function resolveModel(): string {
   return s
 }
 const MODEL = resolveModel()
+
+// Fallback model for a topic whose primary model hits its PLAN USAGE LIMIT
+// (HTTP 429). Claude Code's own fallbackModel chain is availability-based
+// (503/529) and documented to exclude rate limits, and nothing downgrades the
+// model automatically on a plan limit - so without this an interactive topic
+// just stalls until a human runs /model. The StopFailure hook
+// (hooks/rate-limit-failover.py) reports the stall here and handleRateLimit
+// respawns the topic on this model with --resume (the --model FLAG overrides
+// even on resume, which is what makes this work at all). Empty = disabled
+// (the topic stalls as before). Reset back to the primary at the nightly
+// restart, so a fallback is never permanent.
+const MODEL_FALLBACK = (process.env.TELEGRAM_TOPICS_MODEL_FALLBACK ?? 'claude-opus-4-8').trim()
 
 // Which terminal multiplexer hosts the detached topic-Claude sessions.
 // `tmux` (default, the original backend) or `herdr` (herdr.dev, the agent
@@ -362,6 +377,11 @@ type TopicState = {
   // restarts: all topics share one spawn dir, so bare --continue (most-recent
   // session in a dir) cannot tell them apart - we track the id explicitly.
   claudeSessionId?: string
+  // Set when this topic has been failed over to MODEL_FALLBACK after a plan
+  // usage limit (429) on its primary model. Every later spawn uses it until
+  // the nightly restart clears it, so a proxy restart cannot silently drop
+  // the topic back onto an exhausted model.
+  fallbackModel?: string
 }
 
 const topics = new Map<string, TopicState>()
@@ -565,6 +585,7 @@ type RegistryEntry = {
   name: string
   spawned_at: number
   claude_session_id: string | null
+  fallback_model?: string | null
 }
 
 function saveRegistry(): void {
@@ -583,6 +604,7 @@ function saveRegistry(): void {
       name: st.name,
       spawned_at: st.spawnedAt,
       claude_session_id: st.claudeSessionId,
+      ...(st.fallbackModel ? { fallback_model: st.fallbackModel } : {}),
     }
   }
   const tmp = REGISTRY_FILE + '.tmp'
@@ -606,6 +628,7 @@ function loadAndReconcileRegistry(): void {
     st.threadId = entry.thread_id ?? undefined
     st.name = entry.name
     st.claudeSessionId = entry.claude_session_id ?? undefined
+    st.fallbackModel = entry.fallback_model ?? undefined
     if (entry.name) topicNames.set(topic, entry.name)
     if (entry.tmux_session && live.has(entry.tmux_session)) {
       st.session = entry.tmux_session
@@ -853,6 +876,61 @@ async function handleSquareReply(req: Request): Promise<Response> {
   return json({ message_id: sent.message_id })
 }
 
+// POST /rate-limit {topic, error, details} - a topic-Claude's turn died on a
+// plan usage limit (429), reported by the StopFailure hook. Fail the topic
+// over to MODEL_FALLBACK: pin the model, kill the stalled session, and
+// enqueue a nudge so the RESPAWNED session (which --resumes the same
+// conversation on the new model) picks up where it left off. Without the
+// nudge the respawn would sit idle: the user's message was already consumed
+// by the turn that failed, so nothing would be left in the queue to trigger
+// a reply.
+//
+// Idempotent: a repeat report for an already-failed-over topic is a no-op
+// (a claude can hit the limit again mid-recovery), so a burst of hook calls
+// cannot spawn a respawn loop.
+async function handleRateLimit(req: Request): Promise<Response> {
+  const b = (await req.json()) as any
+  const topic = String(b.topic ?? '')
+  if (!topic) return new Response('topic required', { status: 400 })
+  const st = getTopic(topic)
+  const label = st.name || topic
+
+  if (!MODEL_FALLBACK) {
+    log(`rate limit on topic ${topic} "${label}" but no fallback model configured; leaving stalled`)
+    return json({ ok: false, reason: 'no fallback configured' })
+  }
+  if (st.fallbackModel) {
+    log(`rate limit on topic ${topic} "${label}" already on fallback ${st.fallbackModel}; no action`)
+    return json({ ok: true, already: st.fallbackModel })
+  }
+
+  st.fallbackModel = MODEL_FALLBACK
+  saveRegistry()
+  log(`rate limit on topic ${topic} "${label}": failing over ${MODEL || '(account default)'} -> ${MODEL_FALLBACK}`)
+
+  // Kill the stalled session; the nudge below re-spawns it via ensureSession
+  // on the fallback model, --resuming the same conversation.
+  if (st.session && mux.liveSessions().has(st.session)) mux.kill(st.session)
+  st.session = ''
+  st.spawnedAt = 0
+
+  enqueue(topic, {
+    content:
+      `SYSTEM NOTICE (not a user message): your previous turn failed because the ${MODEL || 'default'} ` +
+      `usage limit was reached, so this session has been restarted on ${MODEL_FALLBACK} with your full ` +
+      `conversation intact. Continue where you left off: answer the user's most recent message now. ` +
+      `Mention the model switch only if it affects the answer.`,
+    meta: {
+      chat_id: String(GROUP_CHAT_ID),
+      failover: '1',
+      model: MODEL_FALLBACK,
+      ts: new Date().toISOString(),
+    },
+  })
+  ensureSession(topic)
+  return json({ ok: true, model: MODEL_FALLBACK })
+}
+
 // GET /topics - the directory tool's backing endpoint.
 function handleTopics(): Response {
   return json({ square: SQUARE_TOPIC || null, topics: topicDirectory() })
@@ -1046,7 +1124,10 @@ function ensureSession(topic: string): void {
       TG_MARKETPLACE: MARKETPLACE,
       TG_SETTINGS: settingsPath,
       TG_HOOK: STOP_HOOK,
-      TG_MODEL: MODEL,
+      TG_FAILOVER_HOOK: FAILOVER_HOOK,
+      // A topic failed over by handleRateLimit keeps its fallback model on
+      // every respawn until the nightly restart clears it.
+      TG_MODEL: st.fallbackModel || MODEL,
       TG_KICKOFF: kickoffPrompt(label),
       TG_CLAUDE_SESSION_ID: st.claudeSessionId,
       TG_RESUME: resuming ? '1' : '',
@@ -1470,6 +1551,7 @@ async function serveWithRetry(): Promise<void> {
                 polling_since: pollingSince != null ? new Date(pollingSince).toISOString() : null,
               })
             }
+            if (req.method === 'POST' && url.pathname === '/rate-limit') return await handleRateLimit(req)
             if (req.method === 'GET' && url.pathname === '/topics') return handleTopics()
             if (req.method === 'POST' && url.pathname === '/topic/create') return await handleTopicCreate(req)
             if (req.method === 'POST' && url.pathname === '/square/tag') return await handleSquareTag(req)
@@ -1582,8 +1664,18 @@ function nightlyRestart(): void {
     st.session = ''
     st.spawnedAt = 0
   }
+  // Clear every usage-limit failover: quotas reset on their own schedule, so
+  // the nightly restart is when topics get to try their primary model again.
+  // (A topic still over its limit simply fails over once more.)
+  let reverted = 0
+  for (const [topic, st] of topics) {
+    if (!st.fallbackModel) continue
+    log(`nightly restart: topic ${topic} "${st.name}" reverting from fallback ${st.fallbackModel} to ${MODEL || '(account default)'}`)
+    st.fallbackModel = undefined
+    reverted++
+  }
   saveRegistry()
-  log(`nightly restart complete: ${killed} topic session(s) killed`)
+  log(`nightly restart complete: ${killed} topic session(s) killed, ${reverted} model failover(s) reverted`)
 }
 
 const NIGHTLY_HOUR_RAW = process.env.TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR ?? ''

@@ -12,6 +12,7 @@
       "mcp__plugin_telegram_telegram__edit_message"
     ]
   },
+  "_comment_failover": "The StopFailure hook reports a plan USAGE-LIMIT stall (error == rate_limit, i.e. HTTP 429) to the proxy, which respawns the topic on the fallback model with --resume. Needed because Claude Code's own fallbackModel chain is availability-based (503/529) and explicitly excludes rate limits, and nothing downgrades the model automatically on a plan limit - so an interactive session just stalls until a human runs /model. Deliberately registered with NO matcher: the hook script filters on the error field itself, so it stays correct regardless of matcher semantics. Path comes from $TG_FAILOVER_HOOK (set by the proxy, forwarded by the launcher) to keep this committed file portable.",
   "hooks": {
     "Stop": [
       {
@@ -19,6 +20,16 @@
           {
             "type": "command",
             "command": "python3 \"$TG_HOOK\""
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$TG_FAILOVER_HOOK\""
           }
         ]
       }

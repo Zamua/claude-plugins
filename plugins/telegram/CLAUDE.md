@@ -163,6 +163,48 @@ never broadcast; behavioral discipline, no caps).
   and taggable immediately; its claude spawns on first message or tag. Only
   topics created OUTSIDE the proxy still need a first human message.
 
+## Usage-limit model failover
+
+A topic-Claude that exhausts its model's PLAN quota (HTTP 429) would otherwise
+stall forever: Claude Code's `--fallback-model` / `fallbackModel` chain is
+AVAILABILITY-based (503/529) and documented to exclude rate limits, and there
+is no automatic model downgrade on a plan limit - the session just fails every
+turn until a human runs `/model`
+(https://code.claude.com/docs/en/model-config#fallback-model-chains).
+
+The one signal the harness gives is the **StopFailure** hook, which fires when
+a turn dies on an API error with `error == "rate_limit"` for a 429. It is
+notification-only (output ignored, cannot change the session's model), so the
+plugin uses it purely as a tripwire:
+
+1. `hooks/rate-limit-failover.py` (wired as `StopFailure` in
+   `override-settings.json` via `$TG_FAILOVER_HOOK`; registered with NO
+   matcher - it filters on the `error` field itself so it stays correct
+   regardless of matcher semantics) POSTs `{topic, error, details}` to
+   `POST /rate-limit`.
+2. `handleRateLimit` pins `st.fallbackModel = TELEGRAM_TOPICS_MODEL_FALLBACK`
+   (default `claude-opus-4-8`; empty disables the feature), kills the stalled
+   session, and enqueues a SYSTEM NOTICE nudge.
+3. The nudge respawns the topic through the normal `ensureSession` path with
+   `--resume` + `--model <fallback>` (the `--model` FLAG overrides even on
+   resume - the same property that makes per-topic model pinning work), so the
+   conversation continues intact on the fallback model.
+
+Details that matter:
+- **The nudge is required.** The turn that hit the limit already CONSUMED the
+  user's message, so a bare respawn would sit idle with nothing in the queue.
+  The nudge tells the resumed Claude to answer the last user message.
+- **Idempotent**: a repeat report for an already-failed-over topic is a no-op,
+  so a burst of hook calls cannot cause a respawn loop.
+- **Persisted** in registry.json (`fallback_model`), so a proxy restart cannot
+  silently drop a topic back onto an exhausted model.
+- **Reverted at the nightly restart** (quotas reset on their own schedule): a
+  topic still over its limit simply fails over again on its next turn.
+- Verified live 2026-07-18 with synthetic StopFailure payloads: a
+  non-rate-limit error is ignored, a `rate_limit` error fails the topic over
+  (log + registry + a respawn whose args carry `--model claude-opus-4-8` while
+  other topics stay on the primary), and a repeat report no-ops.
+
 ## Key mechanics / gotchas (baked into the code)
 
 - **Foreground only.** Channel injection (the `<channel>` turn from a

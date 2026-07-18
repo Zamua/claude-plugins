@@ -35,6 +35,10 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 # session's --settings override references it as $TG_HOOK so that committed file
 # needs no hardcoded path; forwarded into the pane like the rest.
 : "${TG_HOOK:?TG_HOOK required}"
+# TG_FAILOVER_HOOK: the StopFailure hook (hooks/rate-limit-failover.py) that
+# reports a usage-limit stall to the proxy for model failover. Optional so an
+# older proxy still spawns; the settings hook entry just no-ops without it.
+: "${TG_FAILOVER_HOOK:=}"
 : "${TG_KICKOFF:?TG_KICKOFF required}"
 : "${TG_CLAUDE_SESSION_ID:?TG_CLAUDE_SESSION_ID required}"
 # TG_RESUME is optional: "1" = resume the topic's existing claude session (no
@@ -137,6 +141,7 @@ spawn_tmux() {
     -e TG_MARKETPLACE="$TG_MARKETPLACE" \
     -e TG_SETTINGS="$TG_SETTINGS" \
     -e TG_HOOK="$TG_HOOK" \
+    -e TG_FAILOVER_HOOK="$TG_FAILOVER_HOOK" \
     -e TG_MODEL="$TG_MODEL" \
     -e TG_KICKOFF="$TG_KICKOFF" \
     -e TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
@@ -198,6 +203,7 @@ spawn_herdr() {
     TG_MARKETPLACE="$TG_MARKETPLACE" \
     TG_SETTINGS="$TG_SETTINGS" \
     TG_HOOK="$TG_HOOK" \
+    TG_FAILOVER_HOOK="$TG_FAILOVER_HOOK" \
     TG_MODEL="$TG_MODEL" \
     TG_KICKOFF="$TG_KICKOFF" \
     TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
