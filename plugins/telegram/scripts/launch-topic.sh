@@ -107,7 +107,13 @@ PANE_CMD='export PATH="$TG_PATH"; \
 # plugin-less, with messages queueing undrained at the proxy). The dialog does
 # not appear on every boot (claude >= 2.1.214 often skips it), so most
 # watchers just poll quietly and exit.
-DIALOG_TEXT='local development'
+# WRAP-PROOF MATCHING: in a NARROW pane the dialog text wraps mid-phrase
+# ("for local\n       development"), so a plain grep for "local development"
+# never matches at ANY window length (this silently defeated the herdr watcher,
+# 2026-07-18). Each watcher therefore strips ALL whitespace (and, for the herdr
+# socket path, JSON-encoded \n sequences) from the captured text and greps for
+# the squashed phrase - immune to wrapping and indentation.
+DIALOG_SQUASHED='Iamusingthisforlocaldevelopment'
 WATCHER_TRIES=480
 
 spawn_tmux() {
@@ -144,7 +150,7 @@ spawn_tmux() {
   # session name already resolves exactly, so pass the bare name.
   (
     for _ in $(seq 1 "$WATCHER_TRIES"); do
-      if tmux capture-pane -t "$TG_SESSION" -p 2>/dev/null | grep -q "$DIALOG_TEXT"; then
+      if tmux capture-pane -t "$TG_SESSION" -p 2>/dev/null | tr -d ' \t\n' | grep -q "$DIALOG_SQUASHED"; then
         tmux send-keys -t "$TG_SESSION" 1 Enter
         break
       fi
@@ -219,8 +225,11 @@ spawn_herdr() {
   if [ -n "$pane_id" ]; then
     (
       for _ in $(seq 1 "$WATCHER_TRIES"); do
+        # sed strips JSON-encoded newlines (literal backslash-n) BEFORE the
+        # space strip, so a phrase wrapped across pane lines squashes back
+        # together; see the wrap-proof matching note above.
         if printf '{"id":"w","method":"pane.read","params":{"pane_id":"%s","source":"visible"}}\n' "$pane_id" \
-          | nc -U "$sock" 2>/dev/null | grep -q "$DIALOG_TEXT"; then
+          | nc -U "$sock" 2>/dev/null | sed 's/\\n//g; s/ //g' | grep -q "$DIALOG_SQUASHED"; then
           "$herdr_bin" pane send-keys "$pane_id" 1 Enter
           break
         fi
