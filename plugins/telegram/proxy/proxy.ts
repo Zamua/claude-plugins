@@ -464,6 +464,31 @@ function enqueue(topic: string, msg: InboundMsg): void {
   else st.queue.push(msg)
 }
 
+// Kill a topic's session AND drop the long-polls that belonged to it.
+//
+// The proxy cannot observe an MCP dying: its /poll waiter stays registered in
+// st.waiters until it times out ~25s later. enqueue() prefers a waiter over
+// the queue, so a message enqueued in that window is handed to a process that
+// no longer exists and is LOST - it never reaches the queue the respawned
+// session drains. That is exactly how the first real usage-limit failover
+// failed (2026-07-19): the nudge vanished into the killed session, so the
+// Claude that came back on the fallback model had nothing to do and sat idle
+// while its pane still showed the limit message - looking hung when it was
+// actually fine.
+//
+// Resolving a stale waiter with null just answers 204 to a dead socket, which
+// is harmless; the point is to empty the list so the NEXT enqueue queues.
+// Always kill through this helper, never mux.kill() directly, when anything
+// might be enqueued afterwards.
+function killSession(st: TopicState, topic: string): boolean {
+  const killed = !!(st.session && mux.liveSessions().has(st.session)) && mux.kill(st.session)
+  while (st.waiters.length) st.waiters.shift()?.(null)
+  while (st.permWaiters.length) st.permWaiters.shift()?.(null)
+  st.session = ''
+  st.spawnedAt = 0
+  return killed
+}
+
 // ---- permission relay -----------------------------------------------------
 //
 // A topic-Claude runs detached, so it cannot answer a permission prompt for
@@ -945,11 +970,9 @@ async function handleRateLimit(req: Request): Promise<Response> {
     )
     .catch(e => log(`failover notice failed for topic ${topic}: ${e}`))
 
-  // Kill the stalled session; the nudge below re-spawns it via ensureSession
-  // on the fallback model, --resuming the same conversation.
-  if (st.session && mux.liveSessions().has(st.session)) mux.kill(st.session)
-  st.session = ''
-  st.spawnedAt = 0
+  // Kill the stalled session AND drop its stale long-polls before enqueueing:
+  // otherwise the nudge is handed to the dying MCP and lost (see killSession).
+  killSession(st, topic)
 
   enqueue(topic, {
     content:
@@ -1723,14 +1746,12 @@ function nightlyRestart(): void {
   let killed = 0
   for (const [topic, st] of topics) {
     if (!st.session || !live.has(st.session)) continue
-    if (mux.kill(st.session)) {
+    if (killSession(st, topic)) {
       killed++
-      log(`nightly restart: killed topic ${topic} "${st.name}" (${st.session}); will --resume on next message`)
+      log(`nightly restart: killed topic ${topic} "${st.name}"; will --resume on next message`)
     } else {
-      log(`nightly restart: failed to kill ${st.session}`)
+      log(`nightly restart: failed to kill topic ${topic} "${st.name}"`)
     }
-    st.session = ''
-    st.spawnedAt = 0
   }
   // Clear every usage-limit failover: quotas reset on their own schedule, so
   // the nightly restart is when topics get to try their primary model again.

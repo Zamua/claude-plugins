@@ -194,6 +194,18 @@ Details that matter:
 - **The nudge is required.** The turn that hit the limit already CONSUMED the
   user's message, so a bare respawn would sit idle with nothing in the queue.
   The nudge tells the resumed Claude to answer the last user message.
+- **Kill through `killSession`, never `mux.kill` directly, when anything may be
+  enqueued afterwards.** The proxy cannot observe an MCP dying: its `/poll`
+  waiter stays registered in `st.waiters` for up to ~25s, and `enqueue()`
+  prefers a waiter over the queue - so a message enqueued in that window is
+  handed to a dead process and LOST. This broke the first real failover
+  (2026-07-19): the nudge vanished into the killed session, so the Claude that
+  came back on the fallback model sat idle with nothing to do while its pane
+  still showed the limit message, looking hung when the failover had actually
+  worked. `killSession` kills, drains stale inbound + permission waiters
+  (resolving them with null = a harmless 204 to a dead socket), and clears the
+  session fields. Regression-tested by abandoning a poll, firing a failover,
+  and confirming a fresh poll receives the nudge.
 - **Idempotent**: a repeat report for an already-failed-over topic is a no-op,
   so a burst of hook calls cannot cause a respawn loop.
 - **Persisted** in registry.json (`fallback_model`), so a proxy restart cannot
