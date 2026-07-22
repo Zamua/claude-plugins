@@ -1,6 +1,7 @@
 {
   "source": "linear",
   "runtime": "herdr",
+  "herdr_session": "agent-board",
   "label": "agent",
   "cap": 3,
   "poll_seconds": 90,
