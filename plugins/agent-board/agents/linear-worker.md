@@ -27,6 +27,7 @@ follow it. The rules below add to it or override the human-in-the-loop gates.
    rules (draft first, Linear issue URL as the first line under `## Summary`, linear
    history). Name the branch `feature/<id>` so Linear auto-links the PR. Do not post
    the PR link on the Linear issue - Linear links it from the branch automatically.
+   Once each draft PR is up, run `open <pr-url>` so it opens in the operator's browser.
 6. **Then watch the PR(s) for automated review, and iterate.** Poll each PR for review
    comments left by AI/automated reviewers (bot accounts, e.g. logins ending in
    `[bot]`, or known AI PR reviewers). Arm a Monitor so new ones wake you, e.g.

@@ -19,6 +19,7 @@ builds, tests, and its conventions, and follow them.
    the build/tests.
 3. **Open a draft PR** (`gh pr create --draft`) that references the issue with
    `Closes #<n>` so merging it closes the issue. Do not post the PR link on the issue.
+   Once the draft PR is up, run `open <pr-url>` so it opens in the operator's browser.
 4. **Then watch the PR for automated review, and iterate.** Poll for review comments
    left by AI/automated reviewers (bot accounts, e.g. logins ending in `[bot]`, or
    known AI PR reviewers). Arm a Monitor so new ones wake you
