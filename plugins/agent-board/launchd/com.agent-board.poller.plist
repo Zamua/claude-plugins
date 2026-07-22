@@ -21,5 +21,9 @@
   <string>@LOG@</string>
   <key>StandardErrorPath</key>
   <string>@LOG@</string>
+  <!-- Do NOT SIGKILL the pass's children on exit: the per-task herdr servers are
+       detached and must outlive the short-lived pass. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
 </dict>
 </plist>
