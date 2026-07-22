@@ -5,8 +5,8 @@
 #
 # Aligned with the new re-entrant model: reap = `claude stop` (transcript kept,
 # resumable via `claude respawn`). It NEVER deletes the worktree, branch, or
-# session; teardown is manual. The worker persona is the issue-agent subagent,
-# delivered via `--agent issue-agent`.
+# session; teardown is manual. The worker persona is loaded as a Claude Code
+# subagent via `--agent <worker_subagent>` (default issue-agent).
 
 rt_deps() { printf 'claude gh jq git'; }
 
@@ -65,7 +65,8 @@ rt_spawn() {  # <id> <context>
   local existing; existing="$(claude agents --json 2>/dev/null | jq -r --arg n "$name" '.[]|select(.kind=="background" and .name==$n)|.id' | head -1)"
   if [ -n "$existing" ]; then ab_map_set "$id" "$existing"; ab_log "$id already running ($existing); adopted"; return 0; fi
   pm="$(ab_get permission_mode acceptEdits)"; house="$(ab_get house_rules "")"; pdir="$(ab_get plugin_dir "")"
-  local cmd=(claude --bg --agent issue-agent --name "$name" --add-dir "$clone" --permission-mode "$pm")
+  local sub; sub="$(ab_get worker_subagent issue-agent)"
+  local cmd=(claude --bg --agent "$sub" --name "$name" --add-dir "$clone" --permission-mode "$pm")
   [ "$(ab_get worktree true)" = "true" ]          && cmd+=(--worktree)
   [ -n "$pdir" ]                                  && cmd+=(--plugin-dir "$pdir")
   [ "$(ab_get dangerously_skip false)" = "true" ] && cmd+=(--dangerously-skip-permissions)

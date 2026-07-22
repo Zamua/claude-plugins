@@ -4,42 +4,42 @@
 # One herdr SESSION per task (name = ab_session_name), isolated from the operator's
 # default session. Reap = `session stop` (preserves a `stopped`, resumable session;
 # NEVER `session delete`). Resume = restart the session server, then
-# `agent start ... -- <agent_cmd> --resume <id>`, where <id> is the claude session
-# id herdr remembers in agent_session.value. Workers launch as bare `claude`, so
-# the worker persona is delivered as the kickoff chat message.
+# `agent start ... -- <agent_cmd> --agent <subagent> --resume <id>`, where <id> is
+# the claude session id herdr remembers in agent_session.value.
+#
+# The worker persona is loaded natively as a Claude Code subagent via `--agent`
+# (default worker_subagent = linear-worker), so the persona is the session's system
+# prompt at launch; the only thing sent afterward is the short task pointer. This
+# requires the plugin to be discoverable (installed, or `plugin_dir` set).
 #
 # Contract used by poll.sh:
 #   rt_deps
-#   rt_status   <id>          -> absent | running | stopped
+#   rt_status   <id>            -> absent | running | stopped
 #   rt_running_count
-#   rt_spawn    <id> <context>   -> fresh worker (persona + context kickoff)
+#   rt_spawn    <id> <context>  -> fresh worker; sends <context> as the first message
 #   rt_resume   <id>            -> restore worker w/ context (ret 2 = no saved id)
-#   rt_reap     <id>          -> stop (preserve)
-#   rt_list                   -> "<id>\t<status>\t<claude-session-id>"
+#   rt_reap     <id>            -> stop (preserve)
+#   rt_list                     -> "<id>\t<status>\t<claude-session-id>"
 #
-# Verbs are all confirmed for 0.7.4 (docs are wrong: no --kind/--pane, no
-# `agent prompt`): `agent start <name> --cwd P --no-focus -- <argv>`, `agent send`,
-# `pane send-keys`, `agent wait --status`, `agent list`, `session stop|list`.
+# Verbs confirmed for 0.7.4 (docs are wrong: no --kind/--pane, no `agent prompt`):
+# `agent start <name> --cwd P --no-focus -- <argv>`, `agent send`, `pane send-keys`,
+# `agent wait --status`, `agent list`, `session stop|list`.
 
 rt_deps() { printf 'herdr jq'; }
 
-# Worker persona delivered as the kickoff chat message. Configurable via
-# `worker_persona`; defaults to the plugin's linear-worker.md.
-_rt_persona() {
-  local p; p="$(ab_get worker_persona "")"
-  [ -n "$p" ] && { printf '%s' "$p"; return; }
-  printf '%s/../../agents/linear-worker.md' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-}
-
-# Build the configured agent launch argv into RT_ARGV, expanding a leading ~/.
+# Build the launch argv into RT_ARGV: the configured agent_cmd (~/ expanded), then
+# an optional --plugin-dir, then --agent <worker_subagent> so the persona loads as
+# the subagent system prompt.
 RT_ARGV=()
 _rt_build_argv() {
-  RT_ARGV=(); local a
+  RT_ARGV=(); local a pdir sub
   while IFS= read -r a; do
     case "$a" in "~/"*) a="$HOME/${a#\~/}";; esac
     RT_ARGV+=("$a")
   done < <(ab_get_list agent_cmd)
   [ "${#RT_ARGV[@]}" -gt 0 ] || RT_ARGV=(claude)
+  pdir="$(ab_get plugin_dir "")"; [ -n "$pdir" ] && RT_ARGV+=(--plugin-dir "$pdir")
+  sub="$(ab_get worker_subagent linear-worker)"; RT_ARGV+=(--agent "$sub")
 }
 
 # Ensure a detached, clean-env herdr server is up for this session. The scrub is
@@ -114,14 +114,13 @@ rt_running_count() {
 }
 
 rt_spawn() {  # <id> <context>
-  local id="$1" context="$2" sname name pane sid cwd kickoff
+  local id="$1" context="$2" sname name pane sid cwd
   sname="$(ab_session_name "$id")"; name="$(ab_safe "$id")"; cwd="$(ab_workspace_root)"
   rt_ensure_server "$sname" || return 1
   _rt_build_argv
   pane="$(_rt_agent_start "$sname" "$name" "$cwd" "${RT_ARGV[@]}")" || return 1
   rt_wait_idle "$sname" "$pane"
-  kickoff="$(printf '%s\n\n%s\n\nBegin now.' "$(cat "$(_rt_persona)" 2>/dev/null)" "$context")"
-  rt_send "$sname" "$pane" "$kickoff"
+  rt_send "$sname" "$pane" "$context"
   sid="$(_rt_sid_by_pane "$sname" "$pane")"
   [ -n "$sid" ] && ab_map_set "$id" "$sid"
   ab_log "spawned $id (session=$sname pane=$pane claude=${sid:-?})"
