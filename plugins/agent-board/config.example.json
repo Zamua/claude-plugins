@@ -8,12 +8,10 @@
 
   "spawn_state": "started",
   "reap_state": "completed",
-  "assignee": "",
-  "team": "",
   "session_prefix": "",
   "workspace_root": "",
   "agent_cmd": ["claude"],
-  "worker_persona": "",
+  "worker_subagent": "",
 
   "gh_login": "",
   "workdir": "",
