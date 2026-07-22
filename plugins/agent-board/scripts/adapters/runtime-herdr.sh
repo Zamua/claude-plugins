@@ -47,9 +47,15 @@ rt_ensure_server() {  # <sname>
     return 0
   fi
   log="$HOME/.config/agent-board/herdr-$sname.log"; mkdir -p "$(dirname "$log")"
-  # Detach so the server outlives this short-lived poll pass. TODO(launchd): the
-  # scheduler job may need AbandonProcessGroup / setsid to keep this alive.
-  ( ab_scrub_env; nohup herdr --session "$sname" server >>"$log" 2>&1 & disown ) 2>/dev/null
+  # Fully detach the server into its OWN session so it outlives this short-lived
+  # (launchd) poll pass. macOS ships no `setsid`, so fall back to a perl
+  # double-fork (parent exits; child setsid()s into a new session, then execs).
+  # The LaunchAgent plist also sets AbandonProcessGroup as a second guard.
+  if command -v setsid >/dev/null 2>&1; then
+    ( ab_scrub_env; setsid herdr --session "$sname" server >>"$log" 2>&1 & ) 2>/dev/null
+  else
+    ( ab_scrub_env; perl -e 'use POSIX qw(setsid); fork and exit; setsid; exec @ARGV' herdr --session "$sname" server >>"$log" 2>&1 & ) 2>/dev/null
+  fi
   while ! herdr --session "$sname" agent list >/dev/null 2>&1; do
     i=$((i+1)); [ "$i" -ge 50 ] && { ab_log "herdr server for $sname did not come up"; return 1; }
     sleep 0.2
