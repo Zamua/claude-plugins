@@ -6,15 +6,16 @@
 # Contract used by poll.sh:
 #   src_deps
 #   src_spawn_candidates          -> ids assigned-to-me + labeled + in spawn_state
-#   src_state   <id>              -> Linear state category (started|completed|...)
+#   src_state   <id>              -> Linear state NAME (e.g. "In Progress", "Done")
 #   src_last_actor_is_me <id>     -> 0 if the newest action on the issue was the operator's (guard)
 #   src_url     <id>              -> issue URL
 #   src_title   <id>              -> issue title
 #   src_kickoff_context <id>      -> short task description for the runtime's kickoff
 #
-# Eligibility uses assignee.isMe (matches the self-assign convention). The guard is
-# what actually prevents a hijack: an attacker can create/assign/label/set-state,
-# but cannot be the LAST actor.
+# spawn_state / reap_state are matched against the exact workflow-state NAME (not
+# the coarse type), so "In Progress" triggers only In Progress - not In Review,
+# Ready for QA, or any other started-type state. Eligibility uses assignee.isMe;
+# the last-actor guard is what prevents a hijack.
 
 src_deps() { printf 'linear jq'; }
 
@@ -25,20 +26,20 @@ _src_num()  { printf '%s' "${1##*-}"; }  # MM-423 -> 423
 
 src_spawn_candidates() {
   local label state q
-  label="$(ab_get label agent)"; state="$(ab_get spawn_state started)"
+  label="$(ab_get label agent)"; state="$(ab_get spawn_state "In Progress")"
   q='query { issues(filter: {
         assignee: { isMe: { eq: true } },
         labels:   { some: { name: { eq: "'"$label"'" } } },
-        state:    { type: { eq: "'"$state"'" } }
+        state:    { name: { eq: "'"$state"'" } }
       }, first: 50) { nodes { identifier } } }'
   _src_api "$q" | jq -r '.data.issues.nodes[]?.identifier // empty' 2>/dev/null
 }
 
-src_state() {  # <id>
+src_state() {  # <id> -> exact workflow-state name
   local team num q; team="$(_src_team "$1")"; num="$(_src_num "$1")"
   q='query { issues(filter: { team: { key: { eq: "'"$team"'" } }, number: { eq: '"$num"' } }, first: 1) {
-        nodes { state { type } } } }'
-  _src_api "$q" | jq -r '.data.issues.nodes[0].state.type // empty' 2>/dev/null
+        nodes { state { name } } } }'
+  _src_api "$q" | jq -r '.data.issues.nodes[0].state.name // empty' 2>/dev/null
 }
 
 src_url() {  # <id>
