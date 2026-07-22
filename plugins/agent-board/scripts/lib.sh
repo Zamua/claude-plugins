@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# agent-board shared helpers. Everything is config-driven - no hardcoded
-# logins, repos, or paths. Sourced by poll.sh and the board skill.
+# agent-board shared core. Provider-agnostic: config, logging, the poll lock, the
+# task->session map, and small helpers. Source-specific logic (Linear) lives in
+# adapters/source-*.sh and runtime-specific logic (herdr) in adapters/runtime-*.sh;
+# poll.sh sources this plus the two adapters the config selects.
+#
+# Kept bash-3.2-safe: the launchd job runs macOS /bin/bash. No associative arrays,
+# no ${x,,}, no mapfile; never expand a possibly-empty array under `set -u`.
 set -uo pipefail
 
-# Schedulers (launchd/cron) run with a minimal PATH; make the common tool
-# locations discoverable so claude/gh/jq/git resolve however they were installed.
+# Schedulers (launchd/cron) run with a minimal PATH; make common tool locations
+# discoverable so claude/herdr/linear/jq/git resolve however they were installed.
 export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 AB_CONFIG="${AGENT_BOARD_CONFIG:-$HOME/.config/agent-board/config.json}"
@@ -18,138 +23,80 @@ ab_need() {
   return $ok
 }
 
-# ---- config (top-level keys, with defaults) ----
+# ---- config ----
+# a scalar string value (or the default)
 ab_get() {
   local key="$1" def="${2-}" v
   [ -f "$AB_CONFIG" ] || { printf '%s' "$def"; return; }
   v=$(jq -r --arg k "$key" '.[$k] // empty' "$AB_CONFIG" 2>/dev/null)
   if [ -n "$v" ] && [ "$v" != "null" ]; then printf '%s' "$v"; else printf '%s' "$def"; fi
 }
-
-# the github login to filter issues by; configured value or auto-detected
-ab_gh_login() {
-  local v; v=$(ab_get gh_login "")
-  if [ -n "$v" ]; then printf '%s' "$v"; else gh api user --jq .login 2>/dev/null; fi
+# a value that may be a JSON array OR a whitespace-separated string: emit one
+# element per line. Used for agent_cmd so a full argv (model/effort/mcp flags)
+# round-trips exactly when given as an array. Empty -> nothing.
+ab_get_list() {
+  [ -f "$AB_CONFIG" ] || return 0
+  jq -r --arg k "$1" '
+    .[$k] as $v
+    | if   $v == null        then empty
+      elif ($v|type)=="array"  then $v[]
+      elif ($v|type)=="string" then ($v / " ")[]
+      else $v end' "$AB_CONFIG" 2>/dev/null
 }
 
-# the managed directory that holds agent-board's own clones (one per repo), kept
-# separate from the user's working checkouts. Configurable; sensible XDG default.
-ab_workdir() {
-  local w; w="$(ab_get workdir "")"
-  if [ -n "$w" ]; then printf '%s' "$w"; else printf '%s' "${XDG_DATA_HOME:-$HOME/.local/share}/agent-board/repos"; fi
+# workspace root the workers operate under (per the user global CLAUDE.md flow).
+ab_workspace_root() {
+  local w; w="$(ab_get workspace_root "")"
+  [ -n "$w" ] && { printf '%s' "$w"; return; }
+  printf '%s' "$HOME/workspace"
 }
 
-# ensure a managed clone of owner/repo exists; echo its path (clone if missing)
-ab_ensure_clone() {  # owner/repo
-  local slug="$1" dir def; dir="$(ab_workdir)/$slug"
-  if [ ! -d "$dir/.git" ]; then
-    mkdir -p "$(dirname "$dir")"
-    gh repo clone "$slug" "$dir" -- --quiet >/dev/null 2>&1 || { ab_log "clone failed: $slug"; return 1; }
-  fi
-  # Always refresh to the remote default branch before a worker branches off it.
-  # Without this, a clone left over from an earlier dispatch keeps a STALE default
-  # branch, and the worker's --worktree forks from that stale base - producing a
-  # PR that conflicts with (or silently reverts) work merged since. Fetch, then
-  # hard-reset the default branch to its remote tip. The default branch is read
-  # from origin/HEAD (set at clone time, no network); a worker's feature worktree
-  # is on its own branch, so resetting the default branch here does not touch it.
-  if git -C "$dir" fetch --quiet origin >/dev/null 2>&1; then
-    def="$(git -C "$dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
-    [ -z "$def" ] && { git -C "$dir" remote set-head origin -a >/dev/null 2>&1; def="$(git -C "$dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"; }
-    [ -z "$def" ] && def=main
-    if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$def"; then
-      git -C "$dir" checkout --quiet "$def" >/dev/null 2>&1 \
-        && git -C "$dir" reset --hard --quiet "origin/$def" >/dev/null 2>&1 \
-        || ab_log "could not refresh $slug to origin/$def (using current base)"
-    fi
-  else
-    ab_log "fetch failed for $slug (using cached clone)"
-  fi
-  printf '%s' "$dir"
+# deterministic herdr session name for a task, so spawn/reap/resume are
+# re-entrant with no duplicates. Lowercased issue id (matches ~/workspace/<id>
+# and feature/<id>), with an optional configurable prefix.
+ab_session_name() {  # <issue-id>
+  local id pfx; pfx="$(ab_get session_prefix "")"
+  id="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+  printf '%s%s' "$pfx" "$id"
 }
 
-# owner/repo slug from a local repo's origin remote (used to label worktrees)
-ab_slug() {
-  git -C "$1" config --get remote.origin.url 2>/dev/null \
-    | sed -E 's#^(git@[^:]+:|https?://[^/]+/)##; s#\.git$##' | head -1
-}
+# a filesystem/agent-name-safe token
+ab_safe() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_-' '-'; }
 
-# a filesystem/agent-name-safe token from a slug
-ab_safe() { printf '%s' "$1" | tr '/:.@' '----'; }
+# Env vars that, if inherited from a parent claude session, mark a nested claude
+# as a "child" and disable its transcript, which would break `claude --resume`.
+# Scrub them (plus any inherited herdr socket/session pointers) before launching
+# herdr so workers save transcripts and every call honors explicit --session.
+# Harmless under launchd (already a clean env); essential if ever run from inside
+# a claude session. Call inside the subshell that execs herdr.
+AB_SCRUB_VARS="CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS CLAUDE_CODE_SESSION_ID CLAUDE_CODE_WORKING_DIR HERDR_SOCKET_PATH HERDR_SESSION HERDR_WORKSPACE_ID HERDR_PANE_ID"
+ab_scrub_env() { local v; for v in $AB_SCRUB_VARS; do unset "$v" 2>/dev/null || true; done; }
 
-ab_uuid() { uuidgen | tr 'A-Z' 'a-z'; }
-
-# ---- session map: "owner/repo#N" -> session uuid ----
+# ---- task -> claude-session-id map (for resume) ----
+# Value is the claude session id captured at spawn. Persisted so a reap (stop)
+# keeps it and a later resume can `claude --resume <id>`. Reap NEVER deletes the
+# entry (stop preserves); only a full manual teardown removes it.
 ab_map_init() { [ -f "$AB_STATE" ] || { mkdir -p "$(dirname "$AB_STATE")"; printf '{}\n' >"$AB_STATE"; }; }
-# Map value is "<sid>" or "<sid>|<worktree-path>". ab_map_get returns the sid
-# (back-compat: a bare "<sid>" has no pipe), ab_map_wt the worktree path (so
-# cleanup can find + prune the worktree even after the session is gone).
-ab_map_get()  { ab_map_init; local v; v="$(jq -r --arg k "$1" '.[$k] // empty' "$AB_STATE")"; printf '%s' "${v%%|*}"; }
-ab_map_wt()   { ab_map_init; local v; v="$(jq -r --arg k "$1" '.[$k] // empty' "$AB_STATE")"; case "$v" in *"|"*) printf '%s' "${v#*|}" ;; esac; }
-ab_map_set()  {  # key sid [worktree]
-  ab_map_init; local tmp v; v="$2"; [ -n "${3:-}" ] && v="$2|$3"
-  tmp=$(mktemp)
-  jq --arg k "$1" --arg v "$v" '.[$k]=$v' "$AB_STATE" >"$tmp" && mv "$tmp" "$AB_STATE"
-}
-ab_map_keys() { ab_map_init; jq -r 'keys[]' "$AB_STATE"; }
-ab_map_vals() { ab_map_init; jq -r '.[]' "$AB_STATE"; }
-ab_map_del()  {
-  ab_map_init; local tmp; tmp=$(mktemp)
-  jq --arg k "$1" 'del(.[$k])' "$AB_STATE" >"$tmp" && mv "$tmp" "$AB_STATE"
-}
+ab_map_get()  { ab_map_init; jq -r --arg k "$1" '.[$k] // empty' "$AB_STATE" 2>/dev/null; }
+ab_map_set()  { ab_map_init; local tmp; tmp=$(mktemp); jq --arg k "$1" --arg v "$2" '.[$k]=$v' "$AB_STATE" >"$tmp" && mv "$tmp" "$AB_STATE"; }
+ab_map_del()  { ab_map_init; local tmp; tmp=$(mktemp); jq --arg k "$1" 'del(.[$k])' "$AB_STATE" >"$tmp" && mv "$tmp" "$AB_STATE"; }
+ab_map_keys() { ab_map_init; jq -r 'keys[]' "$AB_STATE" 2>/dev/null; }
 
-# ---- cleanup-on-stop ----
-# When an issue is done (closed), tear the worker's footprint all the way down:
-# stop the agent, remove its git worktree, delete the feature branch, remove the
-# agent session, and drop the map entry. Idempotent + best-effort: a missing
-# piece is logged, not fatal. Args: key (owner/repo#N), sid (agent short id).
-ab_cleanup_worker() {
-  local key="$1" sid="$2" slug repo wt br
-  slug="${key%#*}"; repo="$(ab_workdir)/$slug"
-  # Worktree path: prefer the one recorded in the map at launch (survives the
-  # session going away); fall back to the live agent's cwd if not recorded.
-  wt="$(ab_map_wt "$key")"
-  [ -n "$wt" ] || wt="$(claude agents --json 2>/dev/null | jq -r --arg id "$sid" '.[] | select(.id==$id) | .cwd' 2>/dev/null | head -1)"
-  claude stop "$sid" >/dev/null 2>&1 || true
-  if [ -n "$wt" ] && [ -d "$wt" ] && [ -d "$repo/.git" ]; then
-    br="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null)"
-    git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 || ab_log "cleanup: worktree remove failed: $wt"
-    if [ -n "$br" ] && [ "$br" != "HEAD" ]; then
-      git -C "$repo" branch -D "$br" >/dev/null 2>&1 || true
+# ---- single-flight poll lock ----
+# Atomic mkdir works everywhere (no flock on macOS); a stale lock from a dead
+# pass is reclaimed. Guarantees two overlapping passes can't act on one task.
+AB_LOCK_DIR=""
+ab_lock() {
+  local lock="${AGENT_BOARD_LOCK:-$HOME/.config/agent-board/.poll.lock}"
+  mkdir -p "$(dirname "$lock")"
+  if ! mkdir "$lock" 2>/dev/null; then
+    local holder=""; [ -f "$lock/pid" ] && holder="$(cat "$lock/pid" 2>/dev/null)"
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      ab_log "another pass (pid $holder) holds the lock; skipping"; return 1
     fi
-    git -C "$repo" worktree prune >/dev/null 2>&1 || true
+    ab_log "reclaiming stale poll lock (holder '${holder:-?}' gone)"
+    rm -rf "$lock"; mkdir "$lock" 2>/dev/null || { ab_log "lost lock race; skipping"; return 1; }
   fi
-  claude rm "$sid" >/dev/null 2>&1 || true
-  ab_map_del "$key"
-  ab_log "cleaned up $key: stopped + removed session $sid, pruned worktree${br:+ + branch $br}"
+  printf '%s' "$$" > "$lock/pid"; AB_LOCK_DIR="$lock"; return 0
 }
-
-# ---- live background agents (by short id) ----
-# `--session-id` is ignored by `--bg`; claude assigns the agent its own short
-# `id` (also the sessionId prefix). That short id is what stop/respawn/logs take
-# and what `claude agents --json` reports, so it is the lifecycle key we track.
-ab_live_sessions() {
-  claude agents --json 2>/dev/null | jq -r '.[] | select(.kind=="background") | .id' 2>/dev/null
-}
-ab_is_running() { ab_live_sessions | grep -qxF "$1"; }            # arg: agent short id
-ab_running_count() {                                              # our mapped sessions that are live
-  local live n=0 sid; live=$(ab_live_sessions)
-  while IFS= read -r sid; do
-    sid="${sid%%|*}"   # map values may be "<sid>|<worktree>"; compare on the sid
-    [ -n "$sid" ] && grep -qxF "$sid" <<<"$live" && n=$((n+1))
-  done < <(ab_map_vals)
-  printf '%s' "$n"
-}
-
-# ---- gh issue helpers (cross-repo; no allowlist) ----
-# all eligible OPEN issues the user authored with the label, across EVERY repo:
-# "owner/repo\t<number>\t<url>" lines. Excludes PRs.
-ab_search_issues() {  # args: label login
-  gh search issues --author "$2" --label "$1" --state open --limit 50 \
-    --json repository,number,url,isPullRequest \
-    --jq '.[] | select(.isPullRequest | not) | "\(.repository.nameWithOwner)\t\(.number)\t\(.url)"' 2>/dev/null
-}
-# fresh per-issue state (no read-after-write lag, unlike search): OPEN|CLOSED|""
-ab_issue_state() {  # args: owner/repo number
-  gh issue view "$2" --repo "$1" --json state --jq '.state' 2>/dev/null
-}
+ab_unlock() { [ -n "$AB_LOCK_DIR" ] && rm -rf "$AB_LOCK_DIR"; AB_LOCK_DIR=""; }
