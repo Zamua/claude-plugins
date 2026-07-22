@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # agent-board runtime adapter: herdr (https://herdr.dev), verified on 0.7.4.
 #
-# ALL tasks run as AGENTS (panes) inside ONE shared herdr session (config
-# `herdr_session`, default "agent-board"), NOT a session per task. Task identity
-# within the session is the claude session id (agent_session.value), captured at
-# spawn and stored in the map - so status/reap/resume key on the sid and are robust
-# to agent-name reuse. The shared session is created once and persists.
+# ALL tasks run inside ONE shared herdr session (config `herdr_session`, default
+# "agent-board"), and each task gets its OWN workspace within that session (label =
+# task id), one agent pane per workspace. Task identity is the claude session id
+# (agent_session.value), captured at spawn and stored in the map - so status/reap/
+# resume key on the sid and are robust to name/pane/workspace changes.
 #
-# spawn  = agent start in the shared session, kickoff passed as claude's positional
-#          prompt (auto-submits, stays interactive).
-# reap   = close that task's pane (worker stops; claude transcript persists; sid kept).
-# resume = agent start --resume <sid> in the shared session.
+# spawn  = agent start (kickoff as claude's positional prompt) then move the pane to
+#          its own new workspace labeled with the task id.
+# reap   = close that task's pane; herdr auto-drops the now-empty workspace. The
+#          claude transcript persists and the sid is kept, so resume works.
+# resume = agent start --resume <sid>, then move to its own workspace.
 #
 # Contract used by poll.sh:
 #   rt_deps
@@ -24,7 +25,7 @@
 rt_deps() { printf 'herdr jq'; }
 
 _rt_session() { ab_get herdr_session agent-board; }   # the ONE shared session
-_rt_name()    { ab_safe "$1"; }                        # per-task agent display name
+_rt_name()    { ab_safe "$1"; }                        # per-task agent + workspace label
 
 # Build the launch argv: agent_cmd (~/ expanded), optional --plugin-dir, worker
 # permission mode (a background worker can't answer prompts), then --agent.
@@ -75,6 +76,12 @@ _rt_agent_start() {  # <name> <cwd> <argv...>
   printf '%s' "$pane"
 }
 
+# Move a freshly-started agent's pane into its OWN new workspace (label = task id),
+# so tasks are one-per-workspace inside the shared session. Best-effort.
+_rt_own_workspace() {  # <pane> <id>
+  herdr --session "$(_rt_session)" pane move "$1" --new-workspace --label "$(_rt_name "$2")" --no-focus >/dev/null 2>&1
+}
+
 # claude sid reported for a pane (retry; the integration reports a beat after start)
 _rt_sid_by_pane() {
   herdr --session "$(_rt_session)" agent list 2>/dev/null \
@@ -111,7 +118,8 @@ rt_spawn() {  # <id> <context>
   _rt_build_argv
   pane="$(_rt_agent_start "$(_rt_name "$id")" "$(ab_workspace_root)" "${RT_ARGV[@]}" "$context")" || return 1
   sid="$(_rt_capture_sid "$pane")"; [ -n "$sid" ] && ab_map_set "$id" "$sid"
-  ab_log "spawned $id (session=$(_rt_session) pane=$pane claude=${sid:-?})"
+  _rt_own_workspace "$pane" "$id"
+  ab_log "spawned $id (session=$(_rt_session) workspace=$(_rt_name "$id") claude=${sid:-?})"
 }
 
 rt_resume() {  # <id> ; returns 2 if no saved sid
@@ -122,15 +130,16 @@ rt_resume() {  # <id> ; returns 2 if no saved sid
   nudge="Resumed. Re-check the PR for new automated review comments and continue; do not redo finished work."
   pane="$(_rt_agent_start "$(_rt_name "$id")" "$(ab_workspace_root)" "${RT_ARGV[@]}" --resume "$sid" "$nudge")" || return 1
   ab_map_set "$id" "$sid"
-  ab_log "resumed $id (session=$(_rt_session) pane=$pane claude=$sid)"
+  _rt_own_workspace "$pane" "$id"
+  ab_log "resumed $id (session=$(_rt_session) workspace=$(_rt_name "$id") claude=$sid)"
 }
 
-rt_reap() {  # <id> -- close the task's pane; keep the sid for a later resume
+rt_reap() {  # <id> -- close the task's pane (its workspace auto-drops); keep the sid
   local id="$1" s sid pane; s="$(_rt_session)"; sid="$(ab_map_get "$id")"
   [ -n "$sid" ] || return 0
   pane="$(_rt_pane_for_sid "$sid")"
   if [ -n "$pane" ]; then
-    herdr --session "$s" pane close "$pane" >/dev/null 2>&1 && ab_log "reaped $id (closed pane $pane in $s, sid kept)" || ab_log "reap $id: pane close failed"
+    herdr --session "$s" pane close "$pane" >/dev/null 2>&1 && ab_log "reaped $id (closed pane $pane in $s, workspace dropped, sid kept)" || ab_log "reap $id: pane close failed"
   else
     ab_log "reap $id: no live pane (already stopped)"
   fi
