@@ -1,12 +1,25 @@
 {
+  "source": "linear",
+  "runtime": "herdr",
   "label": "agent",
-  "gh_login": "",
-  "workdir": "",
   "cap": 3,
   "poll_seconds": 90,
-  "worktree": true,
+  "house_rules": "",
+
+  "spawn_state": "started",
+  "reap_state": "completed",
+  "assignee": "",
+  "team": "",
+  "session_prefix": "",
+  "workspace_root": "",
+  "agent_cmd": ["claude"],
+  "worker_persona": "",
+
+  "gh_login": "",
+  "workdir": "",
   "permission_mode": "acceptEdits",
   "dangerously_skip": false,
-  "house_rules": "",
-  "agent_name_prefix": "agent-board"
+  "worktree": true,
+  "agent_name_prefix": "agent-board",
+  "plugin_dir": ""
 }
