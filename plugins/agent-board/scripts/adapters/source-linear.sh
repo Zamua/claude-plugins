@@ -14,8 +14,9 @@
 #
 # spawn_state / reap_state are matched against the exact workflow-state NAME (not
 # the coarse type), so "In Progress" triggers only In Progress - not In Review,
-# Ready for QA, or any other started-type state. Eligibility uses assignee.isMe;
-# the last-actor guard is what prevents a hijack.
+# Ready for QA, or any other started-type state. reap_state may be a list, so a
+# task reaching Done OR Canceled both reap. Eligibility uses assignee.isMe; the
+# last-actor guard is what prevents a hijack.
 
 src_deps() { printf 'linear jq'; }
 

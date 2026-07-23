@@ -27,10 +27,15 @@ cmd_once() {
   ab_need $(src_deps) $(rt_deps) git || return 1
   ab_lock || return 0
   trap 'ab_unlock' EXIT
-  local cap running reap_state id st rc
-  cap="$(ab_get cap 3)"; reap_state="$(ab_get reap_state completed)"
+  local cap running reap_states reap_disp id st rc st_now
+  cap="$(ab_get cap 3)"
+  # reap_state may be a scalar ("Done") or a list (["Done","Canceled"]); a task
+  # reaching ANY listed state gets reaped. State names have spaces, so use the
+  # non-splitting lines helper, not ab_get_list.
+  reap_states="$(ab_get_lines reap_state completed)"
+  reap_disp="$(printf '%s' "$reap_states" | tr '\n' ',' | sed 's/,$//')"
   running="$(rt_running_count)"
-  ab_log "pass start: source=$AB_SOURCE runtime=$AB_RUNTIME cap=$cap reap=$reap_state running=$running"
+  ab_log "pass start: source=$AB_SOURCE runtime=$AB_RUNTIME cap=$cap reap=$reap_disp running=$running"
 
   # Pass 1: SPAWN / RESUME. Candidates are the source's spawn-eligible tasks.
   # Re-entrant: running -> no-op; stopped -> resume; absent -> spawn. Guarded so
@@ -54,11 +59,14 @@ cmd_once() {
     esac
   done < <(src_spawn_candidates)
 
-  # Pass 2: REAP. Any tracked task whose state reached reap_state -> stop (preserve).
+  # Pass 2: REAP. Any tracked task whose state reached a reap state -> stop
+  # (preserve). Exact full-line match against the reap-states list; an empty state
+  # (e.g. a source API hiccup) never reaps.
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     [ "$(rt_status "$id")" = "running" ] || continue
-    if [ "$(src_state "$id")" = "$reap_state" ]; then
+    st_now="$(src_state "$id")"; [ -n "$st_now" ] || continue
+    if printf '%s\n' "$reap_states" | grep -Fxq -- "$st_now"; then
       rt_reap "$id"; running=$(( running > 0 ? running - 1 : 0 ))
     fi
   done < <(ab_map_keys)
@@ -70,7 +78,9 @@ cmd_status() {
   printf 'agent-board  (%s -> %s)\n' "$AB_SOURCE" "$AB_RUNTIME"
   printf '  config:  %s\n' "$AB_CONFIG"
   printf '  label=%s  spawn=%s  reap=%s  cap=%s  running=%s\n' \
-    "$(ab_get label agent)" "$(ab_get spawn_state started)" "$(ab_get reap_state completed)" "$(ab_get cap 3)" "$(rt_running_count)"
+    "$(ab_get label agent)" "$(ab_get spawn_state started)" \
+    "$(ab_get_lines reap_state completed | tr '\n' ',' | sed 's/,$//')" \
+    "$(ab_get cap 3)" "$(rt_running_count)"
   printf '  tracked sessions:\n'
   local id st sid
   while IFS=$'\t' read -r id st sid; do printf '    %-22s %-8s %s\n' "$id" "$st" "$sid"; done < <(rt_list)

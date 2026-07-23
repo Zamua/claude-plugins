@@ -2,15 +2,17 @@
 # agent-board runtime adapter: herdr (https://herdr.dev), verified on 0.7.4.
 #
 # ALL tasks run inside ONE shared herdr session (config `herdr_session`, default
-# "agent-board"); each task gets its OWN workspace (label = task id) with one agent
-# pane. Task identity for status/reap is the herdr AGENT NAME (deterministic =
-# ab_safe(issue-id)), which both fresh AND resumed agents report reliably. (herdr
-# reports agent_session.value=null for `claude --resume` sessions, so we do NOT key
-# on it.) The claude session id is captured at spawn and kept in the map ONLY to
-# pass to `--resume`.
+# "agent-board"); each task gets its OWN workspace (label = task id + a short slug
+# of the issue title, e.g. "mm-474-send-nelnet-files") with one agent pane. Task
+# identity for status/reap is the herdr AGENT NAME (deterministic = ab_safe(issue-id)),
+# which both fresh AND resumed agents report reliably. (herdr reports
+# agent_session.value=null for `claude --resume` sessions, so we do NOT key on it.)
+# The workspace label is cosmetic only - never keyed on - so it carries the title;
+# the agent name stays the bare id. The claude session id is captured at spawn and
+# kept in the map ONLY to pass to `--resume`.
 #
 # spawn  = agent start (kickoff as claude's positional prompt) -> move pane to its
-#          own new workspace (label = task id) -> capture the claude sid into the map.
+#          own new workspace (label = id + title slug) -> capture the claude sid into the map.
 # reap   = close that task's pane by name; herdr auto-drops the empty workspace.
 # resume = agent start --resume <mapped sid> -> move to its own workspace.
 #
@@ -20,7 +22,28 @@
 rt_deps() { printf 'herdr jq'; }
 
 _rt_session() { ab_get herdr_session agent-board; }   # the ONE shared session
-_rt_name()    { ab_safe "$1"; }                        # per-task agent + workspace label
+_rt_name()    { ab_safe "$1"; }                        # per-task agent name (identity) + label base
+
+# Cosmetic workspace label: the task id plus a short slug of the issue title when
+# the source exposes one (src_title), e.g. "mm-474-send-nelnet-files". Falls back
+# to the bare id (GitHub source has no src_title, empty title, etc). NEVER used as
+# identity - status/reap key on the agent name (_rt_name) only - so enriching it is
+# safe. Title slug is lowercased, non-[a-z0-9_-] collapsed to '-', trimmed, and
+# capped so labels stay short.
+_rt_label() {  # <id> -> "<id-safe>" or "<id-safe>-<title-slug>"
+  local id name title slug
+  id="$1"; name="$(_rt_name "$id")"
+  command -v src_title >/dev/null 2>&1 || { printf '%s' "$name"; return; }
+  title="$(src_title "$id" 2>/dev/null)"
+  [ -n "$title" ] || { printf '%s' "$name"; return; }
+  slug="$(ab_safe "$title" | tr -s '-' | sed -e 's/^-//' -e 's/-*$//')"
+  if [ "${#slug}" -gt 40 ]; then                       # cap length, break on a word
+    slug="$(printf '%s' "$slug" | cut -c1-40)"
+    case "$slug" in *-?*) slug="${slug%-*}";; esac      # drop trailing partial word
+    slug="$(printf '%s' "$slug" | sed 's/-*$//')"
+  fi
+  [ -n "$slug" ] && printf '%s-%s' "$name" "$slug" || printf '%s' "$name"
+}
 
 RT_ARGV=()
 _rt_build_argv() {
@@ -63,8 +86,8 @@ _rt_agent_start() {  # <name> <cwd> <argv...>
   printf '%s' "$pane"
 }
 
-# Move a fresh agent pane into its OWN new workspace (label = task id). Best-effort.
-_rt_own_workspace() { herdr --session "$(_rt_session)" pane move "$1" --new-workspace --label "$(_rt_name "$2")" --no-focus >/dev/null 2>&1; }
+# Move a fresh agent pane into its OWN new workspace under a display label. Best-effort.
+_rt_own_workspace() { herdr --session "$(_rt_session)" pane move "$1" --new-workspace --label "$2" --no-focus >/dev/null 2>&1; }
 
 # claude sid for a pane (fresh spawns report it; resumes report null - that's fine,
 # we only need it at first spawn to seed the map).
@@ -97,24 +120,26 @@ rt_running_count() {
 }
 
 rt_spawn() {  # <id> <context>
-  local id="$1" context="$2" pane sid
+  local id="$1" context="$2" pane sid label
   rt_ensure_server || return 1
   _rt_build_argv
   pane="$(_rt_agent_start "$(_rt_name "$id")" "$(ab_workspace_root)" "${RT_ARGV[@]}" "$context")" || return 1
   sid="$(_rt_capture_sid "$pane")"; [ -n "$sid" ] && ab_map_set "$id" "$sid"
-  _rt_own_workspace "$pane" "$id"
-  ab_log "spawned $id (session=$(_rt_session) workspace=$(_rt_name "$id") claude=${sid:-?})"
+  label="$(_rt_label "$id")"
+  _rt_own_workspace "$pane" "$label"
+  ab_log "spawned $id (session=$(_rt_session) workspace=$label claude=${sid:-?})"
 }
 
 rt_resume() {  # <id> ; returns 2 if no saved sid
-  local id="$1" sid pane nudge
+  local id="$1" sid pane nudge label
   sid="$(ab_map_get "$id")"; [ -n "$sid" ] || { ab_log "resume $id: no saved sid"; return 2; }
   rt_ensure_server || return 1
   _rt_build_argv
   nudge="Resumed. Re-check the PR for new automated review comments and continue; do not redo finished work."
   pane="$(_rt_agent_start "$(_rt_name "$id")" "$(ab_workspace_root)" "${RT_ARGV[@]}" --resume "$sid" "$nudge")" || return 1
-  _rt_own_workspace "$pane" "$id"
-  ab_log "resumed $id (session=$(_rt_session) workspace=$(_rt_name "$id") claude=$sid)"
+  label="$(_rt_label "$id")"
+  _rt_own_workspace "$pane" "$label"
+  ab_log "resumed $id (session=$(_rt_session) workspace=$label claude=$sid)"
 }
 
 rt_reap() {  # <id> -- close the task's pane (its workspace auto-drops); keep the sid
