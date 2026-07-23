@@ -171,12 +171,42 @@ spawn_herdr() {
   # resolution order for the default session).
   sock="${HERDR_SOCKET_PATH:-$HOME/.config/herdr/herdr.sock}"
 
-  # Dedup: a live pane with this label = the session exists. Labels are
-  # slugified (no quotes/escapes), so a plain substring match is exact enough.
-  if "$herdr_bin" pane list 2>/dev/null | grep -q "\"label\":\"$TG_SESSION\""; then
-    echo "telegram-topics: session $TG_SESSION already exists; not spawning" >&2
-    exit 0
-  fi
+  # Dedup, status-aware. A LABEL ALONE IS NOT A LIVE SESSION: herdr restores its
+  # panes on login (from session.json) with labels intact while the claude
+  # process inside died with the logout, and it reports such an empty shell as
+  # `agent_status: "unknown"` (a real agent is idle/working/done/blocked). The
+  # old label-only guard refused to spawn over those corpses, so a topic that was
+  # running at logout could never come back (2026-07-23). Now: a live agent means
+  # skip; a STALE labeled pane is closed first so the spawn below replaces it
+  # (leaving it would also strand a duplicate label).
+  local pane_state stale_pane
+  pane_state=$("$herdr_bin" pane list 2>/dev/null | python3 -c '
+import json, sys
+label = sys.argv[1]
+try:
+    panes = json.load(sys.stdin).get("result", {}).get("panes", [])
+except Exception:
+    print("parse-error")            # fail open: spawn, herdr dedups on its own
+    raise SystemExit
+for p in panes:
+    if p.get("label") == label:
+        status = p.get("agent_status") or "unknown"
+        print(("live " if status != "unknown" else "stale ") + str(p.get("pane_id") or ""))
+        raise SystemExit
+print("absent")
+' "$TG_SESSION" 2>/dev/null) || pane_state="parse-error"
+
+  case "$pane_state" in
+    live*)
+      echo "telegram-topics: session $TG_SESSION already exists; not spawning" >&2
+      exit 0
+      ;;
+    stale*)
+      stale_pane="${pane_state#stale }"
+      echo "telegram-topics: clearing stale pane $stale_pane for $TG_SESSION (no agent running)" >&2
+      [ -n "$stale_pane" ] && "$herdr_bin" pane close "$stale_pane" >/dev/null 2>&1
+      ;;
+  esac
 
   # One WORKSPACE per topic-Claude (operator preference: agents as workspace
   # tabs, not side-by-side splits in one shared workspace). Create it labeled

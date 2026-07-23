@@ -581,14 +581,21 @@ class HerdrMux implements Multiplexer {
   // `label` (set by `herdr agent start <name>` in the launcher), which is our
   // session-name currency. pane_id is a herdr-internal handle we only need
   // transiently for kill().
-  private panes(): Map<string, string> {
-    const out = new Map<string, string>() // label -> pane_id
+  private panes(): Map<string, { paneId: string; status: string }> {
+    const out = new Map<string, { paneId: string; status: string }>()
     const r = spawnSync(this.bin, ['pane', 'list'], { encoding: 'utf8' })
     if (r.status !== 0) return out // server not running -> no sessions
     try {
       const parsed = JSON.parse(r.stdout ?? '{}')
       for (const p of parsed?.result?.panes ?? []) {
-        if (p?.label) out.set(String(p.label), String(p.pane_id ?? ''))
+        // Keep STALE panes too (agent_status 'unknown'): kill() must be able to
+        // close them; only liveSessions() filters them out.
+        if (p?.label) {
+          out.set(String(p.label), {
+            paneId: String(p.pane_id ?? ''),
+            status: String(p.agent_status ?? 'unknown'),
+          })
+        }
       }
     } catch {
       // Unparseable output = treat as no live sessions; callers re-spawn, and
@@ -597,12 +604,27 @@ class HerdrMux implements Multiplexer {
     return out
   }
 
+  // A LABEL ALONE DOES NOT MEAN LIVE. herdr restores its panes on login (from
+  // session.json) with their labels intact, but the claude process inside died
+  // with the logout - leaving an empty shell that herdr reports as
+  // `agent_status: "unknown"` (a real agent reports idle/working/done/blocked).
+  // Counting those as live made the proxy "re-adopt" the corpse on boot and
+  // NEVER respawn the topic, so messages queued for a session that did not
+  // exist. Measured 2026-07-23 after a logout/login: claude-general and
+  // claude-macos-944 were labeled panes with agent_status 'unknown' and zero
+  // claude processes, yet were re-adopted as live. Require a real agent.
+  // NB 'unknown' is also reported for ~2s while a freshly spawned pane boots,
+  // so ensureSession additionally honors a short post-spawn grace window.
   liveSessions(): Set<string> {
-    return new Set(this.panes().keys())
+    const out = new Set<string>()
+    for (const [label, p] of this.panes()) {
+      if (p.status && p.status !== 'unknown') out.add(label)
+    }
+    return out
   }
 
   kill(session: string): boolean {
-    const paneId = this.panes().get(session)
+    const paneId = this.panes().get(session)?.paneId
     if (!paneId) return false
     const r = spawnSync(this.bin, ['pane', 'close', paneId], { encoding: 'utf8' })
     return r.status === 0
@@ -610,6 +632,12 @@ class HerdrMux implements Multiplexer {
 }
 
 const mux: Multiplexer = MUX_KIND === 'herdr' ? new HerdrMux() : new TmuxMux()
+
+// How long after a spawn we still treat a topic as live even if the multiplexer
+// cannot see an agent yet (herdr reports `agent_status: "unknown"` for the first
+// ~2s of a pane's life). Generous enough to cover a slow boot, short enough that
+// a genuinely failed spawn is retried on the next message.
+const SPAWN_GRACE_MS = 30_000
 
 // ---- registry --------------------------------------------------------------
 
@@ -1165,7 +1193,16 @@ function ensureSession(topic: string): void {
   // re-deriving after a rename would miss the running (old-named) session and
   // double-spawn. `live.has(...)` also confirms it is actually up, so a stale
   // recorded name (session died) correctly falls through to a respawn.
-  if (st.session && live.has(st.session)) {
+  // Boot grace: herdr reports a freshly spawned pane as `agent_status:
+  // "unknown"` for ~2s before the agent is detected, and liveSessions() (which
+  // now requires a real agent - see HerdrMux) would read that as dead. Without
+  // this window, a message arriving in those first seconds would trigger a
+  // SECOND spawn on top of the one still booting. Treat anything we spawned very
+  // recently as live; after the window, normal liveness applies (so a genuinely
+  // failed spawn still gets retried on the next message).
+  const bootingGrace =
+    !!st.session && st.spawnedAt > 0 && Date.now() - st.spawnedAt < SPAWN_GRACE_MS
+  if (st.session && (live.has(st.session) || bootingGrace)) {
     if (!st.spawnedAt) {
       st.spawnedAt = Date.now()
       saveRegistry()
