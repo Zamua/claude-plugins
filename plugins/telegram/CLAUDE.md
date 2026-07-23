@@ -102,6 +102,24 @@ backend; (3) one herdr server crash takes ALL its panes down together (unlike
 independent tmux sessions) - KeepAlive + the proxy's respawn-on-next-message
 covers recovery, and each topic `--resume`s its same conversation.
 
+**herdr liveness: a LABEL IS NOT A LIVE SESSION (logout/login recovery).** herdr
+persists its layout (`session.json`) and RESTORES panes when the server comes
+back - so after a logout/login (or any herdr restart) the topic panes reappear
+with their labels intact while the claude process inside them is DEAD. herdr
+reports such an empty shell as `agent_status: "unknown"`; a real agent is
+`idle`/`working`/`done`/`blocked`. Both the proxy's `HerdrMux.liveSessions()` and
+the launcher's `spawn_herdr` dedup guard therefore require a NON-`unknown` status,
+not merely a label. With the old label-only checks, exactly the topics that were
+RUNNING at logout could never come back: the proxy "re-adopted" the corpse on boot
+and never respawned, and even if it had tried, the launcher refused to spawn over
+the existing label - messages queued for a session that did not exist. (Diagnosed
+2026-07-23: `claude-general` + `claude-macos-944` were labeled panes with
+`agent_status: "unknown"` and zero claude processes.) A stale labeled pane is now
+CLOSED by the launcher before spawning, so no duplicate label is stranded.
+Caveat baked in: `unknown` is also reported for the first ~2s of a healthy pane's
+life, so `ensureSession` honors `SPAWN_GRACE_MS` (30s) after a spawn - otherwise a
+message arriving during boot would spawn a second agent on top of the first.
+
 **Switching backends** (either direction): set the env, restart the proxy.
 Live sessions in the OLD backend keep running and stay re-adopted via the
 registry, but the selected backend cannot see or kill them - so drain them
