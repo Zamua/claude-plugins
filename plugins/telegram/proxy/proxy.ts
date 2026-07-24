@@ -128,7 +128,9 @@ const ULTRACODE = envBool(process.env.TELEGRAM_TOPICS_ULTRACODE, true, 'TELEGRAM
 // chooses its own model separately - this is topic-Claudes only.)
 function resolveModel(): string {
   const raw = process.env.TELEGRAM_TOPICS_MODEL
-  if (raw === undefined) return 'claude-fable-5'
+  // Prefer the ALIAS ('opus') over a pinned id: aliases track the newest
+  // model in that family, so a release does not require touching config.
+  if (raw === undefined) return 'opus'
   const s = raw.trim()
   if (s === '' || s.toLowerCase() === 'default' || s.toLowerCase() === 'inherit') return ''
   return s
@@ -145,7 +147,7 @@ const MODEL = resolveModel()
 // even on resume, which is what makes this work at all). Empty = disabled
 // (the topic stalls as before). Reset back to the primary at the nightly
 // restart, so a fallback is never permanent.
-const MODEL_FALLBACK = (process.env.TELEGRAM_TOPICS_MODEL_FALLBACK ?? 'claude-opus-4-8').trim()
+const MODEL_FALLBACK = (process.env.TELEGRAM_TOPICS_MODEL_FALLBACK ?? 'sonnet').trim()
 // How long a failed-over topic waits before RE-TRYING its primary model when
 // the limit error carried no reset time. The retry is free: if the quota is
 // still exhausted the topic just fails over again (one notice, conversation
