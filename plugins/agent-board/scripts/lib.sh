@@ -44,23 +44,6 @@ ab_get_list() {
       else $v end' "$AB_CONFIG" 2>/dev/null
 }
 
-# a value that may be a JSON array OR a single scalar: emit one element per line,
-# WITHOUT splitting scalars on whitespace (unlike ab_get_list). Used for state
-# names, which contain spaces ("In Progress"), so reap_state can be a list like
-# ["Done","Canceled"] while a bare scalar ("Done") still yields one entry. Empty or
-# absent -> the default arg (one line), so callers get back-compat behavior.
-ab_get_lines() {  # <key> [default]
-  local key="$1" def="${2-}" out=""
-  if [ -f "$AB_CONFIG" ]; then
-    out=$(jq -r --arg k "$key" '
-      .[$k] as $v
-      | if   $v == null        then empty
-        elif ($v|type)=="array"  then $v[]
-        else $v end' "$AB_CONFIG" 2>/dev/null)
-  fi
-  if [ -n "$out" ]; then printf '%s\n' "$out"; elif [ -n "$def" ]; then printf '%s\n' "$def"; fi
-}
-
 # workspace root the workers operate under (per the user global CLAUDE.md flow).
 ab_workspace_root() {
   local w; w="$(ab_get workspace_root "")"

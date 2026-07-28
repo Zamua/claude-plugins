@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # agent-board poller + management CLI. Thin harness: it only decides spawn / reap
-# / resume from the task board's state; everything object-level (repos, worktrees,
-# PRs) is the worker's job. Config-driven; source + runtime are pluggable adapters:
+# / resume; everything object-level (repos, worktrees, PRs) is the worker's job.
+# The label is the whole trigger - a task carrying it gets an agent, a task that
+# loses it gets reaped. Config-driven; source + runtime are pluggable adapters:
 #   source=linear runtime=herdr   (work)      source=github runtime=claude  (personal)
 #
 #   poll.sh once            one spawn/resume/reap pass (what the scheduler runs)
@@ -27,17 +28,12 @@ cmd_once() {
   ab_need $(src_deps) $(rt_deps) git || return 1
   ab_lock || return 0
   trap 'ab_unlock' EXIT
-  local cap running reap_states reap_disp id st rc st_now
-  cap="$(ab_get cap 3)"
-  # reap_state may be a scalar ("Done") or a list (["Done","Canceled"]); a task
-  # reaching ANY listed state gets reaped. State names have spaces, so use the
-  # non-splitting lines helper, not ab_get_list.
-  reap_states="$(ab_get_lines reap_state completed)"
-  reap_disp="$(printf '%s' "$reap_states" | tr '\n' ',' | sed 's/,$//')"
+  local cap running label id st rc
+  cap="$(ab_get cap 3)"; label="$(ab_get label agent)"
   running="$(rt_running_count)"
-  ab_log "pass start: source=$AB_SOURCE runtime=$AB_RUNTIME cap=$cap reap=$reap_disp running=$running"
+  ab_log "pass start: source=$AB_SOURCE runtime=$AB_RUNTIME label=$label cap=$cap running=$running"
 
-  # Pass 1: SPAWN / RESUME. Candidates are the source's spawn-eligible tasks.
+  # Pass 1: SPAWN / RESUME. Candidates are the tasks carrying the label.
   # Re-entrant: running -> no-op; stopped -> resume; absent -> spawn. Guarded so
   # we only ever act when the operator took the last action on the task.
   while IFS= read -r id; do
@@ -59,16 +55,19 @@ cmd_once() {
     esac
   done < <(src_spawn_candidates)
 
-  # Pass 2: REAP. Any tracked task whose state reached a reap state -> stop
-  # (preserve). Exact full-line match against the reap-states list; an empty state
-  # (e.g. a source API hiccup) never reaps.
+  # Pass 2: REAP. Any tracked task that no longer carries the label -> stop
+  # (preserve). Removing the label is the operator's stop signal; task state is
+  # never consulted, so a worker outlives its ticket being auto-moved to Done by
+  # PR activity and can still do the post-merge work. Fails closed: when the source
+  # can't say whether the label is there, the worker keeps running.
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     [ "$(rt_status "$id")" = "running" ] || continue
-    st_now="$(src_state "$id")"; [ -n "$st_now" ] || continue
-    if printf '%s\n' "$reap_states" | grep -Fxq -- "$st_now"; then
-      rt_reap "$id"; running=$(( running > 0 ? running - 1 : 0 ))
-    fi
+    src_has_label "$id"; rc=$?
+    case "$rc" in
+      1) rt_reap "$id"; running=$(( running > 0 ? running - 1 : 0 )) ;;
+      2) ab_log "skip reap $id: cannot read labels" ;;
+    esac
   done < <(ab_map_keys)
   ab_log "pass done: running=$running"
 }
@@ -77,10 +76,8 @@ cmd_status() {
   ab_need $(src_deps) $(rt_deps) || return 1
   printf 'agent-board  (%s -> %s)\n' "$AB_SOURCE" "$AB_RUNTIME"
   printf '  config:  %s\n' "$AB_CONFIG"
-  printf '  label=%s  spawn=%s  reap=%s  cap=%s  running=%s\n' \
-    "$(ab_get label agent)" "$(ab_get spawn_state started)" \
-    "$(ab_get_lines reap_state completed | tr '\n' ',' | sed 's/,$//')" \
-    "$(ab_get cap 3)" "$(rt_running_count)"
+  printf '  label=%s  cap=%s  running=%s\n' \
+    "$(ab_get label agent)" "$(ab_get cap 3)" "$(rt_running_count)"
   printf '  tracked sessions:\n'
   local id st sid
   while IFS=$'\t' read -r id st sid; do printf '    %-22s %-8s %s\n' "$id" "$st" "$sid"; done < <(rt_list)
@@ -120,7 +117,7 @@ cmd_uninstall() {
 cmd_config_init() {
   mkdir -p "$(dirname "$AB_CONFIG")"
   if [ -f "$AB_CONFIG" ]; then ab_log "config already exists at $AB_CONFIG"
-  else cp "$HERE/../config.example.json" "$AB_CONFIG"; ab_log "wrote starter config to $AB_CONFIG - set source/runtime + spawn_state/reap_state/label/agent_cmd"; fi
+  else cp "$HERE/../config.example.json" "$AB_CONFIG"; ab_log "wrote starter config to $AB_CONFIG - set source/runtime + label/cap/agent_cmd"; fi
   ab_map_init
 }
 
@@ -135,7 +132,7 @@ main() {
     install)     cmd_install "$@" ;;
     uninstall)   cmd_uninstall "$@" ;;
     config-init) cmd_config_init "$@" ;;
-    help|-h|--help) sed -n '2,18p' "$HERE/poll.sh" | sed 's/^# \{0,1\}//' ;;
+    help|-h|--help) awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$HERE/poll.sh" ;;
     *) ab_log "unknown command: $cmd (try: help)"; exit 2 ;;
   esac
 }

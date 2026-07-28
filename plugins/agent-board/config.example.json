@@ -7,8 +7,6 @@
   "poll_seconds": 90,
   "house_rules": "",
 
-  "spawn_state": "In Progress",
-  "reap_state": ["Done", "Canceled"],
   "session_prefix": "",
   "workspace_root": "",
   "agent_cmd": ["claude"],
