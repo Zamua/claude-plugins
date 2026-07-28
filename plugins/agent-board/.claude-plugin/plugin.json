@@ -1,7 +1,7 @@
 {
   "name": "agent-board",
   "description": "Orchestrate background coding agents from an issue board. A local poller dispatches issues you assign and label to background workers (herdr or native claude-bg, one git worktree each) that open draft PRs and reply to AI PR review; you review and merge. Sources: Linear or GitHub.",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "author": {
     "name": "Zamua"
   },
