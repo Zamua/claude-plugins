@@ -2,9 +2,11 @@
 # agent-board source adapter: GitHub issues (via `gh`). The original agent-board
 # source, ported behind the src_* contract. Task id = "owner/repo#N".
 #
-# State vocabulary here is GitHub's: use spawn_state="open", reap_state="closed"
-# in config for this mode. Candidates are OPEN issues authored by the operator
-# with the label (the author filter is the anti-hijack gate for personal repos).
+# The label is the whole trigger: adding it spawns (or resumes), removing it reaps.
+# Open/closed is deliberately not consulted - merging the PR closes the issue while
+# post-merge work like a release is still the worker's. Candidates are issues
+# authored by the operator with the label (the author filter is the anti-hijack
+# gate for personal repos).
 
 src_deps() { printf 'gh jq git'; }
 
@@ -16,21 +18,28 @@ _gh_login() {
 _gh_repo() { printf '%s' "${1%#*}"; }   # owner/repo#N -> owner/repo
 _gh_num()  { printf '%s' "${1##*#}"; }  # owner/repo#N -> N
 
-# ids "owner/repo#N" for OPEN issues authored by the operator, carrying the label,
+# ids "owner/repo#N" for issues authored by the operator, carrying the label,
 # across every repo (no allowlist). Excludes PRs.
 src_spawn_candidates() {
   local label login; label="$(ab_get label agent)"; login="$(_gh_login)"
   [ -n "$login" ] || { ab_log "github: no gh_login and gh auto-detect failed"; return 0; }
-  gh search issues --author "$login" --label "$label" --state open --limit 50 \
+  gh search issues --author "$login" --label "$label" --limit 50 \
     --json repository,number,isPullRequest \
     --jq '.[] | select(.isPullRequest | not) | "\(.repository.nameWithOwner)#\(.number)"' 2>/dev/null
 }
 
-# lowercased GitHub state so it matches spawn_state/reap_state (open|closed).
-src_state() {  # <id>
-  local repo num st; repo="$(_gh_repo "$1")"; num="$(_gh_num "$1")"
-  st="$(gh issue view "$num" --repo "$repo" --json state --jq '.state' 2>/dev/null)"
-  printf '%s' "$st" | tr 'A-Z' 'a-z'
+# The reap trigger, so it has to tell "label removed" apart from "could not ask":
+# only a definite no reaps. A failed lookup (gone repo, gh outage) is unknown, so
+# the worker keeps running.
+src_has_label() {  # <id> -> 0 has label, 1 no label, 2 unknown
+  local repo num label out verdict
+  repo="$(_gh_repo "$1")"; num="$(_gh_num "$1")"; label="$(ab_get label agent)"
+  out="$(gh issue view "$num" --repo "$repo" --json labels 2>/dev/null)" || return 2
+  verdict="$(printf '%s' "$out" | jq -r --arg l "$label" '
+    if   (.labels | type) != "array"          then "unknown"
+    elif ([.labels[]?.name] | index($l))      then "yes"
+    else "no" end' 2>/dev/null)"
+  case "$verdict" in yes) return 0 ;; no) return 1 ;; *) return 2 ;; esac
 }
 
 src_url() {  # <id>

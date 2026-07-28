@@ -14,22 +14,26 @@ is no custom agent runtime and nothing runs in the cloud.
 ## How it works
 
 ```
-you label an issue `agent`  ─▶  poller dispatches a background worker (its own worktree)
+you add the `agent` label   ─▶  poller dispatches a background worker (its own worktree)
                                     │
-                                    ├─ comments "started", does the work on a branch
-                                    ├─ opens a PR (Closes #N), comments the link
-                                    └─ watches the issue + PR for your comments (Monitor), iterates
-you review + merge the PR  ─────▶  issue closes  ─▶  poller stops the worker (transcript kept)
-you reopen the issue       ─────▶  poller resumes the SAME session that worked it
+                                    ├─ does the work on a branch
+                                    ├─ opens a draft PR (Closes #N)
+                                    └─ replies to automated PR review, iterates
+you review + merge the PR   ─▶  the worker keeps running - post-merge work is still its job
+you remove the label        ─▶  poller stops the worker (transcript kept)
+you re-add the label        ─▶  poller resumes the SAME session that worked it
 ```
 
-- **Eligibility:** any issue in **any of your repos** that's authored by you,
-  carries the label (default `agent`), and is open. Discovery is a cross-repo
-  GitHub search - no repo list to maintain; the repo is cloned on demand into a
-  managed `workdir`.
+- **Eligibility:** the label is the whole trigger. Any issue in **any of your
+  repos** that's authored by you and carries the label (default `agent`) gets a
+  worker; removing the label reaps it. Issue state is never consulted, so the PR
+  merging and closing the issue doesn't end the agent while a release or an
+  observability check is still outstanding. Discovery is a cross-repo GitHub
+  search - no repo list to maintain; the repo is cloned on demand into a managed
+  `workdir`.
 - **Concurrency:** a configurable cap bounds how many agents run at once.
-- **Resume:** the issue→session map means reopening an issue resumes its exact
-  agent; stopping never deletes a transcript.
+- **Resume:** the issue→session map means re-adding the label resumes that
+  issue's exact agent; stopping never deletes a transcript.
 - **You merge:** workers never merge or deploy - their entire output is a PR on
   a branch.
 
@@ -55,7 +59,7 @@ Edit `~/.config/agent-board/config.json`:
 
 | key | default | meaning |
 | --- | --- | --- |
-| `label` | `agent` | only issues with this label are dispatched |
+| `label` | `agent` | the trigger: issues carrying it are dispatched, issues that lose it are reaped |
 | `gh_login` | `""` | whose issues to run; empty = auto-detect via `gh api user` |
 | `workdir` | `""` | where agent-board keeps its own per-repo clones; empty = `~/.local/share/agent-board/repos` |
 | `cap` | `3` | max concurrent agents |
@@ -79,7 +83,7 @@ The repo must have the label: `gh label create agent` once per repo.
 ## Run it
 
 ```
-poll.sh once          # one pass now (dispatch / resume / teardown)
+poll.sh once          # one pass now (spawn / resume / reap)
 poll.sh status        # the board: eligible issues, running agents, the map
 poll.sh install       # arm the scheduler (launchd on macOS; prints a cron line otherwise)
 poll.sh uninstall     # stop the scheduler
@@ -92,8 +96,8 @@ plus the review + merge flow.
 
 | | |
 | --- | --- |
-| dispatch one issue now | `poll.sh dispatch <repo_path> <number>` |
-| stop an agent (keep transcript) | `poll.sh stop <owner/repo#N>` |
+| dispatch one issue now | `poll.sh spawn <owner/repo#N>` |
+| stop an agent (keep transcript) | `poll.sh reap <owner/repo#N>` |
 | resume a stopped agent | `poll.sh resume <owner/repo#N>` |
 | watch one live | `claude attach <session-id>` / `claude logs <session-id>` |
 | see all agents | `claude agents` |

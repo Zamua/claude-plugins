@@ -18,22 +18,23 @@ P="${CLAUDE_PLUGIN_ROOT}/scripts/poll.sh"
 
 - **Status of the board** (eligible issues, running agents, the issue→session map):
   `"$P" status`
-- **Run one poll pass now** (dispatch new / resume reopened / tear down closed):
+- **Run one poll pass now** (spawn newly labelled / resume stopped / reap unlabelled):
   `"$P" once`
 - **Force-dispatch a specific issue** right now:
-  `"$P" dispatch <repo_path> <issue_number>`
+  `"$P" spawn <id>`
 - **Stop an agent** (keeps its transcript; resume later):
-  `"$P" stop <owner/repo#N>`
-- **Resume a stopped agent** (e.g. after reopening an issue):
-  `"$P" resume <owner/repo#N>`
+  `"$P" reap <id>`
+- **Resume a stopped agent** (e.g. after re-adding the label):
+  `"$P" resume <id>`
 - **Watch a worker live** / read its output:
   `claude attach <session-id>` (interactive) or `claude logs <session-id>`
 - **See all background agents** (the native view): `claude agents`
 
 ## Creating work
 
-A worker is dispatched only when an issue is: authored by the configured user,
-carries the configured label (default `agent`), and is open. To queue work:
+The label is the whole trigger: a worker is dispatched when an issue is authored
+by the configured user and carries the configured label (default `agent`), and is
+reaped when the label comes off. Issue state is never consulted. To queue work:
 
 ```
 gh issue create --repo <owner/repo> --label agent --title "..." --body "..."
@@ -49,11 +50,12 @@ Workers open PRs and respond to review comments but never merge. You:
 1. Review the PR (`gh pr view <n>`, `gh pr diff <n>`), or summarize it for the
    user to decide.
 2. Leave review comments on the PR - the worker is watching and will respond.
-3. When it's good and CI is green, **you** merge (`gh pr merge`) and the issue
-   closes (the PR says `Closes #N`). The next poll pass stops that worker; its
-   transcript is retained.
+3. When it's good and CI is green, **you** merge (`gh pr merge`). Merging does NOT
+   end the worker - post-merge work like a release or an observability check is
+   still its job. Stop it by removing the `agent` label; the next poll pass reaps
+   it and its transcript is retained.
 
-If the user wants the work reopened later, reopen the issue - the next pass
+If the user wants the work picked back up later, re-add the label - the next pass
 resumes the exact same session that worked it.
 
 ## Setup / lifecycle

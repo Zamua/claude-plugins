@@ -9,11 +9,11 @@ issue. Coordination, progress, and review all happen on the issue + its PR.
 
 - Keep ONE long continuous chat (the orchestrator) while dispatching many
   independent work sessions.
-- Dispatch is driven by the issue board: an eligible issue becomes a running
-  background agent; a closed issue (the issue is done) triggers full cleanup of
-  its agent - the session, its git worktree, and its branch are all removed. A
-  worker that stops while its issue is still OPEN (e.g. a crash) is respawned by
-  the poller; a previously-closed issue that is reopened is picked up fresh.
+- Dispatch is driven by the issue board: labelling an issue makes it a running
+  background agent, unlabelling it stops that agent (the session is preserved, so
+  re-labelling resumes it with context intact). A worker that stops while its
+  issue still carries the label (e.g. a crash) is respawned by the poller. Git
+  worktrees and branches are never touched by the harness; cleanup is manual.
 - Everything runs LOCALLY on the operator's machine (no cloud agents), visible
   and manageable in one place via `claude agents`.
 - Package the whole thing as a Claude Code **plugin** vended from a personal
@@ -32,7 +32,7 @@ runtime:
 | Resume a stopped agent with context intact | `claude respawn <id>` / `claude --resume <id>` |
 | Remove from the view, keep the transcript | `claude rm <id>` (transcript retained, resumable) |
 | Stop an agent | `claude stop <id>` |
-| In-session polling loops | the **Monitor** tool (session-scoped; fine here because the agent session lives until the issue closes) |
+| In-session polling loops | the **Monitor** tool (session-scoped; fine here because the agent session lives until the label comes off) |
 
 State lives in `~/.claude/jobs/<id>/`; transcripts in `~/.claude/projects/`.
 
@@ -49,21 +49,28 @@ the plugin's `board` skill (`/agent-board:board ...`).
 3. Does the work in its own worktree/branch, posting progress as issue comments.
 4. Opens a PR (draft until it believes it's done), links it to the issue.
 5. Addresses review comments in a loop; NEVER merges, NEVER deploys.
-6. Ends when the issue is closed (done): the poller stops the agent and cleans
-   up after it - removes the session, the git worktree, and the feature branch.
+6. Ends when the operator removes the `agent` label: the poller stops the agent
+   and preserves its session, so re-labelling resumes the same worker. Git
+   worktrees and branches are left alone.
 
 ## Eligibility (the poller's filter)
 
-An issue is dispatched only if ALL hold:
+The label is the whole trigger. An issue is dispatched if BOTH hold:
 - authored by the operator (`--author <login>`) — never run agents on issues
   opened by other people;
-- carries the single `agent` label;
-- is OPEN.
+- carries the single `agent` label.
+
+Losing the label is the reap trigger, so adding and removing it are the two
+operator gestures that start and stop a worker. Issue state is deliberately not a
+predicate: the tracker moves state on its own from PR activity (closed on merge,
+Done in Linear), while post-merge work like a release or an observability check is
+still the worker's. Reaping fails closed: if the source can't say whether the
+label is there, the worker keeps running.
 
 Discovery is a single CROSS-REPO search across every repo the operator can see -
 no allowlist to maintain:
 
-`gh search issues --author <login> --label agent --state open` (excludes PRs)
+`gh search issues --author <login> --label agent` (excludes PRs)
 
 The operator can only add the `agent` label on repos they have write access to,
 so the label requirement naturally scopes dispatch to their own repos. Each repo
@@ -74,26 +81,26 @@ new issue within a few seconds, so discovery is picked up on the next pass.
 ## Lifecycle
 
 ```
-issue opened (agent label, by me, open)
+issue gets the agent label (by me)
    └─ poller: under cap?  ── no ─> queue (retry next tick)
           │ yes
           ▼
    claude --bg --worktree --name issue-<n>  (record issue→session-id)
           ▼
-   worker: arm monitors → work → comment progress → open PR
+   worker: work → open draft PR → reply to automated PR review
           ▼  (operator reviews PR; comments wake the worker; it iterates)
-   operator merges PR + closes issue        (point 8 — merge is the orchestrator's)
+   operator merges PR                       (point 8 — merge is the orchestrator's)
+          ▼  worker lives on for whatever the merge doesn't cover (release, observability)
+   operator removes the agent label → poller stops the worker (transcript kept)
           ▼
-   poller sees issue closed (done) → stop + CLEAN UP
-       (remove the session, the git worktree, and the feature branch)
+   label re-added → poller resumes THAT session (claude respawn <saved-id>)
 
-   worker stops while issue still OPEN (crash) ──> poller: claude respawn <saved-id>
-                                                    (auto-recovery; resumes that session)
+   worker stops while the label is still on (crash) ──> poller resumes it (auto-recovery)
 ```
 
 The issue→session-id map is persisted at `~/.config/agent-board/sessions.json`
-(`{ "<repo>#<number>": "<session-id>" }`) so reopen can resume and the poller
-can tell "already running" from "needs (re)launch".
+(`{ "<repo>#<number>": "<session-id>" }`) so re-labelling can resume and the
+poller can tell "already running" from "needs (re)launch".
 
 ## Concurrency cap (operator point 5)
 
@@ -122,11 +129,12 @@ so after launch the poller captures the agent's short `id` from
 `claude agents --json` by name and stores `key -> id`. That short id drives
 stop / respawn / resume for the agent's whole life.
 
-**GitHub read-after-write lag.** `gh issue list` (the eligible scan) lags
-`gh issue view` (per-issue) by seconds after a close/reopen. So a pass runs two
-loops: Loop 1 reconciles KNOWN issues (the map) via the fresh per-issue endpoint,
-making close->stop and reopen->respawn lag-free; Loop 2 scans the list only for
-NEW issues (a brand-new issue may be picked up one pass later, which is fine).
+**GitHub read-after-write lag.** The cross-repo search (the eligible scan) lags
+`gh issue view` (per-issue) by seconds after a label change. So a pass runs two
+loops: the reap loop reconciles KNOWN issues (the map) via the fresh per-issue
+endpoint, making unlabel->stop lag-free; the spawn loop scans the search only for
+NEW issues (a freshly labelled issue may be picked up one pass later, which is
+fine).
 
 ## Components (all inside the plugin)
 
@@ -173,7 +181,7 @@ auto-detect via `gh api user`), `workdir` (where per-repo clones live),
 1. **Local build + validate**: author the plugin, `claude plugin validate`,
    load via `claude --plugin-dir ./plugins/agent-board`.
 2. **Single-agent e2e** (cap=1): one test issue → poller launches one worker →
-   it opens a PR → operator reviews → close → teardown → reopen → resume.
+   it opens a PR → operator reviews → unlabel → stop → re-label → resume.
 3. **Create the marketplace repo** `Zamua/claude-plugins`, push, `/plugin
    marketplace add Zamua/claude-plugins`, `/plugin install agent-board@...`.
 4. **Arm the poller** (load the LaunchAgent) with a low cap; raise after a soak.
