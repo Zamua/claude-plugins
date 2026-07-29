@@ -77,19 +77,32 @@ def main() -> None:
     except Exception:
         return
 
-    # Only usage/rate limits. Other StopFailure causes (transport blips,
-    # request-size, auth) are not fixed by switching models, and failing over
-    # on them would silently downgrade the model for no reason.
-    if hook.get("error") != "rate_limit":
-        return
-
     topic = os.environ.get("TELEGRAM_TOPIC_ID")
     proxy = os.environ.get("TELEGRAM_PROXY_URL")
+    err = str(hook.get("error", "unknown"))
     if not topic or not proxy:
-        log(f"rate_limit hit but no topic/proxy env (topic={topic!r})")
+        log("StopFailure (%s) but no topic/proxy env (topic=%r)" % (err, topic))
         return
 
     details = str(hook.get("error_details", ""))[:500]
+
+    # rate_limit -> the failover flow below. EVERYTHING ELSE (overloaded/529,
+    # 5xx, auth, ...) -> tell the operator in this topic's thread: the failed
+    # turn already swallowed their message, and without a notice the session
+    # just looks like it ignored them (observed with silent 529s, 2026-07-29).
+    # Model-switching would not fix these, so notify-only.
+    if err != "rate_limit":
+        payload = json.dumps({"topic": topic, "error": err, "details": details}).encode()
+        req = urllib.request.Request(
+            proxy + "/turn-failed", data=payload,
+            headers={"content-type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as res:
+                log("reported %s for topic %s: %s" % (err, topic, res.status))
+        except Exception as e:
+            log("failed reporting %s for topic %s: %s" % (err, topic, e))
+        return
     payload = json.dumps(
         {
             "topic": topic,

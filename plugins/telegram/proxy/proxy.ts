@@ -1028,6 +1028,39 @@ async function handleRateLimit(req: Request): Promise<Response> {
   return json({ ok: true, model: MODEL_FALLBACK })
 }
 
+// POST /turn-failed {topic, error, details} - a topic-Claude's turn died on a
+// non-rate-limit API error (529 overloaded, 5xx, auth...). Reported by the
+// StopFailure hook. The failed turn already consumed the user's message, so
+// without a notice the session just looks like it silently ignored them
+// (observed 2026-07-29 during an Anthropic overload incident). Notify-only:
+// model switching would not fix these, and the notice rides Telegram's API,
+// which survives an Anthropic outage. No debounce by operator choice - keep
+// it simple; revisit if an incident ever makes this spammy.
+async function handleTurnFailed(req: Request): Promise<Response> {
+  const b = (await req.json()) as any
+  const topic = String(b.topic ?? '')
+  if (!topic) return new Response('topic required', { status: 400 })
+  const err = String(b.error ?? 'unknown').slice(0, 40)
+  const overloaded = /overload/i.test(err) || /529/.test(String(b.details ?? ''))
+  const st = getTopic(topic)
+  const tid = threadIdForTopic(topic)
+  const text = overloaded
+    ? `⚠️ My last turn failed: Anthropic is overloaded (529) - server-side, usually temporary ` +
+      `(status.claude.com). Your last message may be unanswered - resend it or say "continue".`
+    : `⚠️ My last turn failed with an API error (${err}). Your last message may be unanswered - ` +
+      `resend it or say "continue".`
+  try {
+    await bot.api.sendMessage(String(GROUP_CHAT_ID), text, {
+      ...(tid != null ? { message_thread_id: tid } : {}),
+    })
+    log(`turn-failed notice posted for topic ${topic} "${st.name}" (${err})`)
+    return json({ ok: true })
+  } catch (e) {
+    log(`turn-failed notice FAILED for topic ${topic}: ${e}`)
+    return new Response('send failed', { status: 502 })
+  }
+}
+
 // GET /topics - the directory tool's backing endpoint.
 function handleTopics(): Response {
   return json({ square: SQUARE_TOPIC || null, topics: topicDirectory() })
@@ -1689,6 +1722,7 @@ async function serveWithRetry(): Promise<void> {
               })
             }
             if (req.method === 'POST' && url.pathname === '/rate-limit') return await handleRateLimit(req)
+            if (req.method === 'POST' && url.pathname === '/turn-failed') return await handleTurnFailed(req)
             if (req.method === 'GET' && url.pathname === '/topics') return handleTopics()
             if (req.method === 'POST' && url.pathname === '/topic/create') return await handleTopicCreate(req)
             if (req.method === 'POST' && url.pathname === '/square/tag') return await handleSquareTag(req)
