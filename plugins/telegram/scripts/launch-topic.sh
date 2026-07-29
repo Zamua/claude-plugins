@@ -49,6 +49,16 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 : "${TG_MODEL:=}"
 # TG_MUX is optional: which multiplexer hosts the session (default tmux).
 : "${TG_MUX:=tmux}"
+# MCP_TIMEOUT (ms, claude's MCP-startup ceiling) is forwarded into the pane with a
+# GENEROUS default. Root cause of a real incident (2026-07-29): a topic with a
+# HUGE transcript (shale) resumed so slowly that the Telegram CHANNEL MCP's
+# startup exceeded the default timeout and claude DROPPED it - the session ran but
+# with no channel, so nothing polled the proxy and every message to that topic
+# silently queued undrained. Small-transcript topics loaded in time and were fine.
+# A generous ceiling is harmless for fast loaders (the MCP connects as soon as
+# it's ready; the timeout only bites a slow resume) and rescues the big ones.
+# Overridable via the environment. Measured: 180000 recovered shale end-to-end.
+: "${MCP_TIMEOUT:=180000}"
 
 # Resolve claude NOW, under this launcher's explicit PATH, and pass the
 # ABSOLUTE path into the pane (TG_CLAUDE_BIN). The pane's shell re-runs its
@@ -136,6 +146,7 @@ spawn_tmux() {
   # the untagged --dangerously-load-development-channels=, killing the pane
   # instantly. (Requires tmux >= 3.2.)
   tmux new-session -d -s "$TG_SESSION" -c "$TG_SPAWN_DIR" \
+    -e MCP_TIMEOUT="$MCP_TIMEOUT" \
     -e TG_PATH="$TG_PATH" \
     -e TG_CLAUDE_BIN="$TG_CLAUDE_BIN" \
     -e TG_MARKETPLACE="$TG_MARKETPLACE" \
@@ -228,6 +239,7 @@ print("absent")
   out=$("$herdr_bin" agent start "$TG_SESSION" ${ws_id:+--workspace "$ws_id"} --no-focus --cwd "$TG_SPAWN_DIR" -- \
     /usr/bin/env \
     PATH="$PATH" \
+    MCP_TIMEOUT="$MCP_TIMEOUT" \
     TG_PATH="$TG_PATH" \
     TG_CLAUDE_BIN="$TG_CLAUDE_BIN" \
     TG_MARKETPLACE="$TG_MARKETPLACE" \
