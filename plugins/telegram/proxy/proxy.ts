@@ -860,7 +860,14 @@ async function handleSquareTag(req: Request): Promise<Response> {
   if (peer === caller) return new Response('cannot tag yourself', { status: 400 })
   if (!text) return new Response('text required', { status: 400 })
 
-  const callerSlug = caller === 'operator' ? 'operator' : slugForTopic(caller)
+  // VIRTUAL CALLERS: any caller that is not a real topic ("operator", "ci",
+  // future automations) renders in the header but must never become a
+  // conversation participant - a participant gets deliveries, and delivery
+  // calls ensureSession, which would SPAWN a claude for a topic that does
+  // not exist. Real topics keep the full breadcrumb + participant behavior.
+  const realTopics = new Set(topicDirectory().map(e => e.topic))
+  const callerIsReal = realTopics.has(caller)
+  const callerSlug = callerIsReal ? slugForTopic(caller) : caller.replace(/[^a-z0-9-]/gi, '').slice(0, 24) || 'operator' 
   const peerSlug = slugForTopic(peer)
   const header = `🤖 ${callerSlug} → @${peerSlug}`
   const sent = await bot.api.sendMessage(String(GROUP_CHAT_ID), `${header}\n${text}`, {
@@ -868,7 +875,7 @@ async function handleSquareTag(req: Request): Promise<Response> {
   })
   const conv = String(sent.message_id)
   convs.set(conv, {
-    participants: [...new Set([caller, peer])].filter(t => t !== 'operator'),
+    participants: callerIsReal ? [...new Set([caller, peer])] : [peer],
     last_msg_id: sent.message_id,
     origin_topic: caller,
     depth: 1,
@@ -876,8 +883,8 @@ async function handleSquareTag(req: Request): Promise<Response> {
   })
   saveConvs()
 
-  // Breadcrumb in the caller's own room (claude callers only), with a deep link.
-  if (caller !== 'operator') {
+  // Breadcrumb in the caller's own room (real claude callers only), with a deep link.
+  if (callerIsReal) {
     const tid = threadIdForTopic(caller)
     bot.api
       .sendMessage(String(GROUP_CHAT_ID), `↪️ asked @${peerSlug} in #square: ${squareLink(sent.message_id)}`, {
