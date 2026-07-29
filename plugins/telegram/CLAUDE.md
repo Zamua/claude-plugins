@@ -302,6 +302,22 @@ Details that matter:
   kickoff turn) is silently dropped by the harness. Waiting lets the REPL finish
   booting and go idle before that first message is delivered, so it injects
   cleanly. Only the first poll waits; warm messages are unaffected.
+- **`MCP_TIMEOUT` bump: a HUGE-transcript resume can drop the channel MCP.** The
+  launcher forwards `MCP_TIMEOUT` (ms, claude's MCP-startup ceiling) into every
+  pane with a generous default (`180000`). WHY (real incident 2026-07-29): a topic
+  with a very large transcript (shale) resumed so slowly that the Telegram channel
+  MCP's startup exceeded claude's DEFAULT timeout, so claude dropped it - the
+  session ran normally (REPL up, no dialog, no visible error) but with NO channel,
+  so nothing polled the proxy and every message to that topic silently queued
+  undrained at the proxy. Smaller-transcript topics (hostthis, general) resumed in
+  time and were fine, which is the tell: it's transcript-size-dependent, not a
+  systematic resume bug. A generous ceiling is harmless for fast loaders (the MCP
+  connects the moment it's ready; the ceiling only bites a slow resume). Diagnosis
+  signal: the MCP is `bun server.ts` / `bun run --cwd .../telegram start` in the
+  pane's process tree - a topic missing it has a dead channel (compare a working
+  topic's `herdr pane process-info` against the broken one). Measured: `180000`
+  recovered shale end-to-end (MCP up, queued messages delivered). If a transcript
+  ever grows past that, raise the default.
 - **Session continuity (one topic = one continuous conversation).** The proxy
   mints a claude session id per topic on the FIRST spawn, passed via
   `--session-id` + the kickoff. Every LATER spawn (kill / crash / proxy restart)
