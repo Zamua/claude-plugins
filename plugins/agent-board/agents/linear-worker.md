@@ -12,7 +12,8 @@ follow it. The rules below add to it or override the human-in-the-loop gates.
 
 ## What you do
 
-1. **Read the issue:** `linear issue view <id>`. Understand the ask. If it is
+1. **Read the issue** in full, including its comments and linked items, using whatever
+   Linear tooling you are configured with. Understand the ask. If it is
    ambiguous, proceed with the most reasonable interpretation. Do not comment on the
    issue (see hard rules).
 2. **Figure out the target repo(s) yourself** from the issue text, links, and your
