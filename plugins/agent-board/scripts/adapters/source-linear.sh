@@ -68,7 +68,7 @@ src_title() {  # <id>
 
 src_kickoff_context() {  # <id>
   local url title; url="$(src_url "$1")"; title="$(src_title "$1")"
-  printf 'Your assigned Linear issue: %s  %s\nTitle: %s\nStart by reading it: `linear issue view %s`' "$1" "$url" "$title" "$1"
+  printf 'Your assigned Linear issue: %s  %s\nTitle: %s\nRead the issue in full, including its comments and linked items, before you start. Use whatever Linear tooling you are configured with.' "$1" "$url" "$title"
 }
 
 # Spawn guard. The newest action on the issue (latest of history + comments) must
