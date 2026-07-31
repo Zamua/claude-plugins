@@ -99,7 +99,10 @@ def main() -> None:
         )
         try:
             with urllib.request.urlopen(req, timeout=10) as res:
-                log("reported %s for topic %s: %s" % (err, topic, res.status))
+                # log the detail text too - without it, diagnosing WHY a turn
+                # failed means digging through session transcripts.
+                log("reported %s for topic %s: %s | %s"
+                    % (err, topic, res.status, details[:160].replace("\n", " ")))
         except Exception as e:
             log("failed reporting %s for topic %s: %s" % (err, topic, e))
         return

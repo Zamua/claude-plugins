@@ -1041,19 +1041,30 @@ async function handleTurnFailed(req: Request): Promise<Response> {
   const topic = String(b.topic ?? '')
   if (!topic) return new Response('topic required', { status: 400 })
   const err = String(b.error ?? 'unknown').slice(0, 40)
-  const overloaded = /overload/i.test(err) || /529/.test(String(b.details ?? ''))
+  const details = String(b.details ?? '')
+  // CONTEXT OVERFLOW, not a fault: the harness classifies an invalid_request
+  // carrying this language as "request too large" and responds by
+  // auto-compacting, then carries on. Same regex the CLI uses, so we stay in
+  // step with it. Reporting these as errors was alarming for a routine,
+  // self-healing event (2026-07-31: a long hostthis session tripped it three
+  // times).
+  const overflow = /\b(too long|too large|exceeds|token limit)\b/i.test(details)
+  const overloaded = /overload/i.test(err) || /529/.test(details)
   const st = getTopic(topic)
   const tid = threadIdForTopic(topic)
-  const text = overloaded
-    ? `⚠️ My last turn failed: Anthropic is overloaded (529) - server-side, usually temporary ` +
-      `(status.claude.com). Your last message may be unanswered - resend it or say "continue".`
-    : `⚠️ My last turn failed with an API error (${err}). Your last message may be unanswered - ` +
-      `resend it or say "continue".`
+  const text = overflow
+    ? `🗜️ Context filled up, so I'm auto-compacting and carrying on - normal housekeeping, ` +
+      `nothing broken. If I go quiet for more than a minute or two, resend your last message.`
+    : overloaded
+      ? `⚠️ My last turn failed: Anthropic is overloaded (529) - server-side, usually temporary ` +
+        `(status.claude.com). Your last message may be unanswered - resend it or say "continue".`
+      : `⚠️ My last turn failed with an API error (${err}). Your last message may be unanswered - ` +
+        `resend it or say "continue".`
   try {
     await bot.api.sendMessage(String(GROUP_CHAT_ID), text, {
       ...(tid != null ? { message_thread_id: tid } : {}),
     })
-    log(`turn-failed notice posted for topic ${topic} "${st.name}" (${err})`)
+    log(`turn-failed notice posted for topic ${topic} "${st.name}" (${err}${overflow ? ', context-overflow/compacting' : ''})`)
     return json({ ok: true })
   } catch (e) {
     log(`turn-failed notice FAILED for topic ${topic}: ${e}`)
