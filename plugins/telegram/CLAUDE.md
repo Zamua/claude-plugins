@@ -201,7 +201,7 @@ plugin uses it purely as a tripwire:
    regardless of matcher semantics) POSTs `{topic, error, details}` to
    `POST /rate-limit`.
 2. `handleRateLimit` pins `st.fallbackModel = TELEGRAM_TOPICS_MODEL_FALLBACK`
-   (default `claude-opus-4-8`; empty disables the feature), kills the stalled
+   (default the `opus` alias; empty disables the feature), kills the stalled
    session, and enqueues a SYSTEM NOTICE nudge.
 3. The nudge respawns the topic through the normal `ensureSession` path with
    `--resume` + `--model <fallback>` (the `--model` FLAG overrides even on
@@ -486,7 +486,7 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 (default `8790`), `TELEGRAM_TOPICS_MARKETPLACE` (default `plugin:telegram@zamua`),
 `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled),
 `TELEGRAM_TOPICS_ULTRACODE` (default ON, see below),
-`TELEGRAM_TOPICS_MODEL` (default `claude-fable-5`, see below),
+`TELEGRAM_TOPICS_MODEL` (default the `fable` alias, see below),
 `TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
 backends" above).
 Loaded from the real env (wins), then plugin-dir `.env`, then
@@ -509,9 +509,11 @@ spawn). NB the single-session bridge sets `ultracode` in its OWN `--settings`
 override, independent of this.
 
 **Topic model (the `--model` FLAG, NOT a settings key).** The proxy passes
-`TELEGRAM_TOPICS_MODEL` (default `claude-fable-5`; `default`/`inherit`/empty =
-account default; else a model id like `claude-opus-4-8` / `claude-sonnet-5` or an
-alias) to the launcher as `TG_MODEL`, which adds `--model <id>` to the claude
+`TELEGRAM_TOPICS_MODEL` (default the `fable` alias; `default`/`inherit`/empty =
+account default; else an alias like `opus` / `sonnet` or a pinned id like
+`claude-opus-5`. Prefer the ALIAS: it tracks the newest model in that family, so
+a release needs no config change) to the launcher as `TG_MODEL`, which adds
+`--model <id>` to the claude
 command. **Why a flag, not a settings `model` key** (learned 2026-07-04 from a
 topic coming up on the wrong model): a settings `model` is only a DEFAULT and is
 IGNORED by a `--resume`d INTERACTIVE session, which restores its OWN baked-in

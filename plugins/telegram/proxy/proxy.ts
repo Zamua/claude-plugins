@@ -122,15 +122,15 @@ const ULTRACODE = envBool(process.env.TELEGRAM_TOPICS_ULTRACODE, true, 'TELEGRAM
 // `--model` FLAG. NOT a settings `model` key: that is only a DEFAULT and is
 // IGNORED by a --resume'd interactive session (it restores its own baked-in
 // model), so an existing topic would keep its old model forever; the --model flag
-// overrides even on resume (verified end-to-end). Default `claude-fable-5`;
+// overrides even on resume (verified end-to-end). Default the `fable` alias;
 // TELEGRAM_TOPICS_MODEL=<id> pins another model, and `default`/`inherit`/empty
 // leaves it unset so the account default applies. (The single-session bridge
 // chooses its own model separately - this is topic-Claudes only.)
 function resolveModel(): string {
   const raw = process.env.TELEGRAM_TOPICS_MODEL
-  // Prefer the ALIAS ('opus') over a pinned id: aliases track the newest
+  // Prefer the ALIAS ('fable') over a pinned id: aliases track the newest
   // model in that family, so a release does not require touching config.
-  if (raw === undefined) return 'opus'
+  if (raw === undefined) return 'fable'
   const s = raw.trim()
   if (s === '' || s.toLowerCase() === 'default' || s.toLowerCase() === 'inherit') return ''
   return s
@@ -147,7 +147,7 @@ const MODEL = resolveModel()
 // even on resume, which is what makes this work at all). Empty = disabled
 // (the topic stalls as before). Reset back to the primary at the nightly
 // restart, so a fallback is never permanent.
-const MODEL_FALLBACK = (process.env.TELEGRAM_TOPICS_MODEL_FALLBACK ?? 'sonnet').trim()
+const MODEL_FALLBACK = (process.env.TELEGRAM_TOPICS_MODEL_FALLBACK ?? 'opus').trim()
 // How long a failed-over topic waits before RE-TRYING its primary model when
 // the limit error carried no reset time. The retry is free: if the quota is
 // still exhausted the topic just fails over again (one notice, conversation
