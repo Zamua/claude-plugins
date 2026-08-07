@@ -40,13 +40,15 @@ the poll pass or a CLI command: `once`, `status`, `spawn`, `resume`, `reap`,
   to `$HOME/workspace`), env scrubbing (`AB_SCRUB_VARS` / `ab_scrub_env`)
 - NEW: a shared **worker-argv builder** used by BOTH pane runtimes:
   `ab_build_worker_argv` sets the globals `AB_EXE` (the `agent_cmd` first
-  element, default `claude`, `~/` expanded) and the array `AB_ARGV` holding, in
+  element, default `claude`) and the array `AB_ARGV` holding, in
   order: the `agent_cmd` tail, `--plugin-dir <plugin_dir>`, `--permission-mode
   <permission_mode>` (uniform default `acceptEdits` for every runtime),
   `--dangerously-skip-permissions` when `dangerously_skip` is true,
   `--append-system-prompt <house_rules>` when `house_rules` is non-empty, and
   `--agent <persona>` (persona = `worker_subagent`, empty -> the source's
   `src_default_persona`). `house_rules` therefore applies to ALL runtimes.
+  Leading `~/` in `agent_cmd` elements, `plugin_dir`, and `workspace_root` is
+  expanded to `$HOME` (schedulers run without a shell to do it).
   tmux execs `AB_EXE` directly; herdr derives the executable from `--kind
   <agent_kind>` and only warns when `AB_EXE`'s basename disagrees with it.
 
