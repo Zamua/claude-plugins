@@ -8,7 +8,7 @@
     {
       "name": "agent-board",
       "source": "./plugins/agent-board",
-      "description": "Issue-driven orchestration of background Claude Code agents: a local poller turns your GitHub issues into background workers (one git worktree each) that comment progress and open PRs; you review and merge."
+      "description": "Issue-board-driven orchestration of local Claude Code worker agents: label an issue (sources: GitHub or Linear) and a local poller spawns a worker in a pane (runtimes: tmux or herdr) that works in a per-issue worktree and opens a draft PR; you review and merge."
     },
     {
       "name": "telegram",

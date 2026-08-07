@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # agent-board shared core. Provider-agnostic: config, logging, the poll lock, the
-# task->session map, and small helpers. Source-specific logic (Linear) lives in
-# adapters/source-*.sh and runtime-specific logic (herdr) in adapters/runtime-*.sh;
-# poll.sh sources this plus the two adapters the config selects.
+# task->session map, the worker argv builder, and small helpers. Source-specific
+# logic lives in adapters/source-*.sh and runtime-specific logic in
+# adapters/runtime-*.sh; poll.sh sources this plus the two adapters the config
+# selects.
 #
 # Kept bash-3.2-safe: the launchd job runs macOS /bin/bash. No associative arrays,
 # no ${x,,}, no mapfile; never expand a possibly-empty array under `set -u`.
 set -uo pipefail
 
 # Schedulers (launchd/cron) run with a minimal PATH; make common tool locations
-# discoverable so claude/herdr/linear/jq/git resolve however they were installed.
+# discoverable so claude/tmux/herdr/gh/linear/jq/git resolve however they were
+# installed.
 export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 AB_CONFIG="${AGENT_BOARD_CONFIG:-$HOME/.config/agent-board/config.json}"
@@ -40,46 +42,78 @@ ab_get_list() {
     .[$k] as $v
     | if   $v == null        then empty
       elif ($v|type)=="array"  then $v[]
-      elif ($v|type)=="string" then ($v / " ")[]
+      elif ($v|type)=="string" then ($v | gsub("\\s+"; " ") | split(" ")[] | select(length > 0))
       else $v end' "$AB_CONFIG" 2>/dev/null
 }
 
-# workspace root the workers operate under (per the user global CLAUDE.md flow).
+# leading-~/ expansion for config-supplied paths (schedulers run without a shell
+# to expand it)
+# shellcheck disable=SC2088  # the literal two-char prefix is the match target
+ab_tilde() { case "$1" in "~/"*) printf '%s' "$HOME/${1#\~/}";; *) printf '%s' "$1";; esac; }
+
+# workspace root the workers operate under; pane cwd. Empty config falls back to
+# $HOME/workspace.
 ab_workspace_root() {
   local w; w="$(ab_get workspace_root "")"
-  [ -n "$w" ] && { printf '%s' "$w"; return; }
+  [ -n "$w" ] && { ab_tilde "$w"; return; }
   printf '%s' "$HOME/workspace"
-}
-
-# deterministic herdr session name for a task, so spawn/reap/resume are
-# re-entrant with no duplicates. Lowercased issue id (matches ~/workspace/<id>
-# and feature/<id>), with an optional configurable prefix.
-ab_session_name() {  # <issue-id>
-  local id pfx; pfx="$(ab_get session_prefix "")"
-  id="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
-  printf '%s%s' "$pfx" "$id"
 }
 
 # a filesystem/agent-name-safe token
 ab_safe() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_-' '-'; }
 
+# ---- worker argv builder (shared by both pane runtimes) ----
+# Sets AB_EXE (agent_cmd first element, default "claude") and AB_ARGV
+# (everything after the executable), in order: the agent_cmd tail,
+# --plugin-dir <plugin_dir> when set, --permission-mode <permission_mode>
+# (uniform default acceptEdits), --dangerously-skip-permissions when
+# dangerously_skip is true, --append-system-prompt <house_rules> when non-empty,
+# and --agent <persona> where persona = worker_subagent or, when empty, the
+# source's src_default_persona. tmux execs AB_EXE directly; herdr derives the
+# executable from agent_kind and treats AB_EXE as advisory. AB_ARGV can be
+# empty: expand it as ${AB_ARGV[@]+"${AB_ARGV[@]}"} (bash 3.2 under set -u).
+AB_EXE=""
+AB_ARGV=()
+ab_build_worker_argv() {
+  AB_EXE=""; AB_ARGV=()
+  local a pdir pm hr sub
+  while IFS= read -r a; do
+    a="$(ab_tilde "$a")"
+    if [ -z "$AB_EXE" ]; then AB_EXE="$a"; continue; fi
+    AB_ARGV+=("$a")
+  done < <(ab_get_list agent_cmd)
+  [ -n "$AB_EXE" ] || AB_EXE="claude"
+  pdir="$(ab_get plugin_dir "")"
+  [ -n "$pdir" ] && AB_ARGV+=(--plugin-dir "$(ab_tilde "$pdir")")
+  pm="$(ab_get permission_mode acceptEdits)"
+  [ -n "$pm" ] && AB_ARGV+=(--permission-mode "$pm")
+  [ "$(ab_get dangerously_skip false)" = "true" ] && AB_ARGV+=(--dangerously-skip-permissions)
+  hr="$(ab_get house_rules "")"
+  [ -n "$hr" ] && AB_ARGV+=(--append-system-prompt "$hr")
+  sub="$(ab_get worker_subagent "")"
+  if [ -z "$sub" ] && declare -F src_default_persona >/dev/null; then
+    sub="$(src_default_persona)"
+  fi
+  [ -n "$sub" ] && AB_ARGV+=(--agent "$sub")
+  return 0
+}
+
 # Env vars that, if inherited from a parent claude session, mark a nested claude
 # as a "child" and disable its transcript, which would break `claude --resume`.
 # Scrub them (plus any inherited herdr socket/session pointers) before launching
-# herdr so workers save transcripts and every call honors explicit --session.
-# Harmless under launchd (already a clean env); essential if ever run from inside
-# a claude session. Call inside the subshell that execs herdr.
+# a worker so it saves transcripts and honors explicit session flags. Harmless
+# under launchd (already a clean env); essential if ever run from inside a
+# claude session. Call inside the subshell that execs the worker.
 AB_SCRUB_VARS="CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS CLAUDE_CODE_SESSION_ID CLAUDE_CODE_WORKING_DIR HERDR_SOCKET_PATH HERDR_SESSION HERDR_WORKSPACE_ID HERDR_PANE_ID"
 ab_scrub_env() { local v; for v in $AB_SCRUB_VARS; do unset "$v" 2>/dev/null || true; done; }
 
 # ---- task -> claude-session-id map (for resume) ----
 # Value is the claude session id captured at spawn. Persisted so a reap (stop)
-# keeps it and a later resume can `claude --resume <id>`. Reap NEVER deletes the
-# entry (stop preserves); only a full manual teardown removes it.
+# keeps it and a later resume can `claude --resume <id>`. Nothing deletes
+# entries; retire one by editing the file.
 ab_map_init() { [ -f "$AB_STATE" ] || { mkdir -p "$(dirname "$AB_STATE")"; printf '{}\n' >"$AB_STATE"; }; }
 ab_map_get()  { ab_map_init; jq -r --arg k "$1" '.[$k] // empty' "$AB_STATE" 2>/dev/null; }
 ab_map_set()  { ab_map_init; local tmp; tmp=$(mktemp); jq --arg k "$1" --arg v "$2" '.[$k]=$v' "$AB_STATE" >"$tmp" && mv "$tmp" "$AB_STATE"; }
-ab_map_del()  { ab_map_init; local tmp; tmp=$(mktemp); jq --arg k "$1" 'del(.[$k])' "$AB_STATE" >"$tmp" && mv "$tmp" "$AB_STATE"; }
 ab_map_keys() { ab_map_init; jq -r 'keys[]' "$AB_STATE" 2>/dev/null; }
 
 # ---- single-flight poll lock ----
