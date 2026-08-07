@@ -1,29 +1,14 @@
 #!/usr/bin/env bash
-# agent-board source adapter: Linear, via the `linear` CLI (headless, verified
-# 2.0.0). Uses `linear api` raw GraphQL for precise, JSON-typed queries.
-# Task id = the Linear identifier, e.g. "MM-423".
-#
-# Contract used by poll.sh:
-#   src_deps
-#   src_spawn_candidates          -> ids assigned-to-me + carrying the label
-#   src_has_label <id>            -> 0 has it, 1 lost it, 2 unknown
-#   src_last_actor_is_me <id>     -> 0 if the newest action on the issue was the operator's (guard)
-#   src_url     <id>              -> issue URL
-#   src_title   <id>              -> issue title
-#   src_kickoff_context <id>      -> short task description for the runtime's kickoff
-#
-# The label is the whole trigger: adding it spawns (or resumes), removing it reaps.
-# Workflow state is deliberately not consulted - Linear moves state on its own from
-# PR activity (Done on merge) while post-merge work like a release or an
-# observability check is still the worker's. Eligibility uses assignee.isMe; the
-# last-actor guard is what prevents a hijack.
+# agent-board source adapter: Linear issues, via `linear api` raw GraphQL. Task id = the Linear identifier, e.g. "ENG-42".
 
 src_deps() { printf 'linear jq'; }
 
+src_default_persona() { printf 'linear-worker'; }
+
 _src_api() { linear api "$1" 2>/dev/null; }
 
-_src_team() { printf '%s' "${1%-*}"; }   # MM-423 -> MM
-_src_num()  { printf '%s' "${1##*-}"; }  # MM-423 -> 423
+_src_team() { printf '%s' "${1%-*}"; }   # ENG-42 -> ENG
+_src_num()  { printf '%s' "${1##*-}"; }  # ENG-42 -> 42
 
 src_spawn_candidates() {
   local label q
@@ -68,7 +53,7 @@ src_title() {  # <id>
 
 src_kickoff_context() {  # <id>
   local url title; url="$(src_url "$1")"; title="$(src_title "$1")"
-  printf 'Your assigned Linear issue: %s  %s\nTitle: %s\nRead the issue in full, including its comments and linked items, before you start. Use whatever Linear tooling you are configured with.' "$1" "$url" "$title"
+  printf 'Your assigned Linear issue: %s  %s\nTitle: %s\nRead the issue in full, including its comments and linked items, before you start. Use whatever Linear tooling you are configured with. Do not merge or deploy.' "$1" "$url" "$title"
 }
 
 # Spawn guard. The newest action on the issue (latest of history + comments) must

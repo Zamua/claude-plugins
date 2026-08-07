@@ -1,9 +1,9 @@
 {
   "name": "agent-board",
-  "description": "Orchestrate background coding agents from an issue board. A local poller dispatches issues you assign and label to background workers (herdr or native claude-bg, one git worktree each) that open draft PRs and reply to AI PR review; you review and merge. Sources: Linear or GitHub.",
-  "version": "0.1.7",
+  "description": "Orchestrate local Claude Code worker agents from an issue board. A poller watches for a trigger label (sources: GitHub or Linear) and hosts one worker per labelled issue in a pane (runtimes: tmux or herdr); removing the label stops the worker, re-adding it resumes the same session. Workers open draft PRs and reply to AI PR review; you review and merge.",
+  "version": "0.2.0",
   "author": {
     "name": "Zamua"
   },
-  "keywords": ["orchestration", "agents", "linear", "github", "herdr", "issues", "automation"]
+  "keywords": ["orchestration", "agents", "github", "linear", "tmux", "herdr", "issues", "automation"]
 }

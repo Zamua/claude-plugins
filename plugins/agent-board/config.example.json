@@ -1,23 +1,18 @@
 {
-  "source": "linear",
-  "runtime": "herdr",
-  "herdr_session": "agent-board",
+  "source": "github",
+  "runtime": "tmux",
   "label": "agent",
   "cap": 3,
   "poll_seconds": 90,
-  "house_rules": "",
-
-  "session_prefix": "",
   "workspace_root": "",
-  "agent_cmd": ["claude"],
-  "agent_kind": "claude",
   "worker_subagent": "",
-
-  "gh_login": "",
-  "workdir": "",
+  "agent_cmd": ["claude"],
   "permission_mode": "acceptEdits",
   "dangerously_skip": false,
-  "worktree": true,
-  "agent_name_prefix": "agent-board",
-  "plugin_dir": ""
+  "house_rules": "",
+  "plugin_dir": "",
+  "tmux_session": "agent-board",
+  "herdr_session": "agent-board",
+  "agent_kind": "claude",
+  "gh_login": ""
 }

@@ -1,12 +1,13 @@
 ---
-description: Operate the agent-board from the orchestrator session - see the board's status, dispatch / stop / resume issue agents, and review + merge their PRs. Use when the user asks to check the agent board, run a poll pass, start or stop an agent for an issue, or review what the background agents have produced.
+description: Operate the agent-board from the orchestrator session - see the board's status, dispatch / stop / resume issue workers, and review + merge their PRs. Use when the user asks to check the agent board, run a poll pass, start or stop a worker for an issue, or review what the workers have produced.
 ---
 
-# agent-board — orchestrator operations
+# agent-board: orchestrator operations
 
 You are the **orchestrator**: the persistent session that manages the board.
-Background workers do the per-issue work and open PRs; you triage issues, watch
-progress, and are the ONLY actor that merges + releases.
+Workers do the per-issue work in their own panes (tmux windows or herdr panes)
+and open draft PRs; you triage issues, watch progress, and are the ONLY actor
+that merges + releases.
 
 All management runs through one script. Use the plugin root:
 
@@ -16,55 +17,65 @@ P="${CLAUDE_PLUGIN_ROOT}/scripts/poll.sh"
 
 ## Common operations
 
-- **Status of the board** (eligible issues, running agents, the issue→session map):
-  `"$P" status`
-- **Run one poll pass now** (spawn newly labelled / resume stopped / reap unlabelled):
-  `"$P" once`
-- **Force-dispatch a specific issue** right now:
-  `"$P" spawn <id>`
-- **Stop an agent** (keeps its transcript; resume later):
-  `"$P" reap <id>`
-- **Resume a stopped agent** (e.g. after re-adding the label):
-  `"$P" resume <id>`
-- **Watch a worker live** / read its output:
-  `claude attach <session-id>` (interactive) or `claude logs <session-id>`
-- **See all background agents** (the native view): `claude agents`
+- **Status of the board** (eligible issues, running workers, the task-session
+  map): `"$P" status`
+- **Run one poll pass now** (spawn newly labelled / resume stopped / reap
+  unlabelled): `"$P" once`
+- **Force-dispatch a specific issue** right now: `"$P" spawn <id>`
+- **Stop a worker** (keeps its transcript; resume later): `"$P" reap <id>`
+- **Resume a stopped worker** (e.g. after re-adding the label): `"$P" resume <id>`
+
+Issue ids: `owner/repo#N` for the github source, the issue identifier
+(e.g. `ENG-42`) for linear.
+
+## Observing workers
+
+- runtime `tmux` (default): `tmux attach -t agent-board`; one window per
+  issue, window name = the sanitized issue id. Detach with `C-b d`.
+- runtime `herdr`: open the shared herdr session (default `agent-board`); one
+  workspace per issue.
 
 ## Creating work
 
-The label is the whole trigger: a worker is dispatched when an issue is authored
-by the configured user and carries the configured label (default `agent`), and is
-reaped when the label comes off. Issue state is never consulted. To queue work:
+The label is the whole trigger: a labelled issue gets a worker, an issue that
+loses the label gets reaped. Issue state is never consulted. Per source:
 
-```
-gh issue create --repo <owner/repo> --label agent --title "..." --body "..."
-```
+- **github** (issues you author):
 
-(The label must already exist on the repo: `gh label create agent` once.) The
-poller picks it up on its next pass, or run `"$P" once` to dispatch immediately.
+  ```
+  gh issue create --repo <owner/repo> --label agent --title "..." --body "..."
+  ```
 
-## Reviewing + merging (your job, never the worker's)
+  The label must already exist on the repo: `gh label create agent` once.
+- **linear** (issues assigned to you): assign the issue to yourself and add
+  the label in Linear. Create the label in the workspace once if it is new.
 
-Workers open PRs and respond to review comments but never merge. You:
+The poller picks it up on its next pass, or run `"$P" once` to dispatch now.
 
-1. Review the PR (`gh pr view <n>`, `gh pr diff <n>`), or summarize it for the
-   user to decide.
-2. Leave review comments on the PR - the worker is watching and will respond.
-3. When it's good and CI is green, **you** merge (`gh pr merge`). Merging does NOT
-   end the worker - post-merge work like a release or an observability check is
-   still its job. Stop it by removing the `agent` label; the next poll pass reaps
-   it and its transcript is retained.
+## Review feedback and merging (your job, never the worker's)
 
-If the user wants the work picked back up later, re-add the label - the next pass
-resumes the exact same session that worked it.
+Workers open draft PRs and never merge. They auto-reply ONLY to AI/automated
+PR review; they do not watch for or respond to human PR comments. To get
+feedback to a worker, either:
+
+- leave it as PR comments for the AI-reviewer flow (an automated review the
+  worker will answer), or
+- deliver it directly: attach to the worker's pane and type it there.
+
+When the PR is good and CI is green, **you** merge (`gh pr merge`). Merging
+does NOT end the worker: post-merge work like a release or an observability
+check is still its job. Stop it by removing the label; the next pass reaps it
+and its transcript is retained. Re-add the label and the next pass resumes the
+exact same session that worked it.
 
 ## Setup / lifecycle
 
-- First-time setup: `"$P" config-init` then edit `~/.config/agent-board/config.json`
-  (optional `gh_login`, `workdir`, `cap`, `poll_seconds`; no repo list - it
-  watches all your repos via cross-repo search).
-- Arm the scheduler: `"$P" install` (launchd on macOS, prints a cron line otherwise).
+- First-time setup: `"$P" config-init`, then edit
+  `~/.config/agent-board/config.json` (pick `source` and `runtime`; defaults
+  are github + tmux).
+- Arm the scheduler: `"$P" install` (launchd on macOS, prints a cron line
+  otherwise).
 - Stop the scheduler: `"$P" uninstall`.
 
-Never raise the concurrency cap blindly - many agents running heavy builds at
+Never raise the concurrency cap blindly: many workers running heavy builds at
 once can exhaust the host's memory. Raise it gradually and watch resource use.
