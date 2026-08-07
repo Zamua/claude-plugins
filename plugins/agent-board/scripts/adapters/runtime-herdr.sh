@@ -3,7 +3,7 @@
 #
 # ALL tasks run inside ONE shared herdr session (config `herdr_session`, default
 # "agent-board"); each task gets its OWN workspace (label = task id + a short slug
-# of the issue title, e.g. "mm-474-send-nelnet-files") with one agent pane. Task
+# of the issue title, e.g. "eng-42-fix-login-retry") with one agent pane. Task
 # identity for status/reap is the herdr AGENT NAME (deterministic = ab_safe(issue-id)).
 # The workspace label is cosmetic only - never keyed on - so it carries the title;
 # the agent name stays the bare id.
@@ -23,9 +23,6 @@
 # spawn  = workspace create -> agent start -> agent prompt (kickoff)
 # reap   = close that task's pane by name; herdr auto-drops the empty workspace.
 # resume = the same three calls with `--resume <mapped uuid>` and a nudge prompt.
-#
-# Contract used by poll.sh: rt_deps, rt_status, rt_running_count, rt_spawn,
-# rt_resume (ret 2 = no saved sid), rt_reap, rt_list.
 
 rt_deps() { printf 'herdr jq uuidgen'; }
 
@@ -34,8 +31,8 @@ _rt_name()    { ab_safe "$1"; }                        # per-task agent name (id
 _rt_new_sid() { uuidgen | tr 'A-Z' 'a-z'; }            # the claude session id we own
 
 # Cosmetic workspace label: the task id plus a short slug of the issue title when
-# the source exposes one (src_title), e.g. "mm-474-send-nelnet-files". Falls back
-# to the bare id (GitHub source has no src_title, empty title, etc). NEVER used as
+# the source exposes one (src_title), e.g. "eng-42-fix-login-retry". Falls back
+# to the bare id (empty title, src_title missing, etc). NEVER used as
 # identity - status/reap key on the agent name (_rt_name) only - so enriching it is
 # safe. Title slug is lowercased, non-[a-z0-9_-] collapsed to '-', trimmed, and
 # capped so labels stay short.
@@ -54,31 +51,22 @@ _rt_label() {  # <id> -> "<id-safe>" or "<id-safe>-<title-slug>"
   [ -n "$slug" ] && printf '%s-%s' "$name" "$slug" || printf '%s' "$name"
 }
 
-# RT_KIND is herdr's agent kind, which fixes the executable; RT_ARGV is everything
-# after it. agent_cmd's first element is dropped, and flagged when it disagrees with
-# the kind, because a wrapper or an absolute path there would silently not be what
-# runs. RT_ARGV can legitimately be empty, so every expansion has to be the
-# ${RT_ARGV[@]+"${RT_ARGV[@]}"} form; bash 3.2 errors on a bare empty-array
+# Worker argv comes from the shared builder (ab_build_worker_argv -> AB_EXE +
+# AB_ARGV). RT_KIND is herdr's agent kind, which fixes the executable herdr
+# launches, so AB_EXE is ignored here; it is flagged when its basename disagrees
+# with the kind, because a wrapper or an absolute path there would silently not
+# be what runs. AB_ARGV can legitimately be empty, so every expansion has to be
+# the ${AB_ARGV[@]+"${AB_ARGV[@]}"} form; bash 3.2 errors on a bare empty-array
 # expansion under set -u.
 RT_KIND=""
-RT_ARGV=()
-_rt_build_argv() {
-  RT_ARGV=(); RT_KIND="$(ab_get agent_kind claude)"
-  local a exe="" pdir sub pm
-  while IFS= read -r a; do
-    case "$a" in "~/"*) a="$HOME/${a#\~/}";; esac
-    if [ -z "$exe" ]; then
-      exe="$a"
-      [ "${a##*/}" = "$RT_KIND" ] || ab_log "agent_cmd starts with '$a' but herdr launches --kind $RT_KIND; that first element is ignored"
-      continue
-    fi
-    RT_ARGV+=("$a")
-  done < <(ab_get_list agent_cmd)
-  pdir="$(ab_get plugin_dir "")"; [ -n "$pdir" ] && RT_ARGV+=(--plugin-dir "$pdir")
-  pm="$(ab_get permission_mode "")"; [ -n "$pm" ] && RT_ARGV+=(--permission-mode "$pm")
-  [ "$(ab_get dangerously_skip false)" = "true" ] && RT_ARGV+=(--dangerously-skip-permissions)
-  sub="$(ab_get worker_subagent linear-worker)"; [ -n "$sub" ] && RT_ARGV+=(--agent "$sub")
+_rt_prep_argv() {
+  ab_build_worker_argv
+  RT_KIND="$(ab_get agent_kind claude)"
+  [ "${AB_EXE##*/}" = "$RT_KIND" ] || ab_log "agent_cmd starts with '$AB_EXE' but herdr launches --kind $RT_KIND; that first element is ignored"
 }
+
+# Pane cwd for every workspace; created up front so --cwd never points nowhere.
+_rt_root() { local r; r="$(ab_workspace_root)"; mkdir -p "$r" 2>/dev/null; printf '%s' "$r"; }
 
 rt_ensure_server() {
   local s i=0 log; s="$(_rt_session)"
@@ -156,10 +144,10 @@ rt_running_count() {
 rt_spawn() {  # <id> <context>
   local id="$1" context="$2" name label pane sid
   rt_ensure_server || return 1
-  _rt_build_argv
+  _rt_prep_argv
   name="$(_rt_name "$id")"; label="$(_rt_label "$id")"; sid="$(_rt_new_sid)"
-  pane="$(_rt_new_pane "$(ab_workspace_root)" "$label")" || return 1
-  if ! _rt_agent_start "$name" "$pane" ${RT_ARGV[@]+"${RT_ARGV[@]}"} --session-id "$sid"; then
+  pane="$(_rt_new_pane "$(_rt_root)" "$label")" || return 1
+  if ! _rt_agent_start "$name" "$pane" ${AB_ARGV[@]+"${AB_ARGV[@]}"} --session-id "$sid"; then
     _rt_drop_pane "$pane"; return 1                  # leave no empty workspace behind
   fi
   ab_map_set "$id" "$sid"                            # only once the agent is really up
@@ -171,11 +159,11 @@ rt_resume() {  # <id> ; returns 2 if no saved sid
   local id="$1" sid name label pane nudge
   sid="$(ab_map_get "$id")"; [ -n "$sid" ] || { ab_log "resume $id: no saved sid"; return 2; }
   rt_ensure_server || return 1
-  _rt_build_argv
+  _rt_prep_argv
   name="$(_rt_name "$id")"; label="$(_rt_label "$id")"
   nudge="Resumed. Re-check the PR for new automated review comments and continue; do not redo finished work."
-  pane="$(_rt_new_pane "$(ab_workspace_root)" "$label")" || return 1
-  if ! _rt_agent_start "$name" "$pane" ${RT_ARGV[@]+"${RT_ARGV[@]}"} --resume "$sid"; then
+  pane="$(_rt_new_pane "$(_rt_root)" "$label")" || return 1
+  if ! _rt_agent_start "$name" "$pane" ${AB_ARGV[@]+"${AB_ARGV[@]}"} --resume "$sid"; then
     _rt_drop_pane "$pane"; return 1
   fi
   _rt_prompt "$name" "$nudge"
