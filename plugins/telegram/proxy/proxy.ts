@@ -41,7 +41,7 @@ import {
 } from 'fs'
 import { homedir } from 'os'
 import { join, extname, sep } from 'path'
-import { spawnSync } from 'child_process'
+import { spawnSync, execFile } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
 
@@ -1352,6 +1352,62 @@ async function downloadFile(fileId: string, uniqueHint?: string): Promise<string
   }
 }
 
+// ---- voice transcription ---------------------------------------------------
+//
+// Inbound voice notes are transcribed locally (whisper.cpp + large-v3-turbo)
+// and delivered as text behind a short provenance tag, so a topic-Claude gets
+// the words as if typed. Fail-open by design: any missing binary/model or a
+// transcription error falls back to the plain "(voice message)" content with
+// the attachment meta intact, so the manual download path still works.
+// Subprocesses run ASYNC (execFile, not spawnSync): a long clip must not
+// stall the event loop that serves every topic's /poll.
+const VOICE_TRANSCRIBE = envBool(
+  process.env.TELEGRAM_TOPICS_VOICE_TRANSCRIBE, true, 'TELEGRAM_TOPICS_VOICE_TRANSCRIBE')
+const FFMPEG_BIN = process.env.TELEGRAM_TOPICS_FFMPEG_BIN ?? '/opt/homebrew/bin/ffmpeg'
+const WHISPER_BIN = process.env.TELEGRAM_TOPICS_WHISPER_BIN ?? '/opt/homebrew/bin/whisper-cli'
+const WHISPER_MODEL = process.env.TELEGRAM_TOPICS_WHISPER_MODEL
+  ?? join(homedir(), '.local/share/whisper-models/ggml-large-v3-turbo-q5_0.bin')
+const VOICE_TAG = '[voice note, auto-transcribed; may contain errors]'
+
+function run(bin: string, args: string[], timeoutMs: number): Promise<string | null> {
+  return new Promise(resolve => {
+    execFile(bin, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      resolve(err ? null : String(stdout))
+    })
+  })
+}
+
+async function transcribeVoice(fileId: string): Promise<string | null> {
+  if (!VOICE_TRANSCRIBE) return null
+  for (const [what, p] of [['ffmpeg', FFMPEG_BIN], ['whisper-cli', WHISPER_BIN], ['model', WHISPER_MODEL]] as const) {
+    if (!existsSync(p)) {
+      log(`voice transcription skipped: ${what} not found at ${p}`)
+      return null
+    }
+  }
+  const oga = await downloadFile(fileId)
+  if (!oga) return null
+  const wav = `${oga}.16k.wav`
+  try {
+    const ff = await run(FFMPEG_BIN, ['-y', '-v', 'error', '-i', oga, '-ar', '16000', '-ac', '1', wav], 30_000)
+    if (ff === null) {
+      log('voice transcription: ffmpeg failed')
+      return null
+    }
+    const out = await run(WHISPER_BIN, ['-m', WHISPER_MODEL, '-f', wav, '--no-timestamps'], 120_000)
+    if (out === null) {
+      log('voice transcription: whisper-cli failed')
+      return null
+    }
+    const text = out.trim()
+    return text || null
+  } finally {
+    for (const f of [wav, oga]) {
+      try { rmSync(f) } catch {}
+    }
+  }
+}
+
 // ---- grammy inbound --------------------------------------------------------
 
 const bot = new Bot(TOKEN)
@@ -1438,6 +1494,15 @@ bot.on('message', async ctx => {
     imagePath = (await downloadFile(desc.photo.file_id, desc.photo.file_unique_id)) ?? undefined
   }
 
+  let voiceTranscribed = false
+  if (desc.attachment?.kind === 'voice') {
+    const text = await transcribeVoice(desc.attachment.file_id)
+    if (text) {
+      desc.content = (msg.caption ? `${msg.caption}\n\n` : '') + `${VOICE_TAG}\n${text}`
+      voiceTranscribed = true
+    }
+  }
+
   const from = ctx.from!
   const meta: Record<string, string> = {
     chat_id: String(ctx.chat.id),
@@ -1447,6 +1512,7 @@ bot.on('message', async ctx => {
     ts: new Date((msg.date ?? 0) * 1000).toISOString(),
     ...(msg.message_thread_id != null ? { message_thread_id: String(msg.message_thread_id) } : {}),
     ...(imagePath ? { image_path: imagePath } : {}),
+    ...(voiceTranscribed ? { voice_transcribed: '1' } : {}),
     ...(desc.attachment
       ? {
           attachment_kind: desc.attachment.kind,
