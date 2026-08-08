@@ -181,6 +181,26 @@ never broadcast; behavioral discipline, no caps).
   and taggable immediately; its claude spawns on first message or tag. Only
   topics created OUTSIDE the proxy still need a first human message.
 
+## Voice-note auto-transcription
+
+Inbound voice messages (attachment_kind `voice`) are transcribed by the PROXY
+before enqueue: download via getFile -> ffmpeg to 16k mono wav -> whisper-cli
+(whisper.cpp, github.com/ggml-org/whisper.cpp) with the large-v3-turbo q5 model
+at `~/.local/share/whisper-models/`. On success the channel content becomes
+`[voice note, auto-transcribed; may contain errors]\n<text>` (caption, when
+present, prefixed) and the meta carries `voice_transcribed: "1"`. FAIL-OPEN:
+missing ffmpeg/whisper-cli/model, a subprocess error, a timeout (30s convert /
+120s transcribe), or empty output -> the plain "(voice message)" content ships
+with attachment meta intact, so the manual download+transcribe path keeps
+working. Subprocesses run via async execFile so a long clip cannot stall the
+event loop serving /poll; temp wav + oga are deleted after. Config:
+`TELEGRAM_TOPICS_VOICE_TRANSCRIBE` (default on) + `_FFMPEG_BIN` /
+`_WHISPER_BIN` / `_WHISPER_MODEL` path overrides (defaults are homebrew paths -
+launchd's minimal PATH never resolves bare names). Model choice matters:
+tiny/base/small all garbled a true WHISPER (low-energy speech); large-v3-turbo
+transcribed it correctly (verified 2026-08-08). Telegram caps bot downloads at
+20MB (~20 min of voice).
+
 ## Usage-limit model failover
 
 A topic-Claude that exhausts its model's PLAN quota (HTTP 429) would otherwise
