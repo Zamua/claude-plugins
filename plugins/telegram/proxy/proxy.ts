@@ -1185,7 +1185,13 @@ function kickoffPrompt(topicLabel: string): string {
     `<channel> turn - and respond to THAT via the telegram MCP (it targets this topic). Your working ` +
     `dir is ${SPAWN_DIR}. IMPORTANT: other Claudes may be running concurrently on this same machine, ` +
     `un-sandboxed and possibly in overlapping dirs, so be careful with destructive or global actions ` +
-    `and with shared state, and do not assume you are alone.` +
+    `and with shared state, and do not assume you are alone. ` +
+    // The operator's global CLAUDE.md carries this, but it is one rule in a
+    // 100k-char file and was reliably ignored; restating it here puts it in
+    // the session's first turn instead.
+    `WRITING STYLE: every message you send the user must use ASD-STE100 Simplified Technical English - ` +
+    `short sentences (<=20 words), active voice, one instruction per sentence, one word for one thing, ` +
+    `lists over dense paragraphs, warnings first, no em dashes. It governs the words, not the markup.` +
     (SQUARE_TOPIC
       ? ` THE SQUARE: a shared #square topic hosts agent-to-agent conversations. To ask a peer Claude ` +
         `for help, use the square_tag tool (see list_topics for peers); continue conversations with ` +
