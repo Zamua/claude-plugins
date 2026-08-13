@@ -1381,15 +1381,23 @@ const VOICE_TAG = '[voice note, auto-transcribed; may contain errors]'
 // "502"->"500 too", "namespace"->"namaspace". The glossary fixed most of them
 // with no model change. Keep it SHORT - whisper's prompt window is ~224
 // tokens, and a bloated list dilutes the bias rather than sharpening it.
-const VOICE_GLOSSARY = process.env.TELEGRAM_TOPICS_WHISPER_PROMPT ?? [
-  'e2e', 'CI', 'PR', 'repo', 'staging', 'prod', 'semver', 'ghcr', 'MCP', 'API',
-  'CLI', 'JSON', 'YAML', 'regex', 'ripgrep', 'async', 'await', 'TODO',
-  'kubectl', 'namespace', 'k3s', 'traefik', 'nginx', 'MinIO', 'podman', 'colima', 'tmux',
-  'launchd', 'pm2', 'caddy', 'tailscale', 'herdr', 'PostgreSQL', 'SQLite',
-  'slatedb', 'Hetzner', 'Oracle', 'Cloudflare', 'OpenTofu', 'ansible',
-  'hostthis', 'prepcards', 'boardtogether', 'pokerchips', 'jamshelf', 'shale',
-  'openpilot', 'whisper', 'Claude', 'opus', 'sonnet', 'fable',
-].join(', ')
+// A bare word list is NOT enough for terms whose spoken form differs from the
+// written one: "CLAUDE.md" is said "claude dot em dee", and listing the token
+// alone still produced "clot md". Embedding the term in a natural SENTENCE
+// fixed it, so the prompt ends with prose, not just commas.
+const VOICE_GLOSSARY = process.env.TELEGRAM_TOPICS_WHISPER_PROMPT ?? (
+  [
+    'e2e', 'CI', 'PR', 'repo', 'staging', 'prod', 'semver', 'ghcr', 'MCP', 'API',
+    'transcription', 'glossary', 'CLI', 'JSON', 'YAML', 'regex', 'ripgrep',
+    'async', 'await', 'TODO', 'kubectl', 'namespace', 'k3s', 'traefik', 'nginx',
+    'MinIO', 'podman', 'colima', 'tmux', 'launchd', 'pm2', 'caddy', 'tailscale',
+    'herdr', 'PostgreSQL', 'SQLite', 'slatedb', 'Hetzner', 'Oracle',
+    'Cloudflare', 'OpenTofu', 'ansible', 'hostthis', 'prepcards',
+    'boardtogether', 'pokerchips', 'jamshelf', 'shale', 'openpilot', 'whisper',
+    'Claude', 'opus', 'sonnet', 'fable',
+  ].join(', ')
+  + '. Update the CLAUDE.md file, run the e2e tests, then check the CI logs.'
+)
 
 function run(bin: string, args: string[], timeoutMs: number): Promise<string | null> {
   return new Promise(resolve => {
