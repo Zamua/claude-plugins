@@ -1375,6 +1375,22 @@ const WHISPER_MODEL = process.env.TELEGRAM_TOPICS_WHISPER_MODEL
   ?? join(homedir(), '.local/share/whisper-models/ggml-large-v3-turbo-q5_0.bin')
 const VOICE_TAG = '[voice note, auto-transcribed; may contain errors]'
 
+// Vocabulary bias for the decoder. Whisper conditions on this text, so naming
+// the stack's jargon fixes the words a general model reliably mangles:
+// measured on synthesized speech, "kubectl"->"cubectal", "traefik"->"Trifik",
+// "502"->"500 too", "namespace"->"namaspace". The glossary fixed most of them
+// with no model change. Keep it SHORT - whisper's prompt window is ~224
+// tokens, and a bloated list dilutes the bias rather than sharpening it.
+const VOICE_GLOSSARY = process.env.TELEGRAM_TOPICS_WHISPER_PROMPT ?? [
+  'e2e', 'CI', 'PR', 'repo', 'staging', 'prod', 'semver', 'ghcr', 'MCP', 'API',
+  'CLI', 'JSON', 'YAML', 'regex', 'ripgrep', 'async', 'await', 'TODO',
+  'kubectl', 'namespace', 'k3s', 'traefik', 'nginx', 'MinIO', 'podman', 'colima', 'tmux',
+  'launchd', 'pm2', 'caddy', 'tailscale', 'herdr', 'PostgreSQL', 'SQLite',
+  'slatedb', 'Hetzner', 'Oracle', 'Cloudflare', 'OpenTofu', 'ansible',
+  'hostthis', 'prepcards', 'boardtogether', 'pokerchips', 'jamshelf', 'shale',
+  'openpilot', 'whisper', 'Claude', 'opus', 'sonnet', 'fable',
+].join(', ')
+
 function run(bin: string, args: string[], timeoutMs: number): Promise<string | null> {
   return new Promise(resolve => {
     execFile(bin, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
@@ -1400,7 +1416,9 @@ async function transcribeVoice(fileId: string): Promise<string | null> {
       log('voice transcription: ffmpeg failed')
       return null
     }
-    const out = await run(WHISPER_BIN, ['-m', WHISPER_MODEL, '-f', wav, '--no-timestamps'], 120_000)
+    const whisperArgs = ['-m', WHISPER_MODEL, '-f', wav, '--no-timestamps']
+    if (VOICE_GLOSSARY.trim()) whisperArgs.push('--prompt', VOICE_GLOSSARY)
+    const out = await run(WHISPER_BIN, whisperArgs, 120_000)
     if (out === null) {
       log('voice transcription: whisper-cli failed')
       return null
