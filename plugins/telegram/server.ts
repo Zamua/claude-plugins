@@ -369,6 +369,15 @@ process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 process.on('SIGHUP', shutdown)
 
+// Orphan watchdog: the stdin events above don't reliably fire on a hard CLI
+// death (SIGKILL, OOM). Stdin is the MCP transport pipe from the CLI; the
+// kernel closes it on any CLI death, so poll it. Without this a surviving MCP
+// keeps long-polling /poll and steals the topic's messages from the live
+// session's MCP.
+setInterval(() => {
+  if (process.stdin.destroyed || process.stdin.readableEnded) shutdown()
+}, 5000).unref()
+
 // The proxy holds each long-poll for ~25s; without a client-side timeout a
 // proxy that accepts the socket but never responds would hang the loop forever
 // and the topic would go deaf. A 30s AbortSignal caps each request; an abort is

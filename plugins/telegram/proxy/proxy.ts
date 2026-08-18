@@ -41,7 +41,7 @@ import {
 } from 'fs'
 import { homedir } from 'os'
 import { join, extname, sep } from 'path'
-import { spawnSync, execFile } from 'child_process'
+import { spawnSync, execFile, execFileSync } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
 
@@ -1777,8 +1777,14 @@ try {
   const stale = parseInt(readFileSync(PID_FILE, 'utf8'), 10)
   if (stale > 1 && stale !== process.pid) {
     process.kill(stale, 0) // throws if the pid is dead - nothing to replace
-    log(`replacing stale proxy pid=${stale}`)
-    process.kill(stale, 'SIGTERM')
+    // PID files race with OS PID recycling: verify the holder is actually a
+    // proxy process before SIGTERM, so a recycled pid can't aim the kill at
+    // an unrelated process.
+    const cmd = execFileSync('ps', ['-p', String(stale), '-o', 'args='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    if (cmd.includes('proxy.ts')) {
+      log(`replacing stale proxy pid=${stale}`)
+      process.kill(stale, 'SIGTERM')
+    }
   }
 } catch {}
 writeFileSync(PID_FILE, String(process.pid))
