@@ -60,36 +60,6 @@ these apart from tone, and will assume everything is equally certain.
 overstated, say which part and why, rather than quietly explaining it
 differently.
 
-## Language
-
-Write the re-explanation in Simplified Technical English, ASD-STE100. That
-standard exists for readers who must understand a system they did not build,
-which is this reader exactly.
-
-The parts that matter here:
-
-- **One word, one meaning.** Choose one term per thing and reuse it. Do not vary
-  the wording for elegance. A second word for the same thing reads as a second
-  thing.
-- **Short sentences.** Twenty words at most when you describe a sequence of
-  steps, twenty-five when you describe how something works. Split anything
-  longer.
-- **One idea per sentence.** Do not join a cause and its consequence with a
-  comma.
-- **Active voice, present tense.** "The handler writes the status", not "the
-  status is written".
-- **Keep the articles.** "The record", not "record". A dropped article makes a
-  sentence read as a label.
-- **Short noun clusters.** Three words at most. Break a longer one with a
-  preposition.
-
-STE permits Technical Names and Technical Verbs outside its core vocabulary. So
-it reinforces the vocabulary rule above rather than fighting it: the codebase's
-own model names are the terms STE expects you to keep.
-
-STE limits how you write. It does not license writing less. The facts, the names
-and the numbers all stay.
-
 ## Shape
 
 Roughly this, trimmed to what the question needs:

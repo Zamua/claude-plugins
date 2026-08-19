@@ -24,7 +24,6 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   diagnoses why the first attempt failed, defines each term on first use, keeps
   the codebase's own vocabulary, runs one concrete example the whole way through,
   and separates what is settled from what is broken from what nobody has decided.
-  Writes the result in Simplified Technical English (ASD-STE100).
 
 ## License
 
