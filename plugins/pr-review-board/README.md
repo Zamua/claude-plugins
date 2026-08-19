@@ -3,9 +3,10 @@
 React to a pull request with 👀 and a background Claude reviews it.
 
 A local poller watches GitHub for reactions **you** added in the last few minutes,
-then spawns one read-only review agent per changeset in its own herdr workspace. Each
-pull request gets a live hunkt diff you can read, annotated inline, plus a report
-written in plain English. Nothing is ever posted to GitHub.
+then spawns one review agent per changeset in its own herdr workspace. Each pull
+request gets a live hunkt diff you can read, annotated inline, plus a report written
+in plain English. The agent finishes by proposing a numbered list of comments and
+posts only the ones you pick.
 
 ```
 you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
@@ -14,9 +15,11 @@ you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
                                   ├─ clones + worktrees the PR head
                                   ├─ one tab per PR: a watched hunkt diff
                                   ├─ reviews it, proves bugs with failing tests
-                                  └─ annotates the diff + writes REVIEW.md
+                                  ├─ annotates the diff + writes REVIEW.md
+                                  └─ proposes numbered comments, then waits
 PR gets new commits       ─▶  the agent re-syncs the diff and revises everything
 you ask it questions      ─▶  it answers in its pane
+you reply "post 1, 3"     ─▶  it posts those two, signed off, and nothing else
 you run /pr-review-board:cleanup  ─▶  archived report, everything else torn down
 ```
 

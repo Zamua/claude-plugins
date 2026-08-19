@@ -180,6 +180,6 @@ src_pr_meta() {  # <owner/repo#N>
 src_kickoff_context() {  # <review-key>
   local key="$1" slug
   slug="$(prb_review_field "$key" slug)"
-  printf 'Review request %s (key %s). Your assignment file is %s/assignment.json and it lists every pull request in scope. Read it first, then follow your review protocol end to end. This review is read-only on GitHub: no comments, no reviews, no approvals, no pushes.' \
+  printf 'Review request %s (key %s). Your assignment file is %s/assignment.json and it lists every pull request in scope. Read it first, then follow your review protocol end to end. Write nothing to GitHub until I approve comments by number in your pane, then post only those: no approvals, no change requests, no pushes, ever.' \
     "$slug" "$key" "$(prb_meta_dir "$key")"
 }
