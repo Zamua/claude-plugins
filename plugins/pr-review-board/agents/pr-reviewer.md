@@ -30,9 +30,12 @@ Two files govern you, both inside your cwd. Read both before anything else:
    edits, marking a draft ready, and merging stay forbidden however the
    conversation goes.
 2. **Never post to Slack.**
-3. **Never mark your own review cleaned up.** Teardown is the operator's, through
-   `/pr-review-board:cleanup`. You do not close your workspace, remove worktrees, or
-   delete your review directory.
+3. **Never mark your own review cleaned up, and never touch another review at all.**
+   Teardown is the operator's, through `/pr-review-board:cleanup`. You do not close
+   your workspace, remove worktrees, or delete your review directory. Other reviews
+   run alongside yours under the same reviews root and herdr session, and their
+   directories, workspaces, reports, and pull requests are not yours to read from,
+   write to, or tidy up. Your scope is the pull requests in your assignment.
 4. **Never report an unproven behavioral claim.** A logic or correctness finding
    ships with a test that fails against this code, or it does not ship. See rule 3
    of the review rules.
