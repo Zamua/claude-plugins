@@ -6,8 +6,15 @@
 #   cleanup.sh plan  <key|slug|owner/repo#N|pr-url>
 #   cleanup.sh apply <key|slug|owner/repo#N|pr-url> --yes
 #
-# apply, in order: archive the report, close the herdr workspace, remove each
-# worktree, delete the review directory, mark the review CLEANEDUP.
+# apply, in order: archive the report, mark the review CLEANEDUP, remove each
+# worktree, delete the review directory and its metadata, close the herdr workspace.
+#
+# The mark comes before the destruction and the workspace close comes last, both for
+# the same reason: closing a workspace kills every pane in it, so a cleanup run from
+# inside the review's own workspace used to die midway with the review still ACTIVE
+# and its agent gone, which the next poll pass read as a crashed agent and resumed.
+# That case is now refused outright, and any other mid-run death leaves a review that
+# is terminal rather than one that comes back.
 #
 # CLEANEDUP is terminal. The poller never resurrects a cleaned-up review, so a later
 # reaction on one of its pull requests starts a fresh review instead.
@@ -87,8 +94,7 @@ cmd_plan() {
   else
     printf '  archive   (no REVIEW.md found; nothing to keep)\n'
   fi
-  local ws; ws="$(prb_review_field "$key" herdr_workspace)"
-  printf '  close     herdr workspace %s\n' "${ws:-none}"
+  printf '  state     mark %s CLEANEDUP (terminal, before anything destructive)\n' "$key"
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
     owner="$(_c_owner_repo "$wt" || true)"
@@ -96,7 +102,12 @@ cmd_plan() {
   done < <(_c_worktrees "$key")
   printf '  delete    %s\n' "$dir"
   printf '  delete    %s   (cached diffs, assignment, pane ids)\n' "$(prb_meta_dir "$key")"
-  printf '  state     mark %s CLEANEDUP (terminal)\n' "$key"
+  local ws; ws="$(prb_review_field "$key" herdr_workspace)"
+  if [ -n "$ws" ] && [ "$ws" = "${HERDR_WORKSPACE_ID:-}" ]; then
+    printf '  close     herdr workspace %s   SKIPPED: it is the one you are running in\n' "$ws"
+  else
+    printf '  close     herdr workspace %s   (last; it takes every pane with it)\n' "${ws:-none}"
+  fi
   printf '\nNothing above has happened yet. Run: cleanup.sh apply %s --yes\n' "$key"
 }
 
@@ -118,8 +129,14 @@ cmd_apply() {
     cp "$dir/REVIEW.md" "$arch/$slug.md" && prb_log "archived report to $arch/$slug.md"
   fi
 
-  # 2. The workspace, which takes the agent pane and the report pane with it.
-  rt_close_workspace "$key"
+  # 2. Terminal state, BEFORE anything destructive. The pull request bindings stay,
+  # so status still explains where a pull request went, but the poller will not
+  # resurrect it. Order matters: a teardown that dies partway used to leave the
+  # review ACTIVE with its workspace already gone, which the next pass read as an
+  # agent that had died and resumed, re-cloning everything just deleted.
+  prb_review_set_field "$key" status CLEANEDUP
+  prb_review_set_field "$key" cleaned_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  prb_log "review '$key' is CLEANEDUP"
 
   # 3. Worktrees, then their administrative entries.
   while IFS= read -r wt; do
@@ -149,11 +166,16 @@ cmd_apply() {
     "$(prb_reviews_root)"/.pr-review-board/?*) [ -d "$meta" ] && rm -rf "$meta" && prb_log "deleted $meta" ;;
   esac
 
-  # 6. Terminal state. The pull request bindings stay, so status still explains
-  # where a pull request went, but the poller will not resurrect it.
-  prb_review_set_field "$key" status CLEANEDUP
-  prb_review_set_field "$key" cleaned_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  prb_log "review '$key' is CLEANEDUP"
+  # 6. The workspace, last, because closing it takes every pane inside it. When the
+  # caller is one of those panes, closing it kills this process, so that case is
+  # refused rather than obeyed: everything above is already done, and one leftover
+  # workspace the operator closes by hand beats a teardown that cannot finish.
+  local ws; ws="$(prb_review_field "$key" herdr_workspace)"
+  if [ -n "$ws" ] && [ "$ws" = "${HERDR_WORKSPACE_ID:-}" ]; then
+    prb_log "workspace $ws is the one you are running in, so it is left open; close it with 'herdr workspace close $ws' once you are done"
+  else
+    rt_close_workspace "$key"
+  fi
 }
 
 case "${1:-help}" in
