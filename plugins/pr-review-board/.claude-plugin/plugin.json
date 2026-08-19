@@ -1,7 +1,7 @@
 {
   "name": "pr-review-board",
   "description": "React to a pull request with an emoji and a background Claude reviews it. A local poller watches GitHub for reactions you added, then spawns one read-only review agent per changeset in its own herdr workspace: a watched hunkt diff per PR with inline annotations, plus a plain-English report. Never comments, never approves, never pushes.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": {
     "name": "Zamua"
   },

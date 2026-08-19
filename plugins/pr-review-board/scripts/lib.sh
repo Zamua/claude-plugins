@@ -110,7 +110,10 @@ prb_last_poll()     { prb_state_read '.last_poll // 0'; }
 prb_set_last_poll() { prb_state_edit '.last_poll = ($t|tonumber)' --arg t "$1"; }
 
 prb_review_json()   { prb_state_read --arg k "$1" '.reviews[$k] // empty'; }
-prb_review_field()  { prb_state_read --arg k "$1" --arg f "$2" '.reviews[$k][$f] // empty'; }
+# `// empty` would swallow a literal false, since jq treats false as absent, so a
+# boolean field set to false would read back as "" and mislead any caller testing for
+# the string "false".
+prb_review_field()  { prb_state_read --arg k "$1" --arg f "$2" '.reviews[$k][$f] | if . == null then empty else . end'; }
 prb_review_status() { local s; s="$(prb_review_field "$1" status)"; [ -n "$s" ] && printf '%s' "$s" || printf 'ABSENT'; }
 prb_review_keys()   { prb_state_read '.reviews | keys[]'; }
 prb_active_keys()   { prb_state_read '.reviews | to_entries[] | select(.value.status=="ACTIVE") | .key'; }
