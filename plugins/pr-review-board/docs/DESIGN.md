@@ -1,0 +1,170 @@
+# pr-review-board — design
+
+One persistent operator session plus N ephemeral review agents, each bound to one
+changeset. The trigger, the review, and the artifacts all live where the code does.
+Nothing runs in the cloud and nothing is ever written to GitHub.
+
+## Goals
+
+- A one-gesture trigger on the object being reviewed: react to a pull request, get a
+  review. No channel to scope, no token to mint, no issue to file.
+- A review that stays current. Pull requests move, so the diff, the annotations, and
+  the report are refreshed rather than regenerated.
+- Findings that are true. A behavioral claim ships with a test that fails against the
+  reviewed code, or it does not ship.
+- A hard read-only boundary. The blast radius of a runaway agent is its own directory.
+- Teardown that is always the operator's decision.
+
+## Verified tool behaviour
+
+These were established empirically against the installed versions. They are the
+reason the design looks the way it does.
+
+**GitHub reactions (GraphQL).** There is no reverse lookup for "things the viewer
+reacted to", so eligibility is a candidate scan plus a per-candidate check. Narrowing
+with `reactions:>0` and reading `viewerHasReacted` keeps a whole pass at **1
+rate-limit point per page**, and one page holds 100 pull requests. Reaction nodes
+carry `createdAt`, which is what makes a freshness window possible without any stored
+watermark. `baseRefName` arrives in the same query, so stack detection is free.
+Filtering on the viewer is essential: bots react to pull requests constantly, and a
+bot 👀 is indistinguishable from a human one by count alone.
+
+**hunkt 0.18.0.**
+- `hunkt session reload` accepts only `diff` and `show`. Handed a patch session it
+  does **not** error; it silently reloads as a working-tree diff of the cwd and the
+  review is gone. Never call it on a patch session.
+- `hunkt patch <file> --watch` reloads when the file is rewritten, **and inline notes
+  survive the reload**. So the refresh path is "rewrite the patch file", which is why
+  the diff is a file rather than a pipe. `gh pr diff | hunkt patch` reads better but
+  cannot be refreshed.
+- A patch session reports no repo, so `--repo` cannot select it. Every
+  `hunkt session` call needs the explicit session id, captured at open time by
+  matching the launch cwd plus the patch basename.
+- Notes survive a reload but line anchors do not follow a force-push, so anchors are
+  re-derived after every sync.
+
+**herdr 0.7.5.** `agent start` attaches to an existing pane already at a shell
+prompt and derives the executable from `--kind`, so a launch is three calls:
+`workspace create`, `agent start`, `agent prompt`. A fresh pane answers
+`agent_pane_busy` until its shell is up, so that one error is retried and no other is.
+Inside a pane the injected socket already points at the right server, so `--session`
+is passed only from outside one.
+
+## Roles
+
+**Poller.** Deliberately thin. It decides which pull requests the operator asked for,
+groups them into reviews, writes the assignment, and brings an agent up. It never
+clones, never diffs, never builds layout. `poll.sh once` is the whole scheduled unit.
+
+**Review agent.** One per review. Owns everything object-level: clones, worktrees,
+hunkt tabs, tests, annotations, the report, and the monitor loop. It is read-only on
+GitHub and cannot tear itself down.
+
+**Operator.** Reacts to pull requests, reads reports, asks questions, and is the only
+actor that tears a review down or acts on a finding.
+
+## Trigger
+
+A pull request is eligible when the viewer added the configured reaction to its body
+at or after the cutoff:
+
+```
+cutoff = min(now - spawn_window_seconds, last_successful_poll)
+```
+
+Equivalently the window is `max(configured, time since the last successful pass)`. The
+floor stops a historical reaction from ever spawning. The widening stops a slept-through
+reaction from being dropped. A failed scan leaves the watermark alone, so an outage
+delays reviews instead of losing them. With no recorded pass, day one uses the flat
+floor and ignores all history.
+
+Reactions on comments are not triggers. The gesture is on the pull request itself.
+
+## Grouping
+
+Sequential, oldest reaction first, with each new review immediately visible to the
+rest of the pass. That makes intra-batch grouping fall out of the same rule as
+joining an existing review, so there is no connected-components pass and no
+coalescing timer.
+
+A fresh pull request joins an **ACTIVE** review when either holds:
+
+- **chain** — its base is a member's head, or its head is a member's base
+- **tracker id** — its branch carries the same id as a member's, matched only at the
+  start of the branch or right after a `/`
+
+Otherwise it opens its own review. A review that grows past one pull request is
+promoted to an umbrella directory named for the pull request that opened it. The
+review **key** never changes, because pull request bindings point at it; only the slug,
+directory, and workspace label do. The herdr agent name is therefore assigned once and
+read back from state forever after — recomputing it from a promoted slug would orphan
+the live agent and leave the review permanently `stopped`.
+
+## Layout
+
+One herdr workspace per review, labelled with the slug. Tab 1 holds the review agent.
+The agent adds one tab per pull request, each running a watched hunkt diff, because the
+pull request set can grow while the review is live.
+
+## Directories
+
+- Single pull request: `<reviews_root>/<repo>-<number>/`, which is also the worktree.
+- Several: an umbrella `<reviews_root>/<slug>-<anchor>/` with one worktree per pull
+  request inside, and the report at the umbrella root.
+
+The report and any scratch tests sit untracked inside a checkout, which is correct:
+a review checkout is evidence, not a branch being prepared. They are deliberately
+**not** hidden with an exclude file, because a linked worktree has no per-worktree
+`info/exclude` — git honours only the shared one, so hiding them would mean editing
+the operator's canonical clone. Everything the harness itself writes lives in the
+metadata directory instead, so `git status` in a checkout only ever shows the
+reviewer's own work.
+
+## State
+
+`~/.config/pr-review-board/state.json`, with `last_poll`, a `reviews` map keyed by
+review, and a `pr_index` so a pull request belongs to at most one live review. Every
+mutation goes through a temp file, so a crash mid-write cannot truncate the store.
+
+Per-review harness data lives in `<reviews_root>/.pr-review-board/<key>/`: the
+assignment, the patch files, and the live hunkt session ids. That location is
+deliberately **outside** the review directory, because for a single-pull-request
+review the review directory *is* a git worktree, and `git worktree add` accepts an
+existing empty directory but refuses a non-empty one. Keeping metadata out means the
+checkout starts empty, nothing pollutes `git status` but the report, and promotion to
+an umbrella is a plain `git worktree move`.
+
+The assignment is rewritten in full on every scope change, so the agent always reads
+the current picture rather than replaying a diff.
+
+`status` is `ACTIVE` or `CLEANEDUP`. `CLEANEDUP` is terminal and the record is kept, so
+`status` still explains where a pull request went. A new reaction on a cleaned-up pull
+request opens a fresh review under a new key rather than reviving the old one.
+
+## Concurrency
+
+`cap` bounds concurrent reviews; the rest wait for the next pass. A `mkdir` lock makes
+a pass single-flight, and a lock left by a dead pass is reclaimed. Review identity is
+the herdr agent name, so a pass that overlaps a launch adopts rather than duplicates.
+An `ACTIVE` review whose agent died is resumed with `claude --resume`, which is the
+same decision as a first launch and goes through the same loop.
+
+## Safety
+
+- A review never writes to GitHub. That is stated in the persona, in the shared review
+  rules, and in the kickoff prompt.
+- Teardown refuses without `--yes`, refuses to delete outside the reviews root, reads
+  a worktree's owning clone from git rather than guessing, and archives the report
+  before removing anything.
+- Canonical clones are only ever fetched from and worktree'd; their branches and
+  working trees are left alone.
+- Only reactions by the configured viewer count, so nobody else can dispatch an agent
+  on the operator's machine.
+
+## Build and rollout
+
+1. Local build, `claude plugin validate`, load with `--plugin-dir`.
+2. Dry run with `"runtime": "stub"`: `poll.sh fresh` and `poll.sh once` exercise the
+   trigger, grouping and assignment without launching anything.
+3. One real review end to end at `cap: 1`, driven by `poll.sh spawn <pr>`.
+4. Arm the scheduler with `poll.sh install`, and only after step 3 looked right.

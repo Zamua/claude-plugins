@@ -19,6 +19,11 @@
       "name": "reexplain",
       "source": "./plugins/reexplain",
       "description": "Re-explain what you just said, for a reader who is not a domain expert. Rebuilds the explanation from first principles instead of compressing it: defines each term on first use, keeps the domain's own vocabulary, runs one concrete example all the way through, and separates what is settled from what is broken from what nobody has decided."
+    },
+    {
+      "name": "pr-review-board",
+      "source": "./plugins/pr-review-board",
+      "description": "React to a pull request with an emoji and a background Claude reviews it: a local poller spawns one read-only review agent per changeset in its own herdr workspace, with a watched hunkt diff per PR, inline annotations, and a plain-English report. Never comments, approves, or pushes."
     }
   ]
 }

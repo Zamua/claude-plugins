@@ -1,0 +1,24 @@
+{
+  "source": "github-reactions",
+  "runtime": "herdr",
+  "orgs": [],
+  "reaction": "EYES",
+  "spawn_window_seconds": 600,
+  "search_extra": "",
+  "issue_key_pattern": "[a-z]{2,4}-[0-9]+",
+  "cap": 3,
+  "poll_seconds": 90,
+  "reviews_root": "",
+  "workspace_root": "",
+  "herdr_session": "pr-review-board",
+  "agent_kind": "claude",
+  "agent_cmd": [
+    "claude"
+  ],
+  "worker_subagent": "pr-reviewer",
+  "permission_mode": "acceptEdits",
+  "dangerously_skip": false,
+  "plugin_dir": "",
+  "gh_login": "",
+  "house_rules": ""
+}

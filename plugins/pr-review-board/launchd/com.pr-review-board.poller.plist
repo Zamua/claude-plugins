@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template. `poll.sh install` substitutes @LABEL@ / @POLL@ / @INTERVAL@ / @LOG@
+     and loads it as a per-user LaunchAgent. Do not edit the installed copy by
+     hand; re-run `poll.sh install` after changing poll_seconds. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@POLL@</string>
+    <string>once</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>@INTERVAL@</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>@LOG@</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG@</string>
+  <!-- Do NOT SIGKILL the pass's children on exit: the shared herdr server is
+       detached and must outlive the short-lived pass. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+</dict>
+</plist>
