@@ -50,6 +50,21 @@ prompt and derives the executable from `--kind`, so a launch is three calls:
 Inside a pane the injected socket already points at the right server, so `--session`
 is passed only from outside one.
 
+**Claude Code permissions.** A read outside the agent's cwd raises a prompt that a
+background worker has nobody to answer, so the cwd is the reviews **root** and
+everything the agent needs — assignment, a copy of the review rules, every checkout —
+lives under it. `bypassPermissions` and `--dangerously-skip-permissions` are both
+dead ends here: each is gated behind a one-time interactive acceptance screen, so the
+worker exits within seconds instead of starting. An explicit `acceptEdits` is also
+worse than passing nothing, being more restrictive than a default `auto` mode for
+outside-cwd reads. Passing no permission flag at all is correct.
+
+**GitHub search index lag.** `reactions:>0` is an indexed qualifier, so a reaction is
+not immediately visible to the candidate scan — observed at several seconds. The
+freshness window absorbs it: the reaction stays eligible for the whole window, so the
+next pass picks it up. This is why the trigger tolerates a slow index without any
+retry logic.
+
 ## Roles
 
 **Poller.** Deliberately thin. It decides which pull requests the operator asked for,

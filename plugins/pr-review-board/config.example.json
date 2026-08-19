@@ -10,13 +10,13 @@
   "poll_seconds": 90,
   "reviews_root": "",
   "workspace_root": "",
-  "herdr_session": "pr-review-board",
+  "herdr_session": "reviews",
   "agent_kind": "claude",
   "agent_cmd": [
     "claude"
   ],
   "worker_subagent": "pr-reviewer",
-  "permission_mode": "acceptEdits",
+  "permission_mode": "",
   "dangerously_skip": false,
   "plugin_dir": "",
   "gh_login": "",
