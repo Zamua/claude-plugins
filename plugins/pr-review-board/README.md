@@ -3,21 +3,21 @@
 React to a pull request with 👀 and a background Claude reviews it.
 
 A local poller watches GitHub for reactions **you** added in the last few minutes,
-then spawns one review agent per changeset in its own herdr workspace. Each pull
-request gets a live hunkt diff you can read, annotated inline, plus a report written
-in plain English. The agent finishes by proposing a numbered list of comments and
-posts only the ones you pick.
+then spawns one review agent per changeset in its own herdr workspace. The report
+lands in a pane beside the agent, live in nvim as it is written, linked to the pull
+request and to every line it calls out. The agent finishes by proposing a numbered
+list of comments and posts only the ones you pick.
 
 ```
 you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
                                   │
                                   ├─ new herdr workspace, one review agent
                                   ├─ clones + worktrees the PR head
-                                  ├─ one tab per PR: a watched hunkt diff
+                                  ├─ splits its pane: REVIEW.md live in nvim
                                   ├─ reviews it, proves bugs with failing tests
-                                  ├─ annotates the diff + writes REVIEW.md
+                                  ├─ writes REVIEW.md as it goes, linked to the PR
                                   └─ proposes numbered comments, then waits
-PR gets new commits       ─▶  the agent re-syncs the diff and revises everything
+PR gets new commits       ─▶  the agent re-reads the diff and revises everything
 you ask it questions      ─▶  it answers in its pane
 you reply "post 1, 3"     ─▶  it posts those two, signed off, and nothing else
 you run /pr-review-board:cleanup  ─▶  archived report, everything else torn down
@@ -38,7 +38,7 @@ matters because bots react to pull requests constantly.
 
 Or develop locally: `claude --plugin-dir /path/to/pr-review-board`.
 
-Requires `gh` (authenticated), `herdr`, `hunkt`, `jq`, `git`, and a Bash shell.
+Requires `gh` (authenticated), `herdr`, `nvim`, `jq`, `git`, and a Bash shell.
 macOS uses launchd; other platforms use cron.
 
 ## Configure

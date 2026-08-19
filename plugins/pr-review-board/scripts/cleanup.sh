@@ -95,7 +95,7 @@ cmd_plan() {
     printf '  worktree  remove %s   (from %s)\n' "$wt" "${owner:-unknown}"
   done < <(_c_worktrees "$key")
   printf '  delete    %s\n' "$dir"
-  printf '  delete    %s   (patches, assignment, hunkt session ids)\n' "$(prb_meta_dir "$key")"
+  printf '  delete    %s   (cached diffs, assignment, pane ids)\n' "$(prb_meta_dir "$key")"
   printf '  state     mark %s CLEANEDUP (terminal)\n' "$key"
   printf '\nNothing above has happened yet. Run: cleanup.sh apply %s --yes\n' "$key"
 }
@@ -118,7 +118,7 @@ cmd_apply() {
     cp "$dir/REVIEW.md" "$arch/$slug.md" && prb_log "archived report to $arch/$slug.md"
   fi
 
-  # 2. The workspace, which takes the agent pane and every hunkt tab with it.
+  # 2. The workspace, which takes the agent pane and the report pane with it.
   rt_close_workspace "$key"
 
   # 3. Worktrees, then their administrative entries.

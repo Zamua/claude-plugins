@@ -4,7 +4,7 @@
 # Every review runs inside ONE shared herdr session (config `herdr_session`).
 # Each review gets its OWN workspace, labelled with the review slug, whose first
 # tab holds the review agent. The worker adds one further tab per pull request and
-# runs a watched hunkt diff there; the harness does not build that layout, because
+# splits its own pane for the report there; the harness does not build that layout, because
 # the pull request set can grow while the review is live.
 #
 # Review identity for status and reap is the herdr AGENT NAME, derived
@@ -189,7 +189,7 @@ rt_resume() {  # <key> ; 2 = no saved session
     return 1
   fi
   prb_review_set_field "$key" herdr_workspace "$ws"
-  _rt_prompt "$name" "Resumed. Re-open the hunkt diff for each pull request in your assignment, re-check every pull request and thread for activity since your last pass, and continue. Do not redo finished work."
+  _rt_prompt "$name" "Resumed. Re-open your report pane, re-check every pull request and thread for activity since your last pass, and continue. Do not redo finished work."
   prb_log "resumed $key (workspace=$ws claude=$sid)"
 }
 
@@ -210,7 +210,7 @@ rt_relabel() {  # <key> <label>
 }
 
 # Teardown, for the cleanup skill only. Closing the workspace takes the agent pane
-# and every hunkt tab with it.
+# and the report pane with it.
 rt_close_workspace() {  # <key>
   local ws s; ws="$(prb_review_field "$1" herdr_workspace)"; s="$(_rt_session)"
   [ -n "$ws" ] || { prb_log "close $1: no recorded workspace"; return 0; }
