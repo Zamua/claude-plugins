@@ -106,6 +106,11 @@ _write_assignment() {  # <key>
   [ -n "$dir" ] || return 1
   meta="$(prb_meta_dir "$key")"
   mkdir -p "$meta" || return 1
+  # Ship the review rules INTO the review workspace. The agent's cwd is the reviews
+  # root, so a copy here is readable without a permission prompt; the canonical doc
+  # in the plugin directory is outside any agent cwd and reading it stalls a
+  # background worker that has nobody to approve it.
+  [ -f "$HERE/../docs/REVIEW-RULES.md" ] && cp "$HERE/../docs/REVIEW-RULES.md" "$meta/REVIEW-RULES.md"
   f="$meta/assignment.json"
   prb_state_read --arg k "$key" \
       --arg meta "$meta" \
@@ -114,7 +119,8 @@ _write_assignment() {  # <key>
       --arg house "$(prb_get house_rules "")" '
     .reviews[$k]
     | { key: $k, slug: .slug, dir: .dir, multi: (.multi // false),
-        meta_dir: $meta, status: .status, created_at: .created_at,
+        meta_dir: $meta, rules: ($meta + "/REVIEW-RULES.md"),
+        status: .status, created_at: .created_at,
         reviews_root: $reviews_root, workspace_root: $workspace_root,
         house_rules: $house,
         prs: [ .prs[]? as $p

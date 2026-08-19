@@ -57,18 +57,25 @@ set:
 | `poll_seconds` | `90` | scheduler interval |
 | `reviews_root` | `~/workspace/reviews` | where review directories live |
 | `workspace_root` | `~/workspace` | where canonical clones live |
-| `herdr_session` | `pr-review-board` | the shared herdr session reviews run in |
+| `herdr_session` | `reviews` | the shared herdr session reviews run in; created on demand |
 | `runtime` | `herdr` | `stub` records what would happen and launches nothing |
 | `issue_key_pattern` | `[a-z]{2,4}-[0-9]+` | tracker id in a branch, used to group cross-repo pull requests |
-| `permission_mode` | `acceptEdits` | the workers' permission mode |
+| `permission_mode` | `""` | passed as `--permission-mode` when set; empty means inherit yours |
 | `dangerously_skip` | `false` | add `--dangerously-skip-permissions` |
 | `house_rules` | `""` | extra text handed to every worker |
 
-> **Unattended autonomy:** a background worker cannot answer permission prompts, so
-> fully hands-off needs `permission_mode: "bypassPermissions"` or
-> `dangerously_skip: true`. The blast radius is bounded by design — a review never
-> writes to GitHub and only ever touches its own directory — but turn it on
-> deliberately, and start with a small `cap`.
+> **Permissions.** A background worker cannot answer a permission prompt, so leave
+> `permission_mode` empty and let it inherit yours. Two traps:
+>
+> - **Do not reach for `bypassPermissions` or `dangerously_skip`.** Both are gated
+>   behind a one-time interactive "I accept" screen that a background agent cannot
+>   clear: it exits after a few seconds and the review never starts.
+> - **Setting `permission_mode: "acceptEdits"` is worse than setting nothing**, since
+>   it is more restrictive than a default `auto` mode for reads outside the cwd.
+>
+> The agent's cwd is `reviews_root`, so its assignment, its rules copy and every
+> checkout are all inside one directory and nothing it needs sits outside it. That,
+> not a permission flag, is what makes unattended review work.
 
 ## Run it
 

@@ -28,7 +28,7 @@
 
 rt_deps() { printf 'herdr jq uuidgen'; }
 
-_rt_session() { prb_get herdr_session pr-review-board; }
+_rt_session() { prb_get herdr_session reviews; }
 _rt_new_sid() { uuidgen | tr 'A-Z' 'a-z'; }
 
 # herdr agent names must match [a-z][a-z0-9_-]{0,31}: 32 chars, leading letter.
@@ -151,7 +151,10 @@ rt_spawn() {  # <key> <context>
   _rt_build_argv
   slug="$(prb_review_field "$key" slug)"; dir="$(prb_review_field "$key" dir)"
   name="$(_rt_name "$key")"; sid="$(_rt_new_sid)"
-  pair="$(_rt_new_workspace "$dir" "$slug")" || return 1
+  # cwd is the reviews ROOT, not $dir. Claude prompts for reads outside its cwd, and a
+  # background agent cannot answer that, so the assignment, the rules copy and every
+  # checkout have to sit inside one cwd. This is why a narrow per-review cwd stalls.
+  pair="$(_rt_new_workspace "$(prb_reviews_root)" "$slug")" || return 1
   ws="${pair%% *}"; pane="${pair##* }"
   if ! _rt_agent_start "$name" "$pane" ${RT_ARGV[@]+"${RT_ARGV[@]}"} --session-id "$sid"; then
     herdr --session "$(_rt_session)" workspace close "$ws" >/dev/null 2>&1
@@ -175,7 +178,7 @@ rt_resume() {  # <key> ; 2 = no saved session
   slug="$(prb_review_field "$key" slug)"; dir="$(prb_review_field "$key" dir)"
   name="$(_rt_name "$key")"
   prb_review_set_field "$key" agent_name "$name"
-  pair="$(_rt_new_workspace "$dir" "$slug")" || return 1
+  pair="$(_rt_new_workspace "$(prb_reviews_root)" "$slug")" || return 1
   ws="${pair%% *}"; pane="${pair##* }"
   if ! _rt_agent_start "$name" "$pane" ${RT_ARGV[@]+"${RT_ARGV[@]}"} --resume "$sid"; then
     herdr --session "$(_rt_session)" workspace close "$ws" >/dev/null 2>&1
