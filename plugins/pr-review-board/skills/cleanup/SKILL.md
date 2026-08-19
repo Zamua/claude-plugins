@@ -1,5 +1,5 @@
 ---
-description: Tear down a finished pr-review-board review - archive its report, close its herdr workspace and hunkt tabs, remove its worktrees, delete its directory, and mark it terminal. Use when the user asks to clean up a review, is done with a review, or asks what reviews are still open.
+description: Tear down a finished pr-review-board review - archive its report, close its herdr workspace and report pane, remove its worktrees, delete its directory, and mark it terminal. Use when the user asks to clean up a review, is done with a review, or asks what reviews are still open.
 ---
 
 # pr-review-board — cleanup

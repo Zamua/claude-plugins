@@ -15,7 +15,7 @@ mechanics.
 ## The GitHub boundary
 
 Nothing reaches GitHub until the user approves comments by number. Local writes only
-until then: the checkout, the report, the comment list, scratch tests, hunkt notes.
+until then: the checkout, the report, the comment list, and scratch tests.
 Once they pick numbers you post those comments and nothing else. Approvals, change
 requests, pushes, branch and label edits, marking a draft ready, and merging are
 always theirs. See the GitHub boundary in the review rules.
@@ -39,38 +39,37 @@ always theirs. See the GitHub boundary in the review rules.
    into the target first. Never disturb an existing clone's branches or working tree
    beyond fetching.
 
-3. **Show the diff in hunkt**, one tab per pull request, through the layout helper.
-   Only do this when running inside a herdr pane; otherwise skip to step 4 and
-   review from the diff directly.
+3. **Open the report pane.** Only when running inside a herdr pane; otherwise skip
+   to step 4 and let the user open `REVIEW.md` however they like.
 
-   The helper is keyed by a review the poller created, so for a manual review drive
-   hunkt directly instead. Write the diff to a file **outside** the checkout and
-   watch it, which is what makes it refreshable:
+   The layout helper is keyed by a review the poller created, so a manual review
+   drives it directly. Seed the file first, since nvim cannot reload into one that
+   does not exist yet:
 
    ```bash
-   mkdir -p ~/workspace/reviews/.pr-review-board/manual
-   P=~/workspace/reviews/.pr-review-board/manual/<repo>-<number>.patch
-   gh pr diff <number> --repo <owner/repo> > "$P"
-   # in a herdr tab of its own:
-   hunkt patch "$P" --watch
-   # then find its id, since a patch session has no repo to select by:
-   hunkt session list --json | jq -r '.sessions[] | select(.sourceLabel|endswith("<repo>-<number>.patch")) | .sessionId'
+   printf '# Review in progress\n' > ~/workspace/reviews/<repo>-<number>/REVIEW.md
+   herdr pane split --pane "$HERDR_PANE_ID" --direction right --ratio 0.5 \
+     --cwd ~/workspace/reviews/<repo>-<number>
+   # then, in the pane id that came back:
+   herdr pane run <pane> "nvim -R -c 'lua vim.diagnostic.enable(false)' \
+     -c 'lua vim.uv.new_timer():start(2000, 2000, vim.schedule_wrap(function() pcall(vim.cmd, \"silent checktime\") end))' \
+     ~/workspace/reviews/<repo>-<number>/REVIEW.md"
    ```
 
-   To refresh after the pull request moves, rewrite `$P` with the same `gh pr diff`.
-   The watched session reloads itself.
-
-   Pass that explicit session id to every `hunkt session` command: a patch session
-   exposes no repo, so `--repo` cannot select it. Never call `hunkt session reload`
-   on one — it silently replaces the review with a working-tree diff instead of
-   erroring.
+   Read-only, diagnostics off, and polling the file, so the user watches the report
+   fill in as you write it. `herdr pane run` reports success even when the shell was
+   not ready and dropped the command, so confirm with
+   `herdr pane wait-output <pane> --match NORMAL --source visible --timeout 3000`
+   before assuming nvim is up, and never fire the command twice blind. The second
+   copy gets typed into a live nvim.
 
 4. **Review per the review rules.** Prove every behavioral finding with a test in
    the checkout that fails against this code. Drop anything you cannot reproduce.
 
-5. **Produce the outputs.** Inline hunkt annotations on the findings worth steering
-   the user to, `REVIEW.md` in the review directory, a summary in the conversation,
-   and `COMMENTS.md` holding the proposed comment list.
+5. **Produce the outputs.** `REVIEW.md` in the review directory, every pull request
+   and finding location linked, a summary in the conversation, and `COMMENTS.md`
+   holding the proposed comment list. Write `REVIEW.md` in whole states, since the
+   user may be reading it as you go.
 
 6. **Propose the comments.** Print the numbered list in the conversation and stop.
    Walk the user through the findings, answer questions, and reword entries as they
@@ -83,7 +82,6 @@ always theirs. See the GitHub boundary in the review rules.
 
 ## If the pull request moves while you are working
 
-Rewrite the patch file and the watched session reloads itself. Notes survive that
-reload, but a force-push moves lines underneath them, so re-derive anchors from
-`hunkt session review <sid> --json` and re-place them rather than trusting what
-survived.
+Re-run `gh pr diff` and re-read it. The pane picks up your rewritten `REVIEW.md` on
+its own. Re-derive the finding links, since they pin a head sha and a force-push
+leaves them pointing at code that is no longer there.

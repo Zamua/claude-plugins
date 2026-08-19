@@ -53,7 +53,7 @@ prb_workspace_root() { local v; v="$(prb_get workspace_root "")"; [ -n "$v" ] &&
 
 # Harness metadata lives OUTSIDE the review directory, because that directory is
 # itself a git worktree for a single-pull-request review and `git worktree add`
-# refuses a non-empty target. Keeping the assignment, the patches and the hunkt
+# refuses a non-empty target. Keeping the assignment, the cached diffs and the pane
 # session ids here leaves the checkout clean and nothing to gitignore but the report.
 prb_meta_dir() {  # <key>
   printf '%s/.pr-review-board/%s' "$(prb_reviews_root)" "$1"

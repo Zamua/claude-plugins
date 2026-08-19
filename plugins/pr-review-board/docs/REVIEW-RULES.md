@@ -10,8 +10,8 @@ Change the process here, not in two places.
 A review reads from GitHub and writes nothing to it until the operator approves
 specific comments by number. Before that approval: no comments, no review
 submissions, no pushes, no branch, label, or title edits, and nothing posted to
-Slack. The only writes are local: the review checkouts, the report, scratch tests,
-and hunkt notes.
+Slack. The only writes are local: the review checkouts, the report, the comment
+list, and scratch tests.
 
 After approval, the one permitted write is posting the comments the operator
 picked, worded as they approved them, and nothing else. These stay forbidden
@@ -61,7 +61,17 @@ push the checkout.
 
 ## Report shape
 
-In this order:
+The report is `REVIEW.md` in the review directory. The operator reads it in a pane
+beside the agent, so it is a document to be navigated, not a wall of text. Open it
+with a link line per pull request in scope, above the first section:
+
+```markdown
+# joinmason/cherry-pos#1234: hold refunds when the reserve is short
+
+[github.com/joinmason/cherry-pos/pull/1234](https://github.com/joinmason/cherry-pos/pull/1234)
+```
+
+Then, in this order:
 
 1. **What this change is about.** The problem being solved, in plain English, with
    enough background that someone unfamiliar with the subsystem follows it. Name
@@ -89,6 +99,12 @@ In this order:
    is, and either the failing test that proves it or an explicit note that it is
    unproven. Once a finding has a proposed comment, it carries that comment's number,
    and once posted, its url.
+
+   Link the location rather than naming it, so the operator lands on the code from
+   the pane:
+   `[RefundLegFactory.kt:88](https://github.com/<owner>/<repo>/blob/<head-sha>/<path>#L88)`.
+   Pin the sha the review is based on, not a branch name, or the link rots on the
+   next push.
 5. **Grouping note**, when the review covers more than one pull request: which
    pull requests are in scope and why they were grouped.
 

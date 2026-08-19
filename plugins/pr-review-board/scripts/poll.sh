@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pr-review-board poller + management CLI. A thin harness: it decides which pull
 # requests you asked to have reviewed, groups them into reviews, and brings a
-# review agent up. Everything object-level (clones, worktrees, diffs, hunkt tabs,
+# review agent up. Everything object-level (clones, worktrees, diffs, the report pane,
 # tests, the report) is the worker's job.
 #
 # The trigger is a reaction you added to a pull request recently. There is no
@@ -194,7 +194,7 @@ _handle_fresh() {  # <pr> <reactedAt> <head> <base> <defaultBranch> <isDraft> <t
       prb_log "promoted review '$key' to umbrella $new_dir (was $old_dir)"
     fi
     _write_assignment "$key" >/dev/null
-    rt_notify "$key" "Scope change: $pr ($title) was added to this review. Re-read $(prb_meta_dir "$key")/assignment.json, which is now authoritative. If promoted_from is set, move the existing checkout into the umbrella dir before continuing. Bring up its hunkt tab, review it, and fold it into the report." \
+    rt_notify "$key" "Scope change: $pr ($title) was added to this review. Re-read $(prb_meta_dir "$key")/assignment.json, which is now authoritative. If promoted_from is set, move the existing checkout into the umbrella dir before continuing. Review it and fold it into the report." \
       || prb_log "review '$key' is not live; the next pass will recover it"
     prb_log "appended $pr to review '$key'"
     return 0

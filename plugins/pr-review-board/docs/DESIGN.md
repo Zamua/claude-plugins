@@ -33,19 +33,13 @@ watermark. `baseRefName` arrives in the same query, so stack detection is free.
 Filtering on the viewer is essential: bots react to pull requests constantly, and a
 bot 👀 is indistinguishable from a human one by count alone.
 
-**hunkt 0.18.0.**
-- `hunkt session reload` accepts only `diff` and `show`. Handed a patch session it
-  does **not** error; it silently reloads as a working-tree diff of the cwd and the
-  review is gone. Never call it on a patch session.
-- `hunkt patch <file> --watch` reloads when the file is rewritten, **and inline notes
-  survive the reload**. So the refresh path is "rewrite the patch file", which is why
-  the diff is a file rather than a pipe. `gh pr diff | hunkt patch` reads better but
-  cannot be refreshed.
-- A patch session reports no repo, so `--repo` cannot select it. Every
-  `hunkt session` call needs the explicit session id, captured at open time by
-  matching the launch cwd plus the patch basename.
-- Notes survive a reload but line anchors do not follow a force-push, so anchors are
-  re-derived after every sync.
+**nvim 0.12.4.** The report pane is `nvim -R` on `REVIEW.md`, and nvim does not
+notice the agent rewriting that file. A `vim.uv` timer calling `checktime` every two
+seconds is what makes the pane live, and without it the operator reads a stale report
+with nothing to indicate it. `-R` matters for the same reason: the buffer is a view of
+the agent's output, so a modified buffer would only collide with the next rewrite.
+`vim.diagnostic.enable(false)` is global rather than per-buffer, so it also covers
+language servers that attach after startup.
 
 **herdr 0.7.5.** `agent start` attaches to an existing pane already at a shell
 prompt and derives the executable from `--kind`, so a launch is three calls:
@@ -53,6 +47,12 @@ prompt and derives the executable from `--kind`, so a launch is three calls:
 `agent_pane_busy` until its shell is up, so that one error is retried and no other is.
 Inside a pane the injected socket already points at the right server, so `--session`
 is passed only from outside one.
+
+`pane split` takes no command, so the report pane is a split followed by a `pane run`.
+That `run` reports success as soon as the API accepts the keystrokes, including when
+the shell had not reached its prompt and dropped them, so the only proof nvim launched
+is `pane wait-output --match NORMAL`. Checking before each retry rather than after is
+deliberate: a blind second `run` gets typed into an nvim that did start.
 
 **Claude Code permissions.** A read outside the agent's cwd raises a prompt that a
 background worker has nobody to answer, so the cwd is the reviews **root** and
@@ -76,7 +76,7 @@ groups them into reviews, writes the assignment, and brings an agent up. It neve
 clones, never diffs, never builds layout. `poll.sh once` is the whole scheduled unit.
 
 **Review agent.** One per review. Owns everything object-level: clones, worktrees,
-hunkt tabs, tests, annotations, the report, the proposed comment list, and the
+the report pane, tests, the report, the proposed comment list, and the
 monitor loop. It reads GitHub freely, writes nothing there until the operator names
 comment numbers, and cannot tear itself down.
 
@@ -123,9 +123,15 @@ the live agent and leave the review permanently `stopped`.
 
 ## Layout
 
-One herdr workspace per review, labelled with the slug. Tab 1 holds the review agent.
-The agent adds one tab per pull request, each running a watched hunkt diff, because the
-pull request set can grow while the review is live.
+One herdr workspace per review, labelled with the slug. Tab 1 holds the review agent,
+and the agent splits its own pane to the right for the report. That is the whole
+layout: the agent on the left, `REVIEW.md` on the right, and nothing per pull request,
+because the report already covers every pull request in scope and the set can grow
+while the review is live.
+
+The report carries the navigation instead. Each pull request in scope is linked at the
+top, and each finding location links to the file at the reviewed head sha, so reading
+the report is how the operator reaches the code.
 
 ## Directories
 
@@ -148,7 +154,7 @@ review, and a `pr_index` so a pull request belongs to at most one live review. E
 mutation goes through a temp file, so a crash mid-write cannot truncate the store.
 
 Per-review harness data lives in `<reviews_root>/.pr-review-board/<key>/`: the
-assignment, the patch files, and the live hunkt session ids. That location is
+assignment, the cached diffs, and the report pane id. That location is
 deliberately **outside** the review directory, because for a single-pull-request
 review the review directory *is* a git worktree, and `git worktree add` accepts an
 existing empty directory but refuses a non-empty one. Keeping metadata out means the
