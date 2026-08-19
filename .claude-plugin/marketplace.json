@@ -14,6 +14,11 @@
       "name": "telegram",
       "source": "./plugins/telegram",
       "description": "Telegram forum-topics channel: multiplex ONE bot token across MANY concurrent Claude sessions, one foreground Claude per Telegram topic, via a local proxy. Drop-in for the single-session telegram channel."
+    },
+    {
+      "name": "reexplain",
+      "source": "./plugins/reexplain",
+      "description": "Re-explain what you just said, for a reader who is not a domain expert. Rebuilds the explanation from first principles instead of compressing it: defines each term on first use, keeps the domain's own vocabulary, runs one concrete example all the way through, and separates what is settled from what is broken from what nobody has decided."
     }
   ]
 }

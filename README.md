@@ -19,6 +19,12 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   MANY concurrent Claude sessions, routed by forum topics. A local proxy owns
   the token + the single poll and spawns one foreground Claude (its own tmux
   session) per topic. A drop-in for the single-session telegram channel.
+- **[reexplain](plugins/reexplain/)**: re-explain your last answer for a reader
+  who is not a domain expert. Rebuilds the explanation instead of compressing it:
+  diagnoses why the first attempt failed, defines each term on first use, keeps
+  the codebase's own vocabulary, runs one concrete example the whole way through,
+  and separates what is settled from what is broken from what nobody has decided.
+  Writes the result in Simplified Technical English (ASD-STE100).
 
 ## License
 
