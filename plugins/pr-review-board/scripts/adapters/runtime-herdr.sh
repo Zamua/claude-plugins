@@ -178,6 +178,10 @@ rt_resume() {  # <key> ; 2 = no saved session
   slug="$(prb_review_field "$key" slug)"; dir="$(prb_review_field "$key" dir)"
   name="$(_rt_name "$key")"
   prb_review_set_field "$key" agent_name "$name"
+  # Resume builds a fresh workspace, so the one recorded for the dead agent has to go
+  # or every recovery leaves another empty workspace in the session.
+  local old_ws; old_ws="$(prb_review_field "$key" herdr_workspace)"
+  [ -n "$old_ws" ] && herdr --session "$(_rt_session)" workspace close "$old_ws" >/dev/null 2>&1
   pair="$(_rt_new_workspace "$(prb_reviews_root)" "$slug")" || return 1
   ws="${pair%% *}"; pane="${pair##* }"
   if ! _rt_agent_start "$name" "$pane" ${RT_ARGV[@]+"${RT_ARGV[@]}"} --resume "$sid"; then

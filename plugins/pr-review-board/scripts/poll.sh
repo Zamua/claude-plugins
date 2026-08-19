@@ -57,14 +57,25 @@ _issue_key() {  # <branch> -> key or empty
 #
 # Only ACTIVE reviews match. A CLEANEDUP review is terminal, so a later reaction on
 # one of its pull requests starts a fresh review rather than reopening a closed one.
-_match_review() {  # <head> <base> -> review key or empty
-  local head="$1" base="$2" ik k
+_match_review() {  # <pr> <head> <base> <default-branch> -> review key or empty
+  local pr="$1" head="$2" base="$3" defbr="$4" repo ik k
+  repo="${pr%%#*}"
   ik="$(_issue_key "$head")"
   while IFS= read -r k; do
     [ -n "$k" ] || continue
-    if prb_state_read --arg k "$k" --arg h "$head" --arg b "$base" -e '
+    # A stack lives in ONE repo, and its linking branch is always a feature branch.
+    # Without the same-repo guard, one repo's release pull request (head `main`) links
+    # to every review in every other repo whose members target `main`. Without the
+    # default-branch guard, the same happens within a repo.
+    if prb_state_read --arg k "$k" --arg repo "$repo" --arg h "$head" --arg b "$base" --arg d "$defbr" -e '
           .reviews[$k].heads // {} | to_entries
-          | any(.value.head == $b or .value.base == $h)' >/dev/null 2>&1; then
+          | any(
+              (.key | split("#")[0]) == $repo
+              and (
+                   (.value.head == $b and $b != $d)
+                or (.value.base == $h and $h != $d)
+              )
+            )' >/dev/null 2>&1; then
       printf '%s' "$k"; return 0
     fi
     if [ -n "$ik" ]; then
@@ -92,7 +103,12 @@ _slug_single() { printf '%s-%s' "$(prb_safe "$(_repo_short "$1")")" "$(_pr_num "
 # that opened it, so it stays unique and greppable while still reading as English.
 _slug_umbrella() {  # <anchor-pr> <title>
   local s; s="$(prb_safe "$2")"
-  s="$(printf '%s' "$s" | cut -c1-40 | sed 's/-[^-]*$//; s/-$//')"
+  # Drop the trailing partial word ONLY when the title was long enough to be cut,
+  # otherwise every umbrella silently loses the last word of its title.
+  if [ "${#s}" -gt 40 ]; then
+    s="$(printf '%s' "$s" | cut -c1-40 | sed 's/-[^-]*$//')"
+  fi
+  s="$(printf '%s' "$s" | sed 's/-$//')"
   [ -n "$s" ] || s="$(prb_safe "$(_repo_short "$1")")"
   printf '%s-%s' "$s" "$(_pr_num "$1")"
 }
@@ -120,6 +136,7 @@ _write_assignment() {  # <key>
     .reviews[$k]
     | { key: $k, slug: .slug, dir: .dir, multi: (.multi // false),
         meta_dir: $meta, rules: ($meta + "/REVIEW-RULES.md"),
+        promoted_from: (.promoted_from // null),
         status: .status, created_at: .created_at,
         reviews_root: $reviews_root, workspace_root: $workspace_root,
         house_rules: $house,
@@ -152,7 +169,7 @@ _handle_fresh() {  # <pr> <reactedAt> <head> <base> <defaultBranch> <isDraft> <t
 
   [ "$base" = "$defbr" ] || stacked=true
 
-  key="$(_match_review "$head" "$base")" || key=""
+  key="$(_match_review "$pr" "$head" "$base" "$defbr")" || key=""
   if [ -n "$key" ]; then
     # Joining a live review. Promote a single-pull-request review to an umbrella so
     # each member gets its own checkout; the worker moves the existing worktree in.
@@ -291,16 +308,23 @@ cmd_spawn() {  # <owner/repo#N> -- force, ignoring the freshness window
   prb_lock || return 1
   trap 'prb_unlock' EXIT
   prb_state_init
-  local pr="$1" row k
+  local pr="$1" row k at head base defbr draft title url _pr
   row="$(src_pr_meta "$pr")"
   [ -n "$row" ] || { prb_log "cannot read $pr"; return 1; }
-  IFS=$'\t' read -r _pr _at head base _db draft title url <<EOF2
+  IFS=$'\t' read -r _pr at head base defbr draft title url <<EOF2
 $row
 EOF2
-  k="$(_handle_fresh "$pr" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$head" "$base" "$base" "$draft" "$title" "$url")"
+  k="$(_handle_fresh "$pr" "$at" "$head" "$base" "$defbr" "$draft" "$title" "$url")"
   [ -n "$k" ] || { k="$(prb_pr_review "$pr")"; }
   [ -n "$k" ] || return 1
-  [ "$(rt_status "$k")" = "running" ] || rt_spawn "$k" "$(src_kickoff_context "$k")"
+  # Same decision as a poll pass: a stopped review is RESUMED. Spawning over it would
+  # mint a second session id and abandon the running review's transcript.
+  local st rc; st="$(rt_status "$k")"
+  case "$st" in
+    running) prb_log "review '$k' is already running" ;;
+    stopped) rt_resume "$k"; rc=$?; [ "$rc" = 2 ] && rt_spawn "$k" "$(src_kickoff_context "$k")" ;;
+    *)       rt_spawn "$k" "$(src_kickoff_context "$k")" ;;
+  esac
 }
 
 cmd_assignment() { printf '%s/assignment.json\n' "$(prb_meta_dir "$1")"; }

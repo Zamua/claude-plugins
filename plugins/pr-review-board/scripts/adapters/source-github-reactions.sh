@@ -19,6 +19,10 @@
 # `reactions:>0` narrows the candidate set server-side and `viewerHasReacted` is
 # evaluated for us, which keeps the whole pass at 1 rate-limit point per page.
 # Filtering on the viewer matters because bots react to pull requests constantly.
+#
+# Reactions are fetched with `last: 50`, not `first: 50`. GitHub returns them oldest
+# first, and the trigger only ever cares about recent ones, so taking the newest end
+# is what keeps a fresh reaction on a heavily-reacted pull request inside the page.
 
 FIELDS='pr reactedAt head base defaultBranch isDraft title url'
 
@@ -84,7 +88,7 @@ query($q: String!, $content: ReactionContent!, $cursor: String) {
         baseRefName
         headRefName
         repository { nameWithOwner defaultBranchRef { name } }
-        reactions(content: $content, first: 50) {
+        reactions(content: $content, last: 50) {
           nodes { createdAt user { login } }
         }
       }
