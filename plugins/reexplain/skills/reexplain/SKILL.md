@@ -48,6 +48,12 @@ fit. Only then what is wrong.
 what is a judgment call you made, and what nobody has decided. Blurring these is
 what makes a status feel like a wall of problems. Give each its own heading.
 
+**Number anything the user has to answer.** Give every open decision, question
+or item awaiting their input a number, and keep the numbers stable within the
+reply. A reader answering four items should be able to write "2 and 4" rather
+than restate them. Do not number things that need no response; a numbered list of
+facts dilutes the ones that are actually questions.
+
 **Name the stakes before the mechanism.** Say what breaks and who is affected,
 then how. "The record is never marked complete, so nothing downstream treats it
 as finished" before the branch condition that causes it.
@@ -70,7 +76,7 @@ Roughly this, trimmed to what the question needs:
 4. **What is wrong.** The same example, at the point it breaks. Stakes first.
 5. **What is separate.** Other findings, clearly fenced off as not the same
    thing.
-6. **What is open.** Decisions, and who owns each.
+6. **What is open.** Decisions, and who owns each. Number them.
 7. **What happens next**, and what you need from the user, if anything.
 
 Skip any section that does not apply. Do not pad to fill the shape.
