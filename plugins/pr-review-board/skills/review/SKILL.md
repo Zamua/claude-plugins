@@ -1,5 +1,5 @@
 ---
-description: Review a GitHub pull request on request, read-only, with findings proven by failing tests and a plain-English report. Use when the user shares a pull request URL and asks for help reviewing it, or asks you to review a PR, a stack, or a set of related PRs. Never posts comments, approvals, or reviews.
+description: Review a GitHub pull request on request, with findings proven by failing tests and a plain-English report, then propose a numbered list of comments and post the ones the user picks. Use when the user shares a pull request URL and asks for help reviewing it, or asks you to review a PR, a stack, or a set of related PRs. Never approves, requests changes, or pushes.
 ---
 
 # Review a pull request
@@ -12,12 +12,13 @@ URL rather than reacting to it on GitHub.
 how the review is conducted and what the report contains. Everything below is
 mechanics.
 
-## This is read-only
+## The GitHub boundary
 
-No comments, no review submissions, no approvals, no change requests, no pushes, no
-branch edits. Local writes only: the checkout, the report, scratch tests, hunkt
-notes. If the user asks you to post something, give them the text and let them post
-it.
+Nothing reaches GitHub until the user approves comments by number. Local writes only
+until then: the checkout, the report, the comment list, scratch tests, hunkt notes.
+Once they pick numbers you post those comments and nothing else. Approvals, change
+requests, pushes, branch and label edits, marking a draft ready, and merging are
+always theirs. See the GitHub boundary in the review rules.
 
 ## Steps
 
@@ -68,11 +69,17 @@ it.
    the checkout that fails against this code. Drop anything you cannot reproduce.
 
 5. **Produce the outputs.** Inline hunkt annotations on the findings worth steering
-   the user to, `REVIEW.md` in the review directory, and a summary in the
-   conversation.
+   the user to, `REVIEW.md` in the review directory, a summary in the conversation,
+   and `COMMENTS.md` holding the proposed comment list.
 
-6. **Stop and iterate.** Walk the user through it and answer questions. Do not
-   start changing code unless they ask.
+6. **Propose the comments.** Print the numbered list in the conversation and stop.
+   Walk the user through the findings, answer questions, and reword entries as they
+   ask, keeping each number fixed. Do not start changing the reviewed code unless
+   they ask.
+
+7. **Post the numbers they pick.** Re-check the head SHA first, then one batched
+   review per pull request, then report the urls against their numbers. The proposed
+   comments section of the review rules carries the call and the failure modes.
 
 ## If the pull request moves while you are working
 
