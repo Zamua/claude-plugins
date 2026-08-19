@@ -136,15 +136,34 @@ src_fresh() {
   done
 }
 
-# One PR by name, for paths that need its metadata without a scan.
+# One PR by name, for paths that need its metadata without a scan. Emits the same
+# row shape as src_fresh.
+#
+# Every field must be NON-EMPTY. A tab is IFS-whitespace, so `IFS=$'\t' read`
+# collapses consecutive tabs and silently drops empty fields, shifting every later
+# field left. Emitting a placeholder-free complete row is the fix; do not reintroduce
+# an empty column here.
 src_pr_meta() {  # <owner/repo#N>
-  local pr repo num
+  local pr repo num owner name
   pr="$1"; repo="${pr%%#*}"; num="${pr##*#}"
-  gh pr view "$num" --repo "$repo" \
-    --json number,title,url,isDraft,baseRefName,headRefName 2>/dev/null \
-    | jq -r --arg pr "$pr" '
-        [ $pr, "", .headRefName, .baseRefName, "", (.isDraft|tostring),
-          (.title | gsub("[\t\n\r]"; " ")), .url ] | @tsv'
+  owner="${repo%%/*}"; name="${repo##*/}"
+  gh api graphql -f query='
+    query($owner:String!,$name:String!,$num:Int!){
+      repository(owner:$owner,name:$name){
+        defaultBranchRef { name }
+        pullRequest(number:$num){
+          number title url isDraft baseRefName headRefName
+        }
+      }
+    }' -F owner="$owner" -F name="$name" -F num="$num" 2>/dev/null \
+    | jq -r --arg pr "$pr" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+        .data.repository as $r
+        | $r.pullRequest
+        | select(. != null)
+        | [ $pr, $now, .headRefName, .baseRefName,
+            ($r.defaultBranchRef.name // "main"), (.isDraft|tostring),
+            ((.title // "untitled") | gsub("[\t\n\r]"; " ")),
+            .url ] | @tsv'
 }
 
 # The worker's opening brief. Deliberately short: the assignment file in the review
