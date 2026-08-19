@@ -1,0 +1,9 @@
+{
+  "name": "reexplain",
+  "description": "Re-explain what you just said, for a reader who is not a domain expert. Rebuilds the explanation from first principles instead of compressing it: defines each term on first use, keeps the domain's own vocabulary, runs one concrete example all the way through, and separates what is settled from what is broken from what nobody has decided.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Zamua"
+  },
+  "keywords": ["explain", "onboarding", "clarify", "domain-language", "teaching"]
+}
