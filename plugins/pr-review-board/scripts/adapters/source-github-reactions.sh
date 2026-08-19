@@ -16,9 +16,13 @@
 #
 # There is no reverse lookup for "things the viewer reacted to" in either the REST
 # or GraphQL API, so eligibility is a candidate scan plus a per-candidate check.
-# `reactions:>0` narrows the candidate set server-side and `viewerHasReacted` is
-# evaluated for us, which keeps the whole pass at 1 rate-limit point per page.
-# Filtering on the viewer matters because bots react to pull requests constantly.
+# `reactions:>0` narrows the candidate set server-side, and each candidate's
+# reactions come back with their author and timestamp, which the jq filter matches
+# against the viewer's login. That keeps a whole page at 1 rate-limit point, logged
+# on the scan line so a schema change that made it more expensive would show up.
+#
+# A reaction's author has to be checked, not just its existence: bots react to pull
+# requests constantly, and a bot's eyes is indistinguishable from a human's by count.
 #
 # Reactions are fetched with `last: 50`, not `first: 50`. GitHub returns them oldest
 # first, and the trigger only ever cares about recent ones, so taking the newest end
@@ -133,6 +137,7 @@ src_fresh() {
               $p.url ]
             | @tsv
         end'
+    prb_log "page $page: $(printf '%s' "$out" | jq -r '"\(.data.search.issueCount) candidates, cost \(.data.rateLimit.cost), \(.data.rateLimit.remaining) left"')"
     [ "$page" -lt 3 ] || prb_log "candidate scan is on page $page; consider narrowing with search_extra"
     [ "$(printf '%s' "$out" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
     cursor="$(printf '%s' "$out" | jq -r '.data.search.pageInfo.endCursor')"

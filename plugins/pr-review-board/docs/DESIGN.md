@@ -22,8 +22,9 @@ reason the design looks the way it does.
 
 **GitHub reactions (GraphQL).** There is no reverse lookup for "things the viewer
 reacted to", so eligibility is a candidate scan plus a per-candidate check. Narrowing
-with `reactions:>0` and reading `viewerHasReacted` keeps a whole pass at **1
-rate-limit point per page**, and one page holds 100 pull requests. Reaction nodes
+with `reactions:>0` and matching each reaction's author against the viewer keeps a
+whole pass at **1 rate-limit point per page**, and one page holds 100 pull requests.
+The cost is logged per page rather than assumed. Reaction nodes
 carry `createdAt`, which is what makes a freshness window possible without any stored
 watermark. `baseRefName` arrives in the same query, so stack detection is free.
 Filtering on the viewer is essential: bots react to pull requests constantly, and a
