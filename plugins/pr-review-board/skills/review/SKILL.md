@@ -43,33 +43,37 @@ always theirs. See the GitHub boundary in the review rules.
    to step 4 and let the user open `REVIEW.md` however they like.
 
    The layout helper is keyed by a review the poller created, so a manual review
-   drives it directly. Seed the file first, since nvim cannot reload into one that
+   drives it directly. Seed both files first, since nvim cannot reload into one that
    does not exist yet:
 
    ```bash
-   printf '# Review in progress\n' > ~/workspace/reviews/<repo>-<number>/REVIEW.md
-   herdr pane split --pane "$HERDR_PANE_ID" --direction right --ratio 0.5 \
-     --cwd ~/workspace/reviews/<repo>-<number>
+   D=~/workspace/reviews/<repo>-<number>
+   printf '# Review in progress\n' > "$D/REVIEW.md"
+   printf '# Proposed comments\n\nNone yet.\n' > "$D/COMMENTS.md"
+   herdr pane split --pane "$HERDR_PANE_ID" --direction right --ratio 0.5 --cwd "$D"
    # then, in the pane id that came back:
-   herdr pane run <pane> "nvim -R -c 'lua vim.diagnostic.enable(false)' \
-     -c 'lua vim.uv.new_timer():start(2000, 2000, vim.schedule_wrap(function() pcall(vim.cmd, \"silent checktime\") end))' \
-     ~/workspace/reviews/<repo>-<number>/REVIEW.md"
+   herdr pane run <pane> "nvim -R -M -n -p \
+     -c 'luafile ${CLAUDE_PLUGIN_ROOT}/scripts/report-view.lua' \
+     $D/REVIEW.md $D/COMMENTS.md"
    ```
 
-   Read-only, diagnostics off, and polling the file, so the user watches the report
-   fill in as you write it. `herdr pane run` reports success even when the shell was
-   not ready and dropped the command, so confirm with
+   `-p` gives one tab per file. `-R -M -n` makes both buffers unmodifiable and
+   unwritable, and `report-view.lua` turns diagnostics off and polls both files, so the
+   user watches them fill in as you write.
+
+   `herdr pane run` reports success even when the shell was not ready and dropped the
+   command, so confirm with
    `herdr pane wait-output <pane> --match NORMAL --source visible --timeout 3000`
-   before assuming nvim is up, and never fire the command twice blind. The second
-   copy gets typed into a live nvim.
+   before assuming nvim is up, and never fire the command twice blind. The second copy
+   gets typed into a live nvim.
 
 4. **Review per the review rules.** Prove every behavioral finding with a test in
    the checkout that fails against this code. Drop anything you cannot reproduce.
 
 5. **Produce the outputs.** `REVIEW.md` in the review directory, every pull request
    and finding location linked, a summary in the conversation, and `COMMENTS.md`
-   holding the proposed comment list. Write `REVIEW.md` in whole states, since the
-   user may be reading it as you go.
+   holding the proposed comment list. Write both in whole states, since the user is
+   reading them live in the pane.
 
 6. **Propose the comments.** Print the numbered list in the conversation and stop.
    Walk the user through the findings, answer questions, and reword entries as they
