@@ -91,6 +91,18 @@ poll.sh uninstall     disarm it
 Validate a new config with `"runtime": "stub"` and `poll.sh once`: it exercises the
 trigger, the grouping and the assignment file without launching an agent.
 
+## Tests
+
+```
+tests/run.sh                  # against ../scripts
+SCRIPTS=<path> tests/run.sh   # against another checkout
+```
+
+Every case proves a defect that once shipped, so each one failed before its fix. They
+build their own config, state and reviews root under `mktemp` and use the stub runtime,
+so nothing touches real state and no agent is launched. Some cases call the GitHub API,
+so an authenticated `gh` is required.
+
 ## Skills
 
 | | |
