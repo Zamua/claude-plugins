@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # pr-review-board layout helper. The review agent runs this; the poller does not.
-# It owns two things: the pane the operator reads the report in, and telling the
-# agent when a pull request's diff has actually moved.
+# It owns two things: the pane the operator reads the review in, REVIEW.md and
+# COMMENTS.md as two nvim tabs, and telling the agent when a diff has actually moved.
 #
-#   layout.sh open  <key> [--pane ID]         report pane beside the agent
+#   layout.sh open  <key> [--pane ID]         review pane beside the agent, two tabs
 #   layout.sh sync  <key> <owner/repo#N>      refresh that cached diff; CHANGED|UNCHANGED
 #   layout.sh sync-all <key>                  refresh every cached diff
 #   layout.sh diff  <key> <owner/repo#N>      path to the cached diff, for reading
@@ -22,15 +22,18 @@
 #     command it silently dropped into a shell that had not reached its prompt.
 #     `pane wait-output --match NORMAL` on nvim's statusline is the only proof it
 #     launched. Without `--timeout` that call waits forever.
-#   * The agent rewrites REVIEW.md repeatedly, and nvim does not notice on its own.
+#   * The agent rewrites both files repeatedly, and nvim does not notice on its own.
 #     A `vim.uv` timer calling `checktime` every two seconds is what makes the pane
 #     live; without it the operator reads a stale report and has no way to know.
 #     Verified by rewriting the file and reading the reloaded buffer back.
-#   * nvim opens it with `-R`. The buffer is a view of the agent's output, so a
-#     modified buffer would only collide with the next rewrite.
-#   * `vim.diagnostic.enable(false)` is exactly what `<leader>ud` runs under
-#     LazyVim, by way of `Snacks.toggle.diagnostics`. Global, so it holds for
-#     language servers that attach after startup.
+#   * `-p` is what puts REVIEW.md and COMMENTS.md in separate tabs. checktime defers
+#     a reload for a buffer with no window, so report-view.lua also re-checks on
+#     TabEnter rather than letting the tab you switch to show stale content.
+#   * `-R -M -n` is the lockdown: readonly, nomodifiable, writes disabled, no swap
+#     file. Verified by sending `i`, `hax`, `<Esc>`, `dd` into the pane: it never
+#     left NORMAL mode and the file on disk was untouched.
+#   * `-M` does NOT break the reload above. A nomodifiable buffer still reloads on
+#     checktime, verified by rewriting the file under `-M` and reading it back.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib.sh"
@@ -50,7 +53,8 @@ _l_dir()   { prb_review_field "$1" dir; }
 _l_state() { printf '%s/layout.json' "$(prb_meta_dir "$1")"; }
 _l_slug()  { printf '%s-%s' "$(prb_safe "$(basename "${1%%#*}")")" "${1##*#}"; }
 _l_patch() { printf '%s/patches/%s.patch' "$(prb_meta_dir "$1")" "$(_l_slug "$2")"; }
-_l_report(){ printf '%s/REVIEW.md' "$(_l_dir "$1")"; }
+_l_report(){   printf '%s/REVIEW.md' "$(_l_dir "$1")"; }
+_l_comments(){ printf '%s/COMMENTS.md' "$(_l_dir "$1")"; }
 
 _l_state_init() { local f; f="$(_l_state "$1")"; mkdir -p "$(dirname "$f")"; [ -f "$f" ] || printf '{"review":{},"prs":{}}\n' >"$f"; }
 _l_set() {  # <key> <jq-expr> [--argjson/--arg pairs...]
@@ -60,13 +64,11 @@ _l_set() {  # <key> <jq-expr> [--argjson/--arg pairs...]
   jq "$@" "$expr" "$f" >"$tmp" && mv "$tmp" "$f" || rm -f "$tmp"
 }
 
-# The report pane's nvim: read-only, diagnostics off, and polling the file so the
-# agent's rewrites appear without the operator doing anything.
-_l_nvim_cmd() {  # <report-path>
-  printf 'nvim -R -c %q -c %q %q' \
-    'lua vim.diagnostic.enable(false)' \
-    'lua vim.uv.new_timer():start(2000, 2000, vim.schedule_wrap(function() pcall(vim.cmd, "silent checktime") end))' \
-    "$1"
+# The report pane's nvim. The flags lock the buffers down; report-view.lua covers the
+# diagnostics and the reload timer, because shell-quoting lua through `pane run` is a
+# needless hazard.
+_l_nvim_cmd() {  # <report-path> <comments-path>
+  printf 'nvim -R -M -n -p -c %q %q %q' "luafile $HERE/report-view.lua" "$1" "$2"
 }
 
 # Write the pull request's current diff to its cache file. Returns 1 when the diff
@@ -89,7 +91,7 @@ _l_write_patch() {  # <key> <pr>
 
 cmd_open() {  # <key> [--pane ID]
   local key="$1"; shift
-  local pane="${HERDR_PANE_ID:-}" dir report out new
+  local pane="${HERDR_PANE_ID:-}" dir report comments out new
   while [ $# -gt 0 ]; do case "$1" in --pane) pane="$2"; shift 2;; *) shift;; esac; done
   dir="$(_l_dir "$key")"
   [ -n "$dir" ] || { prb_log "unknown review key '$key'"; return 1; }
@@ -101,9 +103,10 @@ cmd_open() {  # <key> [--pane ID]
     prb_log "report pane already open ($new)"; printf '%s\n' "$new"; return 0
   fi
 
-  # nvim on a file that does not exist yet cannot be reloaded into, so seed it.
-  report="$(_l_report "$key")"
-  [ -f "$report" ] || printf '# Review in progress\n' >"$report"
+  # nvim cannot reload into a file that does not exist yet, so seed both.
+  report="$(_l_report "$key")"; comments="$(_l_comments "$key")"
+  [ -f "$report" ]   || printf '# Review in progress\n' >"$report"
+  [ -f "$comments" ] || printf '# Proposed comments\n\nNone yet.\n' >"$comments"
 
   out="$(_l_hd pane split --pane "$pane" --direction right --ratio 0.5 --cwd "$dir" 2>&1)"
   new="$(printf '%s' "$out" | jq -r '.result.pane.pane_id // empty')"
@@ -118,14 +121,15 @@ cmd_open() {  # <key> [--pane ID]
     if _l_hd pane wait-output "$new" --match NORMAL --source visible --timeout 3000 >/dev/null 2>&1; then
       up=1; break
     fi
-    _l_hd pane run "$new" "$(_l_nvim_cmd "$report")" >/dev/null 2>&1
+    _l_hd pane run "$new" "$(_l_nvim_cmd "$report" "$comments")" >/dev/null 2>&1
     i=$(( i + 1 ))
   done
   [ -n "$up" ] || prb_log "nvim did not come up in $new; read the pane to see why"
 
-  _l_hd pane rename "$new" "REVIEW.md" >/dev/null 2>&1
-  _l_set "$key" '.review = {pane_id: $p, report: $r}' --arg p "$new" --arg r "$report"
-  prb_log "opened report pane $new on $report"
+  _l_hd pane rename "$new" "review" >/dev/null 2>&1
+  _l_set "$key" '.review = {pane_id: $p, report: $r, comments: $c}' \
+    --arg p "$new" --arg r "$report" --arg c "$comments"
+  prb_log "opened report pane $new: $report + $comments"
   printf '%s\n' "$new"
 }
 
@@ -155,7 +159,7 @@ cmd_diff() {  # <key> <pr>
 
 cmd_list() {
   _l_state_init "$1"
-  jq -r '"report\t\(.review.pane_id // "-")\t\(.review.report // "-")",
+  jq -r '"report\t\(.review.pane_id // "-")\t\(.review.report // "-")\t\(.review.comments // "-")",
          (.prs | to_entries[] | "\(.key)\t\(.value.patch)")' "$(_l_state "$1")"
 }
 

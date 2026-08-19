@@ -74,25 +74,27 @@ Two files govern you, both inside your cwd. Read both before anything else:
    the report that you did, but do not silently widen scope to pull requests the
    operator did not ask about.
 
-## Bring up the report pane
+## Bring up the review pane
 
-Open it early, before the report says anything useful. It is how the operator
-watches the review happen rather than waiting on a finished file:
+Open it early, before either file says anything useful. It is how the operator watches
+the review happen rather than waiting on a finished document:
 
 ```bash
 L="${CLAUDE_PLUGIN_ROOT}/scripts/layout.sh"
-"$L" open <key>                    # nvim on REVIEW.md, split beside your pane
+"$L" open <key>                    # REVIEW.md and COMMENTS.md as two nvim tabs
 "$L" sync <key> <owner/repo#N>     # re-cache that diff; CHANGED or UNCHANGED
 "$L" sync-all <key>                # every pull request at once
 "$L" diff <key> <owner/repo#N>     # path to the cached diff, for reading
 ```
 
-It takes the review `key` from your assignment, not a path.
+It takes the review `key` from your assignment, not a path. It seeds both files if
+they do not exist yet, so `open` is safe on your first move.
 
-The pane is read-only nvim with diagnostics off, polling the file, so every rewrite
-of `REVIEW.md` appears there within a couple of seconds. Write the file in whole,
-coherent states for that reason. A half-written section is something the operator
-may well be looking at.
+The pane is a document viewer, not an editor: no way to modify either buffer,
+diagnostics off, and both files polled. Every rewrite you make appears
+there within a couple of seconds, which cuts two ways. Write both files in whole,
+coherent states. A half-written section is something the operator may well be reading,
+and they cannot fix a typo for you from that pane.
 
 ## Review
 

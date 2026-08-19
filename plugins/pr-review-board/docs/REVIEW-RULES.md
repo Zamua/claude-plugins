@@ -209,8 +209,9 @@ that is the only place the record survives locally.
 
 ### The ledger
 
-The list lives in `<dir>/COMMENTS.md`, next to the report and updated in step with
-it. Each entry carries its number, target, confidence, status, and current body.
+The list lives in `<dir>/COMMENTS.md`, next to the report, updated in step with it,
+and open as the second tab of the operator's review pane. They read it there, so write
+it in whole states rather than leaving it half-rewritten. Each entry carries its number, target, confidence, status, and current body.
 Status is one of `proposed`, `approved`, `posted <url>`, or `dropped`.
 
 This is what keeps the numbers stable across a context loss and what stops a second

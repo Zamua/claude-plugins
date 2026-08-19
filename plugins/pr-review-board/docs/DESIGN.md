@@ -33,11 +33,18 @@ watermark. `baseRefName` arrives in the same query, so stack detection is free.
 Filtering on the viewer is essential: bots react to pull requests constantly, and a
 bot 👀 is indistinguishable from a human one by count alone.
 
-**nvim 0.12.4.** The report pane is `nvim -R` on `REVIEW.md`, and nvim does not
-notice the agent rewriting that file. A `vim.uv` timer calling `checktime` every two
-seconds is what makes the pane live, and without it the operator reads a stale report
-with nothing to indicate it. `-R` matters for the same reason: the buffer is a view of
-the agent's output, so a modified buffer would only collide with the next rewrite.
+**nvim 0.12.4.** The review pane is `nvim -R -M -n -p` on `REVIEW.md` and
+`COMMENTS.md`, one tab each, and nvim does not notice the agent rewriting either. A
+`vim.uv` timer calling `checktime` every two seconds is what makes the pane live, and
+without it the operator reads a stale report with nothing to indicate it. `-M` does not
+interfere: a nomodifiable buffer still reloads, because a reload is not an edit.
+checktime does defer a reload for a buffer with no window, so the inactive tab is also
+re-checked on `TabEnter`.
+
+The lockdown is deliberate. Both buffers are views of the agent's output, so an edit
+could only collide with the next rewrite. The cursor stays visible: nvim re-asserts
+DECTCEM show on every redraw, `guicursor` has no hidden shape, and highlight `blend` is
+inert in the TUI, so hiding it is not available at any price worth paying.
 `vim.diagnostic.enable(false)` is global rather than per-buffer, so it also covers
 language servers that attach after startup.
 
@@ -124,8 +131,9 @@ the live agent and leave the review permanently `stopped`.
 ## Layout
 
 One herdr workspace per review, labelled with the slug. Tab 1 holds the review agent,
-and the agent splits its own pane to the right for the report. That is the whole
-layout: the agent on the left, `REVIEW.md` on the right, and nothing per pull request,
+and the agent splits its own pane to the right for the review documents. That is the
+whole layout: the agent on the left, `REVIEW.md` and `COMMENTS.md` as two nvim tabs on
+the right, and nothing per pull request,
 because the report already covers every pull request in scope and the set can grow
 while the review is live.
 
