@@ -34,5 +34,7 @@
         ]
       }
     ]
-  }
+  },
+  "_comment_style": "outputStyle Concise (built-in, landed in claude 2.1.237): lead with the result, skip preamble and narration, same thoroughness. Set here so topic-Claudes get it via the generated effective-settings.json; also set in the global settings.json for every other session.",
+  "outputStyle": "Concise"
 }
