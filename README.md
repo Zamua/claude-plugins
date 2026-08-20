@@ -24,6 +24,12 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   diagnoses why the first attempt failed, defines each term on first use, keeps
   the codebase's own vocabulary, runs one concrete example the whole way through,
   and separates what is settled from what is broken from what nobody has decided.
+- **[pr-review-board](plugins/pr-review-board/)**: react to a pull request with
+  an emoji and a background Claude reviews it. A local poller spawns one review
+  agent per changeset in its own herdr workspace, with a plain-English report
+  live in nvim beside the agent, linked to the code it calls out. It ends by
+  proposing a numbered list of comments and posts only the ones you pick. Never
+  approves, never pushes.
 
 ## License
 
