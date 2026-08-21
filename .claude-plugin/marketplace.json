@@ -24,6 +24,11 @@
       "name": "pr-review-board",
       "source": "./plugins/pr-review-board",
       "description": "React to a pull request with an emoji and a background Claude reviews it: a local poller spawns one review agent per changeset in its own herdr workspace, with a plain-English report live in nvim beside the agent, linked to the code it calls out. It ends by proposing a numbered list of comments and posts only the ones you pick. Never approves, never pushes."
+    },
+    {
+      "name": "briefme",
+      "source": "./plugins/briefme",
+      "description": "Write a very short brief on the state of the current work: one paragraph on what is going on, then only the questions and decisions that need the user. Use when the user has lost the thread of a long session, is returning after a break, or wants to know what needs them before doing anything else."
     }
   ]
 }

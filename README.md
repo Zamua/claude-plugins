@@ -30,6 +30,10 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   live in nvim beside the agent, linked to the code it calls out. It ends by
   proposing a numbered list of comments and posts only the ones you pick. Never
   approves, never pushes.
+- **[briefme](plugins/briefme/)**: a very short brief on where the current work
+  stands. One paragraph on the state of things, then only the questions and
+  decisions that need you, each saying who it is blocked on. For picking up a
+  long session you have lost the thread of.
 
 ## License
 
