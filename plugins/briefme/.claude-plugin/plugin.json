@@ -1,0 +1,15 @@
+{
+  "name": "briefme",
+  "description": "Write a very short brief on the state of the current work: one paragraph on what is going on, then only the questions and decisions that need the user. Use when the user has lost the thread of a long session, is returning after a break, or wants to know what needs them before doing anything else.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Zamua"
+  },
+  "keywords": [
+    "status",
+    "brief",
+    "reorient",
+    "decisions",
+    "handoff"
+  ]
+}
