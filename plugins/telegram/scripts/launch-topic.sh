@@ -176,7 +176,7 @@ spawn_tmux() {
 }
 
 spawn_herdr() {
-  local herdr_bin sock pane_id ws_id root_pane
+  local herdr_bin sock pane_id ws_id
   herdr_bin=$(command -v herdr || echo /opt/homebrew/bin/herdr)
   # Default-session socket; HERDR_SOCKET_PATH overrides (matches herdr's own
   # resolution order for the default session).
@@ -220,50 +220,68 @@ print("absent")
   esac
 
   # One WORKSPACE per topic-Claude (operator preference: agents as workspace
-  # tabs, not side-by-side splits in one shared workspace). Create it labeled
-  # with the session name, remember its auto-created empty ROOT pane (closed
-  # after the agent lands - `agent start` always splits a NEW pane, it never
-  # reuses the root), and never steal UI focus. If workspace creation fails
-  # (older herdr, server hiccup) fall back to spawning without --workspace -
-  # a shared-workspace pane beats no session.
+  # tabs, not side-by-side splits in one shared workspace), labeled with the
+  # session name and never stealing UI focus. The workspace's auto-created ROOT
+  # pane hosts the agent directly.
   local ws_out
   ws_out=$("$herdr_bin" workspace create --cwd "$TG_SPAWN_DIR" --label "$TG_SESSION" --no-focus 2>/dev/null) || ws_out=''
   ws_id=$(printf '%s' "$ws_out" | sed -n 's/.*"workspace_id":"\([^"]*\)".*/\1/p' | head -1)
-  root_pane=$(printf '%s' "$ws_out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -1)
+  pane_id=$(printf '%s' "$ws_out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -1)
+  if [ -z "$pane_id" ]; then
+    echo "telegram-topics: herdr workspace create failed (is the herdr server running?)" >&2
+    exit 1
+  fi
 
-  # Spawn. A herdr pane inherits the herdr SERVER's environment (not this
-  # launcher's), so every var - PATH included, or `claude` may not resolve
-  # under a launchd-started server - is injected with a /usr/bin/env prefix on
-  # the pane command (the herdr equivalent of tmux's `new-session -e`).
-  local out
-  out=$("$herdr_bin" agent start "$TG_SESSION" ${ws_id:+--workspace "$ws_id"} --no-focus --cwd "$TG_SPAWN_DIR" -- \
-    /usr/bin/env \
-    PATH="$PATH" \
-    MCP_TIMEOUT="$MCP_TIMEOUT" \
-    TG_PATH="$TG_PATH" \
-    TG_CLAUDE_BIN="$TG_CLAUDE_BIN" \
-    TG_MARKETPLACE="$TG_MARKETPLACE" \
-    TG_SETTINGS="$TG_SETTINGS" \
-    TG_HOOK="$TG_HOOK" \
-    TG_FAILOVER_HOOK="$TG_FAILOVER_HOOK" \
-    TG_MODEL="$TG_MODEL" \
-    TG_KICKOFF="$TG_KICKOFF" \
-    TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
-    TG_RESUME="$TG_RESUME" \
-    TELEGRAM_TOPIC_ID="$TELEGRAM_TOPIC_ID" \
-    TELEGRAM_PROXY_URL="$TELEGRAM_PROXY_URL" \
-    bash -c "$PANE_CMD") || {
-    echo "telegram-topics: herdr agent start failed (is the herdr server running?)" >&2
+  # The pane LABEL is the shared currency with the tmux backend (a tmux session
+  # name == a herdr pane label): the dedup guard above and the proxy's reconcile
+  # both look sessions up by it.
+  "$herdr_bin" pane rename "$pane_id" "$TG_SESSION" >/dev/null 2>&1 || true
+
+  # Spawn INTO that pane. `herdr agent start` does not launch arbitrary
+  # commands (as of 0.8.2 it only types the KIND's own binary into an existing
+  # pane), so the invocation goes through `pane run`, which TYPES one line into
+  # the pane's shell. A typed line is a poor carrier for this command: newlines
+  # submit it half-parsed and anything past ~1500 chars is dropped without ever
+  # being submitted. So the real invocation is written to a short-lived script
+  # and the typed line is just `exec bash <path>` - exec so the pane dies with
+  # claude and the proxy's reconcile drops it.
+  #
+  # A herdr pane inherits the herdr SERVER's environment (not this launcher's),
+  # so every var - PATH included, or `claude` may not resolve under a
+  # launchd-started server - is exported by that script (the herdr equivalent of
+  # tmux's `new-session -e`). It deletes itself on entry; bash holds the open fd,
+  # so the running copy is unaffected.
+  local script
+  # NB no .sh suffix: BSD mktemp only substitutes X's at the END of the template
+  # and would otherwise hand back the literal name, colliding across spawns.
+  script=$(mktemp "${TMPDIR:-/tmp}/tg-topic-XXXXXX") || {
+    echo "telegram-topics: could not create the herdr spawn script" >&2
     exit 1
   }
-  # agent start echoes one JSON object; the pane_id is the handle the watcher
-  # needs for pane.read / send-keys.
-  pane_id=$(printf '%s' "$out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -1)
-
-  # Close the workspace's empty root pane so the agent is the workspace's sole
-  # pane. Guard: never close the pane the agent itself landed in.
-  if [ -n "$root_pane" ] && [ "$root_pane" != "$pane_id" ]; then
-    "$herdr_bin" pane close "$root_pane" >/dev/null 2>&1 || true
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'rm -f %q\n' "$script"
+    printf 'export PATH=%q\n' "$PATH"
+    printf 'export MCP_TIMEOUT=%q\n' "$MCP_TIMEOUT"
+    printf 'export TG_PATH=%q\n' "$TG_PATH"
+    printf 'export TG_CLAUDE_BIN=%q\n' "$TG_CLAUDE_BIN"
+    printf 'export TG_MARKETPLACE=%q\n' "$TG_MARKETPLACE"
+    printf 'export TG_SETTINGS=%q\n' "$TG_SETTINGS"
+    printf 'export TG_HOOK=%q\n' "$TG_HOOK"
+    printf 'export TG_FAILOVER_HOOK=%q\n' "$TG_FAILOVER_HOOK"
+    printf 'export TG_MODEL=%q\n' "$TG_MODEL"
+    printf 'export TG_KICKOFF=%q\n' "$TG_KICKOFF"
+    printf 'export TG_CLAUDE_SESSION_ID=%q\n' "$TG_CLAUDE_SESSION_ID"
+    printf 'export TG_RESUME=%q\n' "$TG_RESUME"
+    printf 'export TELEGRAM_TOPIC_ID=%q\n' "$TELEGRAM_TOPIC_ID"
+    printf 'export TELEGRAM_PROXY_URL=%q\n' "$TELEGRAM_PROXY_URL"
+    printf '%s\n' "$PANE_CMD"
+  } > "$script"
+  chmod 700 "$script"
+  if ! "$herdr_bin" pane run "$pane_id" "exec bash $script" >/dev/null 2>&1; then
+    echo "telegram-topics: herdr pane run failed for $pane_id" >&2
+    rm -f "$script"
+    exit 1
   fi
 
   # Auto-confirm watcher: poll the pane's visible text over the socket API

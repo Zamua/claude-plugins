@@ -73,14 +73,21 @@ core:
   the proxy), because spawning is where the backend-specific ceremony is:
   - tmux: `new-session -e VAR=...` for env (see the env-propagation gotcha
     below), `capture-pane`/`send-keys` for the dialog watcher.
-  - herdr: one WORKSPACE per topic-Claude (labeled with the session name,
-    `--no-focus`; the workspace's auto-created empty root pane is closed after
-    the agent lands, and a create failure falls back to a shared-workspace
-    spawn), then `herdr agent start <name> --workspace <id> --cwd ... --
-    /usr/bin/env VAR=... bash -c "$PANE_CMD"`. The env prefix is REQUIRED (a
-    herdr pane inherits the herdr SERVER's environment - often a minimal
-    launchd one - never the launcher's), and PATH is forwarded the same way so
-    `claude` resolves. The dialog watcher polls the socket API (`pane.read`,
+  - herdr: one WORKSPACE per topic-Claude (`workspace create --label <session>
+    --no-focus`), whose auto-created ROOT pane hosts the agent; the pane is
+    renamed to the session name (`pane rename`) because the pane LABEL is what
+    the proxy and the dedup guard look sessions up by. The invocation is then
+    written to a short-lived script under `$TMPDIR` and started with
+    `herdr pane run <pane_id> "exec bash <script>"`. Three constraints force
+    that shape: `herdr agent start` cannot launch an arbitrary command (as of
+    0.8.2 it only types the KIND's own binary into an existing pane, `--kind K
+    --pane ID`); `pane run` TYPES its argument into the pane shell, so a
+    newline submits the line half-parsed and anything past ~1500 chars is
+    dropped without ever being submitted; and a herdr pane inherits the herdr
+    SERVER's environment - often a minimal launchd one - never the launcher's,
+    so every var including PATH must be exported by that script or `claude`
+    may not even resolve. The script deletes itself on entry (bash holds the
+    open fd). The dialog watcher polls the socket API (`pane.read`,
     newline-delimited JSON over `~/.config/herdr/herdr.sock`; NB `source` is
     required and must be `visible`) and answers with
     `herdr pane send-keys <pane_id> 1 Enter`.
