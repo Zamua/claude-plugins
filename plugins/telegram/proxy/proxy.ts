@@ -1391,11 +1391,15 @@ const VOICE_GLOSSARY = process.env.TELEGRAM_TOPICS_WHISPER_PROMPT ?? (
     'async', 'await', 'TODO', 'kubectl', 'namespace', 'k3s', 'traefik', 'nginx',
     'MinIO', 'podman', 'colima', 'tmux', 'launchd', 'pm2', 'caddy', 'tailscale',
     'herdr', 'PostgreSQL', 'SQLite', 'slatedb', 'Hetzner', 'Oracle',
-    'Cloudflare', 'OpenTofu', 'ansible', 'hostthis', 'prepcards',
-    'boardtogether', 'pokerchips', 'jamshelf', 'shale', 'openpilot', 'whisper',
+    'Cloudflare', 'OpenTofu', 'ansible', 'prepcards',
+    'boardtogether', 'pokerchips', 'jamshelf', 'shale', 'whisper',
     'Claude', 'opus', 'sonnet', 'fable',
   ].join(', ')
+  // Terms whose SPOKEN form differs from the written one need a sentence, not a
+  // list entry: "hostthis" is said "host this" and came back as "hostess" while
+  // sitting in the list above, and "celld" is said "cell dee".
   + '. Update the CLAUDE.md file, run the e2e tests, then check the CI logs.'
+  + ' Deploy hostthis to staging, then migrate hostthis onto celld and check the celld cells.'
 )
 
 function run(bin: string, args: string[], timeoutMs: number): Promise<string | null> {
