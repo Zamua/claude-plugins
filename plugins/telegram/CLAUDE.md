@@ -211,11 +211,13 @@ transcribed it correctly (verified 2026-08-08). Telegram caps bot downloads at
 ## Secret drop (`/secret <name>`)
 
 The operator pastes a credential into any topic as `/secret <name>` with the
-value on the next line (same line works too). The PROXY handles it in
-`handleSecretDrop`, before every relay path including the square, and the
-message is never enqueued: a topic-Claude's transcript persists every inbound
-message in plaintext, so the value must not reach one. Parsing and the file
-write live in `proxy/secret.ts` (pure, tested with `bun test`).
+value on the next line (same line works too); `/secret --list` shows names,
+sizes and dates; `/secret --delete <name>` removes one. A flag also reads with
+the em or en dash a phone keyboard turns `--` into. The PROXY handles all of it
+in `handleSecretDrop`, before every relay path including the square, and the
+message itself is never enqueued: a topic-Claude's transcript persists every
+inbound message in plaintext, so the value must not reach one. Parsing and the
+files live in `proxy/secret.ts` (pure, tested with `bun test`).
 
 Order of operations, and why: the message is DELETED from the chat first,
 whatever happens next, so a refused name cannot leave the value on screen.
@@ -230,8 +232,12 @@ is part of the value. The value is written to
 renamed into place, with one trailing newline. The ack in the topic names the
 path and byte count and says `replaced` on an opted-in overwrite; it never
 carries the value. If the delete failed the ack says so, because the value is then
-still in the chat and the operator must remove it. No Claude is woken or told:
-the ack is the notice, and a Claude reads the file when asked to use it.
+still in the chat and the operator must remove it. After a store or a delete
+the topic's Claude is told through the normal queue (`ensureSession` +
+`enqueue`, so a dormant one wakes): a `SYSTEM NOTICE` naming the path and byte
+count, never the value, with meta `secret_drop=1`. The reply guard treats that
+meta like a square turn and accepts silence, since the proxy already acked in
+the topic. The square topic gets no notice; it has no Claude of its own.
 
 Residual exposure is the one hop through Telegram's servers (the Bot API is
 not end-to-end) and the client's own message cache until the delete lands.

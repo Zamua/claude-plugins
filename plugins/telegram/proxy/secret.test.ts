@@ -1,12 +1,15 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, readdirSync, statSync } from 'fs'
+import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { SECRET_CMD_RE, SecretExists, parseSecretCommand, storeSecret } from './secret'
+import {
+  SECRET_CMD_RE, SecretExists, SecretMissing, deleteSecret, listSecrets, parseSecretCommand, storeSecret,
+} from './secret'
 
 describe('parseSecretCommand', () => {
   test('name on the command line, value on the next', () => {
     expect(parseSecretCommand('/secret cloudflare-foo-dns\nabc123\n')).toEqual({
+      kind: 'store',
       name: 'cloudflare-foo-dns',
       value: 'abc123',
       replace: false,
@@ -14,8 +17,9 @@ describe('parseSecretCommand', () => {
   })
 
   test('value on the same line, and a multi-line value, both survive intact', () => {
-    expect(parseSecretCommand('/secret k v1')).toEqual({ name: 'k', value: 'v1', replace: false })
+    expect(parseSecretCommand('/secret k v1')).toEqual({ kind: 'store', name: 'k', value: 'v1', replace: false })
     expect(parseSecretCommand('/secret pem\n-----BEGIN\nline2\n-----END\n\n')).toEqual({
+      kind: 'store',
       name: 'pem',
       value: '-----BEGIN\nline2\n-----END',
       replace: false,
@@ -23,23 +27,38 @@ describe('parseSecretCommand', () => {
   })
 
   test('--replace counts only directly after the name', () => {
-    expect(parseSecretCommand('/secret k --replace\nv')).toEqual({ name: 'k', value: 'v', replace: true })
-    expect(parseSecretCommand('/secret k --replace v')).toEqual({ name: 'k', value: 'v', replace: true })
-    expect(parseSecretCommand('/secret k\n--replace-me')).toEqual({ name: 'k', value: '--replace-me', replace: false })
-    expect(parseSecretCommand('/secret k\nv --replace')).toEqual({ name: 'k', value: 'v --replace', replace: false })
+    expect(parseSecretCommand('/secret k --replace\nv')).toMatchObject({ kind: 'store', value: 'v', replace: true })
+    expect(parseSecretCommand('/secret k --replace v')).toMatchObject({ kind: 'store', value: 'v', replace: true })
+    expect(parseSecretCommand('/secret k\n--replace-me')).toMatchObject({ value: '--replace-me', replace: false })
+    expect(parseSecretCommand('/secret k\nv --replace')).toMatchObject({ value: 'v --replace', replace: false })
     expect(parseSecretCommand('/secret k --replace')).toMatchObject({ error: expect.stringContaining('no value') })
+  })
+
+  test('a phone keyboard dash (em or en) reads as --', () => {
+    expect(parseSecretCommand('/secret —list')).toEqual({ kind: 'list' })
+    expect(parseSecretCommand('/secret –delete k')).toEqual({ kind: 'delete', name: 'k' })
+    expect(parseSecretCommand('/secret k —replace\nv')).toMatchObject({ replace: true, value: 'v' })
+  })
+
+  test('list and delete forms', () => {
+    expect(parseSecretCommand('/secret --list')).toEqual({ kind: 'list' })
+    expect(parseSecretCommand('/secret --list extra words')).toEqual({ kind: 'list' })
+    expect(parseSecretCommand('/secret --delete k')).toEqual({ kind: 'delete', name: 'k' })
+    expect(parseSecretCommand('/secret --delete')).toMatchObject({ error: expect.stringContaining('usage') })
+    expect(parseSecretCommand('/secret --delete ../x')).toMatchObject({ error: expect.stringContaining('refused name') })
+    expect(parseSecretCommand('/secret --frobnicate')).toMatchObject({ error: expect.stringContaining('unknown flag') })
   })
 
   test('the @botname suffix Telegram appends to commands is ignored', () => {
     expect(SECRET_CMD_RE.test('/secret@mybot k')).toBe(true)
-    expect(parseSecretCommand('/secret@mybot k\nv')).toEqual({ name: 'k', value: 'v', replace: false })
+    expect(parseSecretCommand('/secret@mybot k\nv')).toMatchObject({ kind: 'store', name: 'k', value: 'v' })
     expect(SECRET_CMD_RE.test('/secrets k')).toBe(false)
   })
 
   test('a name that could escape the directory is refused', () => {
-    for (const bad of ['../x', 'a/b', '.hidden', 'a..b', 'Upper', 'x'.repeat(65), '']) {
-      const parsed = parseSecretCommand(`/secret ${bad}\nv`)
-      expect('error' in parsed).toBe(true)
+    for (const bad of ['../x', 'a/b', '.hidden', 'a..b', 'Upper', 'x'.repeat(65)]) {
+      expect('error' in parseSecretCommand(`/secret ${bad}\nv`)).toBe(true)
+      expect('error' in parseSecretCommand(`/secret --delete ${bad}`)).toBe(true)
     }
   })
 
@@ -91,5 +110,42 @@ describe('storeSecret', () => {
     const dir = join(mkdtempSync(join(tmpdir(), 'secret-')), 'keys')
     storeSecret(dir, 'k', 'v')
     expect(statSync(dir).mode & 0o777).toBe(0o700)
+  })
+
+  test('a direct caller cannot pass a path as the name', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'secret-'))
+    expect(() => storeSecret(dir, '../escape', 'v')).toThrow('refused name')
+    expect(() => deleteSecret(dir, '../escape')).toThrow('refused name')
+  })
+})
+
+describe('listSecrets', () => {
+  test('names, value sizes and dates, sorted, dotfiles skipped, no values', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'secret-'))
+    storeSecret(dir, 'zeta', 'zz')
+    storeSecret(dir, 'alpha', 'hunter2')
+    writeFileSync(join(dir, 'raw-no-newline'), 'abc')
+    writeFileSync(join(dir, '.alpha.tmp-999'), 'leftover')
+
+    const entries = listSecrets(dir)
+
+    expect(entries.map(e => [e.name, e.bytes])).toEqual([['alpha', 7], ['raw-no-newline', 3], ['zeta', 2]])
+    for (const e of entries) expect(e.mtime).toBeInstanceOf(Date)
+    expect(JSON.stringify(entries)).not.toContain('hunter2')
+  })
+
+  test('a missing directory lists nothing', () => {
+    expect(listSecrets(join(tmpdir(), 'secret-does-not-exist'))).toEqual([])
+  })
+})
+
+describe('deleteSecret', () => {
+  test('removes the file and reports its size; a missing name is a typed error', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'secret-'))
+    storeSecret(dir, 'k', 'hunter2')
+
+    expect(deleteSecret(dir, 'k')).toEqual({ bytes: 7 })
+    expect(readdirSync(dir)).toEqual([])
+    expect(() => deleteSecret(dir, 'k')).toThrow(SecretMissing)
   })
 })

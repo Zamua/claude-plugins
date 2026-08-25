@@ -88,6 +88,11 @@ def main() -> None:
     if last_ch < 0:
         return  # this turn was not triggered by a Telegram message
 
+    # Secret-drop notices (meta secret_drop="1") ask for no reply: the proxy
+    # already acked in the topic, and a nag would only manufacture a "noted".
+    if 'secret_drop="1"' in last_blob:
+        return
+
     # SQUARE turns (meta square="1"): silence is sanctioned - the norm is
     # "reply only if it moves the work forward; if no reply is warranted, do
     # nothing" - so we never nag for a missing reply. But the OPPOSITE failure
