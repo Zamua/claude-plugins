@@ -44,7 +44,9 @@ import { join, extname, sep } from 'path'
 import { spawnSync, execFile, execFileSync } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
-import { SECRET_CMD_RE, SecretExists, parseSecretCommand, storeSecret } from './secret'
+import {
+  SECRET_CMD_RE, SecretExists, SecretMissing, deleteSecret, listSecrets, parseSecretCommand, storeSecret,
+} from './secret'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -1481,33 +1483,73 @@ async function handleSecretDrop(
     await say(`🔐 refused: not the secrets user.${undeleted}`)
     return
   }
-  const parsed = parseSecretCommand(text)
-  if ('error' in parsed) {
-    await say(`🔐 ${parsed.error}.${undeleted}`)
+  const cmd = parseSecretCommand(text)
+  if ('error' in cmd) {
+    await say(`🔐 ${cmd.error}.${undeleted}`)
     return
   }
   const home = homedir()
-  const path = join(SECRETS_DIR, parsed.name)
-  const shown = path.startsWith(home + sep) ? '~' + path.slice(home.length) : path
+  const tilde = (p: string) => (p.startsWith(home + sep) ? '~' + p.slice(home.length) : p)
+  const reason = (err: unknown) => (err instanceof Error ? err.message : String(err))
+  // The topic's Claude learns the path, never the value, through the same
+  // queue a message takes (waking it if dormant), so nobody has to tell it.
+  // The square has no Claude of its own. secret_drop=1 lets the reply guard
+  // accept silence: the proxy already acked in the topic.
+  const notify = (what: string) => {
+    if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
+    ensureSession(topic)
+    enqueue(topic, {
+      content: `SYSTEM NOTICE (not a user message): ${what} No reply is required.`,
+      meta: {
+        chat_id: chatId,
+        user: 'telegram-topics-proxy',
+        user_id: fromId,
+        ts: new Date().toISOString(),
+        ...(topic !== 'general' ? { message_thread_id: topic } : {}),
+        secret_drop: '1',
+      },
+    })
+  }
+  if (cmd.kind === 'list') {
+    const entries = listSecrets(SECRETS_DIR)
+    let body = entries.map(e => `${e.name}  ${e.bytes} bytes  ${e.mtime.toISOString().slice(0, 10)}`).join('\n')
+    if (body.length > 3500) body = body.slice(0, 3500) + '\n... truncated'
+    await say(`🔐 ${tilde(SECRETS_DIR)}: ${entries.length} secret(s)\n${body}${undeleted}`)
+    return
+  }
+  const shown = tilde(join(SECRETS_DIR, cmd.name))
+  if (cmd.kind === 'delete') {
+    try {
+      const gone = deleteSecret(SECRETS_DIR, cmd.name)
+      log(`secret drop: deleted ${shown}`)
+      await say(`🔐 deleted ${shown} (${gone.bytes} bytes).${undeleted}`)
+      notify(`the operator deleted the secret ${shown}.`)
+    } catch (err) {
+      const why = err instanceof SecretMissing ? `no such secret: ${shown}` : `could not delete ${shown}: ${reason(err)}`
+      await say(`🔐 ${why}.${undeleted}`)
+    }
+    return
+  }
   let stored
   try {
-    stored = storeSecret(SECRETS_DIR, parsed.name, parsed.value, parsed.replace)
+    stored = storeSecret(SECRETS_DIR, cmd.name, cmd.value, cmd.replace)
   } catch (err) {
     if (err instanceof SecretExists) {
       log(`secret drop refused: ${shown} exists`)
       await say(
         `🔐 refused: ${shown} exists (${err.bytes} bytes). ` +
-          `Resend as /secret ${parsed.name} --replace to overwrite it.${undeleted}`,
+          `Resend as /secret ${cmd.name} --replace to overwrite it.${undeleted}`,
       )
       return
     }
-    log(`secret drop failed for ${parsed.name}: ${err}`)
-    await say(`🔐 could not store "${parsed.name}": ${err instanceof Error ? err.message : err}.${undeleted}`)
+    log(`secret drop failed for ${cmd.name}: ${err}`)
+    await say(`🔐 could not store "${cmd.name}": ${reason(err)}.${undeleted}`)
     return
   }
   const note = `${stored.replaced ? 'replaced' : 'stored'} ${shown} (${stored.bytes} bytes)`
   log(`secret drop: ${note}`)
   await say(`🔐 ${note}.${undeleted}`)
+  notify(`the operator ${note}. Read the file when a task needs it; the value was deliberately never sent to you.`)
 }
 
 bot.on('message', async ctx => {
