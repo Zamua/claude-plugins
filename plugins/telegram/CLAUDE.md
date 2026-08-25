@@ -208,6 +208,30 @@ tiny/base/small all garbled a true WHISPER (low-energy speech); large-v3-turbo
 transcribed it correctly (verified 2026-08-08). Telegram caps bot downloads at
 20MB (~20 min of voice).
 
+## Secret drop (`/secret <name>`)
+
+The operator pastes a credential into any topic as `/secret <name>` with the
+value on the next line (same line works too). The PROXY handles it in
+`handleSecretDrop`, before every relay path including the square, and the
+message is never enqueued: a topic-Claude's transcript persists every inbound
+message in plaintext, so the value must not reach one. Parsing and the file
+write live in `proxy/secret.ts` (pure, tested with `bun test`).
+
+Order of operations, and why: the message is DELETED from the chat first,
+whatever happens next, so a refused name cannot leave the value on screen.
+Then the sender is checked against `TELEGRAM_TOPICS_SECRETS_USER_ID` (unset =
+feature off; the group gate alone admits every member). Then the name is
+validated (`[a-z0-9][a-z0-9._-]{0,63}`, no `..`), and the value is written to
+`TELEGRAM_TOPICS_SECRETS_DIR/<name>` (default `~/keys`) as a 0600 temp file
+renamed into place, with one trailing newline. The ack in the topic names the
+path and byte count and says `replaced` when a file existed; it never carries
+the value. If the delete failed the ack says so, because the value is then
+still in the chat and the operator must remove it. No Claude is woken or told:
+the ack is the notice, and a Claude reads the file when asked to use it.
+
+Residual exposure is the one hop through Telegram's servers (the Bot API is
+not end-to-end) and the client's own message cache until the delete lands.
+
 ## Usage-limit model failover
 
 A topic-Claude that exhausts its model's PLAN quota (HTTP 429) would otherwise
