@@ -1552,6 +1552,26 @@ async function handleSecretDrop(
   notify(`the operator ${note}. Read the file when a task needs it; the value was deliberately never sent to you.`)
 }
 
+// The "/" menu: discoverable, autocompleted, and free of the "--" a phone
+// keyboard mangles. Scoped to the group so no other chat learns the verbs.
+// Idempotent, and a failure only costs the menu, never the commands.
+async function registerSecretCommands(): Promise<void> {
+  if (!SECRETS_USER_ID) return
+  try {
+    await bot.api.setMyCommands(
+      [
+        { command: 'secret', description: 'store a credential: /secret <name>, value on the next line' },
+        { command: 'secrets', description: 'list stored credentials (names and sizes only)' },
+        { command: 'unsecret', description: 'delete a stored credential: /unsecret <name>' },
+      ],
+      { scope: { type: 'chat', chat_id: Number(GROUP_CHAT_ID) } },
+    )
+    log('registered /secret, /secrets, /unsecret in the group command menu')
+  } catch (err) {
+    log(`could not register the secret commands: ${err}`)
+  }
+}
+
 bot.on('message', async ctx => {
   const msg = ctx.message
   // Access control: only the configured forum group. Everything else dropped.
@@ -2036,6 +2056,7 @@ async function pollWithRetry(): Promise<void> {
 
 await serveWithRetry()
 void pollWithRetry()
+void registerSecretCommands()
 
 // ---- nightly restart (passive) ---------------------------------------------
 //

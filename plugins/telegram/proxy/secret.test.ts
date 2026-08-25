@@ -34,31 +34,39 @@ describe('parseSecretCommand', () => {
     expect(parseSecretCommand('/secret k --replace')).toMatchObject({ error: expect.stringContaining('no value') })
   })
 
-  test('a phone keyboard dash (em or en) reads as --', () => {
-    expect(parseSecretCommand('/secret —list')).toEqual({ kind: 'list' })
-    expect(parseSecretCommand('/secret –delete k')).toEqual({ kind: 'delete', name: 'k' })
-    expect(parseSecretCommand('/secret k —replace\nv')).toMatchObject({ replace: true, value: 'v' })
+  test('the native verbs: /secrets lists, /unsecret deletes', () => {
+    expect(parseSecretCommand('/secrets')).toEqual({ kind: 'list' })
+    expect(parseSecretCommand('/secrets@mybot')).toEqual({ kind: 'list' })
+    expect(parseSecretCommand('/unsecret k')).toEqual({ kind: 'delete', name: 'k' })
+    expect(parseSecretCommand('/unsecret@mybot k')).toEqual({ kind: 'delete', name: 'k' })
+    expect(parseSecretCommand('/unsecret')).toMatchObject({ error: expect.stringContaining('usage') })
+    expect(parseSecretCommand('/unsecret ../x')).toMatchObject({ error: expect.stringContaining('refused name') })
   })
 
-  test('list and delete forms', () => {
+  test('the flag aliases still work, with a phone keyboard dash (em or en) read as --', () => {
     expect(parseSecretCommand('/secret --list')).toEqual({ kind: 'list' })
-    expect(parseSecretCommand('/secret --list extra words')).toEqual({ kind: 'list' })
+    expect(parseSecretCommand('/secret —list')).toEqual({ kind: 'list' })
     expect(parseSecretCommand('/secret --delete k')).toEqual({ kind: 'delete', name: 'k' })
+    expect(parseSecretCommand('/secret –delete k')).toEqual({ kind: 'delete', name: 'k' })
+    expect(parseSecretCommand('/secret k —replace\nv')).toMatchObject({ replace: true, value: 'v' })
     expect(parseSecretCommand('/secret --delete')).toMatchObject({ error: expect.stringContaining('usage') })
-    expect(parseSecretCommand('/secret --delete ../x')).toMatchObject({ error: expect.stringContaining('refused name') })
     expect(parseSecretCommand('/secret --frobnicate')).toMatchObject({ error: expect.stringContaining('unknown flag') })
   })
 
-  test('the @botname suffix Telegram appends to commands is ignored', () => {
-    expect(SECRET_CMD_RE.test('/secret@mybot k')).toBe(true)
-    expect(parseSecretCommand('/secret@mybot k\nv')).toMatchObject({ kind: 'store', name: 'k', value: 'v' })
-    expect(SECRET_CMD_RE.test('/secrets k')).toBe(false)
+  test('only the three verbs match, with or without the @botname suffix', () => {
+    for (const ok of ['/secret k', '/secret@mybot k', '/secrets', '/unsecret k', '/secret']) {
+      expect(SECRET_CMD_RE.test(ok)).toBe(true)
+    }
+    for (const no of ['/secretive k', '/secretsx', '/unsecrets k', 'secret k', ' /secret k']) {
+      expect(SECRET_CMD_RE.test(no)).toBe(false)
+    }
+    expect(parseSecretCommand('/secretive k')).toMatchObject({ error: expect.stringContaining('usage') })
   })
 
   test('a name that could escape the directory is refused', () => {
     for (const bad of ['../x', 'a/b', '.hidden', 'a..b', 'Upper', 'x'.repeat(65)]) {
       expect('error' in parseSecretCommand(`/secret ${bad}\nv`)).toBe(true)
-      expect('error' in parseSecretCommand(`/secret --delete ${bad}`)).toBe(true)
+      expect('error' in parseSecretCommand(`/unsecret ${bad}`)).toBe(true)
     }
   })
 

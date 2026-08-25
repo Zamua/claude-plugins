@@ -8,7 +8,10 @@ import {
 } from 'fs'
 import { join } from 'path'
 
-export const SECRET_CMD_RE = /^\/secret(?:@\w+)?(?=\s|$)/
+// Three flat verbs, because Telegram's "/" menu has no sub-commands and a
+// phone keyboard mangles "--": /secret stores, /secrets lists, /unsecret
+// deletes. The --list / --delete flag forms stay as aliases.
+export const SECRET_CMD_RE = /^\/(secret|secrets|unsecret)(?:@\w+)?(?=\s|$)/
 
 // Lowercase file-name characters only: the name becomes a path component and
 // must never carry a separator, a leading dot, or a parent reference.
@@ -18,7 +21,7 @@ const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const FLAG_RE = /^(?:--|[—–])(\w+)$/
 const REPLACE_RE = /^\s+(?:--|[—–])replace(?=\s|$)/
 
-const USAGE = 'usage: /secret <name> then the value on the next line; /secret --list; /secret --delete <name>'
+const USAGE = 'usage: /secret <name> then the value on the next line; /secrets; /unsecret <name>'
 
 export type SecretCommand =
   | { kind: 'store'; name: string; value: string; replace: boolean }
@@ -40,17 +43,17 @@ function nameError(name: string): string | null {
 // from a phone usually carries a stray newline, and no secret legitimately
 // starts with one.
 export function parseSecretCommand(text: string): SecretCommand {
+  const verb = SECRET_CMD_RE.exec(text)?.[1]
+  if (!verb) return { error: USAGE }
   const body = text.replace(SECRET_CMD_RE, '')
+  if (verb === 'secrets') return { kind: 'list' }
+  if (verb === 'unsecret') return deleteForm(body)
   const m = /^\s*(\S+)([\s\S]*)$/.exec(body)
   if (!m) return { error: USAGE }
   const [, first, rest] = m
   const flag = FLAG_RE.exec(first)?.[1]
   if (flag === 'list') return { kind: 'list' }
-  if (flag === 'delete') {
-    const name = rest.trim().split(/\s+/)[0] ?? ''
-    const bad = nameError(name)
-    return bad ? { error: bad } : { kind: 'delete', name }
-  }
+  if (flag === 'delete') return deleteForm(rest)
   if (flag) return { error: `unknown flag --${flag}. ${USAGE}` }
   const bad = nameError(first)
   if (bad) return { error: bad }
@@ -58,6 +61,12 @@ export function parseSecretCommand(text: string): SecretCommand {
   const value = (rep ? rest.slice(rep[0].length) : rest).trim()
   if (!value) return { error: `no value for "${first}": put it on the line after the name` }
   return { kind: 'store', name: first, value, replace: !!rep }
+}
+
+function deleteForm(rest: string): SecretCommand {
+  const name = rest.trim().split(/\s+/)[0] ?? ''
+  const bad = nameError(name)
+  return bad ? { error: bad } : { kind: 'delete', name }
 }
 
 export class SecretExists extends Error {

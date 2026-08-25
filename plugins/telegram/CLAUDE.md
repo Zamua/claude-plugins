@@ -211,10 +211,14 @@ transcribed it correctly (verified 2026-08-08). Telegram caps bot downloads at
 ## Secret drop (`/secret <name>`)
 
 The operator pastes a credential into any topic as `/secret <name>` with the
-value on the next line (same line works too); `/secret --list` shows names,
-sizes and dates; `/secret --delete <name>` removes one. A flag also reads with
-the em or en dash a phone keyboard turns `--` into. The PROXY handles all of it
-in `handleSecretDrop`, before every relay path including the square, and the
+value on the next line (same line works too); `/secrets` shows names, sizes
+and dates; `/unsecret <name>` removes one. Three flat verbs because Telegram's
+"/" menu has no sub-commands and a phone keyboard turns `--` into an em dash;
+the proxy registers them in the group's command menu at boot
+(`registerSecretCommands`, `setMyCommands` scoped to the group). The
+`/secret --list` and `/secret --delete <name>` flag forms remain as aliases,
+and a flag also reads with an em or en dash. The PROXY handles all of it in
+`handleSecretDrop`, before every relay path including the square, and the
 message itself is never enqueued: a topic-Claude's transcript persists every
 inbound message in plaintext, so the value must not reach one. Parsing and the
 files live in `proxy/secret.ts` (pure, tested with `bun test`).
