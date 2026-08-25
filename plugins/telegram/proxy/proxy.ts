@@ -101,6 +101,11 @@ const SECRETS_DIR = process.env.TELEGRAM_TOPICS_SECRETS_DIR ?? join(homedir(), '
 // --resume: same conversation, freshly loaded MCP servers and settings, which
 // a running session cannot pick up mid-flight.
 const RELAUNCH_RE = /^\/relaunch(?:@\w+)?\s*$/
+// A double tap lands inside the spawn window: the second request finds no
+// live session, so it cannot double-spawn, but it would enqueue a second
+// nudge and the fresh session would answer twice.
+const RELAUNCH_DEBOUNCE_MS = 30_000
+const lastRelaunch = new Map<string, number>()
 const PROXY_URL = `http://localhost:${PORT}`
 
 function log(m: string): void {
@@ -1668,6 +1673,12 @@ async function handleRelaunch(chatId: string, topic: string, fromId: string): Pr
     await sayIn(chatId, topic, '♻️ the square has no claude of its own; run /relaunch in a topic.')
     return
   }
+  const since = Date.now() - (lastRelaunch.get(topic) ?? 0)
+  if (since < RELAUNCH_DEBOUNCE_MS) {
+    await sayIn(chatId, topic, `♻️ already relaunching; it answers within a few seconds.`)
+    return
+  }
+  lastRelaunch.set(topic, Date.now())
   const st = getTopic(topic)
   const wasLive = killSession(st, topic)
   log(`relaunch of topic ${topic} "${st.name || topic}" requested by user ${fromId} (was ${wasLive ? 'live' : 'not running'})`)
