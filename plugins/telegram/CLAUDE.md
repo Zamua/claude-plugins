@@ -259,6 +259,21 @@ the topic. The square topic gets no notice; it has no Claude of its own.
 Residual exposure is the one hop through Telegram's servers (the Bot API is
 not end-to-end) and the client's own message cache until the delete lands.
 
+## Relaunch (`/relaunch`)
+
+A topic session is one long-lived claude process, and MCP servers and settings
+load only at spawn, so a change to either needs a respawn. `/relaunch` in a
+topic does exactly what the nightly restart and the usage-limit failover do,
+on demand: `killSession` (which also drains the dying MCP's long-polls, so the
+nudge cannot be handed to it and lost), a proxy ack in the thread, a `SYSTEM
+NOTICE` enqueued with meta `relaunch=1`, then `ensureSession` respawns with
+`--resume`. The notice asks for ONE line back naming the MCP servers the
+session now sees, so a respawn that fails shows up as a visible silence and
+the operator can read the reloaded config off the reply. The square gets a
+refusal (no claude of its own). Registered in the group's "/" menu alongside
+the secret verbs (`registerCommands`); any group member may run it, since it
+is not destructive: the conversation resumes.
+
 ## Usage-limit model failover
 
 A topic-Claude that exhausts its model's PLAN quota (HTTP 429) would otherwise

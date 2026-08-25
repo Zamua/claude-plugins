@@ -97,6 +97,10 @@ const MARKETPLACE = process.env.TELEGRAM_TOPICS_MARKETPLACE ?? 'plugin:telegram@
 // alone admits every member, and this writes files into the operator's home.
 const SECRETS_USER_ID = process.env.TELEGRAM_TOPICS_SECRETS_USER_ID ?? ''
 const SECRETS_DIR = process.env.TELEGRAM_TOPICS_SECRETS_DIR ?? join(homedir(), 'keys')
+// "/relaunch" in a topic kills that topic's claude and respawns it with
+// --resume: same conversation, freshly loaded MCP servers and settings, which
+// a running session cannot pick up mid-flight.
+const RELAUNCH_RE = /^\/relaunch(?:@\w+)?\s*$/
 const PROXY_URL = `http://localhost:${PORT}`
 
 function log(m: string): void {
@@ -1655,23 +1659,59 @@ const sayIn = (chatId: string, topic: string, t: string) =>
 const tilde = (p: string) => (p.startsWith(homedir() + sep) ? '~' + p.slice(homedir().length) : p)
 const reason = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
+// Same kill-then-nudge sequence as the usage-limit failover: killSession
+// drains the dying MCP's long-polls first so the nudge cannot be handed to it
+// and lost. The nudge asks for one line back, so a respawn that fails is a
+// visible silence rather than a quiet one.
+async function handleRelaunch(chatId: string, topic: string, fromId: string): Promise<void> {
+  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
+    await sayIn(chatId, topic, '♻️ the square has no claude of its own; run /relaunch in a topic.')
+    return
+  }
+  const st = getTopic(topic)
+  const wasLive = killSession(st, topic)
+  log(`relaunch of topic ${topic} "${st.name || topic}" requested by user ${fromId} (was ${wasLive ? 'live' : 'not running'})`)
+  await sayIn(
+    chatId, topic,
+    `♻️ relaunching this topic's claude${wasLive ? '' : ' (it was not running)'}: same conversation, ` +
+      'freshly loaded MCP servers and settings.',
+  )
+  enqueue(topic, {
+    content:
+      'SYSTEM NOTICE (not a user message): the operator relaunched this session, so it has just restarted ' +
+      'with your full conversation intact and freshly loaded MCP servers and settings. Reply with ONE short ' +
+      'line confirming you are back and naming the MCP servers you now see, then continue any pending work.',
+    meta: {
+      chat_id: chatId,
+      user: 'telegram-topics-proxy',
+      user_id: fromId,
+      ts: new Date().toISOString(),
+      ...(topic !== 'general' ? { message_thread_id: topic } : {}),
+      relaunch: '1',
+    },
+  })
+  ensureSession(topic)
+}
+
 // The "/" menu: discoverable, autocompleted, and free of the "--" a phone
 // keyboard mangles. Scoped to the group so no other chat learns the verbs.
 // Idempotent, and a failure only costs the menu, never the commands.
-async function registerSecretCommands(): Promise<void> {
-  if (!SECRETS_USER_ID) return
+async function registerCommands(): Promise<void> {
+  const commands = [
+    { command: 'relaunch', description: "restart this topic's claude (same conversation, reloads MCP config)" },
+    ...(SECRETS_USER_ID
+      ? [
+          { command: 'secret', description: 'store a credential: /secret <name>, value on the next line' },
+          { command: 'secrets', description: 'list stored credentials (names and sizes only)' },
+          { command: 'unsecret', description: 'delete a stored credential: /unsecret <name>' },
+        ]
+      : []),
+  ]
   try {
-    await bot.api.setMyCommands(
-      [
-        { command: 'secret', description: 'store a credential: /secret <name>, value on the next line' },
-        { command: 'secrets', description: 'list stored credentials (names and sizes only)' },
-        { command: 'unsecret', description: 'delete a stored credential: /unsecret <name>' },
-      ],
-      { scope: { type: 'chat', chat_id: Number(GROUP_CHAT_ID) } },
-    )
-    log('registered /secret, /secrets, /unsecret in the group command menu')
+    await bot.api.setMyCommands(commands, { scope: { type: 'chat', chat_id: Number(GROUP_CHAT_ID) } })
+    log(`registered ${commands.map(c => '/' + c.command).join(', ')} in the group command menu`)
   } catch (err) {
-    log(`could not register the secret commands: ${err}`)
+    log(`could not register the group commands: ${err}`)
   }
 }
 
@@ -1686,6 +1726,10 @@ bot.on('message', async ctx => {
   // value can reach neither a topic-Claude nor a peer. See handleSecretDrop.
   if (typeof msg.text === 'string' && SECRET_CMD_RE.test(msg.text)) {
     await handleSecretDrop(String(ctx.chat.id), topic, msg.message_id, String(ctx.from?.id ?? ''), msg.text)
+    return
+  }
+  if (typeof msg.text === 'string' && RELAUNCH_RE.test(msg.text)) {
+    await handleRelaunch(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
     return
   }
   // A reply to a guided-flow prompt (name or value) belongs to the flow and is
@@ -2169,7 +2213,7 @@ async function pollWithRetry(): Promise<void> {
 
 await serveWithRetry()
 void pollWithRetry()
-void registerSecretCommands()
+void registerCommands()
 
 // ---- nightly restart (passive) ---------------------------------------------
 //
