@@ -44,6 +44,7 @@ import { join, extname, sep } from 'path'
 import { spawnSync, execFile, execFileSync } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
+import { SECRET_CMD_RE, parseSecretCommand, storeSecret } from './secret'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -88,6 +89,10 @@ const GROUP_CHAT_ID = process.env.TELEGRAM_GROUP_CHAT_ID
 const SPAWN_DIR = process.env.TELEGRAM_TOPICS_SPAWN_DIR ?? homedir()
 const PORT = parseInt(process.env.TELEGRAM_PROXY_PORT ?? '8790', 10)
 const MARKETPLACE = process.env.TELEGRAM_TOPICS_MARKETPLACE ?? 'plugin:telegram@zamua'
+// Secret drop is gated on ONE user id (unset = feature off): the group gate
+// alone admits every member, and this writes files into the operator's home.
+const SECRETS_USER_ID = process.env.TELEGRAM_TOPICS_SECRETS_USER_ID ?? ''
+const SECRETS_DIR = process.env.TELEGRAM_TOPICS_SECRETS_DIR ?? join(homedir(), 'keys')
 const PROXY_URL = `http://localhost:${PORT}`
 
 function log(m: string): void {
@@ -1451,12 +1456,64 @@ bot.catch(err => {
   process.stderr.write(`telegram-topics-proxy: handler error (polling continues): ${err.error}\n`)
 })
 
+// A "/secret <name>" message is stored to SECRETS_DIR and deleted from the
+// chat without ever being enqueued: a topic-Claude's transcript persists every
+// inbound message in plaintext, so the value must not reach one. The ack names
+// the path and the byte count, never the value, and it is the whole notice: a
+// Claude is not woken or told, it reads the file when asked to use it.
+async function handleSecretDrop(
+  chatId: string, topic: string, msgId: number, fromId: string, text: string,
+): Promise<void> {
+  const say = (t: string) =>
+    bot.api
+      .sendMessage(chatId, t, topic === 'general' ? {} : { message_thread_id: Number(topic) })
+      .catch(() => {})
+  // Delete before validating: a refused name must not leave the value on screen.
+  let deleted = true
+  try {
+    await bot.api.deleteMessage(chatId, msgId)
+  } catch {
+    deleted = false
+  }
+  const undeleted = deleted ? '' : ' Could NOT delete your message; remove it yourself.'
+  if (!SECRETS_USER_ID || fromId !== SECRETS_USER_ID) {
+    log(`secret drop refused from user ${fromId}`)
+    await say(`🔐 refused: not the secrets user.${undeleted}`)
+    return
+  }
+  const parsed = parseSecretCommand(text)
+  if ('error' in parsed) {
+    await say(`🔐 ${parsed.error}.${undeleted}`)
+    return
+  }
+  let stored
+  try {
+    stored = storeSecret(SECRETS_DIR, parsed.name, parsed.value)
+  } catch (err) {
+    log(`secret drop failed for ${parsed.name}: ${err}`)
+    await say(`🔐 could not store "${parsed.name}": ${err instanceof Error ? err.message : err}.${undeleted}`)
+    return
+  }
+  const home = homedir()
+  const shown = stored.path.startsWith(home + sep) ? '~' + stored.path.slice(home.length) : stored.path
+  const note = `${stored.replaced ? 'replaced' : 'stored'} ${shown} (${stored.bytes} bytes)`
+  log(`secret drop: ${note}`)
+  await say(`🔐 ${note}.${undeleted}`)
+}
+
 bot.on('message', async ctx => {
   const msg = ctx.message
   // Access control: only the configured forum group. Everything else dropped.
   if (String(ctx.chat.id) !== String(GROUP_CHAT_ID)) return
 
   const topic = msg.message_thread_id != null ? String(msg.message_thread_id) : 'general'
+
+  // Secret drop runs before every relay path, the square included, so the
+  // value can reach neither a topic-Claude nor a peer. See handleSecretDrop.
+  if (typeof msg.text === 'string' && SECRET_CMD_RE.test(msg.text)) {
+    await handleSecretDrop(String(ctx.chat.id), topic, msg.message_id, String(ctx.from?.id ?? ''), msg.text)
+    return
+  }
 
   // Square-topic USER messages route by conversation membership / @tags -
   // there is no claude "for" the square, so they never hit the normal path.
