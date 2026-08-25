@@ -45,8 +45,10 @@ import { spawnSync, execFile, execFileSync } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
 import {
-  SECRET_CMD_RE, SecretExists, SecretMissing, deleteSecret, listSecrets, parseSecretCommand, storeSecret,
+  SECRET_CMD_RE, SecretExists, SecretMissing, advanceSecretFlow, beginSecretFlow, deleteSecret, listSecrets,
+  parseSecretCommand, secretExists, storeSecret,
 } from './secret'
+import type { FlowResult, Pending } from './secret'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -1488,27 +1490,11 @@ async function handleSecretDrop(
     await say(`🔐 ${cmd.error}.${undeleted}`)
     return
   }
-  const home = homedir()
-  const tilde = (p: string) => (p.startsWith(home + sep) ? '~' + p.slice(home.length) : p)
-  const reason = (err: unknown) => (err instanceof Error ? err.message : String(err))
-  // The topic's Claude learns the path, never the value, through the same
-  // queue a message takes (waking it if dormant), so nobody has to tell it.
-  // The square has no Claude of its own. secret_drop=1 lets the reply guard
-  // accept silence: the proxy already acked in the topic.
-  const notify = (what: string) => {
-    if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
-    ensureSession(topic)
-    enqueue(topic, {
-      content: `SYSTEM NOTICE (not a user message): ${what} No reply is required.`,
-      meta: {
-        chat_id: chatId,
-        user: 'telegram-topics-proxy',
-        user_id: fromId,
-        ts: new Date().toISOString(),
-        ...(topic !== 'general' ? { message_thread_id: topic } : {}),
-        secret_drop: '1',
-      },
-    })
+  if (cmd.kind === 'begin') {
+    // A menu tap sends the bare verb, so a bare verb opens the guided flow.
+    await cancelSecretFlow(chatId, fromId, topic)
+    await promptSecret(chatId, topic, fromId, beginSecretFlow(cmd.verb), [])
+    return
   }
   if (cmd.kind === 'list') {
     const entries = listSecrets(SECRETS_DIR)
@@ -1517,40 +1503,157 @@ async function handleSecretDrop(
     await say(`🔐 ${tilde(SECRETS_DIR)}: ${entries.length} secret(s)\n${body}${undeleted}`)
     return
   }
-  const shown = tilde(join(SECRETS_DIR, cmd.name))
   if (cmd.kind === 'delete') {
-    try {
-      const gone = deleteSecret(SECRETS_DIR, cmd.name)
-      log(`secret drop: deleted ${shown}`)
-      await say(`🔐 deleted ${shown} (${gone.bytes} bytes).${undeleted}`)
-      notify(`the operator deleted the secret ${shown}.`)
-    } catch (err) {
-      const why = err instanceof SecretMissing ? `no such secret: ${shown}` : `could not delete ${shown}: ${reason(err)}`
-      await say(`🔐 ${why}.${undeleted}`)
-    }
+    await deleteAndAck(chatId, topic, fromId, cmd.name, undeleted)
     return
   }
+  await storeAndAck(chatId, topic, fromId, cmd.name, cmd.value, cmd.replace, undeleted)
+}
+
+// ---- guided flow -------------------------------------------------------------
+// A bare /secret or /unsecret opens a prompt exchange (name, then value). The
+// state is keyed by user AND topic and expires, so a stale flow can never
+// swallow an unrelated message. Every message in the exchange is deleted and
+// only the final ack stays.
+
+type PendingFlow = { pending: Pending; prompts: number[]; at: number }
+const pendingSecrets = new Map<string, PendingFlow>()
+const SECRET_FLOW_TTL_MS = 5 * 60_000
+const flowKey = (fromId: string, topic: string) => `${fromId}:${topic}`
+
+function pendingSecretFlow(fromId: string, topic: string): PendingFlow | undefined {
+  const key = flowKey(fromId, topic)
+  const flow = pendingSecrets.get(key)
+  if (!flow) return undefined
+  if (Date.now() - flow.at > SECRET_FLOW_TTL_MS) {
+    pendingSecrets.delete(key)
+    return undefined
+  }
+  return flow
+}
+
+// ForceReply opens the reply box on the phone with the placeholder shown.
+async function promptSecret(
+  chatId: string, topic: string, fromId: string, result: FlowResult, prompts: number[],
+): Promise<void> {
+  if (result.kind !== 'prompt') return
+  const sent = await bot.api
+    .sendMessage(chatId, result.text, {
+      ...threadOf(topic),
+      reply_markup: { force_reply: true, input_field_placeholder: result.placeholder },
+    })
+    .catch(() => null)
+  if (sent) prompts.push(sent.message_id)
+  pendingSecrets.set(flowKey(fromId, topic), { pending: result.next, prompts, at: Date.now() })
+}
+
+async function cancelSecretFlow(chatId: string, fromId: string, topic: string): Promise<void> {
+  const key = flowKey(fromId, topic)
+  const flow = pendingSecrets.get(key)
+  if (!flow) return
+  pendingSecrets.delete(key)
+  await deleteMessages(chatId, flow.prompts)
+}
+
+async function deleteMessages(chatId: string, ids: number[]): Promise<void> {
+  for (const id of ids) await bot.api.deleteMessage(chatId, id).catch(() => {})
+}
+
+// One step of the flow. The user's message is deleted first whatever it holds.
+async function handleSecretStep(
+  chatId: string, topic: string, msgId: number, fromId: string, text: string, flow: PendingFlow,
+): Promise<void> {
+  pendingSecrets.delete(flowKey(fromId, topic))
+  let deleted = true
+  try {
+    await bot.api.deleteMessage(chatId, msgId)
+  } catch {
+    deleted = false
+  }
+  const undeleted = deleted ? '' : ' Could NOT delete your message; remove it yourself.'
+  const r = advanceSecretFlow(flow.pending, text, name => secretExists(SECRETS_DIR, name))
+  if (r.kind === 'prompt') {
+    await promptSecret(chatId, topic, fromId, r, flow.prompts)
+    return
+  }
+  await deleteMessages(chatId, flow.prompts)
+  if (r.kind === 'cancelled') {
+    await sayIn(chatId, topic, `🔐 cancelled.${undeleted}`)
+    return
+  }
+  if (r.kind === 'delete') {
+    await deleteAndAck(chatId, topic, fromId, r.name, undeleted)
+    return
+  }
+  await storeAndAck(chatId, topic, fromId, r.name, r.value, r.replace, undeleted)
+}
+
+async function storeAndAck(
+  chatId: string, topic: string, fromId: string, name: string, value: string, replace: boolean, undeleted: string,
+): Promise<void> {
+  const shown = tilde(join(SECRETS_DIR, name))
   let stored
   try {
-    stored = storeSecret(SECRETS_DIR, cmd.name, cmd.value, cmd.replace)
+    stored = storeSecret(SECRETS_DIR, name, value, replace)
   } catch (err) {
     if (err instanceof SecretExists) {
       log(`secret drop refused: ${shown} exists`)
-      await say(
-        `🔐 refused: ${shown} exists (${err.bytes} bytes). ` +
-          `Resend as /secret ${cmd.name} --replace to overwrite it.${undeleted}`,
+      await sayIn(
+        chatId, topic,
+        `🔐 refused: ${shown} exists (${err.bytes} bytes). Resend as /secret ${name} --replace to overwrite it.${undeleted}`,
       )
       return
     }
-    log(`secret drop failed for ${cmd.name}: ${err}`)
-    await say(`🔐 could not store "${cmd.name}": ${reason(err)}.${undeleted}`)
+    log(`secret drop failed for ${name}: ${err}`)
+    await sayIn(chatId, topic, `🔐 could not store "${name}": ${reason(err)}.${undeleted}`)
     return
   }
   const note = `${stored.replaced ? 'replaced' : 'stored'} ${shown} (${stored.bytes} bytes)`
   log(`secret drop: ${note}`)
-  await say(`🔐 ${note}.${undeleted}`)
-  notify(`the operator ${note}. Read the file when a task needs it; the value was deliberately never sent to you.`)
+  await sayIn(chatId, topic, `🔐 ${note}.${undeleted}`)
+  notifyTopic(chatId, topic, fromId, `the operator ${note}. Read the file when a task needs it; the value was deliberately never sent to you.`)
 }
+
+async function deleteAndAck(
+  chatId: string, topic: string, fromId: string, name: string, undeleted: string,
+): Promise<void> {
+  const shown = tilde(join(SECRETS_DIR, name))
+  try {
+    const gone = deleteSecret(SECRETS_DIR, name)
+    log(`secret drop: deleted ${shown}`)
+    await sayIn(chatId, topic, `🔐 deleted ${shown} (${gone.bytes} bytes).${undeleted}`)
+    notifyTopic(chatId, topic, fromId, `the operator deleted the secret ${shown}.`)
+  } catch (err) {
+    const why = err instanceof SecretMissing ? `no such secret: ${shown}` : `could not delete ${shown}: ${reason(err)}`
+    await sayIn(chatId, topic, `🔐 ${why}.${undeleted}`)
+  }
+}
+
+// The topic's Claude learns the path, never the value, through the same queue
+// a message takes (waking it if dormant), so nobody has to tell it. The square
+// has no Claude of its own. secret_drop=1 lets the reply guard accept silence:
+// the proxy already acked in the topic.
+function notifyTopic(chatId: string, topic: string, fromId: string, what: string): void {
+  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
+  ensureSession(topic)
+  enqueue(topic, {
+    content: `SYSTEM NOTICE (not a user message): ${what} No reply is required.`,
+    meta: {
+      chat_id: chatId,
+      user: 'telegram-topics-proxy',
+      user_id: fromId,
+      ts: new Date().toISOString(),
+      ...(topic !== 'general' ? { message_thread_id: topic } : {}),
+      secret_drop: '1',
+    },
+  })
+}
+
+const threadOf = (topic: string) => (topic === 'general' ? {} : { message_thread_id: Number(topic) })
+const sayIn = (chatId: string, topic: string, t: string) =>
+  bot.api.sendMessage(chatId, t, threadOf(topic)).catch(() => {})
+const tilde = (p: string) => (p.startsWith(homedir() + sep) ? '~' + p.slice(homedir().length) : p)
+const reason = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
 // The "/" menu: discoverable, autocompleted, and free of the "--" a phone
 // keyboard mangles. Scoped to the group so no other chat learns the verbs.
@@ -1584,6 +1687,16 @@ bot.on('message', async ctx => {
   if (typeof msg.text === 'string' && SECRET_CMD_RE.test(msg.text)) {
     await handleSecretDrop(String(ctx.chat.id), topic, msg.message_id, String(ctx.from?.id ?? ''), msg.text)
     return
+  }
+  // A reply to a guided-flow prompt (name or value) belongs to the flow and is
+  // never relayed. Checked after the verbs so a fresh /secret restarts cleanly.
+  if (typeof msg.text === 'string' && ctx.from) {
+    const fromId = String(ctx.from.id)
+    const flow = pendingSecretFlow(fromId, topic)
+    if (flow) {
+      await handleSecretStep(String(ctx.chat.id), topic, msg.message_id, fromId, msg.text, flow)
+      return
+    }
   }
 
   // Square-topic USER messages route by conversation membership / @tags -

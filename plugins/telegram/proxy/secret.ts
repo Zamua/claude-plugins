@@ -1,6 +1,6 @@
-// Secret drop: parse "/secret <name> [--replace]" + value, "/secret --list",
-// "/secret --delete <name>", and keep the files. No Telegram here, so the
-// rules are testable without a bot.
+// Secret drop: parse "/secret <name> [--replace]" + value, "/secrets",
+// "/unsecret <name>", drive the guided flow a bare command opens, and keep the
+// files. No Telegram here, so the rules are testable without a bot.
 
 import {
   chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
@@ -20,13 +20,17 @@ const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 // A phone keyboard turns "--" into an em or en dash, so a flag accepts either.
 const FLAG_RE = /^(?:--|[—–])(\w+)$/
 const REPLACE_RE = /^\s+(?:--|[—–])replace(?=\s|$)/
+const REPLACE_WORD_RE = /^(?:--|[—–])replace$/
 
 const USAGE = 'usage: /secret <name> then the value on the next line; /secrets; /unsecret <name>'
+
+export type SecretVerb = 'secret' | 'unsecret'
 
 export type SecretCommand =
   | { kind: 'store'; name: string; value: string; replace: boolean }
   | { kind: 'list' }
   | { kind: 'delete'; name: string }
+  | { kind: 'begin'; verb: SecretVerb }
   | { error: string }
 
 function nameError(name: string): string | null {
@@ -41,12 +45,14 @@ function nameError(name: string): string | null {
 // following lines). `--replace` counts only directly after the name; anywhere
 // else it is part of the value. Surrounding whitespace is dropped: a paste
 // from a phone usually carries a stray newline, and no secret legitimately
-// starts with one.
+// starts with one. A bare /secret or /unsecret is what the "/" menu sends on
+// a tap, so it begins the guided flow instead of failing with usage.
 export function parseSecretCommand(text: string): SecretCommand {
   const verb = SECRET_CMD_RE.exec(text)?.[1]
   if (!verb) return { error: USAGE }
   const body = text.replace(SECRET_CMD_RE, '')
   if (verb === 'secrets') return { kind: 'list' }
+  if (!body.trim()) return { kind: 'begin', verb }
   if (verb === 'unsecret') return deleteForm(body)
   const m = /^\s*(\S+)([\s\S]*)$/.exec(body)
   if (!m) return { error: USAGE }
@@ -69,6 +75,55 @@ function deleteForm(rest: string): SecretCommand {
   return bad ? { error: bad } : { kind: 'delete', name }
 }
 
+// ---- guided flow -------------------------------------------------------------
+// A bare command opens a two-step exchange: name, then value (or just the
+// name for a delete). Pure: the caller owns the pending state, sends the
+// prompts, and performs the resulting store or delete.
+
+export type Pending =
+  | { step: 'name'; verb: 'secret' }
+  | { step: 'value'; verb: 'secret'; name: string; replace: boolean }
+  | { step: 'name'; verb: 'unsecret' }
+
+export type FlowResult =
+  | { kind: 'prompt'; next: Pending; text: string; placeholder: string }
+  | { kind: 'store'; name: string; value: string; replace: boolean }
+  | { kind: 'delete'; name: string }
+  | { kind: 'cancelled' }
+
+export function beginSecretFlow(verb: SecretVerb): FlowResult {
+  return verb === 'secret'
+    ? prompt({ step: 'name', verb }, 'Name for the secret? (or "cancel")', 'name, e.g. cloudflare-foo-dns')
+    : prompt({ step: 'name', verb }, 'Which secret to delete? (or "cancel")', 'name')
+}
+
+// `exists` is asked at the name step so an existing name is refused BEFORE the
+// value is requested: nobody should paste a secret only to have it bounced.
+export function advanceSecretFlow(p: Pending, text: string, exists: (name: string) => boolean): FlowResult {
+  const t = text.trim()
+  if (/^\/?cancel$/i.test(t)) return { kind: 'cancelled' }
+  if (p.step === 'value') return { kind: 'store', name: p.name, value: t, replace: p.replace }
+  const [name = '', flag = ''] = t.split(/\s+/)
+  const bad = nameError(name)
+  if (bad) return prompt(p, `${bad}. Try again, or "cancel".`, 'name')
+  if (p.verb === 'unsecret') return { kind: 'delete', name }
+  const replace = REPLACE_WORD_RE.test(flag)
+  if (exists(name) && !replace) {
+    return prompt(p, `"${name}" exists. Send "${name} --replace" to overwrite it, another name, or "cancel".`, 'name')
+  }
+  return prompt(
+    { step: 'value', verb: 'secret', name, replace },
+    `Value for ${name}? Paste it; the message is deleted once stored.`,
+    'paste the value',
+  )
+}
+
+function prompt(next: Pending, text: string, placeholder: string): FlowResult {
+  return { kind: 'prompt', next, text: `🔐 ${text}`, placeholder }
+}
+
+// ---- files -------------------------------------------------------------------
+
 export class SecretExists extends Error {
   constructor(public readonly bytes: number) {
     super('secret exists')
@@ -81,6 +136,11 @@ export class SecretMissing extends Error {
     super('no such secret')
     this.name = 'SecretMissing'
   }
+}
+
+export function secretExists(dir: string, name: string): boolean {
+  assertName(name)
+  return existsSync(join(dir, name))
 }
 
 export type StoredSecret = { path: string; bytes: number; replaced: boolean }

@@ -3,8 +3,10 @@ import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
-  SECRET_CMD_RE, SecretExists, SecretMissing, deleteSecret, listSecrets, parseSecretCommand, storeSecret,
+  SECRET_CMD_RE, SecretExists, SecretMissing, advanceSecretFlow, beginSecretFlow, deleteSecret, listSecrets,
+  parseSecretCommand, secretExists, storeSecret,
 } from './secret'
+import type { Pending } from './secret'
 
 describe('parseSecretCommand', () => {
   test('name on the command line, value on the next', () => {
@@ -34,12 +36,18 @@ describe('parseSecretCommand', () => {
     expect(parseSecretCommand('/secret k --replace')).toMatchObject({ error: expect.stringContaining('no value') })
   })
 
-  test('the native verbs: /secrets lists, /unsecret deletes', () => {
+  test('a bare verb, which is what a menu tap sends, begins the guided flow', () => {
+    expect(parseSecretCommand('/secret')).toEqual({ kind: 'begin', verb: 'secret' })
+    expect(parseSecretCommand('/secret@mybot')).toEqual({ kind: 'begin', verb: 'secret' })
+    expect(parseSecretCommand('/secret  \n')).toEqual({ kind: 'begin', verb: 'secret' })
+    expect(parseSecretCommand('/unsecret')).toEqual({ kind: 'begin', verb: 'unsecret' })
     expect(parseSecretCommand('/secrets')).toEqual({ kind: 'list' })
+  })
+
+  test('the native verbs: /secrets lists, /unsecret deletes', () => {
     expect(parseSecretCommand('/secrets@mybot')).toEqual({ kind: 'list' })
     expect(parseSecretCommand('/unsecret k')).toEqual({ kind: 'delete', name: 'k' })
     expect(parseSecretCommand('/unsecret@mybot k')).toEqual({ kind: 'delete', name: 'k' })
-    expect(parseSecretCommand('/unsecret')).toMatchObject({ error: expect.stringContaining('usage') })
     expect(parseSecretCommand('/unsecret ../x')).toMatchObject({ error: expect.stringContaining('refused name') })
   })
 
@@ -73,7 +81,66 @@ describe('parseSecretCommand', () => {
   test('a missing value is refused rather than stored empty', () => {
     expect(parseSecretCommand('/secret k')).toEqual({ error: 'no value for "k": put it on the line after the name' })
     expect(parseSecretCommand('/secret k\n   \n')).toMatchObject({ error: expect.stringContaining('no value') })
-    expect(parseSecretCommand('/secret')).toMatchObject({ error: expect.stringContaining('usage') })
+  })
+})
+
+describe('guided flow', () => {
+  const none = () => false
+  const nameStep: Pending = { step: 'name', verb: 'secret' }
+
+  test('store: name prompt, then value prompt, then the store', () => {
+    const first = beginSecretFlow('secret')
+    expect(first).toMatchObject({ kind: 'prompt', next: nameStep, placeholder: expect.stringContaining('name') })
+
+    const second = advanceSecretFlow(nameStep, 'cloudflare-foo-dns\n', none)
+    expect(second).toMatchObject({
+      kind: 'prompt',
+      next: { step: 'value', verb: 'secret', name: 'cloudflare-foo-dns', replace: false },
+      placeholder: 'paste the value',
+    })
+
+    const third = advanceSecretFlow((second as { next: Pending }).next, '  abc123\n', none)
+    expect(third).toEqual({ kind: 'store', name: 'cloudflare-foo-dns', value: 'abc123', replace: false })
+  })
+
+  test('an existing name is bounced at the name step, before any value is asked for', () => {
+    const exists = (n: string) => n === 'taken'
+    const bounced = advanceSecretFlow(nameStep, 'taken', exists)
+    expect(bounced).toMatchObject({ kind: 'prompt', next: nameStep, text: expect.stringContaining('--replace') })
+
+    for (const flag of ['--replace', '—replace']) {
+      expect(advanceSecretFlow(nameStep, `taken ${flag}`, exists)).toMatchObject({
+        kind: 'prompt',
+        next: { step: 'value', name: 'taken', replace: true },
+      })
+    }
+  })
+
+  test('a bad name re-prompts at the same step', () => {
+    const again = advanceSecretFlow(nameStep, '../x', none)
+    expect(again).toMatchObject({ kind: 'prompt', next: nameStep, text: expect.stringContaining('refused name') })
+  })
+
+  test('delete: one prompt, then the delete', () => {
+    const first = beginSecretFlow('unsecret')
+    expect(first).toMatchObject({ kind: 'prompt', next: { step: 'name', verb: 'unsecret' } })
+    expect(advanceSecretFlow({ step: 'name', verb: 'unsecret' }, 'k', none)).toEqual({ kind: 'delete', name: 'k' })
+  })
+
+  test('cancel works at every step, with or without the slash', () => {
+    const valueStep: Pending = { step: 'value', verb: 'secret', name: 'k', replace: false }
+    for (const p of [nameStep, valueStep, { step: 'name', verb: 'unsecret' } as Pending]) {
+      expect(advanceSecretFlow(p, 'cancel', none)).toEqual({ kind: 'cancelled' })
+      expect(advanceSecretFlow(p, '/Cancel', none)).toEqual({ kind: 'cancelled' })
+    }
+  })
+
+  test('secretExists validates the name before touching the filesystem', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'secret-'))
+    storeSecret(dir, 'k', 'v')
+    expect(secretExists(dir, 'k')).toBe(true)
+    expect(secretExists(dir, 'nope')).toBe(false)
+    expect(() => secretExists(dir, '../x')).toThrow('refused name')
   })
 })
 

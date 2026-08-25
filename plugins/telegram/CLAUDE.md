@@ -223,6 +223,19 @@ message itself is never enqueued: a topic-Claude's transcript persists every
 inbound message in plaintext, so the value must not reach one. Parsing and the
 files live in `proxy/secret.ts` (pure, tested with `bun test`).
 
+**The guided flow.** A menu tap sends the bare verb, so a bare `/secret` or
+`/unsecret` opens a prompt exchange instead of failing with usage: the proxy
+asks for the name (ForceReply, so the phone's reply box opens with a
+placeholder), then for the value; `/unsecret` asks only for the name. The
+state machine is pure (`beginSecretFlow` / `advanceSecretFlow` in
+`secret.ts`); the proxy keeps the pending state in `pendingSecrets`, keyed by
+user AND topic with a 5-minute TTL, so a stale flow can never swallow an
+unrelated message. While a flow is pending, that user's next text in that
+topic is consumed by the flow and never relayed. An existing name is bounced
+at the NAME step (before any value is requested), `name --replace` opts in,
+and "cancel" works at every step. Every message in the exchange, the prompts
+included, is deleted; only the final ack stays.
+
 Order of operations, and why: the message is DELETED from the chat first,
 whatever happens next, so a refused name cannot leave the value on screen.
 Then the sender is checked against `TELEGRAM_TOPICS_SECRETS_USER_ID` (unset =
