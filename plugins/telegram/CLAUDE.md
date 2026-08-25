@@ -221,11 +221,15 @@ Order of operations, and why: the message is DELETED from the chat first,
 whatever happens next, so a refused name cannot leave the value on screen.
 Then the sender is checked against `TELEGRAM_TOPICS_SECRETS_USER_ID` (unset =
 feature off; the group gate alone admits every member). Then the name is
-validated (`[a-z0-9][a-z0-9._-]{0,63}`, no `..`), and the value is written to
+validated (`[a-z0-9][a-z0-9._-]{0,63}`, no `..`). An EXISTING name is refused
+(the ack reports its size and the `/secret <name> --replace` form to resend),
+because the directory holds live credentials and a mistyped name must not
+clobber one; `--replace` counts only directly after the name, anywhere else it
+is part of the value. The value is written to
 `TELEGRAM_TOPICS_SECRETS_DIR/<name>` (default `~/keys`) as a 0600 temp file
 renamed into place, with one trailing newline. The ack in the topic names the
-path and byte count and says `replaced` when a file existed; it never carries
-the value. If the delete failed the ack says so, because the value is then
+path and byte count and says `replaced` on an opted-in overwrite; it never
+carries the value. If the delete failed the ack says so, because the value is then
 still in the chat and the operator must remove it. No Claude is woken or told:
 the ack is the notice, and a Claude reads the file when asked to use it.
 

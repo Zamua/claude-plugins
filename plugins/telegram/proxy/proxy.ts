@@ -44,7 +44,7 @@ import { join, extname, sep } from 'path'
 import { spawnSync, execFile, execFileSync } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
-import { SECRET_CMD_RE, parseSecretCommand, storeSecret } from './secret'
+import { SECRET_CMD_RE, SecretExists, parseSecretCommand, storeSecret } from './secret'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -1486,16 +1486,25 @@ async function handleSecretDrop(
     await say(`🔐 ${parsed.error}.${undeleted}`)
     return
   }
+  const home = homedir()
+  const path = join(SECRETS_DIR, parsed.name)
+  const shown = path.startsWith(home + sep) ? '~' + path.slice(home.length) : path
   let stored
   try {
-    stored = storeSecret(SECRETS_DIR, parsed.name, parsed.value)
+    stored = storeSecret(SECRETS_DIR, parsed.name, parsed.value, parsed.replace)
   } catch (err) {
+    if (err instanceof SecretExists) {
+      log(`secret drop refused: ${shown} exists`)
+      await say(
+        `🔐 refused: ${shown} exists (${err.bytes} bytes). ` +
+          `Resend as /secret ${parsed.name} --replace to overwrite it.${undeleted}`,
+      )
+      return
+    }
     log(`secret drop failed for ${parsed.name}: ${err}`)
     await say(`🔐 could not store "${parsed.name}": ${err instanceof Error ? err.message : err}.${undeleted}`)
     return
   }
-  const home = homedir()
-  const shown = stored.path.startsWith(home + sep) ? '~' + stored.path.slice(home.length) : stored.path
   const note = `${stored.replaced ? 'replaced' : 'stored'} ${shown} (${stored.bytes} bytes)`
   log(`secret drop: ${note}`)
   await say(`🔐 ${note}.${undeleted}`)
