@@ -235,6 +235,38 @@ EOF
   report
 }
 
+# A scheduler pinned to a version-scoped path keeps running the version it was
+# installed from, so this case installs from 0.2.0, drops a 0.3.0 beside it the way
+# an update does, and checks which one a tick actually reaches. launchctl is stubbed
+# and HOME is redirected, so nothing outside the case dir is touched.
+case_scheduler_survives_updates() {
+  new_case scheduler_survives_updates
+  write_config 3
+  local root="$CASE_DIR/cache/agent-board" plist launcher
+  mkdir -p "$root/0.2.0/scripts" "$root/0.2.0/launchd" "$root/0.3.0/scripts"
+  cp "$HERE/../scripts/poll.sh" "$HERE/../scripts/lib.sh" "$root/0.2.0/scripts/"
+  cp -R "$HERE/../scripts/adapters" "$root/0.2.0/scripts/"
+  cp "$HERE/../launchd/com.agent-board.poller.plist" "$root/0.2.0/launchd/"
+  printf '#!/usr/bin/env bash\necho RAN-0.3.0\n' >"$root/0.3.0/scripts/poll.sh"
+  chmod +x "$root/0.3.0/scripts/poll.sh"
+  mkdir -p "$CASE_DIR/bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$CASE_DIR/bin/launchctl"
+  chmod +x "$CASE_DIR/bin/launchctl"
+
+  HOME="$CASE_DIR/home" PATH="$CASE_DIR/bin:$PATH" \
+    "$BASH_BIN" "$root/0.2.0/scripts/poll.sh" install >"$CASE_DIR/install.log" 2>&1
+
+  plist="$CASE_DIR/home/Library/LaunchAgents/com.agent-board.poller.plist"
+  launcher="$CASE_DIR/home/.config/agent-board/run-poll.sh"
+  expect "plist written" test -f "$plist"
+  expect "launcher written and executable" test -x "$launcher"
+  expect "plist points at the launcher" has_match "$plist" "run-poll.sh"
+  expect "plist pins no version path" no_match "$plist" "0\.2\.0/scripts/poll.sh"
+  expect "a tick reaches the newest version" \
+    test "$(HOME="$CASE_DIR/home" "$BASH_BIN" "$launcher" 2>/dev/null)" = "RAN-0.3.0"
+  report
+}
+
 # ---- main ----
 
 case_spawn_under_cap
@@ -246,6 +278,7 @@ case_guard_skip
 case_lock_single_flight
 case_contract_validation_failure
 case_server_env_hyperlinks
+case_scheduler_survives_updates
 
 printf '%d passed, %d failed\n' "$PASS_N" "$FAIL_N"
 [ "$FAIL_N" = "0" ]
