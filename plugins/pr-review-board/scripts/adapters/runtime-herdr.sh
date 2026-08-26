@@ -52,6 +52,11 @@ rt_ensure_server() {
   local s i=0 log; s="$(_rt_session)"
   herdr session list 2>/dev/null | awk -v x="$s" '$1==x && $2=="running"{f=1} END{exit !f}' && return 0
   log="$HOME/.config/pr-review-board/herdr-$s.log"; mkdir -p "$(dirname "$log")"
+  # Every pane herdr opens inherits this server's environment, and the scheduler that
+  # starts the server has no TERM_PROGRAM. Without this the agent in each pane cannot
+  # identify the terminal, disables OSC-8, and prints bare URLs beside its link text,
+  # which also breaks click-to-open because the printed URL wraps across lines.
+  export FORCE_HYPERLINK=1
   if command -v setsid >/dev/null 2>&1; then
     ( prb_scrub_env; setsid herdr --session "$s" server >>"$log" 2>&1 & ) 2>/dev/null
   else
