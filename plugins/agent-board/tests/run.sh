@@ -203,6 +203,38 @@ EOF
   report
 }
 
+# The stub runtime never reaches runtime-herdr.sh, so this case sources that adapter
+# directly and stands a fake herdr in front of it: no running session to find, dump the
+# environment the server would be given, and satisfy the readiness probe.
+case_server_env_hyperlinks() {
+  new_case server_env_hyperlinks
+  write_config 3 stub herdr
+  mkdir -p "$CASE_DIR/bin"
+  cat >"$CASE_DIR/bin/herdr" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+  [ "$a" = server ] && { printenv >"$AB_TEST_ENV_DUMP"; exit 0; }
+done
+exit 0
+EOF
+  chmod +x "$CASE_DIR/bin/herdr"
+  # HERDR_SESSION is a pointer the scrub is meant to drop, so asserting it is gone
+  # proves this site still sheds the caller's identity while adding the capability.
+  AB_TEST_ENV_DUMP="$CASE_DIR/server.env" HERDR_SESSION=leaked-from-caller \
+  "$BASH_BIN" -c '
+    set -u
+    . "$1"; . "$2"
+    PATH="$3:$PATH"   # lib.sh prepends the real tool locations; the stub wins after it
+    rt_ensure_server
+    i=0
+    while [ ! -s "$AB_TEST_ENV_DUMP" ] && [ "$i" -lt 20 ]; do i=$((i+1)); sleep 0.1; done
+  ' _ "$HERE/../scripts/lib.sh" "$HERE/../scripts/adapters/runtime-herdr.sh" "$CASE_DIR/bin"
+  expect "server was started" test -s "$CASE_DIR/server.env"
+  expect "hyperlinks forced on" has_line "$CASE_DIR/server.env" "FORCE_HYPERLINK=1"
+  expect "caller herdr session scrubbed" no_match "$CASE_DIR/server.env" "^HERDR_SESSION="
+  report
+}
+
 # ---- main ----
 
 case_spawn_under_cap
@@ -213,6 +245,7 @@ case_keep_running_on_haslabel_unknown
 case_guard_skip
 case_lock_single_flight
 case_contract_validation_failure
+case_server_env_hyperlinks
 
 printf '%d passed, %d failed\n' "$PASS_N" "$FAIL_N"
 [ "$FAIL_N" = "0" ]
