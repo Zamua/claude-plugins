@@ -22,6 +22,7 @@ const spec = (over: Partial<SpawnSpec> = {}): SpawnSpec => ({
   failoverHook: '/hooks/rate-limit-failover.py',
   kickoff: '',
   opencodeSessionId: '',
+  opencodeBin: '/etc/profiles/per-user/zamua/bin/opencode',
   opencodeModel: 'opencode-go/glm-5.3-flash',
   opencodeVariant: '',
   opencodeSeed: '',
@@ -85,11 +86,12 @@ describe('claudeBackend.spawnEnv', () => {
 })
 
 describe('opencodeBackend.spawnEnv', () => {
-  test('minting spawn carries the seed; resumed spawn drops it', () => {
+  test('minting and resumed spawns both carry the seed (a handoff delta rides until acked)', () => {
     const mint = opencodeBackend.spawnEnv(spec({ sessionName: 'oc-hostthis-34', opencodeSeed: 'SEED TEXT' }))
     expect(mint.TG_BACKEND).toBe('opencode')
     expect(mint.TG_OC_SESSION_ID).toBe('')
     expect(mint.TG_OC_SEED).toBe('SEED TEXT')
+    expect(mint.TG_OC_BIN).toBe('/etc/profiles/per-user/zamua/bin/opencode')
     expect(mint.TG_OC_MODEL).toBe('opencode-go/glm-5.3-flash')
     expect(mint.TG_OC_VARIANT).toBe('')
     expect(mint.TG_SESSION).toBe('oc-hostthis-34')
@@ -101,7 +103,11 @@ describe('opencodeBackend.spawnEnv', () => {
 
     const resumed = opencodeBackend.spawnEnv(spec({ opencodeSessionId: 'ses_x', opencodeSeed: 'SEED TEXT' }))
     expect(resumed.TG_OC_SESSION_ID).toBe('ses_x')
-    expect(resumed.TG_OC_SEED).toBe('')
+    expect(resumed.TG_OC_SEED).toBe('SEED TEXT')
+
+    // No seed pending: both are empty.
+    expect(opencodeBackend.spawnEnv(spec()).TG_OC_SEED).toBe('')
+    expect(opencodeBackend.spawnEnv(spec({ opencodeSessionId: 'ses_x' })).TG_OC_SEED).toBe('')
   })
 
   test('variant passes through when set', () => {
@@ -195,14 +201,14 @@ describe('renderDelta', () => {
 
 describe('opencode handoff framing', () => {
   test('kickoff is a startup notice, not a greeting', () => {
-    const t = opencodeKickoff(spec({ label: 'gpu' }))
+    const t = opencodeKickoff({ label: 'gpu', spawnDir: '/tmp', squareTopic: '' })
     expect(t).toContain('you are the assistant for the gpu topic')
     expect(t).toContain('running in opencode')
     expect(t).toContain('never use em dashes')
   })
 
   test('handoff seed frames the delta with the takeover context', () => {
-    const t = opencodeHandoffSeed(spec({ label: 'gpu' }), '[user]\nhi\n[assistant]\nhello')
+    const t = opencodeHandoffSeed({ label: 'gpu', spawnDir: '/tmp', squareTopic: '' }, '[user]\nhi\n[assistant]\nhello')
     expect(t).toContain('taking over the Telegram topic "gpu"')
     expect(t).toContain('usage limit')
     expect(t).toContain('--- PRIOR CONVERSATION')
