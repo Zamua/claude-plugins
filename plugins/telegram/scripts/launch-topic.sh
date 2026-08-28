@@ -45,6 +45,14 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 # Absolute opencode binary, resolved by the proxy for opencode spawns. MUST be
 # defaulted before the env-propagation lists reference it (set -u).
 : "${TG_OC_BIN:=}"
+# The claude-only vars the env-propagation lists still reference: defaulted
+# empty here, and the claude gate above enforces non-empty for claude spawns.
+: "${TG_MARKETPLACE:=}"
+: "${TG_SETTINGS:=}"
+: "${TG_HOOK:=}"
+: "${TG_FAILOVER_HOOK:=}"
+: "${TG_KICKOFF:=}"
+: "${TG_CLAUDE_SESSION_ID:=}"
 # The two backends need DIFFERENT env: claude's spawn identity (marketplace,
 # settings, hooks, session id) is meaningless to an opencode pane, so the
 # required-var gate is per backend.
