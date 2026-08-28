@@ -44,6 +44,36 @@ const SEED = process.env.TG_OC_SEED ?? ''
 // deliver (the claude channel notification is meaningless to opencode).
 process.env.TELEGRAM_OUTBOUND_ONLY = '1'
 
+// Per-run config injection (OPENCODE_CONFIG_CONTENT is merged last by
+// opencode), so the telegram MCP and the topic permission denies exist ONLY
+// for this driver's runs - they must never live in a global/project config,
+// where a casually-started inbound-polling MCP would steal a topic's queue.
+// The telegram MCP needs TOPIC identity: it inherits TELEGRAM_TOPIC_ID /
+// TELEGRAM_PROXY_URL from this driver's env (spike-verified).
+const PLUGIN_ROOT = new URL('..', import.meta.url).pathname
+process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+  $schema: 'https://opencode.ai/config.json',
+  mcp: {
+    telegram: {
+      type: 'local',
+      command: [process.execPath, PLUGIN_ROOT + 'server.ts'],
+      enabled: true,
+    },
+  },
+  permission: {
+    question: 'deny', // a detached pane cannot answer an interactive prompt
+    bash: {
+      // The reply path is the MCP, never raw Bot API calls: block the
+      // improvisation where the agent greps a token out of ~/keys and curls
+      // api.telegram.org itself (observed once under a synthetic prompt).
+      '*api.telegram.org*': 'deny',
+      'sudo *': 'deny',
+      'shutdown*': 'deny',
+      'launchctl *': 'deny',
+    },
+  },
+})
+
 const POLL_TIMEOUT_MS = 30_000
 const MINT_TRIES = 3
 
@@ -184,7 +214,14 @@ async function main(): Promise<void> {
     // One run per message, strictly sequential (matches the claude topic's
     // one-turn-at-a-time behavior; the proxy queue holds the rest).
     const marker = await lastReplyMarker()
-    const prompt = renderChannel(msg.content, msg.meta ?? {})
+    // Channel discipline, restated per message: CLAUDE.md carries it too, but
+    // it is one rule in a large file, and a missed reply is invisible to the
+    // user (the claude side backstops with a Stop hook; the backstop below is
+    // the only net here, so make the nudge explicit).
+    const prompt =
+      renderChannel(msg.content, msg.meta ?? {}) +
+      '\n\n(Inbound Telegram message above. Answer the user through the telegram reply tool with ' +
+      'the chat_id from the channel block - text you print here never reaches them.)'
     log(`run for message ${msg.meta?.message_id ?? '?'} (${prompt.length} chars)`)
     const r = await runOpencode(prompt)
     const after = await lastReplyMarker()
