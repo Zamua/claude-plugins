@@ -49,6 +49,18 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 : "${TG_MODEL:=}"
 # TG_MUX is optional: which multiplexer hosts the session (default tmux).
 : "${TG_MUX:=tmux}"
+# TG_BACKEND is optional: which HARNESS runs in the pane (default claude, the
+# original topic session; opencode = scripts/opencode-driver.ts driving
+# `opencode run`). Independent axis from TG_MUX: the mux mechanics (workspace,
+# env propagation, dialog watcher) are shared, the pane command is per backend.
+: "${TG_BACKEND:=claude}"
+# TG_OC_* carry the opencode backend's state (session id / model flags / the
+# seed a handoff or first spawn initializes the session with). Unused by the
+# claude backend.
+: "${TG_OC_SESSION_ID:=}"
+: "${TG_OC_MODEL:=}"
+: "${TG_OC_VARIANT:=}"
+: "${TG_OC_SEED:=}"
 # MCP_TIMEOUT (ms, claude's MCP-startup ceiling) is forwarded into the pane with a
 # GENEROUS default. Root cause of a real incident (2026-07-29): a topic with a
 # HUGE transcript (shale) resumed so slowly that the Telegram CHANNEL MCP's
@@ -74,6 +86,23 @@ TG_CLAUDE_BIN=$(command -v claude) || {
 }
 TG_PATH="$PATH"
 
+# The opencode backend execs the DRIVER (bun), which in turn runs `opencode`
+# per message. Resolve bun NOW (same logic as TG_CLAUDE_BIN: exec the absolute
+# path, immune to pane shell-init PATH games) and point at the sibling script.
+TG_BUN_BIN=""
+TG_DRIVER=""
+if [ "$TG_BACKEND" = "opencode" ]; then
+  TG_BUN_BIN=$(command -v bun) || {
+    echo "telegram-topics: bun not found on the launcher PATH (required for the opencode backend)" >&2
+    exit 1
+  }
+  TG_DRIVER="$(cd "$(dirname "$0")" && pwd)/opencode-driver.ts"
+  [ -f "$TG_DRIVER" ] || {
+    echo "telegram-topics: driver not found at $TG_DRIVER" >&2
+    exit 1
+  }
+fi
+
 # The pane command, IDENTICAL for both backends. Runs under a shell INSIDE the
 # pane with the TG_*/TELEGRAM_* vars present in its environment (each backend
 # has its own way of getting them there - see spawn_tmux / spawn_herdr).
@@ -97,7 +126,7 @@ TG_PATH="$PATH"
 # --model FLAG (a settings `model` is ignored by a --resume'd session; the flag
 # overrides even on resume). Args built with `set --` so a bracketed id like
 # claude-fable-5[1m] stays ONE properly-quoted arg.
-PANE_CMD='export PATH="$TG_PATH"; \
+CLAUDE_PANE_CMD='export PATH="$TG_PATH"; \
  set -- --dangerously-load-development-channels="$TG_MARKETPLACE" \
         --settings "$TG_SETTINGS" --permission-mode auto \
         --disallowedTools=AskUserQuestion; \
@@ -107,6 +136,18 @@ PANE_CMD='export PATH="$TG_PATH"; \
  else \
    exec "$TG_CLAUDE_BIN" "$@" --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
  fi'
+
+# opencode pane: the driver IS the process. It polls the proxy, feeds each
+# message to `opencode run` (one session per topic, minted on first run), and
+# runs for the pane's whole life - exec so the pane dies with it.
+OPENCODE_PANE_CMD='export PATH="$TG_PATH"; \
+ exec "$TG_BUN_BIN" "$TG_DRIVER"'
+
+if [ "$TG_BACKEND" = "opencode" ]; then
+  PANE_CMD="$OPENCODE_PANE_CMD"
+else
+  PANE_CMD="$CLAUDE_PANE_CMD"
+fi
 
 # --dangerously-load-development-channels can show a one-key "local
 # development" confirmation dialog (third-party channel plugins are not
@@ -149,6 +190,9 @@ spawn_tmux() {
     -e MCP_TIMEOUT="$MCP_TIMEOUT" \
     -e TG_PATH="$TG_PATH" \
     -e TG_CLAUDE_BIN="$TG_CLAUDE_BIN" \
+    -e TG_BUN_BIN="$TG_BUN_BIN" \
+    -e TG_DRIVER="$TG_DRIVER" \
+    -e TG_BACKEND="$TG_BACKEND" \
     -e TG_MARKETPLACE="$TG_MARKETPLACE" \
     -e TG_SETTINGS="$TG_SETTINGS" \
     -e TG_HOOK="$TG_HOOK" \
@@ -157,6 +201,10 @@ spawn_tmux() {
     -e TG_KICKOFF="$TG_KICKOFF" \
     -e TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
     -e TG_RESUME="$TG_RESUME" \
+    -e TG_OC_SESSION_ID="$TG_OC_SESSION_ID" \
+    -e TG_OC_MODEL="$TG_OC_MODEL" \
+    -e TG_OC_VARIANT="$TG_OC_VARIANT" \
+    -e TG_OC_SEED="$TG_OC_SEED" \
     -e TELEGRAM_TOPIC_ID="$TELEGRAM_TOPIC_ID" \
     -e TELEGRAM_PROXY_URL="$TELEGRAM_PROXY_URL" \
     "$PANE_CMD"
@@ -164,15 +212,17 @@ spawn_tmux() {
   # Auto-confirm watcher. NB: pane-target commands (capture-pane/send-keys) do
   # NOT accept the "=name" exact-match prefix that has-session does; an exact
   # session name already resolves exactly, so pass the bare name.
-  (
-    for _ in $(seq 1 "$WATCHER_TRIES"); do
-      if tmux capture-pane -t "$TG_SESSION" -p 2>/dev/null | tr -d ' \t\n' | grep -q "$DIALOG_SQUASHED"; then
-        tmux send-keys -t "$TG_SESSION" 1 Enter
-        break
-      fi
-      sleep 0.25
-    done
-  ) </dev/null >/dev/null 2>&1 &
+  if [ "$TG_BACKEND" != "opencode" ]; then
+    (
+      for _ in $(seq 1 "$WATCHER_TRIES"); do
+        if tmux capture-pane -t "$TG_SESSION" -p 2>/dev/null | tr -d ' \t\n' | grep -q "$DIALOG_SQUASHED"; then
+          tmux send-keys -t "$TG_SESSION" 1 Enter
+          break
+        fi
+        sleep 0.25
+      done
+    ) </dev/null >/dev/null 2>&1 &
+  fi
 }
 
 spawn_herdr() {
@@ -265,6 +315,9 @@ print("absent")
     printf 'export MCP_TIMEOUT=%q\n' "$MCP_TIMEOUT"
     printf 'export TG_PATH=%q\n' "$TG_PATH"
     printf 'export TG_CLAUDE_BIN=%q\n' "$TG_CLAUDE_BIN"
+    printf 'export TG_BUN_BIN=%q\n' "$TG_BUN_BIN"
+    printf 'export TG_DRIVER=%q\n' "$TG_DRIVER"
+    printf 'export TG_BACKEND=%q\n' "$TG_BACKEND"
     printf 'export TG_MARKETPLACE=%q\n' "$TG_MARKETPLACE"
     printf 'export TG_SETTINGS=%q\n' "$TG_SETTINGS"
     printf 'export TG_HOOK=%q\n' "$TG_HOOK"
@@ -273,6 +326,10 @@ print("absent")
     printf 'export TG_KICKOFF=%q\n' "$TG_KICKOFF"
     printf 'export TG_CLAUDE_SESSION_ID=%q\n' "$TG_CLAUDE_SESSION_ID"
     printf 'export TG_RESUME=%q\n' "$TG_RESUME"
+    printf 'export TG_OC_SESSION_ID=%q\n' "$TG_OC_SESSION_ID"
+    printf 'export TG_OC_MODEL=%q\n' "$TG_OC_MODEL"
+    printf 'export TG_OC_VARIANT=%q\n' "$TG_OC_VARIANT"
+    printf 'export TG_OC_SEED=%q\n' "$TG_OC_SEED"
     printf 'export TELEGRAM_TOPIC_ID=%q\n' "$TELEGRAM_TOPIC_ID"
     printf 'export TELEGRAM_PROXY_URL=%q\n' "$TELEGRAM_PROXY_URL"
     printf '%s\n' "$PANE_CMD"
