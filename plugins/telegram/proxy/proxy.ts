@@ -1957,7 +1957,10 @@ async function opencodeDeltaFor(st: TopicState): Promise<string | null> {
 }
 
 // The "/"-menu /handoff command. Operator-gated (ADMIN_USER_ID), debounced,
-// and usable on live or dormant topics alike.
+// and usable on live or dormant topics alike. A BARE /handoff opens a
+// clickable prompt (inline keyboard) instead of demanding the argument - the
+// verb is discoverable in the "/" menu and should be usable without memorizing
+// sub-commands. /handoff status stays textual; explicit targets skip the menu.
 async function handleHandoffCommand(chatId: string, topic: string, fromId: string, arg: string): Promise<void> {
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
     await sayIn(chatId, topic, '🤝 the square has no claude of its own; run /handoff in a topic.')
@@ -1972,7 +1975,21 @@ async function handleHandoffCommand(chatId: string, topic: string, fromId: strin
     return
   }
   const a = arg.trim().toLowerCase()
-  if (!a || a === 'status') {
+  if (!a) {
+    const backend = getTopic(topic).activeBackend ?? 'claude'
+    const keyboard = new InlineKeyboard()
+      .text('🤖 opencode (GLM)', `tghandoff:opencode:${topic}`)
+      .row()
+      .text('🧑‍💻 claude', `tghandoff:claude:${topic}`)
+    await bot.api
+      .sendMessage(chatId, `🤝 This topic currently runs on ${backend}. Switch to:`, {
+        ...threadOf(topic),
+        reply_markup: keyboard,
+      })
+      .catch(() => {})
+    return
+  }
+  if (a === 'status') {
     const st = getTopic(topic)
     const backend = st.activeBackend ?? 'claude'
     const id =
@@ -1995,6 +2012,21 @@ async function handleHandoffCommand(chatId: string, topic: string, fromId: strin
   await handoffTopic(chatId, topic, a as 'opencode' | 'claude', 'manual')
 }
 
+// Button taps from the bare-/handoff menu. Same gate + debounce as the typed
+// command; the prompt message is edited to the outcome so a tap cannot be
+// replayed and the thread records what was chosen.
+async function handleHandoffButton(topic: string, target: 'opencode' | 'claude', fromId: string, editPrompt: (t: string) => Promise<void>): Promise<boolean> {
+  if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) return false
+  const cur = getTopic(topic).activeBackend ?? 'claude'
+  if (cur === target) return false
+  const since = Date.now() - (lastHandoff.get(topic) ?? 0)
+  if (since < HANDOFF_DEBOUNCE_MS) return false
+  lastHandoff.set(topic, Date.now())
+  await editPrompt(`🤝 handing off to ${target}...`)
+  await handoffTopic(String(GROUP_CHAT_ID), topic, target, 'manual')
+  return true
+}
+
 // The "/" menu: discoverable, autocompleted, and free of the "--" a phone
 // keyboard mangles. Scoped to the group so no other chat learns the verbs.
 // Idempotent, and a failure only costs the menu, never the commands.
@@ -2002,7 +2034,7 @@ async function registerCommands(): Promise<void> {
   const commands = [
     { command: 'relaunch', description: "restart this topic's claude (same conversation, reloads MCP config)" },
     ...(ADMIN_USER_ID
-      ? [{ command: 'handoff', description: 'switch this topic between claude and opencode: /handoff [opencode|claude|status]' }]
+      ? [{ command: 'handoff', description: 'switch this topic between claude and opencode (shows options)' }]
       : []),
     ...(SECRETS_USER_ID
       ? [
@@ -2169,6 +2201,31 @@ bot.on('callback_query:data', async ctx => {
   const data = ctx.callbackQuery.data ?? ''
   const m = /^tgperm:(allow|deny):(.+)$/.exec(data)
   if (!m) {
+    // The bare-/handoff menu's buttons.
+    const h = /^tghandoff:(opencode|claude):(.+)$/.exec(data)
+    if (h) {
+      const cbChatId = ctx.callbackQuery.message?.chat.id
+      if (String(cbChatId) !== String(GROUP_CHAT_ID)) {
+        await ctx.answerCallbackQuery({ text: 'Not authorized.' }).catch(() => {})
+        return
+      }
+      const fromId = String(ctx.callbackQuery.from.id)
+      const topic = h[2]
+      const cur = getTopic(topic).activeBackend ?? 'claude'
+      if (cur === h[1] as 'opencode' | 'claude') {
+        await ctx.answerCallbackQuery({ text: `Already on ${cur}.` }).catch(() => {})
+        return
+      }
+      const msg = ctx.callbackQuery.message
+      const editPrompt = async (t: string) => {
+        if (msg && 'text' in msg && msg.text) await ctx.editMessageText(t).catch(() => {})
+      }
+      const ran = await handleHandoffButton(topic, h[1] as 'opencode' | 'claude', fromId, editPrompt)
+      await ctx
+        .answerCallbackQuery({ text: ran ? `Handed off to ${h[1]}.` : 'Only the operator can hand off.' })
+        .catch(() => {})
+      return
+    }
     await ctx.answerCallbackQuery().catch(() => {})
     return
   }
