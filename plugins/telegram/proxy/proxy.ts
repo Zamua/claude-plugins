@@ -469,6 +469,11 @@ type TopicState = {
   // stranded-reply backstop (it ships the run text itself when the marker
   // does not move across a run). In-memory: a proxy restart resets it.
   lastReplyAt?: number
+  // Pending handoff delta for an opencode spawn, cleared when the driver acks
+  // it (POST /oc-seed-done) so a driver killed before its first run re-gets
+  // the delta on respawn. In-memory: a proxy restart drops it (the oc session
+  // then just misses the delta turns; accepted).
+  pendingSeed?: string
 }
 
 const topics = new Map<string, TopicState>()
@@ -1057,6 +1062,15 @@ async function handleRateLimit(req: Request): Promise<Response> {
   const st = getTopic(topic)
   const label = st.name || topic
 
+  // The StopFailure hook is claude-side, so a report for an opencode topic is
+  // a stale or malformed POST: claude is not running, there is nothing to
+  // fail over, and acting on it would kill the oc driver and deliver a
+  // claude-shaped nudge into an opencode session.
+  if (st.activeBackend === 'opencode') {
+    log(`rate limit report for opencode topic ${topic} "${label}"; ignoring`)
+    return json({ ok: true, ignored: 'opencode backend' })
+  }
+
   if (!MODEL_FALLBACK) {
     log(`rate limit on topic ${topic} "${label}" but no fallback model configured; leaving stalled`)
     return json({ ok: false, reason: 'no fallback configured' })
@@ -1068,6 +1082,12 @@ async function handleRateLimit(req: Request): Promise<Response> {
     // it back (and the spawn-time window probe does so automatically).
     if (AUTO_HANDOFF && st.activeBackend !== 'opencode') {
       log(`rate limit on topic ${topic} "${label}" while already on fallback ${st.fallbackModel}; auto-handoff to opencode`)
+      // The oc leg becomes the probe window: when it passes, maybeAutoReturn
+      // gives claude another chance. The fallback pin is dropped so the
+      // return probes the PRIMARY, and no lingering pin can re-fail-over the
+      // topic the moment it is back on claude.
+      st.fallbackModel = undefined
+      st.fallbackUntil = Date.now() + FALLBACK_PROBE_MIN * 60_000
       await handoffTopic(String(GROUP_CHAT_ID), topic, 'opencode', 'quota')
       return json({ ok: true, escalated: 'opencode' })
     }
@@ -1319,6 +1339,11 @@ function maybeAutoReturn(st: TopicState, topic: string): void {
   if (st.session && mux.liveSessions().has(st.session)) return
   st.activeBackend = undefined
   st.handoffReason = undefined
+  // Drop the pin the escalation left behind so the return probes the PRIMARY
+  // (a lingering fallback pin would re-fail-over the topic immediately, and
+  // the live-session guard below would then keep it forever).
+  st.fallbackModel = undefined
+  st.fallbackUntil = undefined
   st.lastHandoffAt = Date.now()
   saveRegistry()
   log(`topic ${topic} "${st.name}": quota window elapsed, returning to claude`)
@@ -1328,6 +1353,26 @@ function maybeAutoReturn(st: TopicState, topic: string): void {
       ...(tid != null ? { message_thread_id: tid } : {}),
     })
     .catch(e => log(`auto-return notice failed for topic ${topic}: ${e}`))
+  // Carry the oc-era turns to the respawned claude the same way a manual
+  // /handoff claude does. Fire-and-forget: ensureSession's cold-start window
+  // (FIRST_POLL_DELAY) covers the export, and the queue holds the notice.
+  void opencodeDeltaFor(st).then(delta => {
+    if (!delta) return
+    enqueue(topic, {
+      content:
+        `SYSTEM NOTICE (not a user message): this topic ran on opencode while the claude usage limit was ` +
+        `exhausted, and has now switched back to you. The opencode-era conversation follows so you can ` +
+        `continue seamlessly; answer the user's latest unanswered message via the reply tool.\n\n` +
+        `--- OPENCODE-ERA CONVERSATION (oldest first) ---\n\n${delta}`,
+      meta: {
+        chat_id: String(GROUP_CHAT_ID),
+        user: 'telegram-topics-proxy',
+        ts: new Date().toISOString(),
+        ...(topic !== 'general' ? { message_thread_id: topic } : {}),
+        handoff: '1',
+      },
+    })
+  })
 }
 
 // The recent turns of the topic's CLAUDE conversation, read from the session
@@ -1439,16 +1484,17 @@ function ensureSession(topic: string): void {
       failoverHook: FAILOVER_HOOK,
       kickoff: '',
       opencodeSessionId: st.opencodeSessionId ?? '',
+      opencodeBin: opencodeBin(),
       opencodeModel: OPENCODE_MODEL,
       opencodeVariant: OPENCODE_VARIANT,
       opencodeSeed: '',
     }
-    if (isOc && !resuming) {
-      const { turns, found } = claudeTurnsFor(st)
-      spec.opencodeSeed =
-        found || st.lastHandoffAt
-          ? opencodeHandoffSeed(spec, renderDelta(turns, HANDOFF_MAX_CHARS))
-          : opencodeKickoff(spec)
+    if (isOc) {
+      // Seed precedence: a pending handoff delta (carried until the driver
+      // acks), else the startup notice for a fresh topic. A resumed topic
+      // with neither gets nothing.
+      if (st.pendingSeed) spec.opencodeSeed = st.pendingSeed
+      else if (!resuming) spec.opencodeSeed = opencodeKickoff(spec)
     }
     const env = {
       ...process.env,
@@ -1876,6 +1922,14 @@ async function handoffTopic(chatId: string, topic: string, target: 'opencode' | 
       })
     }
   } else {
+    // Frame the claude-era delta NOW and carry it on every opencode spawn
+    // until the driver acks it. In-memory: a proxy restart mid-handoff drops
+    // it (the oc session then misses the delta turns; accepted).
+    const { turns } = claudeTurnsFor(st)
+    st.pendingSeed = opencodeHandoffSeed(
+      { label, spawnDir: SPAWN_DIR, squareTopic: SQUARE_TOPIC },
+      renderDelta(turns, HANDOFF_MAX_CHARS),
+    )
     ensureSession(topic)
   }
 }
@@ -2180,18 +2234,35 @@ function handlePoll(url: URL): Promise<Response> {
   })
 }
 
-// POST /oc-session {topic, session_id} - the opencode driver registers the
-// session id it just minted, so every later spawn (and proxy restart) resumes
-// the SAME conversation via `opencode run -s`.
+// POST /oc-session {topic, session_id} - the driver registers the session id
+// it just minted, so every later spawn (and proxy restart) resumes the SAME
+// conversation via `opencode run -s`. An EMPTY session_id clears it: the
+// driver reports a stale id it dropped after repeated failures, and the next
+// spawn mints fresh.
 async function handleOcSession(req: Request): Promise<Response> {
   const b = (await req.json()) as any
   const topic = String(b.topic ?? '')
   const sessionId = String(b.session_id ?? '').trim()
-  if (!topic || !sessionId) return new Response('topic and session_id required', { status: 400 })
+  if (!topic) return new Response('topic required', { status: 400 })
   const st = getTopic(topic)
-  st.opencodeSessionId = sessionId
+  st.opencodeSessionId = sessionId || undefined
   saveRegistry()
+  if (!sessionId) {
+    log(`opencode session cleared for topic ${topic} "${st.name}"; next spawn mints fresh`)
+    return json({ ok: true, cleared: true })
+  }
   log(`opencode session registered for topic ${topic} "${st.name}": ${sessionId}`)
+  return json({ ok: true })
+}
+
+// POST /oc-seed-done {topic} - the driver consumed the pending handoff seed
+// (its first run used it). Clears the in-memory pendingSeed so later spawns
+// stop re-delivering it.
+async function handleOcSeedDone(req: Request): Promise<Response> {
+  const b = (await req.json()) as any
+  const topic = String(b.topic ?? '')
+  if (!topic) return new Response('topic required', { status: 400 })
+  getTopic(topic).pendingSeed = undefined
   return json({ ok: true })
 }
 
@@ -2407,6 +2478,7 @@ async function serveWithRetry(): Promise<void> {
               })
             }
             if (req.method === 'POST' && url.pathname === '/oc-session') return await handleOcSession(req)
+            if (req.method === 'POST' && url.pathname === '/oc-seed-done') return await handleOcSeedDone(req)
             if (req.method === 'GET' && url.pathname === '/last-reply') return handleLastReply(url)
             if (req.method === 'POST' && url.pathname === '/rate-limit') return await handleRateLimit(req)
             if (req.method === 'POST' && url.pathname === '/turn-failed') return await handleTurnFailed(req)

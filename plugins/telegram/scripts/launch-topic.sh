@@ -29,30 +29,11 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 : "${TG_SPAWN_DIR:?TG_SPAWN_DIR required}"
 : "${TELEGRAM_TOPIC_ID:?TELEGRAM_TOPIC_ID required}"
 : "${TELEGRAM_PROXY_URL:?TELEGRAM_PROXY_URL required}"
-: "${TG_MARKETPLACE:?TG_MARKETPLACE required}"
-: "${TG_SETTINGS:?TG_SETTINGS required}"
-# TG_HOOK: absolute path to the Stop hook (hooks/stop-reply-guard.py). The
-# session's --settings override references it as $TG_HOOK so that committed file
-# needs no hardcoded path; forwarded into the pane like the rest.
-: "${TG_HOOK:?TG_HOOK required}"
-# TG_FAILOVER_HOOK: the StopFailure hook (hooks/rate-limit-failover.py) that
-# reports a usage-limit stall to the proxy for model failover. Optional so an
-# older proxy still spawns; the settings hook entry just no-ops without it.
-: "${TG_FAILOVER_HOOK:=}"
-: "${TG_KICKOFF:?TG_KICKOFF required}"
-: "${TG_CLAUDE_SESSION_ID:?TG_CLAUDE_SESSION_ID required}"
-# TG_RESUME is optional: "1" = resume the topic's existing claude session (no
-# kickoff, keeps history); empty = first spawn (mint the session + send kickoff).
-: "${TG_RESUME:=}"
-# TG_MODEL is optional: a model id passed as the --model FLAG (empty = account
-# default). Set by the proxy from TELEGRAM_TOPICS_MODEL.
-: "${TG_MODEL:=}"
-# TG_MUX is optional: which multiplexer hosts the session (default tmux).
-: "${TG_MUX:=tmux}"
-# TG_BACKEND is optional: which HARNESS runs in the pane (default claude, the
-# original topic session; opencode = scripts/opencode-driver.ts driving
-# `opencode run`). Independent axis from TG_MUX: the mux mechanics (workspace,
-# env propagation, dialog watcher) are shared, the pane command is per backend.
+# TG_BACKEND: which HARNESS runs in the pane (default claude, the original
+# topic session; opencode = scripts/opencode-driver.ts driving `opencode run`).
+# Independent axis from TG_MUX: the mux mechanics (workspace, env propagation,
+# dialog watcher) are shared, the pane command is per backend. Defaulted BEFORE
+# the per-backend gates below reference it (set -u).
 : "${TG_BACKEND:=claude}"
 # TG_OC_* carry the opencode backend's state (session id / model flags / the
 # seed a handoff or first spawn initializes the session with). Unused by the
@@ -61,6 +42,31 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 : "${TG_OC_MODEL:=}"
 : "${TG_OC_VARIANT:=}"
 : "${TG_OC_SEED:=}"
+# The two backends need DIFFERENT env: claude's spawn identity (marketplace,
+# settings, hooks, session id) is meaningless to an opencode pane, so the
+# required-var gate is per backend.
+
+# -- opencode backend: only the driver + its state.
+if [ "$TG_BACKEND" = "opencode" ]; then
+  : "${TG_OC_BIN:?TG_OC_BIN required (absolute opencode path resolved by the proxy)}"
+fi
+
+# -- claude backend: the original gate, verbatim.
+if [ "$TG_BACKEND" != "opencode" ]; then
+  : "${TG_MARKETPLACE:?TG_MARKETPLACE required}"
+  : "${TG_SETTINGS:?TG_SETTINGS required}"
+  : "${TG_HOOK:?TG_HOOK required}"
+  : "${TG_KICKOFF:?TG_KICKOFF required}"
+  : "${TG_CLAUDE_SESSION_ID:?TG_CLAUDE_SESSION_ID required}"
+fi
+# TG_RESUME is optional: "1" = resume the topic's existing claude session (no
+# kickoff, keeps history); empty = first spawn (mint the session + send kickoff).
+: "${TG_RESUME:=}"
+# TG_MODEL is optional: a model id passed as the --model FLAG (empty = account
+# default). Set by the proxy from TELEGRAM_TOPICS_MODEL.
+: "${TG_MODEL:=}"
+# TG_MUX is optional: which multiplexer hosts the session (default tmux).
+: "${TG_MUX:=tmux}"
 # MCP_TIMEOUT (ms, claude's MCP-startup ceiling) is forwarded into the pane with a
 # GENEROUS default. Root cause of a real incident (2026-07-29): a topic with a
 # HUGE transcript (shale) resumed so slowly that the Telegram CHANNEL MCP's
@@ -80,10 +86,13 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 # absolute path is immune to any shell-init PATH games; TG_PATH additionally
 # restores the full PATH inside the pane so claude's OWN children (its Bash
 # tool) inherit a working environment.
-TG_CLAUDE_BIN=$(command -v claude) || {
-  echo "telegram-topics: claude not found on the launcher PATH" >&2
-  exit 1
-}
+TG_CLAUDE_BIN=""
+if [ "$TG_BACKEND" != "opencode" ]; then
+  TG_CLAUDE_BIN=$(command -v claude) || {
+    echo "telegram-topics: claude not found on the launcher PATH" >&2
+    exit 1
+  }
+fi
 TG_PATH="$PATH"
 
 # The opencode backend execs the DRIVER (bun), which in turn runs `opencode`
@@ -103,7 +112,7 @@ if [ "$TG_BACKEND" = "opencode" ]; then
   }
 fi
 
-# The pane command, IDENTICAL for both backends. Runs under a shell INSIDE the
+# The pane command per backend (selected above). Runs under a shell INSIDE the
 # pane with the TG_*/TELEGRAM_* vars present in its environment (each backend
 # has its own way of getting them there - see spawn_tmux / spawn_herdr).
 #
@@ -192,6 +201,7 @@ spawn_tmux() {
     -e TG_CLAUDE_BIN="$TG_CLAUDE_BIN" \
     -e TG_BUN_BIN="$TG_BUN_BIN" \
     -e TG_DRIVER="$TG_DRIVER" \
+    -e TG_OC_BIN="$TG_OC_BIN" \
     -e TG_BACKEND="$TG_BACKEND" \
     -e TG_MARKETPLACE="$TG_MARKETPLACE" \
     -e TG_SETTINGS="$TG_SETTINGS" \
@@ -317,6 +327,7 @@ print("absent")
     printf 'export TG_CLAUDE_BIN=%q\n' "$TG_CLAUDE_BIN"
     printf 'export TG_BUN_BIN=%q\n' "$TG_BUN_BIN"
     printf 'export TG_DRIVER=%q\n' "$TG_DRIVER"
+    printf 'export TG_OC_BIN=%q\n' "$TG_OC_BIN"
     printf 'export TG_BACKEND=%q\n' "$TG_BACKEND"
     printf 'export TG_MARKETPLACE=%q\n' "$TG_MARKETPLACE"
     printf 'export TG_SETTINGS=%q\n' "$TG_SETTINGS"
@@ -341,11 +352,13 @@ print("absent")
     exit 1
   fi
 
-  # Auto-confirm watcher: poll the pane's visible text over the socket API
+  # Auto-confirm watcher (claude backend only - opencode panes show no
+  # dev-channel dialog, so polling could never match): pane's visible text over
+  # the socket API
   # (newline-delimited JSON; pane.read requires source=visible), answer the
   # dialog with send-keys, exit. Skipped if the pane_id could not be parsed -
   # the session still runs; a human can answer the dialog via `herdr`.
-  if [ -n "$pane_id" ]; then
+  if [ -n "$pane_id" ] && [ "$TG_BACKEND" != "opencode" ]; then
     (
       for _ in $(seq 1 "$WATCHER_TRIES"); do
         # sed strips JSON-encoded newlines (literal backslash-n) BEFORE the
