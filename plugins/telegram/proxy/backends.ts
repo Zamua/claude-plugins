@@ -51,9 +51,14 @@ export type SpawnSpec = {
   // ---- opencode-specific ----
   /** '' = minting spawn (driver creates the session, POSTs /oc-session). */
   opencodeSessionId: string
+  /** Absolute opencode binary, resolved by the proxy (pane PATH is unreliable). */
+  opencodeBin: string
   opencodeModel: string
   opencodeVariant: string
-  /** First message for a minting spawn (handoff delta or opencodeKickoff). */
+  /**
+   * First prompt for the driver's next run: a handoff delta (carried until the
+   * driver acks it), or the startup notice on a fresh topic. Empty = none.
+   */
   opencodeSeed: string
 }
 
@@ -124,18 +129,23 @@ export const claudeBackend: AgentBackend = {
 
 // ---- opencode ---------------------------------------------------------------
 
-export function opencodeKickoff(spec: SpawnSpec): string {
+/** What the framing functions need: the topic identity + working dir. */
+export type SeedContext = { label: string; spawnDir: string; squareTopic: string }
+
+export function opencodeKickoff(ctx: SeedContext): string {
   return (
-    `SYSTEM STARTUP NOTICE (not a user message): you are the assistant for the ${spec.label} topic, ` +
+    `SYSTEM STARTUP NOTICE (not a user message): you are the assistant for the ${ctx.label} topic, ` +
     `running in opencode. Do NOT greet or send anything yet. Wait for the first real user message - ` +
     `it will arrive as a <channel> turn - and respond to THAT via the telegram MCP reply tool ` +
     `(pass the chat_id from the inbound block; it targets this topic). Your working dir is ` +
-    `${spec.spawnDir}. IMPORTANT: other agents may be running concurrently on this same machine, ` +
+    `${ctx.spawnDir}. CHANNEL DISCIPLINE: every <channel> turn MUST be answered through the telegram ` +
+    `reply tool - transcript output never reaches the user. IMPORTANT: other agents may be running ` +
+    `concurrently on this same machine, ` +
     `un-sandboxed and possibly in overlapping dirs, so be careful with destructive or global actions ` +
     `and with shared state, and do not assume you are alone. ` +
     `WRITING STYLE: never use em dashes in anything you write - not in messages to the user, ` +
     `not in code comments, commit messages, or docs. Use a colon, parentheses, or two sentences.` +
-    (spec.squareTopic
+    (ctx.squareTopic
       ? ` THE SQUARE: a shared #square topic hosts agent-to-agent conversations. To ask a peer agent ` +
         `for help, use the square_tag tool (see list_topics for peers); continue conversations with ` +
         `square_reply using the conv + reply_token from the notification meta. Norms: tag a peer only ` +
@@ -149,15 +159,16 @@ export function opencodeKickoff(spec: SpawnSpec): string {
 }
 
 /** Frames a rendered conversation delta for handing a topic OVER to opencode. */
-export function opencodeHandoffSeed(spec: SpawnSpec, delta: string): string {
+export function opencodeHandoffSeed(ctx: SeedContext, delta: string): string {
   return (
     `SYSTEM HANDOFF NOTICE (not a user message): you are taking over the Telegram topic ` +
-    `"${spec.label}" from a Claude Code session whose usage limit was exhausted. The recent ` +
+    `"${ctx.label}" from a Claude Code session whose usage limit was exhausted. The recent ` +
     `conversation follows below so you can continue seamlessly: pick up any unanswered message ` +
-    `and answer it via the telegram reply tool (chat_id comes from the inbound <channel> block). ` +
-    `Your working dir is ${spec.spawnDir}. ` +
+    `and answer it via the telegram reply tool (chat_id comes from the inbound <channel> block; ` +
+    `transcript output never reaches the user). ` +
+    `Your working dir is ${ctx.spawnDir}. ` +
     `WRITING STYLE: never use em dashes in anything you write. Use a colon, parentheses, or two sentences.` +
-    (spec.squareTopic
+    (ctx.squareTopic
       ? ` The #square and its norms work exactly as described in your instructions; list_topics shows the peers.`
       : '') +
     `\n\n--- PRIOR CONVERSATION (oldest first, from the Claude Code session) ---\n\n${delta}`
@@ -176,10 +187,15 @@ export const opencodeBackend: AgentBackend = {
       TELEGRAM_PROXY_URL: spec.proxyUrl,
       TG_BACKEND: 'opencode',
       TG_OC_SESSION_ID: spec.opencodeSessionId,
+      // Absolute path: opencode commonly lives outside the pane's PATH (a nix
+      // per-user profile on this box), and a missed resolution kills the pane.
+      TG_OC_BIN: spec.opencodeBin,
       TG_OC_MODEL: spec.opencodeModel,
       TG_OC_VARIANT: spec.opencodeVariant,
-      // Only a minting spawn consumes a seed; a resumed session already has it.
-      TG_OC_SEED: spec.opencodeSessionId ? '' : spec.opencodeSeed,
+      // A pending handoff delta rides EVERY spawn until the driver acks it
+      // (POST /oc-seed-done), so a driver killed before its first run still
+      // gets the delta on respawn - minting or resumed alike.
+      TG_OC_SEED: spec.opencodeSeed,
     }
   },
 }
