@@ -49,6 +49,8 @@ import {
   parseSecretCommand, secretExists, storeSecret,
 } from './secret'
 import type { FlowResult, Pending } from './secret'
+import { backendFor } from './backends'
+import type { BackendKind } from './backends'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -411,6 +413,9 @@ type TopicState = {
   // When the primary model may be retried: the quota reset time parsed from
   // the limit error, or (absent that) failover time + FALLBACK_PROBE_MIN.
   fallbackUntil?: number
+  // Which harness the topic's session runs on (absent = claude). Swapped by
+  // /handoff; every spawn asks backendFor(this) for the pane env.
+  activeBackend?: BackendKind
 }
 
 const topics = new Map<string, TopicState>()
@@ -669,6 +674,7 @@ type RegistryEntry = {
   claude_session_id: string | null
   fallback_model?: string | null
   fallback_until?: number | null
+  active_backend?: BackendKind
 }
 
 function saveRegistry(): void {
@@ -688,6 +694,7 @@ function saveRegistry(): void {
       spawned_at: st.spawnedAt,
       claude_session_id: st.claudeSessionId,
       ...(st.fallbackModel ? { fallback_model: st.fallbackModel, fallback_until: st.fallbackUntil ?? null } : {}),
+      ...(st.activeBackend ? { active_backend: st.activeBackend } : {}),
     }
   }
   const tmp = REGISTRY_FILE + '.tmp'
@@ -713,6 +720,7 @@ function loadAndReconcileRegistry(): void {
     st.claudeSessionId = entry.claude_session_id ?? undefined
     st.fallbackModel = entry.fallback_model ?? undefined
     st.fallbackUntil = entry.fallback_until ?? undefined
+    st.activeBackend = entry.active_backend ?? undefined
     if (entry.name) topicNames.set(topic, entry.name)
     if (entry.tmux_session && live.has(entry.tmux_session)) {
       st.session = entry.tmux_session
@@ -1196,32 +1204,6 @@ function handleSquareUserMessage(msg: any, text: string): void {
 
 // ---- spawn (single-flight) -------------------------------------------------
 
-function kickoffPrompt(topicLabel: string): string {
-  return (
-    `SYSTEM STARTUP NOTICE (not a user message): you are the Claude for the ${topicLabel} topic. ` +
-    `Do NOT greet or send anything yet. Wait for the first real user message - it will arrive as a ` +
-    `<channel> turn - and respond to THAT via the telegram MCP (it targets this topic). Your working ` +
-    `dir is ${SPAWN_DIR}. IMPORTANT: other Claudes may be running concurrently on this same machine, ` +
-    `un-sandboxed and possibly in overlapping dirs, so be careful with destructive or global actions ` +
-    `and with shared state, and do not assume you are alone. ` +
-    // The operator's global CLAUDE.md carries this, but it is one rule in a
-    // 100k-char file and was reliably ignored; restating it here puts it in
-    // the session's first turn instead.
-    `WRITING STYLE: never use em dashes in anything you write - not in messages to the user, ` +
-    `not in code comments, commit messages, or docs. Use a colon, parentheses, or two sentences.` +
-    (SQUARE_TOPIC
-      ? ` THE SQUARE: a shared #square topic hosts agent-to-agent conversations. To ask a peer Claude ` +
-        `for help, use the square_tag tool (see list_topics for peers); continue conversations with ` +
-        `square_reply using the conv + reply_token from the notification meta. Norms: tag a peer only ` +
-        `when you genuinely need them; every message must move the work forward; do long work in shared ` +
-        `files and post summaries + paths; a closing courtesy is fine but never reply to a courtesy with ` +
-        `a courtesy; if a square notification warrants no reply, do nothing - silence politely ends a ` +
-        `conversation and is explicitly sanctioned there (the reply requirement applies to YOUR topic's ` +
-        `user messages, not square deliveries).`
-      : '')
-  )
-}
-
 // Drop a topic's usage-limit failover once its retry window has passed, so the
 // next SPAWN uses the primary model again.
 //
@@ -1318,23 +1300,34 @@ function ensureSession(topic: string): void {
     // Regenerate the effective settings for THIS spawn so it reflects the current
     // committed base + the ultracode config (fresh on every respawn).
     const settingsPath = resolveSettings()
+    // The harness-specific pane env comes from the topic's AgentBackend. The
+    // core never branches on the backend kind; it only carries the state.
+    const backend = backendFor(st.activeBackend)
     const env = {
       ...process.env,
-      TG_SESSION: name,
-      TG_MUX: mux.kind,
-      TG_SPAWN_DIR: SPAWN_DIR,
-      TELEGRAM_TOPIC_ID: topic,
-      TELEGRAM_PROXY_URL: PROXY_URL,
-      TG_MARKETPLACE: MARKETPLACE,
-      TG_SETTINGS: settingsPath,
-      TG_HOOK: STOP_HOOK,
-      TG_FAILOVER_HOOK: FAILOVER_HOOK,
-      // A topic failed over by handleRateLimit keeps its fallback model on
-      // every respawn until the nightly restart clears it.
-      TG_MODEL: st.fallbackModel || MODEL,
-      TG_KICKOFF: kickoffPrompt(label),
-      TG_CLAUDE_SESSION_ID: st.claudeSessionId,
-      TG_RESUME: resuming ? '1' : '',
+      ...backend.spawnEnv({
+        topic,
+        label,
+        sessionName: name,
+        muxKind: mux.kind,
+        spawnDir: SPAWN_DIR,
+        proxyUrl: PROXY_URL,
+        squareTopic: SQUARE_TOPIC,
+        marketplace: MARKETPLACE,
+        // A topic failed over by handleRateLimit keeps its fallback model on
+        // every respawn until the nightly restart clears it.
+        model: st.fallbackModel || MODEL,
+        claudeSessionId: st.claudeSessionId,
+        resume: resuming,
+        settingsPath,
+        stopHook: STOP_HOOK,
+        failoverHook: FAILOVER_HOOK,
+        kickoff: '',
+        opencodeSessionId: '',
+        opencodeModel: '',
+        opencodeVariant: '',
+        opencodeSeed: '',
+      }),
     }
     const r = spawnSync('bash', [LAUNCH_SCRIPT], { env, encoding: 'utf8' })
     if (r.status !== 0) {
