@@ -42,13 +42,19 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 : "${TG_OC_MODEL:=}"
 : "${TG_OC_VARIANT:=}"
 : "${TG_OC_SEED:=}"
+# Absolute opencode binary, resolved by the proxy for opencode spawns. MUST be
+# defaulted before the env-propagation lists reference it (set -u).
+: "${TG_OC_BIN:=}"
 # The two backends need DIFFERENT env: claude's spawn identity (marketplace,
 # settings, hooks, session id) is meaningless to an opencode pane, so the
 # required-var gate is per backend.
 
 # -- opencode backend: only the driver + its state.
 if [ "$TG_BACKEND" = "opencode" ]; then
-  : "${TG_OC_BIN:?TG_OC_BIN required (absolute opencode path resolved by the proxy)}"
+  if [ -z "$TG_OC_BIN" ]; then
+    echo "telegram-topics: TG_OC_BIN required (absolute opencode path resolved by the proxy)" >&2
+    exit 1
+  fi
 fi
 
 # -- claude backend: the original gate, verbatim.
