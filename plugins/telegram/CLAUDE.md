@@ -548,8 +548,14 @@ Details that matter:
 - `.mcp.json`: starts the MCP via `bun run --cwd ${CLAUDE_PLUGIN_ROOT} ... start`.
 - `server.ts` + `package.json`: the thin MCP client (dep: `@modelcontextprotocol/sdk`).
 - `proxy/proxy.ts` + `proxy/package.json`: the daemon (dep: `grammy`).
-- `scripts/launch-topic.sh`: the tmux launcher (invoked by the proxy).
+- `proxy/backends.ts` + `proxy/backends.test.ts`: the AgentBackend port (pure;
+  claude env snapshots pinned) + the handoff delta renderers.
+- `scripts/launch-topic.sh`: the launcher (invoked by the proxy; `TG_MUX` picks
+  the multiplexer, `TG_BACKEND` picks the harness - independent axes).
+- `scripts/opencode-driver.ts`: the opencode backend's pane process.
 - `scripts/start-proxy.sh`: foreground proxy starter.
+- `server.ts`: ALSO loaded by opencode topics (outbound-only mode via
+  `TELEGRAM_OUTBOUND_ONLY=1`, set by the driver; the bg-agent guard ORs it).
 - `hooks/stop-reply-guard.py`: the Stop hook (reply guard). Blocks a
   Telegram-triggered turn that ended without a `reply` call and reminds Claude to
   resend via the reply tool (once per turn). Wired via `override-settings.json`
@@ -645,6 +651,66 @@ at install). The ONE as-shipped identity is the marketplace name
 default (override via env) and the `enabledPlugins` key in the committed
 `override-settings.json` (edit to `telegram@<your-marketplace>`). Change both
 and everything else ports as-is.
+
+## Backend handoff (`/handoff`, claude <-> opencode)
+
+A topic's session can switch HARNESS without losing the conversation:
+`/handoff opencode` continues it on an opencode (GLM) session, `/handoff
+claude` brings it back. The purpose is quota resilience: when the primary
+model AND the fallback are both exhausted, the conversation degrades to
+opencode instead of stalling. Operator-gated (`ADMIN_USER_ID`, default the
+secrets user), debounced like /relaunch, usable live or dormant.
+
+The layering (see `proxy/backends.ts`, the port; pure, snapshot-tested):
+
+- **AgentBackend port** - `claudeBackend` / `opencodeBackend` build the pane
+  env; the proxy core never branches on the kind. The claude env is a VERBATIM
+  extraction of the pre-handoff ensureSession block (pinned by
+  `backends.test.ts`), so topics that never hand off spawn byte-identically.
+- **Session continuity is per-harness, both persisted in the registry**:
+  claude keeps `claude_session_id` (`--resume`); opencode keeps
+  `opencode_session_id` (the driver mints the session on the topic's first
+  opencode run and POSTs it to `/oc-session`; later runs and respawns continue
+  it with `opencode run -s <id>`). A handoff cycle therefore RESUMES the prior
+  opencode session rather than spawning a fresh one.
+- **Seeding** (`claudeTurnsFor` / `opencodeDeltaFor` + `renderDelta`): the
+  switch to opencode rides the spawn env (`TG_OC_SEED` = handoff delta from
+  the claude .jsonl transcript, newest-kept, oldest-omitted marker). The
+  switch back to claude rides the queue as a SYSTEM NOTICE (the nudge
+  mechanism), because `--resume` takes no kickoff. Proxy-constructed seed
+  notices are stripped from the opencode export so history is not duplicated.
+- **The pane process** for opencode is `scripts/opencode-driver.ts` (bun,
+  exec'd by the launcher when `TG_BACKEND=opencode`; independent axis from
+  `TG_MUX`). It long-polls `/poll` exactly like server.ts, renders each
+  message as the SAME `<channel>` block a claude topic gets (so the shared
+  CLAUDE.md discipline applies verbatim), and feeds `opencode run --format
+  json --auto` one message at a time. Its env sets `TELEGRAM_OUTBOUND_ONLY=1`
+  and injects `OPENCODE_CONFIG_CONTENT` (telegram MCP + a permission deny
+  list) so the MCP and denies exist ONLY for its own runs - the telegram MCP
+  must never be registered in a global/project opencode config, where any
+  other opencode session's inbound-polling MCP would steal topic queues.
+- **Reply backstop**: opencode has no Stop hook, so the driver snapshots
+  `GET /last-reply?topic=` around each run and, if the marker did not move
+  while the run produced text, POSTs the run text to `/send` itself. The
+  marker moves in `handleSend` (any successful reply).
+
+**Auto-handoff** (`TELEGRAM_TOPICS_AUTO_HANDOFF`, default OFF): a SECOND
+consecutive rate-limit report for a topic already pinned to its fallback
+model means the whole claude family is exhausted; `handleRateLimit` then
+degrades the topic to opencode automatically (`handoff_reason: "quota"`).
+Such topics auto-RETURN: `maybeAutoReturn` (spawn-time, same laziness as
+`maybeRevertFallback`) switches back to claude once `fallback_until` passes,
+and the nightly restart clears quota handoffs too. If claude is still
+limited, the next StopFailure re-degrades - bounded by the window, one notice
+per attempt. Manual handoffs (`handoff_reason: "manual"`) never auto-return.
+`maybeRevertFallback` skips opencode topics (the fallback pin is claude-side
+state; `maybeAutoReturn` owns that case).
+
+Registry additions (all additive, absent = claude, back-compat):
+`active_backend`, `opencode_session_id`, `last_handoff_at`, `handoff_reason`.
+The save condition persists a topic with EITHER session id or a name.
+Opencode panes are named `oc-<slug>-<tid>` (claude keeps `claude-<...>`), so
+`herdr pane list` self-describes the harness.
 
 ## Not in v1
 
