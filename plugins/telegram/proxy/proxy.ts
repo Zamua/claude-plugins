@@ -49,8 +49,8 @@ import {
   parseSecretCommand, secretExists, storeSecret,
 } from './secret'
 import type { FlowResult, Pending } from './secret'
-import { backendFor } from './backends'
-import type { BackendKind } from './backends'
+import { backendFor, claudeTranscriptTurns, opencodeHandoffSeed, opencodeKickoff, parseOpencodeExport, renderDelta } from './backends'
+import type { BackendKind, SpawnSpec } from './backends'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -174,6 +174,46 @@ const MODEL_FALLBACK = (process.env.TELEGRAM_TOPICS_MODEL_FALLBACK ?? 'opus').tr
 // continues), so this is a "probe optimistically" knob, not a guess that has
 // to be right. Ignored when a reset time IS known - that is exact.
 const FALLBACK_PROBE_MIN = Number(process.env.TELEGRAM_TOPICS_FALLBACK_PROBE_MINUTES ?? '60')
+
+// ---- handoff (claude <-> opencode) ------------------------------------------
+//
+// A topic's session can switch harness: /handoff opencode degrades a topic
+// whose claude quota is exhausted onto an opencode (GLM) session, /handoff
+// claude brings it back. One conversation per topic regardless of harness:
+// claude continuity stays in claude_session_id (--resume), opencode
+// continuity in opencode_session_id (`opencode run -s`), and each switch
+// seeds the target with the source's recent turns.
+const HANDOFF_RE = /^\/handoff(?:@\w+)?(?:\s+(\S+))?\s*$/
+// Who may /handoff. Falls back to the secrets gate's user id (both are
+// "the operator"); unset = feature off.
+const ADMIN_USER_ID = (process.env.TELEGRAM_TOPICS_ADMIN_USER_ID ?? SECRETS_USER_ID).trim()
+// When the pinned fallback model ALSO hits the limit (a second consecutive
+// rate-limit report for a topic already on fallback), degrade the topic to
+// opencode automatically. Off by default; the operator's .env opts in after
+// the pilot soaks.
+const AUTO_HANDOFF = envBool(process.env.TELEGRAM_TOPICS_AUTO_HANDOFF, false, 'TELEGRAM_TOPICS_AUTO_HANDOFF')
+// opencode model/variant for topic sessions. Empty = the machine's opencode
+// config default (usually what you want); a value pins `-m provider/model`
+// and `--variant <effort>` per run.
+const OPENCODE_MODEL = (process.env.TELEGRAM_OPENCODE_MODEL ?? '').trim()
+const OPENCODE_VARIANT = (process.env.TELEGRAM_OPENCODE_VARIANT ?? '').trim()
+// Seed bounds: the recent turns of the source conversation, oldest first.
+const HANDOFF_MAX_TURNS = 60
+const HANDOFF_MAX_CHARS = 40_000
+// Debounce, same shape as /relaunch: a double tap must not hand off twice.
+const HANDOFF_DEBOUNCE_MS = 30_000
+const lastHandoff = new Map<string, number>()
+
+// The opencode CLI, for `opencode export` when rendering a handoff delta.
+// The proxy runs under launchd's minimal PATH; opencode is commonly a nix
+// per-user profile binary that PATH will not resolve.
+function opencodeBin(): string {
+  const perUser = process.env.USER ? `/etc/profiles/per-user/${process.env.USER}/bin/opencode` : ''
+  for (const c of [perUser, join(homedir(), '.local/bin/opencode'), '/opt/homebrew/bin/opencode', '/usr/local/bin/opencode']) {
+    if (c && existsSync(c)) return c
+  }
+  return 'opencode' // last resort: whatever PATH makes of it
+}
 
 // Which terminal multiplexer hosts the detached topic-Claude sessions.
 // `tmux` (default, the original backend) or `herdr` (herdr.dev, the agent
@@ -416,6 +456,19 @@ type TopicState = {
   // Which harness the topic's session runs on (absent = claude). Swapped by
   // /handoff; every spawn asks backendFor(this) for the pane env.
   activeBackend?: BackendKind
+  // The opencode session id (the driver mints it on the topic's first opencode
+  // run and POSTs it here). Absent = the next opencode spawn mints a new one,
+  // consuming the seed (handoff delta, or the startup notice).
+  opencodeSessionId?: string
+  // When this topic last switched harness, and why. 'quota' handoffs are
+  // auto-reversible (the spawn-time probe returns them to claude once the
+  // window passes); 'manual' handoffs stay until manually reversed.
+  lastHandoffAt?: number
+  handoffReason?: 'quota' | 'manual'
+  // Marker of the last successful outbound reply, for the opencode driver's
+  // stranded-reply backstop (it ships the run text itself when the marker
+  // does not move across a run). In-memory: a proxy restart resets it.
+  lastReplyAt?: number
 }
 
 const topics = new Map<string, TopicState>()
@@ -435,20 +488,22 @@ function slugify(s: string): string {
   )
 }
 
-// The tmux session name. Readable: `claude-<slug>-<thread_id>` (e.g.
+// The mux session name. Readable: `<prefix>-<slug>-<thread_id>` (e.g.
 // `claude-hostthis-34`), with the numeric thread id as a short, stable,
 // collision-proof suffix; the General topic (no thread id) is just
-// `claude-general`. Computed from the topic's LABEL at spawn time and then
-// RECORDED in st.session (dedup/kill use the recorded string, never re-derive) so
-// a later rename can't orphan the running session.
-function sessionNameFor(topic: string, label?: string): string {
-  if (topic === 'general') return 'claude-general'
+// `<prefix>-general`. The prefix doubles as the harness marker
+// (`claude-` / `oc-`) so panes are self-describing. Computed from the topic's
+// LABEL at spawn time and then RECORDED in st.session (dedup/kill use the
+// recorded string, never re-derive) so a later rename can't orphan the
+// running session.
+function sessionNameFor(topic: string, label?: string, prefix = 'claude'): string {
+  if (topic === 'general') return `${prefix}-general`
   const id = topic.replace(/[^A-Za-z0-9]/g, '')
   const slug = slugify(label ?? '')
   // Unknown/degenerate name (the label fell back to the numeric id, or slugified
-  // to the 'topic' placeholder) -> just `claude-<id>`, not `claude-<id>-<id>`.
-  if (slug === id || slug === 'topic') return `claude-${id}`
-  return `claude-${slug}-${id}`
+  // to the 'topic' placeholder) -> just `<prefix>-<id>`, not `<prefix>-<id>-<id>`.
+  if (slug === id || slug === 'topic') return `${prefix}-${id}`
+  return `${prefix}-${slug}-${id}`
 }
 
 // The pre-2026-07 `tg-<cid>-<tid>` name. Used ONLY by the migration bridge in
@@ -675,18 +730,21 @@ type RegistryEntry = {
   fallback_model?: string | null
   fallback_until?: number | null
   active_backend?: BackendKind
+  opencode_session_id?: string | null
+  last_handoff_at?: number | null
+  handoff_reason?: string | null
 }
 
 function saveRegistry(): void {
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
   const out: Record<string, RegistryEntry> = {}
   for (const [topic, st] of topics) {
-    // Persist any topic that has been spawned at least once (has a claude
-    // session id - needed to --resume the SAME conversation on the next
+    // Persist any topic that has been spawned at least once (has a claude OR
+    // opencode session id - needed to resume the SAME conversation on the next
     // message) OR that has a known NAME with no session yet (a proxy-created
     // topic, registered at creation time; without persisting it here a proxy
     // restart would make it invisible again until a human messaged it).
-    if (!st.claudeSessionId && !st.name) continue
+    if (!st.claudeSessionId && !st.opencodeSessionId && !st.name) continue
     out[topic] = {
       tmux_session: st.session,
       thread_id: st.threadId ?? null,
@@ -695,6 +753,8 @@ function saveRegistry(): void {
       claude_session_id: st.claudeSessionId,
       ...(st.fallbackModel ? { fallback_model: st.fallbackModel, fallback_until: st.fallbackUntil ?? null } : {}),
       ...(st.activeBackend ? { active_backend: st.activeBackend } : {}),
+      ...(st.opencodeSessionId ? { opencode_session_id: st.opencodeSessionId } : {}),
+      ...(st.lastHandoffAt ? { last_handoff_at: st.lastHandoffAt, handoff_reason: st.handoffReason ?? null } : {}),
     }
   }
   const tmp = REGISTRY_FILE + '.tmp'
@@ -721,6 +781,9 @@ function loadAndReconcileRegistry(): void {
     st.fallbackModel = entry.fallback_model ?? undefined
     st.fallbackUntil = entry.fallback_until ?? undefined
     st.activeBackend = entry.active_backend ?? undefined
+    st.opencodeSessionId = entry.opencode_session_id ?? undefined
+    st.lastHandoffAt = entry.last_handoff_at ?? undefined
+    st.handoffReason = (entry.handoff_reason as 'quota' | 'manual' | undefined) ?? undefined
     if (entry.name) topicNames.set(topic, entry.name)
     if (entry.tmux_session && live.has(entry.tmux_session)) {
       st.session = entry.tmux_session
@@ -999,6 +1062,15 @@ async function handleRateLimit(req: Request): Promise<Response> {
     return json({ ok: false, reason: 'no fallback configured' })
   }
   if (st.fallbackModel) {
+    // A SECOND consecutive report while already on the fallback: the whole
+    // claude family is exhausted. AUTO_HANDOFF degrades the topic to opencode
+    // so the conversation continues somewhere; manual /handoff claude brings
+    // it back (and the spawn-time window probe does so automatically).
+    if (AUTO_HANDOFF && st.activeBackend !== 'opencode') {
+      log(`rate limit on topic ${topic} "${label}" while already on fallback ${st.fallbackModel}; auto-handoff to opencode`)
+      await handoffTopic(String(GROUP_CHAT_ID), topic, 'opencode', 'quota')
+      return json({ ok: true, escalated: 'opencode' })
+    }
     log(`rate limit on topic ${topic} "${label}" already on fallback ${st.fallbackModel}; no action`)
     return json({ ok: true, already: st.fallbackModel })
   }
@@ -1216,6 +1288,7 @@ function handleSquareUserMessage(msg: any, text: string): void {
 // If the quota turns out to still be exhausted, the very next turn fails over
 // again - one notice, conversation continues - so probing early is cheap.
 function maybeRevertFallback(st: TopicState, topic: string): void {
+  if (st.activeBackend === 'opencode') return // claude-side state; maybeAutoReturn owns this topic
   if (!st.fallbackModel) return
   if (st.fallbackUntil && Date.now() < st.fallbackUntil) return
   if (st.session && mux.liveSessions().has(st.session)) return // live: leave it be
@@ -1234,16 +1307,58 @@ function maybeRevertFallback(st: TopicState, topic: string): void {
     .catch(e => log(`revert notice failed for topic ${topic}: ${e}`))
 }
 
-// Ensure a live tmux Claude session exists for a topic. Single-flight: the
-// synchronous spawnSync blocks the event loop for the whole launch, so two
-// inbound messages for a brand-new topic cannot spawn two sessions; the
-// spawning flag + the live-session dedup are belt and suspenders.
+// Mirror of maybeRevertFallback for quota-degraded OPENCODE topics: when the
+// claude quota window recorded at auto-handoff time has passed, the topic
+// returns to claude at its next spawn. Manual handoffs never auto-return. A
+// live session is left alone (same laziness); if claude is STILL limited the
+// topic simply fails over and auto-handoff degrades it again - one notice,
+// conversation continues, so probing early is cheap.
+function maybeAutoReturn(st: TopicState, topic: string): void {
+  if (st.activeBackend !== 'opencode' || st.handoffReason !== 'quota') return
+  if (st.fallbackUntil && Date.now() < st.fallbackUntil) return
+  if (st.session && mux.liveSessions().has(st.session)) return
+  st.activeBackend = undefined
+  st.handoffReason = undefined
+  st.lastHandoffAt = Date.now()
+  saveRegistry()
+  log(`topic ${topic} "${st.name}": quota window elapsed, returning to claude`)
+  const tid = threadIdForTopic(topic)
+  bot.api
+    .sendMessage(String(GROUP_CHAT_ID), `✅ Claude quota window elapsed - switching this topic back to claude.`, {
+      ...(tid != null ? { message_thread_id: tid } : {}),
+    })
+    .catch(e => log(`auto-return notice failed for topic ${topic}: ${e}`))
+}
+
+// The recent turns of the topic's CLAUDE conversation, read from the session
+// transcript. [] when there is no claude session or the file is unreadable
+// (the seed still forms, just with the omission marker).
+function claudeTurnsFor(st: TopicState): { turns: ReturnType<typeof claudeTranscriptTurns>; found: boolean } {
+  if (!st.claudeSessionId) return { turns: [], found: false }
+  // Claude munges the session cwd into its project dir name (non-alnum -> '-').
+  const munged = SPAWN_DIR.replace(/[^a-zA-Z0-9]/g, '-')
+  const path = join(homedir(), '.claude', 'projects', munged, `${st.claudeSessionId}.jsonl`)
+  try {
+    const jsonl = readFileSync(path, 'utf8')
+    return { turns: claudeTranscriptTurns(jsonl, HANDOFF_MAX_TURNS), found: true }
+  } catch (e) {
+    log(`could not read claude transcript ${path}: ${e}`)
+    return { turns: [], found: true }
+  }
+}
+
+// Ensure a live topic session exists for a topic (claude TUI or opencode
+// driver, per the topic's active backend). Single-flight: the synchronous
+// spawnSync blocks the event loop for the whole launch, so two inbound
+// messages for a brand-new topic cannot spawn two sessions; the spawning
+// flag + the live-session dedup are belt and suspenders.
 function ensureSession(topic: string): void {
   // The square topic hosts conversations, not a claude of its own.
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
   const st = getTopic(topic)
   if (st.spawning) return
   maybeRevertFallback(st, topic)
+  maybeAutoReturn(st, topic)
   const live = mux.liveSessions()
   // Dedup on the RECORDED session name (stable for a live session's whole life;
   // '' for a brand-new / dead topic, so we fall through and spawn). We do NOT
@@ -1287,47 +1402,57 @@ function ensureSession(topic: string): void {
   try {
     const label = st.name || topicNames.get(topic) || topic
     st.name = label
-    // First spawn: mint a session id and create the session with it (passing
-    // the kickoff). Every later spawn RESUMES that same id (no kickoff), so the
-    // topic stays one continuous conversation. The id is persisted in the
-    // registry, so it survives proxy restarts too.
-    const resuming = !!st.claudeSessionId
-    if (!st.claudeSessionId) st.claudeSessionId = crypto.randomUUID()
-    // Name the tmux session from the CURRENT label (fresh each spawn, so a rename
-    // takes effect on the next respawn); recorded in st.session after a successful
-    // spawn so dedup + kill target this exact string.
-    const name = sessionNameFor(topic, label)
-    // Regenerate the effective settings for THIS spawn so it reflects the current
-    // committed base + the ultracode config (fresh on every respawn).
-    const settingsPath = resolveSettings()
     // The harness-specific pane env comes from the topic's AgentBackend. The
     // core never branches on the backend kind; it only carries the state.
     const backend = backendFor(st.activeBackend)
+    const isOc = backend.kind === 'opencode'
+    // Session continuity is per-harness: claude resumes via --resume of the
+    // minted id; opencode via `run -s` of the driver-POSTed id. A minting
+    // opencode spawn (no id yet) consumes the seed: the handoff delta from
+    // the claude transcript, or this backend's startup notice.
+    const resuming = isOc ? !!st.opencodeSessionId : !!st.claudeSessionId
+    if (!isOc && !st.claudeSessionId) st.claudeSessionId = crypto.randomUUID()
+    // Name the mux session from the CURRENT label (fresh each spawn, so a
+    // rename takes effect on the next respawn); recorded in st.session after a
+    // successful spawn so dedup + kill target this exact string. The prefix
+    // doubles as the harness marker (`claude-...` / `oc-...`).
+    const name = sessionNameFor(topic, label, isOc ? 'oc' : 'claude')
+    // Regenerate the effective settings for THIS spawn so it reflects the current
+    // committed base + the ultracode config (fresh on every respawn).
+    const settingsPath = resolveSettings()
+    const spec: SpawnSpec = {
+      topic,
+      label,
+      sessionName: name,
+      muxKind: mux.kind,
+      spawnDir: SPAWN_DIR,
+      proxyUrl: PROXY_URL,
+      squareTopic: SQUARE_TOPIC,
+      marketplace: MARKETPLACE,
+      // A topic failed over by handleRateLimit keeps its fallback model on
+      // every respawn until the nightly restart clears it.
+      model: st.fallbackModel || MODEL,
+      claudeSessionId: st.claudeSessionId ?? '',
+      resume: resuming,
+      settingsPath,
+      stopHook: STOP_HOOK,
+      failoverHook: FAILOVER_HOOK,
+      kickoff: '',
+      opencodeSessionId: st.opencodeSessionId ?? '',
+      opencodeModel: OPENCODE_MODEL,
+      opencodeVariant: OPENCODE_VARIANT,
+      opencodeSeed: '',
+    }
+    if (isOc && !resuming) {
+      const { turns, found } = claudeTurnsFor(st)
+      spec.opencodeSeed =
+        found || st.lastHandoffAt
+          ? opencodeHandoffSeed(spec, renderDelta(turns, HANDOFF_MAX_CHARS))
+          : opencodeKickoff(spec)
+    }
     const env = {
       ...process.env,
-      ...backend.spawnEnv({
-        topic,
-        label,
-        sessionName: name,
-        muxKind: mux.kind,
-        spawnDir: SPAWN_DIR,
-        proxyUrl: PROXY_URL,
-        squareTopic: SQUARE_TOPIC,
-        marketplace: MARKETPLACE,
-        // A topic failed over by handleRateLimit keeps its fallback model on
-        // every respawn until the nightly restart clears it.
-        model: st.fallbackModel || MODEL,
-        claudeSessionId: st.claudeSessionId,
-        resume: resuming,
-        settingsPath,
-        stopHook: STOP_HOOK,
-        failoverHook: FAILOVER_HOOK,
-        kickoff: '',
-        opencodeSessionId: '',
-        opencodeModel: '',
-        opencodeVariant: '',
-        opencodeSeed: '',
-      }),
+      ...backend.spawnEnv(spec),
     }
     const r = spawnSync('bash', [LAUNCH_SCRIPT], { env, encoding: 'utf8' })
     if (r.status !== 0) {
@@ -1336,7 +1461,8 @@ function ensureSession(topic: string): void {
     st.session = name
     st.spawnedAt = Date.now()
     saveRegistry()
-    log(`${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" (claude ${st.claudeSessionId}) -> ${mux.kind} ${name}`)
+    const idPart = isOc ? (resuming ? `oc ${st.opencodeSessionId}` : 'oc minting') : `claude ${st.claudeSessionId}`
+    log(`${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" (${idPart}) -> ${mux.kind} ${name}`)
   } catch (e) {
     log(`spawn failed for topic ${topic}: ${e}`)
   } finally {
@@ -1697,12 +1823,133 @@ async function handleRelaunch(chatId: string, topic: string, fromId: string): Pr
   ensureSession(topic)
 }
 
+// The /handoff engine: switch a topic's session between harnesses. Both the
+// operator command and the automatic quota degradation (handleRateLimit) land
+// here. killSession first (drains the dying long-polls so nothing enqueued
+// next is lost), then persist the switch, then respawn via ensureSession -
+// which asks the NEW backend for the pane env.
+//
+// Seed direction, per target:
+//   opencode  the claude transcript delta rides the spawn env (TG_OC_SEED)
+//             and initializes the minting session - it can never interleave
+//             with a live queued message.
+//   claude    `--resume` takes no kickoff, so the opencode-era delta arrives
+//             as an enqueued SYSTEM NOTICE (the nudge mechanism) instead.
+async function handoffTopic(chatId: string, topic: string, target: 'opencode' | 'claude', why: 'quota' | 'manual'): Promise<void> {
+  const st = getTopic(topic)
+  const from = st.activeBackend ?? 'claude'
+  if (from === target) {
+    await sayIn(chatId, topic, `🤝 this topic already runs on ${target}.`)
+    return
+  }
+  const wasLive = killSession(st, topic)
+  st.activeBackend = target === 'claude' ? undefined : 'opencode'
+  st.lastHandoffAt = Date.now()
+  st.handoffReason = why
+  saveRegistry()
+  const label = st.name || topic
+  log(`handoff topic ${topic} "${label}": ${from} -> ${target} (${why}; was ${wasLive ? 'live' : 'not running'})`)
+  await sayIn(
+    chatId, topic,
+    why === 'quota'
+      ? `⚠️ The fallback model also hit its usage limit - continuing this conversation on opencode/GLM. ` +
+          `Say "/handoff claude" once the claude window resets.`
+      : `🤝 handing this topic from ${from} to ${target}: same conversation, recent turns carried over.`,
+  )
+  if (target === 'claude') {
+    const delta = await opencodeDeltaFor(st)
+    ensureSession(topic)
+    if (delta) {
+      enqueue(topic, {
+        content:
+          `SYSTEM NOTICE (not a user message): this topic ran on opencode while the claude usage limit was ` +
+          `exhausted, and has now switched back to you. The opencode-era conversation follows so you can ` +
+          `continue seamlessly; answer the user's latest unanswered message via the reply tool.\n\n` +
+          `--- OPENCODE-ERA CONVERSATION (oldest first) ---\n\n${delta}`,
+        meta: {
+          chat_id: String(GROUP_CHAT_ID),
+          user: 'telegram-topics-proxy',
+          ts: new Date().toISOString(),
+          ...(topic !== 'general' ? { message_thread_id: topic } : {}),
+          handoff: '1',
+        },
+      })
+    }
+  } else {
+    ensureSession(topic)
+  }
+}
+
+// The opencode-era turns for a handoff BACK to claude, via `opencode export`.
+// Proxy-constructed seeds and startup notices are stripped (the claude
+// transcript already holds the pre-handoff history they summarized); null =
+// nothing to carry (no oc session, or the export failed).
+async function opencodeDeltaFor(st: TopicState): Promise<string | null> {
+  if (!st.opencodeSessionId) return null
+  try {
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(opencodeBin(), ['export', st.opencodeSessionId!], { maxBuffer: 64 * 1024 * 1024, timeout: 60_000 },
+        (err, stdout) => (err ? reject(err) : resolve(String(stdout))))
+    })
+    const turns = parseOpencodeExport(stdout, HANDOFF_MAX_TURNS).filter(
+      t => !(t.role === 'user' && /^(SYSTEM HANDOFF NOTICE|SYSTEM STARTUP NOTICE)/.test(t.text)),
+    )
+    if (!turns.length) return null
+    return renderDelta(turns, HANDOFF_MAX_CHARS)
+  } catch (e) {
+    log(`could not export opencode session ${st.opencodeSessionId}: ${e}`)
+    return null
+  }
+}
+
+// The "/"-menu /handoff command. Operator-gated (ADMIN_USER_ID), debounced,
+// and usable on live or dormant topics alike.
+async function handleHandoffCommand(chatId: string, topic: string, fromId: string, arg: string): Promise<void> {
+  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
+    await sayIn(chatId, topic, '🤝 the square has no claude of its own; run /handoff in a topic.')
+    return
+  }
+  if (!ADMIN_USER_ID) {
+    await sayIn(chatId, topic, '🤝 /handoff is disabled (TELEGRAM_TOPICS_ADMIN_USER_ID is unset).')
+    return
+  }
+  if (fromId !== ADMIN_USER_ID) {
+    await sayIn(chatId, topic, '🤝 only the operator can hand a topic off.')
+    return
+  }
+  const a = arg.trim().toLowerCase()
+  if (!a || a === 'status') {
+    const st = getTopic(topic)
+    const backend = st.activeBackend ?? 'claude'
+    const id =
+      backend === 'claude'
+        ? `claude session ${st.claudeSessionId ?? 'none yet'}`
+        : `opencode session ${st.opencodeSessionId ?? 'minting on next spawn'}`
+    await sayIn(chatId, topic, `🤝 backend: ${backend} (${id}). Use /handoff opencode or /handoff claude.`)
+    return
+  }
+  if (a !== 'opencode' && a !== 'claude') {
+    await sayIn(chatId, topic, '🤝 usage: /handoff [opencode|claude|status]')
+    return
+  }
+  const since = Date.now() - (lastHandoff.get(topic) ?? 0)
+  if (since < HANDOFF_DEBOUNCE_MS) {
+    await sayIn(chatId, topic, '🤝 a handoff just ran; wait a moment.')
+    return
+  }
+  lastHandoff.set(topic, Date.now())
+  await handoffTopic(chatId, topic, a as 'opencode' | 'claude', 'manual')
+}
+
 // The "/" menu: discoverable, autocompleted, and free of the "--" a phone
 // keyboard mangles. Scoped to the group so no other chat learns the verbs.
 // Idempotent, and a failure only costs the menu, never the commands.
 async function registerCommands(): Promise<void> {
   const commands = [
     { command: 'relaunch', description: "restart this topic's claude (same conversation, reloads MCP config)" },
+    ...(ADMIN_USER_ID
+      ? [{ command: 'handoff', description: 'switch this topic between claude and opencode: /handoff [opencode|claude|status]' }]
+      : []),
     ...(SECRETS_USER_ID
       ? [
           { command: 'secret', description: 'store a credential: /secret <name>, value on the next line' },
@@ -1734,6 +1981,11 @@ bot.on('message', async ctx => {
   }
   if (typeof msg.text === 'string' && RELAUNCH_RE.test(msg.text)) {
     await handleRelaunch(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
+    return
+  }
+  const handoffMatch = HANDOFF_RE.exec(msg.text ?? '')
+  if (handoffMatch) {
+    await handleHandoffCommand(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), handoffMatch[1] ?? '')
     return
   }
   // A reply to a guided-flow prompt (name or value) belongs to the flow and is
@@ -1928,6 +2180,29 @@ function handlePoll(url: URL): Promise<Response> {
   })
 }
 
+// POST /oc-session {topic, session_id} - the opencode driver registers the
+// session id it just minted, so every later spawn (and proxy restart) resumes
+// the SAME conversation via `opencode run -s`.
+async function handleOcSession(req: Request): Promise<Response> {
+  const b = (await req.json()) as any
+  const topic = String(b.topic ?? '')
+  const sessionId = String(b.session_id ?? '').trim()
+  if (!topic || !sessionId) return new Response('topic and session_id required', { status: 400 })
+  const st = getTopic(topic)
+  st.opencodeSessionId = sessionId
+  saveRegistry()
+  log(`opencode session registered for topic ${topic} "${st.name}": ${sessionId}`)
+  return json({ ok: true })
+}
+
+// GET /last-reply?topic=T - the marker the opencode driver's stranded-reply
+// backstop compares across a run: if the topic's last outbound reply did not
+// move while the run produced text, the driver ships the text itself.
+function handleLastReply(url: URL): Response {
+  const topic = url.searchParams.get('topic') ?? 'general'
+  return json({ last_reply_at: getTopic(topic).lastReplyAt ?? null })
+}
+
 async function handleSend(req: Request): Promise<Response> {
   const b = (await req.json()) as any
   assertGroup(b.chat_id)
@@ -1971,6 +2246,9 @@ async function handleSend(req: Request): Promise<Response> {
     ids.push(sent.message_id)
   }
 
+  // Reply marker for the opencode driver's stranded-reply backstop: it ships
+  // a run's text itself only when this marker did not move across the run.
+  getTopic(topic).lastReplyAt = Date.now()
   return json({ message_ids: ids })
 }
 
@@ -2128,6 +2406,8 @@ async function serveWithRetry(): Promise<void> {
                 polling_since: pollingSince != null ? new Date(pollingSince).toISOString() : null,
               })
             }
+            if (req.method === 'POST' && url.pathname === '/oc-session') return await handleOcSession(req)
+            if (req.method === 'GET' && url.pathname === '/last-reply') return handleLastReply(url)
             if (req.method === 'POST' && url.pathname === '/rate-limit') return await handleRateLimit(req)
             if (req.method === 'POST' && url.pathname === '/turn-failed') return await handleTurnFailed(req)
             if (req.method === 'GET' && url.pathname === '/topics') return handleTopics()
@@ -2251,8 +2531,20 @@ function nightlyRestart(): void {
     st.fallbackModel = undefined
     reverted++
   }
+  // Quota-degraded opencode topics also get to try claude again at the nightly
+  // restart (manual handoffs stay until manually reversed). The oc session id
+  // persists, so the conversation continues if claude is still limited and
+  // auto-handoff degrades the topic again.
+  let returned = 0
+  for (const [topic, st] of topics) {
+    if (st.activeBackend !== 'opencode' || st.handoffReason !== 'quota') continue
+    st.activeBackend = undefined
+    st.handoffReason = undefined
+    returned++
+    log(`nightly restart: topic ${topic} "${st.name}" returning from opencode to claude`)
+  }
   saveRegistry()
-  log(`nightly restart complete: ${killed} topic session(s) killed, ${reverted} model failover(s) reverted`)
+  log(`nightly restart complete: ${killed} topic session(s) killed, ${reverted} model failover(s) reverted, ${returned} opencode handoff(s) returned`)
 }
 
 const NIGHTLY_HOUR_RAW = process.env.TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR ?? ''
