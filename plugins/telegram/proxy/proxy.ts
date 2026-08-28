@@ -700,12 +700,35 @@ class HerdrMux implements Multiplexer {
   // claude processes, yet were re-adopted as live. Require a real agent.
   // NB 'unknown' is also reported for ~2s while a freshly spawned pane boots,
   // so ensureSession additionally honors a short post-spawn grace window.
+  //
+  // 'unknown' ALSO covers a healthy pane running an agent herdr does not
+  // recognize: the opencode topic driver is a plain bun process, not a known
+  // TUI. For those panes ask what runs in the foreground (pane process-info):
+  // a non-shell foreground process means the pane is live; the bare shell
+  // (or nothing) is a corpse. The launcher exec-chains into the driver, so
+  // the shell pid IS the driver - the name check is what distinguishes them.
   liveSessions(): Set<string> {
     const out = new Set<string>()
     for (const [label, p] of this.panes()) {
-      if (p.status && p.status !== 'unknown') out.add(label)
+      if (p.status && p.status !== 'unknown') {
+        out.add(label)
+        continue
+      }
+      if (this.foregroundIsAgent(p.paneId)) out.add(label)
     }
     return out
+  }
+
+  private foregroundIsAgent(paneId: string): boolean {
+    const r = spawnSync(this.bin, ['pane', 'process-info', '--pane', paneId], { encoding: 'utf8' })
+    if (r.status !== 0) return false
+    try {
+      const procs =
+        JSON.parse(r.stdout ?? '{}')?.result?.process_info?.foreground_processes ?? []
+      return procs.some((p: any) => !/^(zsh|bash|sh|fish|dash|ksh)$/.test(String(p?.name ?? '')))
+    } catch {
+      return false
+    }
   }
 
   kill(session: string): boolean {
