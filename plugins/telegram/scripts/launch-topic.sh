@@ -183,13 +183,12 @@ CLAUDE_PANE_CMD='export PATH="$TG_PATH"; \
    exec "$TG_CLAUDE_BIN" "$@" --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
  fi'
 
-# opencode pane: the TUI IS the process. The injected plugin polls the proxy
-# and submits turns into this session; exec so the pane dies with the TUI.
 # opencode pane: the TUI itself, bound to the topic's session when one exists
 # (full history on screen; the telegram-channel plugin injects inbound turns
 # and the user can drop in and type directly). exec so the pane dies with it.
 OPENCODE_PANE_CMD='export PATH="$TG_PATH"; \
- if [ -n "$TG_OC_SESSION_ID" ]; then set -- --session "$TG_OC_SESSION_ID"; else set --; fi; \
+ if [ -n "$TG_OC_MODEL" ]; then set -- --model "$TG_OC_MODEL"; else set --; fi; \
+ if [ -n "$TG_OC_SESSION_ID" ]; then set -- "$@" --session "$TG_OC_SESSION_ID"; fi; \
  exec "$TG_OC_BIN" "$@"'
 
 if [ "$TG_BACKEND" = "opencode" ]; then
