@@ -29,56 +29,27 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 : "${TG_SPAWN_DIR:?TG_SPAWN_DIR required}"
 : "${TELEGRAM_TOPIC_ID:?TELEGRAM_TOPIC_ID required}"
 : "${TELEGRAM_PROXY_URL:?TELEGRAM_PROXY_URL required}"
-# TG_BACKEND: which HARNESS runs in the pane (default claude, the original
-# topic session; opencode = the interactive opencode TUI).
-# Independent axis from TG_MUX: the mux mechanics (workspace, env propagation,
-# dialog watcher) are shared, the pane command is per backend. Defaulted BEFORE
-# the per-backend gates below reference it (set -u).
-: "${TG_BACKEND:=claude}"
-# TG_OC_* carry the opencode backend's state (session id / model flags / the
-# seed a handoff or first spawn initializes the session with). Unused by the
-# claude backend.
-: "${TG_OC_SESSION_ID:=}"
-: "${TG_OC_MODEL:=}"
-: "${TG_OC_VARIANT:=}"
-: "${TG_OC_SEED:=}"
-# Absolute opencode binary, resolved by the proxy for opencode spawns. MUST be
-# defaulted before the env-propagation lists reference it (set -u).
-: "${TG_OC_BIN:=}"
-# The claude-only vars the env-propagation lists still reference: defaulted
-# empty here, and the claude gate above enforces non-empty for claude spawns.
-: "${TG_MARKETPLACE:=}"
-: "${TG_SETTINGS:=}"
-: "${TG_HOOK:=}"
+: "${TG_MARKETPLACE:?TG_MARKETPLACE required}"
+: "${TG_SETTINGS:?TG_SETTINGS required}"
+# TG_HOOK: absolute path to the Stop hook. The settings override references it
+# as $TG_HOOK so the committed file needs no hardcoded path.
+: "${TG_HOOK:?TG_HOOK required}"
 : "${TG_FAILOVER_HOOK:=}"
-: "${TG_KICKOFF:=}"
-: "${TG_CLAUDE_SESSION_ID:=}"
-# The two backends need DIFFERENT env: claude's spawn identity (marketplace,
-# settings, hooks, session id) is meaningless to an opencode pane, so the
-# required-var gate is per backend.
-
-# -- opencode backend: only the TUI + plugin state.
-if [ "$TG_BACKEND" = "opencode" ]; then
-  if [ -z "$TG_OC_BIN" ]; then
-    echo "telegram-topics: TG_OC_BIN required (absolute opencode path resolved by the proxy)" >&2
-    exit 1
-  fi
-fi
-
-# -- claude backend: the original gate, verbatim.
-if [ "$TG_BACKEND" != "opencode" ]; then
-  : "${TG_MARKETPLACE:?TG_MARKETPLACE required}"
-  : "${TG_SETTINGS:?TG_SETTINGS required}"
-  : "${TG_HOOK:?TG_HOOK required}"
-  : "${TG_KICKOFF:?TG_KICKOFF required}"
-  : "${TG_CLAUDE_SESSION_ID:?TG_CLAUDE_SESSION_ID required}"
-fi
+: "${TG_CAPACITY_HOOK:?TG_CAPACITY_HOOK required}"
+: "${TG_KICKOFF:?TG_KICKOFF required}"
+: "${TG_CLAUDE_SESSION_ID:?TG_CLAUDE_SESSION_ID required}"
+: "${TG_PROVIDER:=anthropic}"
+: "${TG_INBOUND_MODE:=channel}"
+: "${TG_PROVIDER_BASE_URL:=}"
+: "${TG_PROVIDER_AUTH_TOKEN:=}"
+: "${TG_AUTO_COMPACT_WINDOW:=}"
 # TG_RESUME is optional: "1" = resume the topic's existing claude session (no
 # kickoff, keeps history); empty = first spawn (mint the session + send kickoff).
 : "${TG_RESUME:=}"
 # TG_MODEL is optional: a model id passed as the --model FLAG (empty = account
 # default). Set by the proxy from TELEGRAM_TOPICS_MODEL.
 : "${TG_MODEL:=}"
+: "${TG_EFFORT:=}"
 # TG_MUX is optional: which multiplexer hosts the session (default tmux).
 : "${TG_MUX:=tmux}"
 # MCP_TIMEOUT (ms, claude's MCP-startup ceiling) is forwarded into the pane with a
@@ -100,58 +71,14 @@ fi
 # absolute path is immune to any shell-init PATH games; TG_PATH additionally
 # restores the full PATH inside the pane so claude's OWN children (its Bash
 # tool) inherit a working environment.
-TG_CLAUDE_BIN=""
-if [ "$TG_BACKEND" != "opencode" ]; then
-  TG_CLAUDE_BIN=$(command -v claude) || {
-    echo "telegram-topics: claude not found on the launcher PATH" >&2
-    exit 1
-  }
-fi
+TG_CLAUDE_BIN=$(command -v claude) || {
+  echo "telegram-topics: claude not found on the launcher PATH" >&2
+  exit 1
+}
 TG_PATH="$PATH"
 
-# The opencode backend execs the opencode TUI bound to the topic's session
-# (interactive, herdr-recognized); the telegram-channel plugin (loaded via the
-# injected config) delivers inbound Telegram turns into that session. Resolve
-# bun NOW (same logic as TG_CLAUDE_BIN) and build the per-run config: the
-# telegram MCP + the plugin + the permission policy, so they exist ONLY for
-# topic panes - never in a global/project config, where an inbound-polling MCP
-# would steal a topic's queue.
-TG_BUN_BIN=""
-TG_OC_CONFIG=""
-if [ "$TG_BACKEND" = "opencode" ]; then
-  TG_BUN_BIN=$(command -v bun) || {
-    echo "telegram-topics: bun not found on the launcher PATH (required for the opencode backend)" >&2
-    exit 1
-  }
-  TG_PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-  TG_CHANNEL_TS="$TG_PLUGIN_ROOT/opencode-plugin/telegram-channel.ts"
-  [ -f "$TG_CHANNEL_TS" ] || {
-    echo "telegram-topics: telegram-channel plugin not found at $TG_CHANNEL_TS" >&2
-    exit 1
-  }
-  [ -f "$TG_PLUGIN_ROOT/server.ts" ] || {
-    echo "telegram-topics: server.ts not found at $TG_PLUGIN_ROOT (required for the telegram MCP)" >&2
-    exit 1
-  }
-  # Permission policy: allow routine work (an unattended pane cannot answer a
-  # prompt), deny what must never run (raw Bot API calls would bypass the MCP;
-  # a detached pane cannot answer `question`). opencode evaluates the LAST
-  # matching rule, so the broad allow comes first, denies last.
-  TG_OC_CONFIG=$(printf '{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["%s"],
-  "mcp": { "telegram": { "type": "local", "command": ["%s", "%s/server.ts"], "enabled": true } },
-  "permission": {
-    "edit": "allow",
-    "bash": { "*": "allow", "*api.telegram.org*": "deny", "sudo *": "deny", "shutdown*": "deny", "launchctl *": "deny" },
-    "question": "deny"
-  }
-}' "$TG_CHANNEL_TS" "$TG_BUN_BIN" "$TG_PLUGIN_ROOT")
-fi
-
-# The pane command per backend (selected above). Runs under a shell INSIDE the
-# pane with the TG_*/TELEGRAM_* vars present in its environment (each backend
-# has its own way of getting them there - see spawn_tmux / spawn_herdr).
+# The Claude pane command runs under a shell INSIDE the pane with the
+# TG_*/TELEGRAM_* vars present in its environment.
 #
 # IMPORTANT: --dangerously-load-development-channels is VARIADIC so it MUST use
 # the =form; the space form would greedy-consume the following arg as another
@@ -168,34 +95,37 @@ fi
 # `exec` so the pane dies with claude and the proxy's reconcile drops it.
 #
 # Session continuity: a FIRST spawn uses --session-id <id> + the kickoff; a
-# re-spawn (TG_RESUME=1) uses --resume <id> and NO kickoff. TG_MODEL is the
-# --model FLAG (a settings `model` is ignored by a --resume'd session; the flag
-# overrides even on resume). Args built with `set --` so a bracketed id like
-# claude-fable-5[1m] stays ONE properly-quoted arg.
-CLAUDE_PANE_CMD='export PATH="$TG_PATH"; \
+# re-spawn (TG_RESUME=1) uses --resume <id> and NO kickoff. TG_MODEL is both the
+# --model flag and, for a proxied route, ANTHROPIC_MODEL plus
+# ANTHROPIC_SMALL_FAST_MODEL. The env overrides are required on resume: the
+# flag changes the displayed model but an Anthropic-authenticated session can
+# otherwise restore its native plan route before issuing an HTTP request.
+# Args use `set --` so a bracketed id stays one properly quoted argument.
+PANE_CMD='export PATH="$TG_PATH"; \
+ if [ -n "$TG_PROVIDER_BASE_URL" ]; then \
+   export ANTHROPIC_BASE_URL="$TG_PROVIDER_BASE_URL" \
+          ANTHROPIC_AUTH_TOKEN="$TG_PROVIDER_AUTH_TOKEN" \
+          ANTHROPIC_MODEL="$TG_MODEL" \
+          ANTHROPIC_SMALL_FAST_MODEL="$TG_MODEL" \
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW="$TG_AUTO_COMPACT_WINDOW" \
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+          CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1; \
+ else \
+   unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL \
+         ANTHROPIC_SMALL_FAST_MODEL CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
+         CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK; \
+ fi; \
  set -- --dangerously-load-development-channels="$TG_MARKETPLACE" \
         --settings "$TG_SETTINGS" --permission-mode auto \
         --disallowedTools=AskUserQuestion; \
  [ -n "$TG_MODEL" ] && set -- "$@" --model "$TG_MODEL"; \
+ [ -n "$TG_EFFORT" ] && set -- "$@" --effort "$TG_EFFORT"; \
  if [ -n "$TG_RESUME" ]; then \
    exec "$TG_CLAUDE_BIN" "$@" --resume "$TG_CLAUDE_SESSION_ID"; \
  else \
    exec "$TG_CLAUDE_BIN" "$@" --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
  fi'
-
-# opencode pane: the TUI itself, bound to the topic's session when one exists
-# (full history on screen; the telegram-channel plugin injects inbound turns
-# and the user can drop in and type directly). exec so the pane dies with it.
-OPENCODE_PANE_CMD='export PATH="$TG_PATH"; \
- if [ -n "$TG_OC_MODEL" ]; then set -- --model "$TG_OC_MODEL"; else set --; fi; \
- if [ -n "$TG_OC_SESSION_ID" ]; then set -- "$@" --session "$TG_OC_SESSION_ID"; fi; \
- exec "$TG_OC_BIN" "$@"'
-
-if [ "$TG_BACKEND" = "opencode" ]; then
-  PANE_CMD="$OPENCODE_PANE_CMD"
-else
-  PANE_CMD="$CLAUDE_PANE_CMD"
-fi
 
 # --dangerously-load-development-channels can show a one-key "local
 # development" confirmation dialog (third-party channel plugins are not
@@ -238,24 +168,21 @@ spawn_tmux() {
     -e MCP_TIMEOUT="$MCP_TIMEOUT" \
     -e TG_PATH="$TG_PATH" \
     -e TG_CLAUDE_BIN="$TG_CLAUDE_BIN" \
-    -e TG_BUN_BIN="$TG_BUN_BIN" \
-    -e OPENCODE_CONFIG_CONTENT="$TG_OC_CONFIG" \
-    -e TG_OC_BIN="$TG_OC_BIN" \
-    -e TELEGRAM_CHANNEL="$TELEGRAM_CHANNEL" \
-    -e TELEGRAM_OUTBOUND_ONLY="$TELEGRAM_OUTBOUND_ONLY" \
-    -e TG_BACKEND="$TG_BACKEND" \
     -e TG_MARKETPLACE="$TG_MARKETPLACE" \
     -e TG_SETTINGS="$TG_SETTINGS" \
     -e TG_HOOK="$TG_HOOK" \
     -e TG_FAILOVER_HOOK="$TG_FAILOVER_HOOK" \
+    -e TG_CAPACITY_HOOK="$TG_CAPACITY_HOOK" \
+    -e TG_PROVIDER="$TG_PROVIDER" \
+    -e TG_INBOUND_MODE="$TG_INBOUND_MODE" \
+    -e TG_PROVIDER_BASE_URL="$TG_PROVIDER_BASE_URL" \
+    -e TG_PROVIDER_AUTH_TOKEN="$TG_PROVIDER_AUTH_TOKEN" \
+    -e TG_AUTO_COMPACT_WINDOW="$TG_AUTO_COMPACT_WINDOW" \
     -e TG_MODEL="$TG_MODEL" \
+    -e TG_EFFORT="$TG_EFFORT" \
     -e TG_KICKOFF="$TG_KICKOFF" \
     -e TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
     -e TG_RESUME="$TG_RESUME" \
-    -e TG_OC_SESSION_ID="$TG_OC_SESSION_ID" \
-    -e TG_OC_MODEL="$TG_OC_MODEL" \
-    -e TG_OC_VARIANT="$TG_OC_VARIANT" \
-    -e TG_OC_SEED="$TG_OC_SEED" \
     -e TELEGRAM_TOPIC_ID="$TELEGRAM_TOPIC_ID" \
     -e TELEGRAM_PROXY_URL="$TELEGRAM_PROXY_URL" \
     "$PANE_CMD"
@@ -263,17 +190,15 @@ spawn_tmux() {
   # Auto-confirm watcher. NB: pane-target commands (capture-pane/send-keys) do
   # NOT accept the "=name" exact-match prefix that has-session does; an exact
   # session name already resolves exactly, so pass the bare name.
-  if [ "$TG_BACKEND" != "opencode" ]; then
-    (
-      for _ in $(seq 1 "$WATCHER_TRIES"); do
-        if tmux capture-pane -t "$TG_SESSION" -p 2>/dev/null | tr -d ' \t\n' | grep -q "$DIALOG_SQUASHED"; then
-          tmux send-keys -t "$TG_SESSION" 1 Enter
-          break
-        fi
-        sleep 0.25
-      done
-    ) </dev/null >/dev/null 2>&1 &
-  fi
+  (
+    for _ in $(seq 1 "$WATCHER_TRIES"); do
+      if tmux capture-pane -t "$TG_SESSION" -p 2>/dev/null | tr -d ' \t\n' | grep -q "$DIALOG_SQUASHED"; then
+        tmux send-keys -t "$TG_SESSION" 1 Enter
+        break
+      fi
+      sleep 0.25
+    done
+  ) </dev/null >/dev/null 2>&1 &
 }
 
 spawn_herdr() {
@@ -366,24 +291,21 @@ print("absent")
     printf 'export MCP_TIMEOUT=%q\n' "$MCP_TIMEOUT"
     printf 'export TG_PATH=%q\n' "$TG_PATH"
     printf 'export TG_CLAUDE_BIN=%q\n' "$TG_CLAUDE_BIN"
-    printf 'export TG_BUN_BIN=%q\n' "$TG_BUN_BIN"
-    printf 'export OPENCODE_CONFIG_CONTENT=%q\n' "$TG_OC_CONFIG"
-    printf 'export TG_OC_BIN=%q\n' "$TG_OC_BIN"
-    printf 'export TELEGRAM_CHANNEL=%q\n' "$TELEGRAM_CHANNEL"
-    printf 'export TELEGRAM_OUTBOUND_ONLY=%q\n' "$TELEGRAM_OUTBOUND_ONLY"
-    printf 'export TG_BACKEND=%q\n' "$TG_BACKEND"
     printf 'export TG_MARKETPLACE=%q\n' "$TG_MARKETPLACE"
     printf 'export TG_SETTINGS=%q\n' "$TG_SETTINGS"
     printf 'export TG_HOOK=%q\n' "$TG_HOOK"
     printf 'export TG_FAILOVER_HOOK=%q\n' "$TG_FAILOVER_HOOK"
+    printf 'export TG_CAPACITY_HOOK=%q\n' "$TG_CAPACITY_HOOK"
+    printf 'export TG_PROVIDER=%q\n' "$TG_PROVIDER"
+    printf 'export TG_INBOUND_MODE=%q\n' "$TG_INBOUND_MODE"
+    printf 'export TG_PROVIDER_BASE_URL=%q\n' "$TG_PROVIDER_BASE_URL"
+    printf 'export TG_PROVIDER_AUTH_TOKEN=%q\n' "$TG_PROVIDER_AUTH_TOKEN"
+    printf 'export TG_AUTO_COMPACT_WINDOW=%q\n' "$TG_AUTO_COMPACT_WINDOW"
     printf 'export TG_MODEL=%q\n' "$TG_MODEL"
+    printf 'export TG_EFFORT=%q\n' "$TG_EFFORT"
     printf 'export TG_KICKOFF=%q\n' "$TG_KICKOFF"
     printf 'export TG_CLAUDE_SESSION_ID=%q\n' "$TG_CLAUDE_SESSION_ID"
     printf 'export TG_RESUME=%q\n' "$TG_RESUME"
-    printf 'export TG_OC_SESSION_ID=%q\n' "$TG_OC_SESSION_ID"
-    printf 'export TG_OC_MODEL=%q\n' "$TG_OC_MODEL"
-    printf 'export TG_OC_VARIANT=%q\n' "$TG_OC_VARIANT"
-    printf 'export TG_OC_SEED=%q\n' "$TG_OC_SEED"
     printf 'export TELEGRAM_TOPIC_ID=%q\n' "$TELEGRAM_TOPIC_ID"
     printf 'export TELEGRAM_PROXY_URL=%q\n' "$TELEGRAM_PROXY_URL"
     printf '%s\n' "$PANE_CMD"
@@ -395,13 +317,11 @@ print("absent")
     exit 1
   fi
 
-  # Auto-confirm watcher (claude backend only - opencode panes show no
-  # dev-channel dialog, so polling could never match): pane's visible text over
-  # the socket API
+  # Auto-confirm watcher: poll the pane's visible text over the socket API
   # (newline-delimited JSON; pane.read requires source=visible), answer the
   # dialog with send-keys, exit. Skipped if the pane_id could not be parsed -
   # the session still runs; a human can answer the dialog via `herdr`.
-  if [ -n "$pane_id" ] && [ "$TG_BACKEND" != "opencode" ]; then
+  if [ -n "$pane_id" ]; then
     (
       for _ in $(seq 1 "$WATCHER_TRIES"); do
         # sed strips JSON-encoded newlines (literal backslash-n) BEFORE the

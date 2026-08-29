@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""StopFailure hook: report a usage-limit stall to the proxy so it can fail over.
+"""StopFailure hook: report a usage-limit stall to the topic proxy.
 
-Claude Code's `--fallback-model` / `fallbackModel` chain is AVAILABILITY-based
-(503/529) and explicitly does NOT cover plan usage limits (429) - and there is
-no automatic model downgrade on a plan limit. So an interactive topic-Claude
-that exhausts its model's quota just stalls: every later turn fails the same
-way until a human runs /model.
+Claude Code's built-in fallback chain handles model availability, not plan
+quota. A plan limit therefore stalls an interactive session until its route is
+changed. This hook is the tripwire that lets the proxy surface a provider/model
+picker in Telegram while keeping the same Claude Code session UUID.
 
-The one signal the harness does give is this hook: StopFailure fires when a
-turn ends on an API error, with error == "rate_limit" for a 429. It is
-notification-only (its output is ignored, and it cannot change the session's
-model), so it does the one thing it can: tell the proxy, which OWNS the
-session lifecycle and can respawn it on the fallback model with --resume (the
---model flag overrides even on resume - that is why per-topic model pinning
-works at all).
+StopFailure fires when a turn ends on an API error, with error == "rate_limit"
+for a 429. It is notification-only, so it tells the proxy, which owns the
+session lifecycle and pauses the exhausted route until the operator selects
+another provider/model.
 
 Fires and forgets: any failure here is swallowed, because a hook that throws
 must never make a already-failing turn worse.
@@ -51,7 +47,7 @@ def parse_reset(details: str) -> int | None:
     time (a `|<unix>` suffix, a `resets at <ISO>` phrase, a bare epoch). Rather
     than depend on one format, accept any of them and sanity-check the result:
     a reset must be in the future and within a week, so a random number in the
-    message text cannot pin a topic to the fallback model for a month.
+    message text cannot schedule a bogus reset notification a month out.
     """
     now = int(time.time())
     horizon = now + 7 * 24 * 3600
@@ -86,7 +82,7 @@ def main() -> None:
 
     details = str(hook.get("error_details", ""))[:500]
 
-    # rate_limit -> the failover flow below. EVERYTHING ELSE (overloaded/529,
+    # rate_limit -> the provider-picker flow below. EVERYTHING ELSE (overloaded/529,
     # 5xx, auth, ...) -> tell the operator in this topic's thread: the failed
     # turn already swallowed their message, and without a notice the session
     # just looks like it ignored them (observed with silent 529s, 2026-07-29).
@@ -112,10 +108,9 @@ def main() -> None:
             "error": hook.get("error"),
             "details": details,
             # Opportunistic: the limit error often carries WHEN the quota
-            # resets. Pass it along so the proxy can revert to the primary
-            # model exactly then instead of probing blindly. Absent/garbled =
-            # the proxy falls back to its probe interval, so this is a
-            # best-effort optimization, never a dependency.
+            # resets. Pass it along so the proxy can notify the operator at
+            # the right time. Absent/garbled means provider probes remain the
+            # source of truth, so this is an optimization, never a dependency.
             **({"reset_at": r} if (r := parse_reset(details)) else {}),
         }
     ).encode()

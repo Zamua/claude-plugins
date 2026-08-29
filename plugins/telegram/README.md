@@ -2,8 +2,10 @@
 
 One Telegram bot, many Claudes. This plugin multiplexes a SINGLE bot token
 across MANY concurrent Claude Code sessions, routed by Telegram forum
-**topics**. Each topic in your group gets its own foreground Claude in its own
-detached tmux session; you talk to a different Claude by switching topics.
+**topics**. Each topic in your group gets its own foreground Claude Code
+session in a detached tmux or herdr pane; you talk to a different Claude by
+switching topics. Claude Code is the only harness. Each topic can route that
+same Claude session to native Anthropic, Codex, or OpenCode Go models.
 
 It is a drop-in for the single-session telegram channel: the plugin is named
 `telegram`, the MCP server is named `telegram`, and the four tools keep their
@@ -14,10 +16,11 @@ transfer unchanged.
 
 ## Why a proxy
 
-Telegram allows exactly one `getUpdates` consumer per bot token, and Claude's
-channel injection only works for a FOREGROUND session (a `--bg` agent silently
-drops the channel notifications). So the token and the poll live in ONE place,
-and each conversation is a real foreground REPL:
+Telegram allows exactly one `getUpdates` consumer per bot token, and each
+conversation must reach one foreground Claude REPL. The proxy owns the token
+and selects the ingress supported by the active route: native Claude Channels
+for Anthropic, or direct idle-pane prompting for a custom provider route (Claude
+Code disables Channels under API billing).
 
 ```
                     ┌──────────────────────────────────────────────┐
@@ -29,7 +32,7 @@ and each conversation is a real foreground REPL:
                  long-poll + POST       │               │
                         │               │               │
                  ┌──────▼─────┐  ┌──────▼─────┐  ┌──────▼─────┐
-                 │ tmux: ops  │  │ tmux: infra│  │ tmux:general│
+                 │ pane: ops  │  │ pane: infra│  │ pane:general│
                  │ claude +   │  │ claude +   │  │ claude +    │
                  │ telegram   │  │ telegram   │  │ telegram    │
                  │ MCP client │  │ MCP client │  │ MCP client  │
@@ -41,14 +44,16 @@ and each conversation is a real foreground REPL:
   for the General topic), enqueues `{content, meta}`, and spawns the topic's
   tmux Claude if none is live (single-flight). It also serves the outbound
   tools over loopback HTTP.
-- **MCP client** (`server.ts`): a thin per-session channel. It owns no token
-  and does no polling. Inbound, it long-polls `GET /poll?topic=<topic>` and
-  injects each message as a `<channel>` turn. Outbound, the four tools POST to
-  the proxy (`/send`, `/react`, `/edit`, `/download`), each carrying its topic.
+- **MCP client** (`server.ts`): owns no token. On native Anthropic routes it
+  long-polls `GET /poll?topic=<topic>` and injects each message as a Channel
+  turn. On Codex/OpenCode routes it keeps only the outbound tools active while
+  the proxy submits an equivalent `<channel>` envelope through the idle Claude
+  pane. The four tools POST to the proxy (`/send`, `/react`, `/edit`,
+  `/download`), each carrying its topic.
   It also carries a permission-relay path (forward a prompt to the proxy, answer
   from an approve/deny in the topic), but that path is DORMANT under the current
   auto mode - see the launcher below.
-- **Launcher** (`scripts/launch-topic.sh`): spawns one detached tmux session
+- **Launcher** (`scripts/launch-topic.sh`): spawns one detached multiplexer pane
   per topic running a foreground `claude` with the channel loaded, under
   `--permission-mode auto`. That is checked auto-approve, not skip-all-checks: a
   guard model vets each command and auto-approves the SAFE ones, so routine work
@@ -56,11 +61,16 @@ and each conversation is a real foreground REPL:
   command can still escalate to a confirm, which would block the pane until
   someone attaches. It also handles session continuity: it mints a claude session
   id on the first spawn and `--resume`s that same id on every later spawn, so a
-  topic is one continuous conversation across kills / crashes / proxy restarts.
+  topic is one continuous conversation across kills, route changes, crashes,
+  and proxy restarts. Native Anthropic launches without overrides; Codex and
+  OpenCode Go launch the same `claude` binary through a loopback compatibility
+  bridge.
 
 ## Prerequisites
 
-- `bun`, `tmux`, `claude`, and a Bash shell on the proxy's PATH.
+- `bun`, `claude`, a Bash shell, and either `tmux` or `herdr` on the proxy's PATH.
+- Optional provider routing: `claude-code-proxy` on PATH. Codex must already be
+  authenticated; OpenCode Go must already exist in OpenCode's local auth file.
 - A Telegram bot token (BotFather).
 - A Telegram **group with Topics enabled** (group settings -> Topics -> on).
 - BotFather -> `/setprivacy` -> **Disable**, so the bot receives every topic
@@ -103,9 +113,15 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_TOPICS_SPAWN_DIR` | no | `$HOME` | cwd for every spawned topic-Claude |
 | `TELEGRAM_PROXY_PORT` | no | `8790` | HTTP port for the MCP clients |
 | `TELEGRAM_TOPICS_MARKETPLACE` | no | `plugin:telegram@zamua` | channel ref for the launcher |
+| `TELEGRAM_TOPICS_ADMIN_USER_ID` | for routing | secrets user id | Telegram user allowed to change routes |
+| `TELEGRAM_PROVIDER_PROXY_URL` | no | `http://127.0.0.1:18765` | loopback compatibility bridge |
+| `TELEGRAM_PROVIDER_PROXY_BIN` | no | `claude-code-proxy` | bridge CLI used to enumerate models |
+| `TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES` | no | `5` | Codex/OpenCode Go usage refresh interval |
+| `TELEGRAM_OPENCODE_AUTH_FILE` | no | OpenCode's standard auth file | source for OpenCode Go usage auth; the key is never copied into plugin state |
+| `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr`; this changes the pane host, never the harness |
 | `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` | no | (disabled) | 0-23 local; once a day at this hour the proxy kills live topic sessions (each `--resume`s on its next message) |
 | `TELEGRAM_TOPICS_ULTRACODE` | no | `true` | run every topic-Claude at ultracode (xhigh) effort; `false` = default medium. Baked into the generated settings; takes effect on the next proxy restart |
-| `TELEGRAM_TOPICS_MODEL` | no | `claude-fable-5` | default model id for every topic-Claude; `default`/`inherit`/empty = the account default. Baked into the generated settings; takes effect on the next proxy restart |
+| `TELEGRAM_TOPICS_MODEL` | no | `fable` | initial model for topics without a persisted route; `/model` selections are persisted per topic |
 | `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` | no | `5000` | MCP-side: how long the first inbound poll is held so the booting REPL is idle before the first message is delivered |
 
 ## Run the proxy
@@ -130,15 +146,35 @@ plist in `~/Library/LaunchAgents/` and remove it.
 
 Health check while it runs: `curl -s localhost:8790/health`.
 
+For Codex/OpenCode Go routes, start `scripts/start-provider-proxy.sh` under your
+service manager. It binds only to loopback. The script reads the existing
+OpenCode Go key at process start; do not copy that key into `.env`.
+
 ## Use it
 
 1. Start the proxy.
 2. In your group, open (or create) a topic and send a message.
-3. The proxy spawns a tmux Claude for that topic (`tmux ls` shows
-   `tg-<chatid>-<threadid>`), which replies back INTO that topic.
+3. The proxy spawns a Claude for that topic (`claude-<slug>-<threadid>`), which
+   replies back INTO that topic.
 4. Different topic, different Claude. They run concurrently and independently.
 
-Attach to any topic's session to watch it: `tmux attach -t tg-<chatid>-<threadid>`.
+Attach through the selected multiplexer when you need to inspect a pane. Normal
+provider/model management stays in Telegram:
+
+- `/model` — choose provider, model, and effort with inline buttons.
+- `/model status` — show this topic's Claude UUID and active route.
+- `/usage` — show observed provider windows and reset times.
+
+When a provider hits its limit, the proxy stops the stalled route and offers
+the other providers. It switches only after the operator chooses. Claude resumes
+the same UUID and is nudged to finish the unanswered message. When the exhausted
+provider resets, Telegram offers a switch-back button; it does not switch
+automatically or spend a banked reset credit.
+
+Provider switching does not fork the conversation. The same Claude UUID is
+resumed with the selected provider/model. Only inbound transport differs:
+Anthropic uses native Channels; custom-provider sessions use the multiplexer
+prompt port because Claude Code rejects Channel delivery in that auth mode.
 
 Each topic is one continuous conversation. If its session dies (you kill it, it
 crashes, the proxy restarts), the next message to that topic re-spawns Claude and
@@ -157,6 +193,8 @@ Loopback only (`127.0.0.1:8790`).
 | `POST /edit` | `{topic, chat_id, message_id, text, format?}` | `{message_id}` |
 | `POST /download` | `{topic, file_id}` | `{path}` |
 | `POST /permission-request` | `{topic, request_id, tool, input}` | `{ok: true}` |
+| `POST /rate-limit` | `{topic, error, details, reset_at?}` | pauses the exhausted route and opens the Telegram picker |
+| `POST /capacity` | Anthropic capacity windows | `{ok: true}` |
 | `GET /health` | | `{ok, topics, port, polling, polling_since}` |
 
 `topic` is the `message_thread_id` as a string, or `"general"`. On `/send`,
