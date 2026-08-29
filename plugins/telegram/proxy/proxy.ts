@@ -99,9 +99,9 @@ const MARKETPLACE = process.env.TELEGRAM_TOPICS_MARKETPLACE ?? 'plugin:telegram@
 // alone admits every member, and this writes files into the operator's home.
 const SECRETS_USER_ID = process.env.TELEGRAM_TOPICS_SECRETS_USER_ID ?? ''
 const SECRETS_DIR = process.env.TELEGRAM_TOPICS_SECRETS_DIR ?? join(homedir(), 'keys')
-// "/relaunch" in a topic kills that topic's claude and respawns it with
-// --resume: same conversation, freshly loaded MCP servers and settings, which
-// a running session cannot pick up mid-flight.
+// "/relaunch" in a topic kills that topic's agent and respawns it with the
+// same backend and conversation, freshly loading MCP servers and settings
+// that a running session cannot pick up mid-flight.
 const RELAUNCH_RE = /^\/relaunch(?:@\w+)?\s*$/
 // A double tap lands inside the spawn window: the second request finds no
 // live session, so it cannot double-spawn, but it would enqueue a second
@@ -1858,7 +1858,7 @@ const reason = (err: unknown) => (err instanceof Error ? err.message : String(er
 // visible silence rather than a quiet one.
 async function handleRelaunch(chatId: string, topic: string, fromId: string): Promise<void> {
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
-    await sayIn(chatId, topic, '♻️ the square has no claude of its own; run /relaunch in a topic.')
+    await sayIn(chatId, topic, '♻️ the square has no agent of its own; run /relaunch in a topic.')
     return
   }
   const since = Date.now() - (lastRelaunch.get(topic) ?? 0)
@@ -1872,7 +1872,7 @@ async function handleRelaunch(chatId: string, topic: string, fromId: string): Pr
   log(`relaunch of topic ${topic} "${st.name || topic}" requested by user ${fromId} (was ${wasLive ? 'live' : 'not running'})`)
   await sayIn(
     chatId, topic,
-    `♻️ relaunching this topic's claude${wasLive ? '' : ' (it was not running)'}: same conversation, ` +
+    `♻️ relaunching this topic's agent${wasLive ? '' : ' (it was not running)'}: same conversation, ` +
       'freshly loaded MCP servers and settings.',
   )
   enqueue(topic, {
@@ -2055,7 +2055,7 @@ async function handleHandoffButton(topic: string, target: 'opencode' | 'claude',
 // Idempotent, and a failure only costs the menu, never the commands.
 async function registerCommands(): Promise<void> {
   const commands = [
-    { command: 'relaunch', description: "restart this topic's claude (same conversation, reloads MCP config)" },
+    { command: 'relaunch', description: "restart this topic's agent (same conversation, reloads MCP config)" },
     ...(ADMIN_USER_ID
       ? [{ command: 'handoff', description: 'switch this topic between claude and opencode (shows options)' }]
       : []),
