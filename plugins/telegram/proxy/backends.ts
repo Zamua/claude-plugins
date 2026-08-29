@@ -186,15 +186,20 @@ export const opencodeBackend: AgentBackend = {
       TELEGRAM_TOPIC_ID: spec.topic,
       TELEGRAM_PROXY_URL: spec.proxyUrl,
       TG_BACKEND: 'opencode',
-      TG_OC_SESSION_ID: spec.opencodeSessionId,
       // Absolute path: opencode commonly lives outside the pane's PATH (a nix
       // per-user profile on this box), and a missed resolution kills the pane.
       TG_OC_BIN: spec.opencodeBin,
-      TG_OC_MODEL: spec.opencodeModel,
-      TG_OC_VARIANT: spec.opencodeVariant,
-      // A pending handoff delta rides EVERY spawn until the driver acks it
-      // (POST /oc-seed-done), so a driver killed before its first run still
-      // gets the delta on respawn - minting or resumed alike.
+      // The registry session id: the launcher opens the TUI with `--session`
+      // when present; empty = fresh topic, the plugin adopts the new session.
+      TG_OC_SESSION_ID: spec.opencodeSessionId,
+      // Pane-mode gates: OUTBOUND_ONLY puts the injected telegram MCP into
+      // outbound-only mode (the plugin owns /poll); CHANNEL activates the
+      // telegram-channel plugin in this opencode instance and nothing else.
+      TELEGRAM_OUTBOUND_ONLY: '1',
+      TELEGRAM_CHANNEL: '1',
+      // A pending handoff delta or the startup notice: the plugin injects it
+      // as the session's first prompt and acks it (POST /oc-seed-done), so it
+      // rides every spawn until acked - minting or resumed alike.
       TG_OC_SEED: spec.opencodeSeed,
     }
   },
