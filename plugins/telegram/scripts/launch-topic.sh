@@ -243,6 +243,8 @@ spawn_tmux() {
     -e TG_BUN_BIN="$TG_BUN_BIN" \
     -e OPENCODE_CONFIG_CONTENT="$TG_OC_CONFIG" \
     -e TG_OC_BIN="$TG_OC_BIN" \
+    -e TELEGRAM_CHANNEL="$TELEGRAM_CHANNEL" \
+    -e TELEGRAM_OUTBOUND_ONLY="$TELEGRAM_OUTBOUND_ONLY" \
     -e TG_BACKEND="$TG_BACKEND" \
     -e TG_MARKETPLACE="$TG_MARKETPLACE" \
     -e TG_SETTINGS="$TG_SETTINGS" \
@@ -369,6 +371,8 @@ print("absent")
     printf 'export TG_BUN_BIN=%q\n' "$TG_BUN_BIN"
     printf 'export OPENCODE_CONFIG_CONTENT=%q\n' "$TG_OC_CONFIG"
     printf 'export TG_OC_BIN=%q\n' "$TG_OC_BIN"
+    printf 'export TELEGRAM_CHANNEL=%q\n' "$TELEGRAM_CHANNEL"
+    printf 'export TELEGRAM_OUTBOUND_ONLY=%q\n' "$TELEGRAM_OUTBOUND_ONLY"
     printf 'export TG_BACKEND=%q\n' "$TG_BACKEND"
     printf 'export TG_MARKETPLACE=%q\n' "$TG_MARKETPLACE"
     printf 'export TG_SETTINGS=%q\n' "$TG_SETTINGS"
