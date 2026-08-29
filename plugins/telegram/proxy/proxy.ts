@@ -456,8 +456,8 @@ type TopicState = {
   // Which harness the topic's session runs on (absent = claude). Swapped by
   // /handoff; every spawn asks backendFor(this) for the pane env.
   activeBackend?: BackendKind
-  // The opencode session id (the driver mints it on the topic's first opencode
-  // run and POSTs it here). Absent = the next opencode spawn mints a new one,
+  // The opencode session id (the TUI plugin adopts it on startup and POSTs it
+  // here). Absent = the next opencode spawn creates and adopts a new one,
   // consuming the seed (handoff delta, or the startup notice).
   opencodeSessionId?: string
   // When this topic last switched harness, and why. 'quota' handoffs are
@@ -465,12 +465,12 @@ type TopicState = {
   // window passes); 'manual' handoffs stay until manually reversed.
   lastHandoffAt?: number
   handoffReason?: 'quota' | 'manual'
-  // Marker of the last successful outbound reply, for the opencode driver's
+  // Marker of the last successful outbound reply, for the opencode plugin's
   // stranded-reply backstop (it ships the run text itself when the marker
   // does not move across a run). In-memory: a proxy restart resets it.
   lastReplyAt?: number
-  // Pending handoff delta for an opencode spawn, cleared when the driver acks
-  // it (POST /oc-seed-done) so a driver killed before its first run re-gets
+  // Pending handoff delta for an opencode spawn, cleared when the plugin acks
+  // it (POST /oc-seed-done) so a TUI killed before its first prompt re-gets
   // the delta on respawn. In-memory: a proxy restart drops it (the oc session
   // then just misses the delta turns; accepted).
   pendingSeed?: string
@@ -701,12 +701,12 @@ class HerdrMux implements Multiplexer {
   // NB 'unknown' is also reported for ~2s while a freshly spawned pane boots,
   // so ensureSession additionally honors a short post-spawn grace window.
   //
-  // 'unknown' ALSO covers a healthy pane running an agent herdr does not
-  // recognize: the opencode topic driver is a plain bun process, not a known
-  // TUI. For those panes ask what runs in the foreground (pane process-info):
+  // 'unknown' can also cover a healthy pane running an agent herdr does not
+  // recognize. For those panes ask what runs in the foreground
+  // (pane process-info):
   // a non-shell foreground process means the pane is live; the bare shell
-  // (or nothing) is a corpse. The launcher exec-chains into the driver, so
-  // the shell pid IS the driver - the name check is what distinguishes them.
+  // (or nothing) is a corpse. The name check distinguishes an exec-chained
+  // agent from the shell it replaced.
   liveSessions(): Set<string> {
     const out = new Set<string>()
     for (const [label, p] of this.panes()) {
@@ -1087,7 +1087,7 @@ async function handleRateLimit(req: Request): Promise<Response> {
 
   // The StopFailure hook is claude-side, so a report for an opencode topic is
   // a stale or malformed POST: claude is not running, there is nothing to
-  // fail over, and acting on it would kill the oc driver and deliver a
+  // fail over, and acting on it would kill the oc TUI and deliver a
   // claude-shaped nudge into an opencode session.
   if (st.activeBackend === 'opencode') {
     log(`rate limit report for opencode topic ${topic} "${label}"; ignoring`)
@@ -1415,8 +1415,8 @@ function claudeTurnsFor(st: TopicState): { turns: ReturnType<typeof claudeTransc
   }
 }
 
-// Ensure a live topic session exists for a topic (claude TUI or opencode
-// driver, per the topic's active backend). Single-flight: the synchronous
+// Ensure a live topic session exists for a topic (claude or opencode TUI, per
+// the topic's active backend). Single-flight: the synchronous
 // spawnSync blocks the event loop for the whole launch, so two inbound
 // messages for a brand-new topic cannot spawn two sessions; the spawning
 // flag + the live-session dedup are belt and suspenders.
@@ -1475,7 +1475,7 @@ function ensureSession(topic: string): void {
     const backend = backendFor(st.activeBackend)
     const isOc = backend.kind === 'opencode'
     // Session continuity is per-harness: claude resumes via --resume of the
-    // minted id; opencode via `run -s` of the driver-POSTed id. A minting
+    // minted id; opencode via the TUI's --session id. A fresh
     // opencode spawn (no id yet) consumes the seed: the handoff delta from
     // the claude transcript, or this backend's startup notice.
     const resuming = isOc ? !!st.opencodeSessionId : !!st.claudeSessionId
@@ -1513,7 +1513,7 @@ function ensureSession(topic: string): void {
       opencodeSeed: '',
     }
     if (isOc) {
-      // Seed precedence: a pending handoff delta (carried until the driver
+      // Seed precedence: a pending handoff delta (carried until the plugin
       // acks), else the startup notice for a fresh topic. A resumed topic
       // with neither gets nothing.
       if (st.pendingSeed) spec.opencodeSeed = st.pendingSeed
@@ -1946,7 +1946,7 @@ async function handoffTopic(chatId: string, topic: string, target: 'opencode' | 
     }
   } else {
     // Frame the claude-era delta NOW and carry it on every opencode spawn
-    // until the driver acks it. In-memory: a proxy restart mid-handoff drops
+    // until the plugin acks it. In-memory: a proxy restart mid-handoff drops
     // it (the oc session then misses the delta turns; accepted).
     const { turns } = claudeTurnsFor(st)
     st.pendingSeed = opencodeHandoffSeed(
@@ -2314,11 +2314,10 @@ function handlePoll(url: URL): Promise<Response> {
   })
 }
 
-// POST /oc-session {topic, session_id} - the driver registers the session id
-// it just minted, so every later spawn (and proxy restart) resumes the SAME
+// POST /oc-session {topic, session_id} - the TUI plugin registers the session
+// id it adopted, so every later spawn (and proxy restart) resumes the SAME
 // conversation via `opencode run -s`. An EMPTY session_id clears it: the
-// driver reports a stale id it dropped after repeated failures, and the next
-// spawn mints fresh.
+// caller reports that an id is stale, and the next spawn creates fresh.
 async function handleOcSession(req: Request): Promise<Response> {
   const b = (await req.json()) as any
   const topic = String(b.topic ?? '')
@@ -2335,7 +2334,7 @@ async function handleOcSession(req: Request): Promise<Response> {
   return json({ ok: true })
 }
 
-// POST /oc-seed-done {topic} - the driver consumed the pending handoff seed
+// POST /oc-seed-done {topic} - the TUI plugin consumed the pending handoff seed
 // (its first run used it). Clears the in-memory pendingSeed so later spawns
 // stop re-delivering it.
 async function handleOcSeedDone(req: Request): Promise<Response> {
@@ -2346,9 +2345,9 @@ async function handleOcSeedDone(req: Request): Promise<Response> {
   return json({ ok: true })
 }
 
-// GET /last-reply?topic=T - the marker the opencode driver's stranded-reply
-// backstop compares across a run: if the topic's last outbound reply did not
-// move while the run produced text, the driver ships the text itself.
+// GET /last-reply?topic=T - the marker the opencode plugin's stranded-reply
+// backstop compares across a turn: if the topic's last outbound reply did not
+// move while the turn produced text, the plugin ships the text itself.
 function handleLastReply(url: URL): Response {
   const topic = url.searchParams.get('topic') ?? 'general'
   return json({ last_reply_at: getTopic(topic).lastReplyAt ?? null })
@@ -2397,7 +2396,7 @@ async function handleSend(req: Request): Promise<Response> {
     ids.push(sent.message_id)
   }
 
-  // Reply marker for the opencode driver's stranded-reply backstop: it ships
+  // Reply marker for the opencode plugin's stranded-reply backstop: it ships
   // a run's text itself only when this marker did not move across the run.
   getTopic(topic).lastReplyAt = Date.now()
   return json({ message_ids: ids })
