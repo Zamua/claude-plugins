@@ -10,9 +10,9 @@
  *             MCP, `--session-id` / `--resume` continuity). Its outputs here
  *             are a VERBATIM extraction of what proxy.ts used to inline in
  *             ensureSession / kickoffPrompt; backends.test.ts pins them.
- *   opencode  an opencode session driven by scripts/opencode-driver.ts
- *             (`opencode run -s <id>`, session id minted on first run and
- *             POSTed back to the proxy via /oc-session).
+ *   opencode  an opencode TUI session driven by
+ *             opencode-plugin/telegram-channel.ts (`--session <id>`;
+ *             fresh sessions are adopted and POSTed to /oc-session).
  *
  * The first message a session gets is also backend-specific: claude carries
  * its startup notice in TG_KICKOFF (the launcher uses it only on a minting
@@ -49,15 +49,15 @@ export type SpawnSpec = {
   /** claude: the startup notice (present even on resume; unused by the launcher then). */
   kickoff: string
   // ---- opencode-specific ----
-  /** '' = minting spawn (driver creates the session, POSTs /oc-session). */
+  /** '' = fresh TUI spawn; the plugin adopts and POSTs its session id. */
   opencodeSessionId: string
   /** Absolute opencode binary, resolved by the proxy (pane PATH is unreliable). */
   opencodeBin: string
   opencodeModel: string
   opencodeVariant: string
   /**
-   * First prompt for the driver's next run: a handoff delta (carried until the
-   * driver acks it), or the startup notice on a fresh topic. Empty = none.
+   * First prompt for the plugin's next run: a handoff delta (carried until the
+   * plugin acks it), or the startup notice on a fresh topic. Empty = none.
    */
   opencodeSeed: string
 }

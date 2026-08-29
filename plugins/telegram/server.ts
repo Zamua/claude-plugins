@@ -489,9 +489,9 @@ async function permissionLoop(): Promise<void> {
 //     round-robining the topic's queue and steals messages from the real
 //     session (observed live 2026-07-18: a hostthis bg agent round-robining
 //     topic 34's deliveries). Identified by CLAUDE_CODE_SESSION_KIND=bg.
-//   - an opencode topic (TELEGRAM_OUTBOUND_ONLY=1, set by the launcher for
-//     scripts/opencode-driver.ts panes): the DRIVER polls /poll and feeds
-//     messages to `opencode run`; this MCP still loads there (it provides the
+//   - an opencode topic (TELEGRAM_OUTBOUND_ONLY=1, set by the launcher): the
+//     telegram-channel plugin polls /poll and feeds messages to the TUI; this
+//     MCP still loads there (it provides the
 //     outbound tools), but the claude channel notification it would fire is
 //     meaningless to that harness - a message it consumed would be LOST.
 // Outbound-only sessions keep every tool (a bg subagent may legitimately
