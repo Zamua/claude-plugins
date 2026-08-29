@@ -109,21 +109,44 @@ if [ "$TG_BACKEND" != "opencode" ]; then
 fi
 TG_PATH="$PATH"
 
-# The opencode backend execs the DRIVER (bun), which in turn runs `opencode`
-# per message. Resolve bun NOW (same logic as TG_CLAUDE_BIN: exec the absolute
-# path, immune to pane shell-init PATH games) and point at the sibling script.
+# The opencode backend execs the opencode TUI bound to the topic's session
+# (interactive, herdr-recognized); the telegram-channel plugin (loaded via the
+# injected config) delivers inbound Telegram turns into that session. Resolve
+# bun NOW (same logic as TG_CLAUDE_BIN) and build the per-run config: the
+# telegram MCP + the plugin + the permission policy, so they exist ONLY for
+# topic panes - never in a global/project config, where an inbound-polling MCP
+# would steal a topic's queue.
 TG_BUN_BIN=""
-TG_DRIVER=""
+TG_OC_CONFIG=""
 if [ "$TG_BACKEND" = "opencode" ]; then
   TG_BUN_BIN=$(command -v bun) || {
     echo "telegram-topics: bun not found on the launcher PATH (required for the opencode backend)" >&2
     exit 1
   }
-  TG_DRIVER="$(cd "$(dirname "$0")" && pwd)/opencode-driver.ts"
-  [ -f "$TG_DRIVER" ] || {
-    echo "telegram-topics: driver not found at $TG_DRIVER" >&2
+  TG_PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  TG_CHANNEL_TS="$TG_PLUGIN_ROOT/opencode-plugin/telegram-channel.ts"
+  [ -f "$TG_CHANNEL_TS" ] || {
+    echo "telegram-topics: telegram-channel plugin not found at $TG_CHANNEL_TS" >&2
     exit 1
   }
+  [ -f "$TG_PLUGIN_ROOT/server.ts" ] || {
+    echo "telegram-topics: server.ts not found at $TG_PLUGIN_ROOT (required for the telegram MCP)" >&2
+    exit 1
+  }
+  # Permission policy: allow routine work (an unattended pane cannot answer a
+  # prompt), deny what must never run (raw Bot API calls would bypass the MCP;
+  # a detached pane cannot answer `question`). opencode evaluates the LAST
+  # matching rule, so the broad allow comes first, denies last.
+  TG_OC_CONFIG=$(printf '{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["%s"],
+  "mcp": { "telegram": { "type": "local", "command": ["%s", "%s/server.ts"], "enabled": true } },
+  "permission": {
+    "edit": "allow",
+    "bash": { "*": "allow", "*api.telegram.org*": "deny", "sudo *": "deny", "shutdown*": "deny", "launchctl *": "deny" },
+    "question": "deny"
+  }
+}' "$TG_CHANNEL_TS" "$TG_BUN_BIN" "$TG_PLUGIN_ROOT")
 fi
 
 # The pane command per backend (selected above). Runs under a shell INSIDE the
@@ -163,8 +186,12 @@ CLAUDE_PANE_CMD='export PATH="$TG_PATH"; \
 # opencode pane: the driver IS the process. It polls the proxy, feeds each
 # message to `opencode run` (one session per topic, minted on first run), and
 # runs for the pane's whole life - exec so the pane dies with it.
+# opencode pane: the TUI itself, bound to the topic's session when one exists
+# (full history on screen; the telegram-channel plugin injects inbound turns
+# and the user can drop in and type directly). exec so the pane dies with it.
 OPENCODE_PANE_CMD='export PATH="$TG_PATH"; \
- exec "$TG_BUN_BIN" "$TG_DRIVER"'
+ if [ -n "$TG_OC_SESSION_ID" ]; then set -- --session "$TG_OC_SESSION_ID"; else set --; fi; \
+ exec "$TG_OC_BIN" "$@"'
 
 if [ "$TG_BACKEND" = "opencode" ]; then
   PANE_CMD="$OPENCODE_PANE_CMD"
@@ -214,7 +241,7 @@ spawn_tmux() {
     -e TG_PATH="$TG_PATH" \
     -e TG_CLAUDE_BIN="$TG_CLAUDE_BIN" \
     -e TG_BUN_BIN="$TG_BUN_BIN" \
-    -e TG_DRIVER="$TG_DRIVER" \
+    -e OPENCODE_CONFIG_CONTENT="$TG_OC_CONFIG" \
     -e TG_OC_BIN="$TG_OC_BIN" \
     -e TG_BACKEND="$TG_BACKEND" \
     -e TG_MARKETPLACE="$TG_MARKETPLACE" \
@@ -340,7 +367,7 @@ print("absent")
     printf 'export TG_PATH=%q\n' "$TG_PATH"
     printf 'export TG_CLAUDE_BIN=%q\n' "$TG_CLAUDE_BIN"
     printf 'export TG_BUN_BIN=%q\n' "$TG_BUN_BIN"
-    printf 'export TG_DRIVER=%q\n' "$TG_DRIVER"
+    printf 'export OPENCODE_CONFIG_CONTENT=%q\n' "$TG_OC_CONFIG"
     printf 'export TG_OC_BIN=%q\n' "$TG_OC_BIN"
     printf 'export TG_BACKEND=%q\n' "$TG_BACKEND"
     printf 'export TG_MARKETPLACE=%q\n' "$TG_MARKETPLACE"

@@ -552,7 +552,8 @@ Details that matter:
   claude env snapshots pinned) + the handoff delta renderers.
 - `scripts/launch-topic.sh`: the launcher (invoked by the proxy; `TG_MUX` picks
   the multiplexer, `TG_BACKEND` picks the harness - independent axes).
-- `scripts/opencode-driver.ts`: the opencode backend's pane process.
+- `opencode-plugin/telegram-channel.ts`: the opencode backend's inbound
+  plugin (runs inside the topic TUI's server process).
 - `scripts/start-proxy.sh`: foreground proxy starter.
 - `server.ts`: ALSO loaded by opencode topics (outbound-only mode via
   `TELEGRAM_OUTBOUND_ONLY=1`, set by the driver; the bg-agent guard ORs it).
@@ -679,16 +680,21 @@ The layering (see `proxy/backends.ts`, the port; pure, snapshot-tested):
   switch back to claude rides the queue as a SYSTEM NOTICE (the nudge
   mechanism), because `--resume` takes no kickoff. Proxy-constructed seed
   notices are stripped from the opencode export so history is not duplicated.
-- **The pane process** for opencode is `scripts/opencode-driver.ts` (bun,
-  exec'd by the launcher when `TG_BACKEND=opencode`; independent axis from
-  `TG_MUX`). It long-polls `/poll` exactly like server.ts, renders each
-  message as the SAME `<channel>` block a claude topic gets (so the shared
-  CLAUDE.md discipline applies verbatim), and feeds `opencode run --format
-  json --auto` one message at a time. Its env sets `TELEGRAM_OUTBOUND_ONLY=1`
-  and injects `OPENCODE_CONFIG_CONTENT` (telegram MCP + a permission deny
-  list) so the MCP and denies exist ONLY for its own runs - the telegram MCP
-  must never be registered in a global/project opencode config, where any
-  other opencode session's inbound-polling MCP would steal topic queues.
+- **The pane process** for opencode is the opencode TUI ITSELF, bound to the
+  topic's session (`opencode --session <registry id>` when one exists;
+  independent axis from `TG_MUX`). herdr natively tracks it (real
+  idle/working status; the operator can drop in and type directly). Inbound
+  delivery is `opencode-plugin/telegram-channel.ts` (auto-loaded via the
+  launcher-injected `OPENCODE_CONFIG_CONTENT`): env-gated on
+  `TELEGRAM_CHANNEL=1` + `TELEGRAM_TOPIC_ID` so no other opencode session
+  ever polls, it long-polls `/poll` exactly like server.ts, injects each
+  message as a `<channel>` turn via `client.session.prompt`, handles the
+  seed + /oc-session contracts, and backstops stranded replies via
+  `/last-reply` + `/send`. The SAME injected config registers the telegram
+  MCP (outbound-only) and the permission policy (broad allow, raw-Bot-API +
+  sudo denies, `question: deny`) so they exist ONLY for topic panes - never
+  in a global/project opencode config, where an inbound-polling MCP would
+  steal topic queues.
 - **Reply backstop**: opencode has no Stop hook, so the driver snapshots
   `GET /last-reply?topic=` around each run and, if the marker did not move
   while the run produced text, POSTs the run text to `/send` itself. The
