@@ -34,6 +34,7 @@ import { z } from 'zod'
 
 const TOPIC = process.env.TELEGRAM_TOPIC_ID ?? 'general'
 const PROXY = (process.env.TELEGRAM_PROXY_URL ?? 'http://localhost:8790').replace(/\/+$/, '')
+const INBOUND_MODE = process.env.TG_INBOUND_MODE === 'pane' ? 'pane' : 'channel'
 
 // Last-resort safety net: keep serving tools instead of dying silently on any
 // unhandled rejection / uncaught exception.
@@ -480,30 +481,25 @@ async function permissionLoop(): Promise<void> {
   }
 }
 
-// SUBAGENT GUARD + opencode mode: a session must NOT run the inbound/
-// permission polls when it is not the topic's primary consumer of the queue.
-// Two cases set that:
-//   - a background agent spawned by a topic-Claude (Agent tool / claude
-//     daemon) inherits the pane environment - TELEGRAM_TOPIC_ID included -
-//     and loads this plugin, so without the guard it becomes a SECOND poller
-//     round-robining the topic's queue and steals messages from the real
-//     session (observed live 2026-07-18: a hostthis bg agent round-robining
-//     topic 34's deliveries). Identified by CLAUDE_CODE_SESSION_KIND=bg.
-//   - an opencode topic (TELEGRAM_OUTBOUND_ONLY=1, set by the launcher): the
-//     telegram-channel plugin polls /poll and feeds messages to the TUI; this
-//     MCP still loads there (it provides the
-//     outbound tools), but the claude channel notification it would fire is
-//     meaningless to that harness - a message it consumed would be LOST.
-// Outbound-only sessions keep every tool (a bg subagent may legitimately
-// reply on its parent's behalf; opencode topics reply through the same tools).
-const OUTBOUND_ONLY =
-  process.env.CLAUDE_CODE_SESSION_KIND === 'bg' ||
-  !!process.env.CLAUDE_BG_BACKEND ||
-  process.env.TELEGRAM_OUTBOUND_ONLY === '1'
-if (OUTBOUND_ONLY) {
+// SUBAGENT GUARD: a background agent spawned by a topic-Claude (Agent tool /
+// claude daemon) inherits the pane environment - TELEGRAM_TOPIC_ID included -
+// and loads this plugin, so without this guard it becomes a SECOND poller on
+// the topic's queue and steals messages from the real session (observed live
+// 2026-07-18: a hostthis bg agent round-robining topic 34's deliveries). Bg
+// sessions are identifiable by CLAUDE_CODE_SESSION_KIND=bg; for them we keep
+// the outbound tools (a subagent may legitimately reply on its parent's
+// behalf) but never start the inbound/permission polls.
+const IS_BG_SESSION =
+  process.env.CLAUDE_CODE_SESSION_KIND === 'bg' || !!process.env.CLAUDE_BG_BACKEND
+if (IS_BG_SESSION) {
   process.stderr.write(
-    `telegram-topics: outbound-only session (bg agent or TELEGRAM_OUTBOUND_ONLY=1); ` +
-      `tools available, inbound polling DISABLED for topic "${TOPIC}"\n`,
+    `telegram-topics: background-agent session detected (CLAUDE_CODE_SESSION_KIND=bg); ` +
+      `outbound tools available, inbound polling DISABLED for topic "${TOPIC}"\n`,
+  )
+} else if (INBOUND_MODE === 'pane') {
+  process.stderr.write(
+    `telegram-topics: proxied-provider session detected; outbound tools available, ` +
+      `native Channel polling DISABLED for topic "${TOPIC}" (foreground pane ingress active)\n`,
   )
 } else {
   void inboundLoop()

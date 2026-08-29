@@ -26,7 +26,9 @@ Telegram forum group
    ▼
 proxy/proxy.ts ── grammy inbound ── group-chat gate ── topic = message_thread_id | "general"
    │                                                    ├─ enqueue {content, meta}
-   │                                                    └─ ensureSession() spawns a tmux Claude
+   │                                                    ├─ Anthropic: MCP /poll -> native Channel
+   │                                                    ├─ custom provider: idle-pane prompt adapter
+   │                                                    └─ ensureSession() spawns a Claude
    │                                                       if none is live (single-flight)
    │  Bun.serve on 127.0.0.1:PORT
    ├── GET  /poll?topic=T             long-poll ~25s, 204 idle / 200 {content,meta}
@@ -44,8 +46,8 @@ scripts/launch-topic.sh ── spawn in the selected multiplexer (TG_MUX: tmux n
                re-spawn:    --resume <id>                    (no kickoff, keeps history)
    + a short-lived detached watcher answers the "local development" confirm dialog
 
-server.ts (the MCP, one per tmux session)
-   ├── inbound     long-poll GET /poll -> notifications/claude/channel {content, meta}
+server.ts (the MCP, one per multiplexer session)
+   ├── inbound     Anthropic only: long-poll GET /poll -> notifications/claude/channel
    │               (first poll held FIRST_POLL_DELAY_MS so the booting REPL is idle)
    ├── outbound    reply/react/edit/download -> POST to the proxy (each carries TOPIC)
    └── permission  DORMANT under --permission-mode auto (guard-checked auto-approve
@@ -61,9 +63,10 @@ The detached topic-Claudes are hosted by a terminal multiplexer, selectable via
 The code follows a ports-and-adapters split so neither backend leaks into the
 core:
 
-- **The port** (`proxy.ts`, "multiplexer" section): `interface Multiplexer
-  { kind; liveSessions(); kill(session) }` - the ONLY two operations the proxy
-  core needs. `TmuxMux` shells to `tmux ls` / `tmux kill-session`; `HerdrMux`
+- **The port** (`proxy/adapters/multiplexer.ts`): `interface MultiplexerPort
+  { kind; liveSessions(); runtime(); prompt(); kill() }`. `runtime` and `prompt`
+  provide safe idle-turn delivery for custom provider routes. `TmuxMux` shells
+  to `tmux`; `HerdrMux`
   shells to `herdr pane list` (JSON; the pane `label` is our session name) /
   `herdr pane close <pane_id>`. Session NAMES are the shared currency: a tmux
   session name == a herdr agent/pane label (`claude-<slug>-<tid>`), so the
@@ -263,7 +266,7 @@ not end-to-end) and the client's own message cache until the delete lands.
 
 A topic session is one long-lived agent process, and MCP servers and settings
 load only at spawn, so a change to either needs a respawn. `/relaunch` in a
-topic does exactly what the nightly restart and the usage-limit failover do,
+topic does exactly what the nightly restart and a provider-route change do,
 on demand: `killSession` (which also drains the dying MCP's long-polls, so the
 nudge cannot be handed to it and lost), a proxy ack in the thread, a `SYSTEM
 NOTICE` enqueued with meta `relaunch=1`, then `ensureSession` respawns with
@@ -274,81 +277,77 @@ refusal (no claude of its own). Registered in the group's "/" menu alongside
 the secret verbs (`registerCommands`); any group member may run it, since it
 is not destructive: the conversation resumes.
 
-## Usage-limit model failover
+## Provider/model routing and quota recovery
 
-A topic-Claude that exhausts its model's PLAN quota (HTTP 429) would otherwise
-stall forever: Claude Code's `--fallback-model` / `fallbackModel` chain is
-AVAILABILITY-based (503/529) and documented to exclude rate limits, and there
-is no automatic model downgrade on a plan limit - the session just fails every
-turn until a human runs `/model`
-(https://code.claude.com/docs/en/model-config#fallback-model-chains).
+There is exactly one agent harness: foreground Claude Code. Provider/model is
+a route below that harness:
 
-The one signal the harness gives is the **StopFailure** hook, which fires when
-a turn dies on an API error with `error == "rate_limit"` for a 429. It is
-notification-only (output ignored, cannot change the session's model), so the
-plugin uses it purely as a tripwire:
+```
+Telegram topic -> Claude Code session UUID -> launch profile
+                                      native Anthropic
+                                      Codex via loopback bridge
+                                      OpenCode Go via loopback bridge
+```
 
-1. `hooks/rate-limit-failover.py` (wired as `StopFailure` in
-   `override-settings.json` via `$TG_FAILOVER_HOOK`; registered with NO
-   matcher - it filters on the `error` field itself so it stays correct
-   regardless of matcher semantics) POSTs `{topic, error, details}` to
+`TopicRoute {provider, model, effort}` is domain state persisted in
+`registry.json`. `proxy/domain/` owns route validation and safe-turn-boundary
+planning; `proxy/adapters/` owns provider catalogs, capacity reads, Codex
+app-server JSON-RPC, OpenCode Go usage HTTP, and Claude launch environments.
+The proxy/application layer coordinates those ports with Telegram and the
+multiplexer. The Claude UUID never changes when the route changes.
+
+Inbound delivery is also route state. Anthropic uses the MCP's native Channel
+notification path. Claude Code reports `Channels are not currently available`
+under the custom API-billing mode used by the compatibility bridge, and silently
+drops those notifications. Codex/OpenCode routes therefore disable MCP inbound
+polling (`TG_INBOUND_MODE=pane`) and the proxy renders the same Telegram
+`<channel>` envelope into the idle foreground Claude pane through the
+multiplexer port. The Telegram MCP remains loaded for replies and attachments.
+This changes transport only: it does not fork the UUID, replace Claude Code, or
+introduce another harness.
+
+The operator runs `/model` proactively: provider buttons -> model buttons ->
+effort buttons. `/model status` shows the active route. `/usage` shows observed
+quota windows and reset times. A route change while Claude is idle is applied
+immediately; one requested during a turn is persisted as `pending_route` and
+applied when the old process polls again after finishing the turn.
+
+Quota recovery is deliberately operator-driven:
+
+1. `hooks/rate-limit-failover.py` reports a StopFailure `rate_limit` to
    `POST /rate-limit`.
-2. `handleRateLimit` pins `st.fallbackModel = TELEGRAM_TOPICS_MODEL_FALLBACK`
-   (default the `opus` alias; empty disables the feature), kills the stalled
-   session, and enqueues a SYSTEM NOTICE nudge.
-3. The nudge respawns the topic through the normal `ensureSession` path with
-   `--resume` + `--model <fallback>` (the `--model` FLAG overrides even on
-   resume - the same property that makes per-topic model pinning work), so the
-   conversation continues intact on the fallback model.
+2. The proxy marks the current provider exhausted, stops the stalled process,
+   and posts provider buttons in that topic. It does not silently choose or
+   consume a reset credit.
+3. After a provider/model/effort is selected, the launcher starts Claude Code
+   with `--resume <the-same-uuid>` and the new launch profile. A durable
+   `pending_resume_notice` tells it to answer the most recent unanswered user
+   message; that notice is cleared only after its active inbound adapter accepts
+   it.
+4. Provider capacity adapters keep watching reset windows. When the exhausted
+   provider becomes available, the proxy offers “switch back” and “choose
+   model” buttons. It never switches back automatically.
 
 Details that matter:
-- **The nudge is required.** The turn that hit the limit already CONSUMED the
-  user's message, so a bare respawn would sit idle with nothing in the queue.
-  The nudge tells the resumed Claude to answer the last user message.
-- **Kill through `killSession`, never `mux.kill` directly, when anything may be
-  enqueued afterwards.** The proxy cannot observe an MCP dying: its `/poll`
-  waiter stays registered in `st.waiters` for up to ~25s, and `enqueue()`
-  prefers a waiter over the queue - so a message enqueued in that window is
-  handed to a dead process and LOST. This broke the first real failover
-  (2026-07-19): the nudge vanished into the killed session, so the Claude that
-  came back on the fallback model sat idle with nothing to do while its pane
-  still showed the limit message, looking hung when the failover had actually
-  worked. `killSession` kills, drains stale inbound + permission waiters
-  (resolving them with null = a harmless 204 to a dead socket), and clears the
-  session fields. Regression-tested by abandoning a poll, firing a failover,
-  and confirming a fresh poll receives the nudge.
-- **Idempotent**: a repeat report for an already-failed-over topic is a no-op,
-  so a burst of hook calls cannot cause a respawn loop.
-- **Persisted** in registry.json (`fallback_model`), so a proxy restart cannot
-  silently drop a topic back onto an exhausted model.
-- **Reverted when the quota window passes, lazily at SPAWN time**
-  (`maybeRevertFallback`, called from `ensureSession`). The window is the reset
-  time parsed out of the limit error when it carries one
-  (`parse_reset` in the hook: accepts `|<unix>`, unix millis, or an ISO
-  timestamp, and rejects anything past or >7 days out so a stray number in an
-  error string cannot pin a topic for a month), else failover time +
-  `TELEGRAM_TOPICS_FALLBACK_PROBE_MINUTES` (default 60). Probing early is
-  cheap: if the quota is still gone the topic just fails over again.
-  Deliberately lazy - a topic whose session is LIVE is skipped, because
-  killing a running Claude mid-task to upgrade its model would be worse than
-  the problem being solved; it picks the primary up at its next natural
-  respawn. The nightly restart remains a backstop.
-- **Both transitions are announced in the topic's own thread** by the PROXY
-  (the topic-Claude is being killed at that moment, so it cannot speak):
-  "⚠️ Hit the usage limit on X - resuming on Y. Will retry X after <time>."
-  and "✅ Usage window elapsed - back on X for this topic."
-- **The hook must stay python3.9-compatible**: macOS ships 3.9 as
-  `/usr/bin/python3` and that is what the hook command resolves to, so
-  `int | None` / `list[int]` annotations would raise at runtime - exactly when
-  a rate limit hits. `from __future__ import annotations` keeps them lazy.
-  (Caught in testing 2026-07-18; the same applies to stop-reply-guard.py.)
-- Verified live 2026-07-18, both directions: a non-rate-limit StopFailure is
-  ignored; a `rate_limit` one fails the topic over (log + registry pin +
-  respawn carrying `--model claude-opus-4-8` while other topics stay on the
-  primary) and posts the notice into the real topic thread; a repeat report
-  no-ops; `parse_reset` unit-tested under real 3.9 across all accepted formats
-  plus the past/far-future rejections; and with the window forced elapsed, the
-  next spawn reverted to `--model claude-fable-5` with the ✅ notice.
+
+- Always kill through `killSession`, never `mux.kill` directly, before a nudge.
+  It drains stale long-poll waiters so a notice cannot be handed to a dead MCP.
+- Anthropic capacity is reported by `provider-capacity-status.py`; Codex is read
+  from `codex app-server` (`model/list`, `account/rateLimits/read`); OpenCode Go
+  is read from its authenticated usage endpoint. A missing probe is “not
+  observed,” never assumed available.
+- Proxied routes set `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
+  `ANTHROPIC_MODEL`, and `ANTHROPIC_SMALL_FAST_MODEL` only in the spawned
+  Claude environment and lower the auto-compact window to 100k. The two model
+  env overrides are load-bearing for exact-UUID resumes: `--model` alone can
+  leave an Anthropic-authenticated session on its restored native plan route.
+  Native Anthropic explicitly unsets every bridge override.
+- `claude-code-proxy` is an unofficial local compatibility bridge. It binds to
+  loopback, owns no Telegram state, and receives the OpenCode credential at
+  process start from OpenCode's existing auth file; the key is not copied into
+  the plugin `.env`, PM2 config, or registry.
+- The hook must stay compatible with the macOS Python used by the detached
+  process. `from __future__ import annotations` keeps newer type syntax lazy.
 
 ## Key mechanics / gotchas (baked into the code)
 
@@ -548,17 +547,19 @@ Details that matter:
 - `.mcp.json`: starts the MCP via `bun run --cwd ${CLAUDE_PLUGIN_ROOT} ... start`.
 - `server.ts` + `package.json`: the thin MCP client (dep: `@modelcontextprotocol/sdk`).
 - `proxy/proxy.ts` + `proxy/package.json`: the daemon (dep: `grammy`).
-- `proxy/backends.ts` + `proxy/backends.test.ts`: the AgentBackend port (pure;
-  claude env snapshots pinned) + the handoff delta renderers.
-- `scripts/launch-topic.sh`: the launcher (invoked by the proxy; `TG_MUX` picks
-  the multiplexer, `TG_BACKEND` picks the harness - independent axes).
-- `opencode-plugin/telegram-channel.ts`: the opencode backend's inbound
-  plugin (runs inside the topic TUI's server process).
-- `opencode-plugin/channel-core.ts` + `telegram-channel.test.ts`: pure channel
-  rendering, idle-event matching and message-part helpers used by that plugin.
+- `proxy/domain/`: pure provider-route, inbound-delivery, and capacity types/transitions.
+- `proxy/adapters/`: Claude launch profiles, bridge model catalog, Codex
+  app-server client, and OpenCode Go capacity client. Tests sit beside them.
+- `scripts/launch-topic.sh`: the one-harness launcher (invoked by the proxy;
+  `TG_MUX` picks only the multiplexer). Every pane executes `claude`.
+- `scripts/start-provider-proxy.sh`: starts the loopback compatibility bridge
+  and injects the existing OpenCode Go credential without duplicating it.
 - `scripts/start-proxy.sh`: foreground proxy starter.
-- `server.ts`: ALSO loaded by opencode topics (outbound-only mode via
-  `TELEGRAM_OUTBOUND_ONLY=1`, set by the launcher; the bg-agent guard ORs it).
+- `server.ts`: the Claude Code Telegram MCP. Background subagents and proxied
+  provider sessions inherit outbound tools but do not start another inbound
+  poller.
+- `hooks/provider-capacity-status.py`: status line plus Anthropic capacity
+  adapter (`POST /capacity`).
 - `hooks/stop-reply-guard.py`: the Stop hook (reply guard). Blocks a
   Telegram-triggered turn that ended without a `reply` call and reminds Claude to
   resend via the reply tool (once per turn). Wired via `override-settings.json`
@@ -594,10 +595,11 @@ backends" above).
 Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
 
-**Topic effort / ultracode.** Every topic-Claude runs at ultracode (xhigh) effort
-by default. `ultracode` is a SETTINGS key (`"ultracode": true`), NOT a CLI flag
-(`--effort` rejects the value), and repeated `--settings` is last-wins not merged
-- so the proxy `resolveSettings()` bakes it into the ONE settings file the
+**Topic effort / ultracode.** Every topic-Claude starts at xhigh effort by
+default. The proxy keeps the historical `ultracode` settings key and also
+persists the explicit route effort; the launcher supplies `--effort` on every
+spawn. Repeated `--settings` is last-wins, not merged, so
+`resolveSettings()` bakes `ultracode` into the ONE settings file the
 launcher passes: on each start it writes
 `~/.claude/channels/telegram-topics/effective-settings.json` = the committed
 `override-settings.json` base + `"ultracode": <TELEGRAM_TOPICS_ULTRACODE>`
@@ -607,8 +609,8 @@ un-generated if the read/write fails). A change takes effect on the NEXT proxy
 restart; LIVE topics keep their current effort until they re-spawn (nightly 3am or
 a kill). Measured via the Stop-hook input's `effort.level` field: `ultracode:true`
 flips it `medium` -> `xhigh` (verified end-to-end through a real proxy-style
-spawn). NB the single-session bridge sets `ultracode` in its OWN `--settings`
-override, independent of this.
+spawn). A `/model` selection persists its own effort and overrides this default
+for that topic.
 
 **Topic model (the `--model` FLAG, NOT a settings key).** The proxy passes
 `TELEGRAM_TOPICS_MODEL` (default the `fable` alias; `default`/`inherit`/empty =
@@ -616,7 +618,8 @@ account default; else an alias like `opus` / `sonnet` or a pinned id like
 `claude-opus-5`. Prefer the ALIAS: it tracks the newest model in that family, so
 a release needs no config change) to the launcher as `TG_MODEL`, which adds
 `--model <id>` to the claude
-command. **Why a flag, not a settings `model` key** (learned 2026-07-04 from a
+command. Once a topic has a persisted `route`, that selection wins over the
+environment default. **Why a flag, not a settings `model` key** (learned 2026-07-04 from a
 topic coming up on the wrong model): a settings `model` is only a DEFAULT and is
 IGNORED by a `--resume`d INTERACTIVE session, which restores its OWN baked-in
 model - so a pre-existing topic (created on an older default) would keep that old
@@ -655,71 +658,15 @@ default (override via env) and the `enabledPlugins` key in the committed
 `override-settings.json` (edit to `telegram@<your-marketplace>`). Change both
 and everything else ports as-is.
 
-## Backend handoff (`/handoff`, claude <-> opencode)
+## Removed alternate harness
 
-A topic's session can switch HARNESS without losing the conversation:
-`/handoff opencode` continues it on an opencode (GLM) session, `/handoff
-claude` brings it back. The purpose is quota resilience: when the primary
-model AND the fallback are both exhausted, the conversation degrades to
-opencode instead of stalling. Operator-gated (`ADMIN_USER_ID`, default the
-secrets user), debounced like /relaunch, usable live or dormant.
-
-The layering (see `proxy/backends.ts`, the port; pure, snapshot-tested):
-
-- **AgentBackend port** - `claudeBackend` / `opencodeBackend` build the pane
-  env; the proxy core never branches on the kind. The claude env is a VERBATIM
-  extraction of the pre-handoff ensureSession block (pinned by
-  `backends.test.ts`), so topics that never hand off spawn byte-identically.
-- **Session continuity is per-harness, both persisted in the registry**:
-  claude keeps `claude_session_id` (`--resume`); opencode keeps
-  `opencode_session_id` (the TUI opens the id with `--session`; a fresh TUI
-  session is adopted and POSTed to `/oc-session`; later respawns open the same
-  id). A handoff cycle therefore RESUMES the prior opencode session rather than
-  spawning a fresh one.
-- **Seeding** (`claudeTurnsFor` / `opencodeDeltaFor` + `renderDelta`): the
-  switch to opencode rides the spawn env (`TG_OC_SEED` = handoff delta from
-  the claude .jsonl transcript, newest-kept, oldest-omitted marker). The
-  switch back to claude rides the queue as a SYSTEM NOTICE (the nudge
-  mechanism), because `--resume` takes no kickoff. Proxy-constructed seed
-  notices are stripped from the opencode export so history is not duplicated.
-- **The pane process** for opencode is the opencode TUI ITSELF, bound to the
-  topic's session (`opencode --session <registry id>` when one exists;
-  independent axis from `TG_MUX`). herdr natively tracks it (real
-  idle/working status; the operator can drop in and type directly). Inbound
-  delivery is `opencode-plugin/telegram-channel.ts` (auto-loaded via the
-  launcher-injected `OPENCODE_CONFIG_CONTENT`): env-gated on
-  `TELEGRAM_CHANNEL=1` + `TELEGRAM_TOPIC_ID` so no other opencode session
-  ever polls, it long-polls `/poll` exactly like server.ts, injects each
-  message as a `<channel>` turn via `client.session.promptAsync`, handles the
-  seed + /oc-session contracts, and backstops stranded replies from
-  `session.idle` via `/last-reply` + `/send`. The SAME injected config registers the telegram
-  MCP (outbound-only) and the permission policy (broad allow, raw-Bot-API +
-  sudo denies, `question: deny`) so they exist ONLY for topic panes - never
-  in a global/project opencode config, where an inbound-polling MCP would
-  steal topic queues.
-- **Reply backstop**: opencode has no Stop hook, so the plugin watches the
-  `session.idle` event after each injected turn. `tool.execute.before` records
-  `telegram_reply`; if no reply tool ran and `GET /last-reply?topic=` did not
-  move, the plugin fetches the assistant message and POSTs it to `/send`.
-  The marker moves in `handleSend` (any successful reply).
-
-**Auto-handoff** (`TELEGRAM_TOPICS_AUTO_HANDOFF`, default OFF): a SECOND
-consecutive rate-limit report for a topic already pinned to its fallback
-model means the whole claude family is exhausted; `handleRateLimit` then
-degrades the topic to opencode automatically (`handoff_reason: "quota"`).
-Such topics auto-RETURN: `maybeAutoReturn` (spawn-time, same laziness as
-`maybeRevertFallback`) switches back to claude once `fallback_until` passes,
-and the nightly restart clears quota handoffs too. If claude is still
-limited, the next StopFailure re-degrades - bounded by the window, one notice
-per attempt. Manual handoffs (`handoff_reason: "manual"`) never auto-return.
-`maybeRevertFallback` skips opencode topics (the fallback pin is claude-side
-state; `maybeAutoReturn` owns that case).
-
-Registry additions (all additive, absent = claude, back-compat):
-`active_backend`, `opencode_session_id`, `last_handoff_at`, `handoff_reason`.
-The save condition persists a topic with EITHER session id or a name.
-Opencode panes are named `oc-<slug>-<tid>` (claude keeps `claude-<...>`), so
-`herdr pane list` self-describes the harness.
+The short-lived OpenCode TUI harness experiment was removed: there is no
+`/handoff`, OpenCode channel plugin, OpenCode pane, second session identity, or
+delta-copy protocol. OpenCode Go remains only as a provider route beneath
+Claude Code through the local compatibility bridge. One pilot topic was
+migrated by exporting its OpenCode dialogue into a one-time resume notice for
+its original Claude UUID before cutover; no legacy harness fields remain in the
+runtime registry contract.
 
 ## Not in v1
 

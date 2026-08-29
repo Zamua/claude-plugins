@@ -49,8 +49,38 @@ import {
   parseSecretCommand, secretExists, storeSecret,
 } from './secret'
 import type { FlowResult, Pending } from './secret'
-import { backendFor, claudeTranscriptTurns, opencodeHandoffSeed, opencodeKickoff, parseOpencodeExport, renderDelta } from './backends'
-import type { BackendKind, SpawnSpec } from './backends'
+import { claudeSpawnEnv } from './adapters/claude-launch'
+import type { ClaudeSpawnSpec } from './adapters/claude-launch'
+import { catalogFromBridge } from './adapters/provider-catalog'
+import type { ProviderCatalog, ProviderModel } from './adapters/provider-catalog'
+import { readCodexSnapshot } from './adapters/codex-app-server'
+import { readOpenCodeGoCapacity } from './adapters/opencode-go-capacity'
+import { createMultiplexer } from './adapters/multiplexer'
+import type { MultiplexerPort } from './adapters/multiplexer'
+import { inboundModeForRoute, renderPaneTurn } from './domain/inbound-delivery'
+import type { InboundMessage } from './domain/inbound-delivery'
+import {
+  DEFAULT_ROUTE,
+  exhaustedRouteFor,
+  forgetExhaustedProvider,
+  isEffort,
+  isProviderId,
+  modelLabel,
+  planRouteChange,
+  providerLabel,
+  rememberExhaustedRoute,
+  sameRoute,
+  topicRoute,
+} from './domain/model-routing'
+import type {
+  Effort,
+  PendingRouteChange,
+  ProviderId,
+  RouteChangeReason,
+  TopicRoute,
+} from './domain/model-routing'
+import { capacityTransition, nextResetAt, providerCapacity } from './domain/provider-capacity'
+import type { ProviderCapacity } from './domain/provider-capacity'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -66,9 +96,11 @@ const OVERRIDE_SETTINGS = join(PLUGIN_ROOT, 'override-settings.json')
 // references it as $TG_HOOK (passed to the session via `tmux new-session -e`) so
 // that committed file needs no hardcoded path.
 const STOP_HOOK = join(PLUGIN_ROOT, 'hooks', 'stop-reply-guard.py')
-// The StopFailure hook that reports a usage-limit stall so we can fail the
-// topic over to the fallback model (see MODEL_FALLBACK / handleRateLimit).
+// The StopFailure hook that reports a usage-limit stall. The proxy pauses the
+// exhausted route and offers provider/model choices in Telegram; it never
+// swaps providers without the operator's selection.
 const FAILOVER_HOOK = join(PLUGIN_ROOT, 'hooks', 'rate-limit-failover.py')
+const CAPACITY_HOOK = join(PLUGIN_ROOT, 'hooks', 'provider-capacity-status.py')
 const LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-topic.sh')
 // The token-bearing .env files. assertSendable refuses to ship these so a
 // prompt-injected topic-Claude cannot exfil the bot token via reply(files:[...]).
@@ -100,7 +132,7 @@ const MARKETPLACE = process.env.TELEGRAM_TOPICS_MARKETPLACE ?? 'plugin:telegram@
 const SECRETS_USER_ID = process.env.TELEGRAM_TOPICS_SECRETS_USER_ID ?? ''
 const SECRETS_DIR = process.env.TELEGRAM_TOPICS_SECRETS_DIR ?? join(homedir(), 'keys')
 // "/relaunch" in a topic kills that topic's agent and respawns it with the
-// same backend and conversation, freshly loading MCP servers and settings
+// same provider route and conversation, freshly loading MCP servers and settings
 // that a running session cannot pick up mid-flight.
 const RELAUNCH_RE = /^\/relaunch(?:@\w+)?\s*$/
 // A double tap lands inside the spawn window: the second request finds no
@@ -157,63 +189,27 @@ function resolveModel(): string {
 }
 const MODEL = resolveModel()
 
-// Fallback model for a topic whose primary model hits its PLAN USAGE LIMIT
-// (HTTP 429). Claude Code's own fallbackModel chain is availability-based
-// (503/529) and documented to exclude rate limits, and nothing downgrades the
-// model automatically on a plan limit - so without this an interactive topic
-// just stalls until a human runs /model. The StopFailure hook
-// (hooks/rate-limit-failover.py) reports the stall here and handleRateLimit
-// respawns the topic on this model with --resume (the --model FLAG overrides
-// even on resume, which is what makes this work at all). Empty = disabled
-// (the topic stalls as before). Reset back to the primary at the nightly
-// restart, so a fallback is never permanent.
-const MODEL_FALLBACK = (process.env.TELEGRAM_TOPICS_MODEL_FALLBACK ?? 'opus').trim()
-// How long a failed-over topic waits before RE-TRYING its primary model when
-// the limit error carried no reset time. The retry is free: if the quota is
-// still exhausted the topic just fails over again (one notice, conversation
-// continues), so this is a "probe optimistically" knob, not a guess that has
-// to be right. Ignored when a reset time IS known - that is exact.
-const FALLBACK_PROBE_MIN = Number(process.env.TELEGRAM_TOPICS_FALLBACK_PROBE_MINUTES ?? '60')
-
-// ---- handoff (claude <-> opencode) ------------------------------------------
-//
-// A topic's session can switch harness: /handoff opencode degrades a topic
-// whose claude quota is exhausted onto an opencode (GLM) session, /handoff
-// claude brings it back. One conversation per topic regardless of harness:
-// claude continuity stays in claude_session_id (--resume), opencode
-// continuity in opencode_session_id (`opencode run -s`), and each switch
-// seeds the target with the source's recent turns.
-const HANDOFF_RE = /^\/handoff(?:@\w+)?(?:\s+(\S+))?\s*$/
-// Who may /handoff. Falls back to the secrets gate's user id (both are
-// "the operator"); unset = feature off.
+// Provider/model routing belongs below the Claude Code harness. Every topic
+// keeps one Claude UUID; a route change restarts that same session with a new
+// launch profile. Anthropic is native. Codex and OpenCode Go use the loopback
+// Anthropic-compatible bridge.
 const ADMIN_USER_ID = (process.env.TELEGRAM_TOPICS_ADMIN_USER_ID ?? SECRETS_USER_ID).trim()
-// When the pinned fallback model ALSO hits the limit (a second consecutive
-// rate-limit report for a topic already on fallback), degrade the topic to
-// opencode automatically. Off by default; the operator's .env opts in after
-// the pilot soaks.
-const AUTO_HANDOFF = envBool(process.env.TELEGRAM_TOPICS_AUTO_HANDOFF, false, 'TELEGRAM_TOPICS_AUTO_HANDOFF')
-// opencode model/variant for topic sessions. Empty = the machine's opencode
-// config default (usually what you want); a value pins `-m provider/model`
-// and `--variant <effort>` per run.
-const OPENCODE_MODEL = (process.env.TELEGRAM_OPENCODE_MODEL ?? '').trim()
-const OPENCODE_VARIANT = (process.env.TELEGRAM_OPENCODE_VARIANT ?? '').trim()
-// Seed bounds: the recent turns of the source conversation, oldest first.
-const HANDOFF_MAX_TURNS = 60
-const HANDOFF_MAX_CHARS = 40_000
-// Debounce, same shape as /relaunch: a double tap must not hand off twice.
-const HANDOFF_DEBOUNCE_MS = 30_000
-const lastHandoff = new Map<string, number>()
-
-// The opencode CLI, for `opencode export` when rendering a handoff delta.
-// The proxy runs under launchd's minimal PATH; opencode is commonly a nix
-// per-user profile binary that PATH will not resolve.
-function opencodeBin(): string {
-  const perUser = process.env.USER ? `/etc/profiles/per-user/${process.env.USER}/bin/opencode` : ''
-  for (const c of [perUser, join(homedir(), '.local/bin/opencode'), '/opt/homebrew/bin/opencode', '/usr/local/bin/opencode']) {
-    if (c && existsSync(c)) return c
-  }
-  return 'opencode' // last resort: whatever PATH makes of it
-}
+const MODEL_RE = /^\/model(?:@\w+)?(?:\s+(\S+))?\s*$/
+const USAGE_RE = /^\/usage(?:@\w+)?\s*$/
+const ROUTE_DEBOUNCE_MS = 10_000
+const lastRouteChange = new Map<string, number>()
+const PROVIDER_PROXY_URL = (
+  process.env.TELEGRAM_PROVIDER_PROXY_URL ?? 'http://127.0.0.1:18765'
+).replace(/\/$/, '')
+const PROVIDER_PROXY_BIN = process.env.TELEGRAM_PROVIDER_PROXY_BIN ?? 'claude-code-proxy'
+const OPENCODE_AUTH_FILE = process.env.TELEGRAM_OPENCODE_AUTH_FILE ??
+  join(homedir(), '.local', 'share', 'opencode', 'auth.json')
+const CAPACITY_POLL_MS = Number(process.env.TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES ?? '5') * 60_000
+const DEFAULT_TOPIC_ROUTE = topicRoute({
+  provider: 'anthropic',
+  model: MODEL || DEFAULT_ROUTE.model,
+  effort: ULTRACODE ? 'xhigh' : 'medium',
+})
 
 // Which terminal multiplexer hosts the detached topic-Claude sessions.
 // `tmux` (default, the original backend) or `herdr` (herdr.dev, the agent
@@ -423,7 +419,7 @@ function describeMessage(msg: any): Described | null {
 
 // ---- per-topic state -------------------------------------------------------
 
-type InboundMsg = { content: string; meta: Record<string, string> }
+type InboundMsg = InboundMessage
 type PermAnswer = { request_id: string; behavior: 'allow' | 'deny' }
 
 type TopicState = {
@@ -445,35 +441,19 @@ type TopicState = {
   // restarts: all topics share one spawn dir, so bare --continue (most-recent
   // session in a dir) cannot tell them apart - we track the id explicitly.
   claudeSessionId?: string
-  // Set when this topic has been failed over to MODEL_FALLBACK after a plan
-  // usage limit (429) on its primary model. Every later spawn uses it until
-  // the nightly restart clears it, so a proxy restart cannot silently drop
-  // the topic back onto an exhausted model.
-  fallbackModel?: string
-  // When the primary model may be retried: the quota reset time parsed from
-  // the limit error, or (absent that) failover time + FALLBACK_PROBE_MIN.
-  fallbackUntil?: number
-  // Which harness the topic's session runs on (absent = claude). Swapped by
-  // /handoff; every spawn asks backendFor(this) for the pane env.
-  activeBackend?: BackendKind
-  // The opencode session id (the TUI plugin adopts it on startup and POSTs it
-  // here). Absent = the next opencode spawn creates and adopts a new one,
-  // consuming the seed (handoff delta, or the startup notice).
-  opencodeSessionId?: string
-  // When this topic last switched harness, and why. 'quota' handoffs are
-  // auto-reversible (the spawn-time probe returns them to claude once the
-  // window passes); 'manual' handoffs stay until manually reversed.
-  lastHandoffAt?: number
-  handoffReason?: 'quota' | 'manual'
-  // Marker of the last successful outbound reply, for the opencode plugin's
-  // stranded-reply backstop (it ships the run text itself when the marker
-  // does not move across a run). In-memory: a proxy restart resets it.
-  lastReplyAt?: number
-  // Pending handoff delta for an opencode spawn, cleared when the plugin acks
-  // it (POST /oc-seed-done) so a TUI killed before its first prompt re-gets
-  // the delta on respawn. In-memory: a proxy restart drops it (the oc session
-  // then just misses the delta turns; accepted).
-  pendingSeed?: string
+  // The provider/model/effort used when this Claude session starts or resumes.
+  // This is routing state, not a harness choice: every route runs Claude Code.
+  route?: TopicRoute
+  // A proactive switch requested while Claude is inside a turn. It is applied
+  // by the next /poll, which is the observable safe turn boundary.
+  pendingRoute?: PendingRouteChange
+  // The latest route that exhausted quota for each provider. A conversation
+  // can cross several exhausted providers; retain each exact return route so
+  // every reset can offer a switch-back button.
+  exhaustedRoutes: TopicRoute[]
+  // One-time durable notice used by migrations and failed-turn recovery. It is
+  // removed only when a resumed Claude actually polls and receives it.
+  pendingResumeNotice?: string
 }
 
 const topics = new Map<string, TopicState>()
@@ -536,6 +516,7 @@ function getTopic(topic: string): TopicState {
       session: '',
       spawnedAt: 0,
       spawning: false,
+      exhaustedRoutes: [],
     }
     topics.set(topic, st)
   }
@@ -544,6 +525,16 @@ function getTopic(topic: string): TopicState {
 
 function enqueue(topic: string, msg: InboundMsg): void {
   const st = getTopic(topic)
+  if (inboundModeForRoute(currentRoute(st)) === 'pane') {
+    // A proxied Claude runs under API billing, where Claude Code deliberately
+    // disables Channels. Never hand its message to a stale /poll waiter: the
+    // harness would silently discard it. Queue it for the foreground-pane
+    // adapter instead.
+    while (st.waiters.length) st.waiters.shift()?.(null)
+    st.queue.push(msg)
+    schedulePanePump(topic)
+    return
+  }
   const waiter = st.waiters.shift()
   if (waiter) waiter(msg)
   else st.queue.push(msg)
@@ -557,7 +548,7 @@ function enqueue(topic: string, msg: InboundMsg): void {
 // no longer exists and is LOST - it never reaches the queue the respawned
 // session drains. That is exactly how the first real usage-limit failover
 // failed (2026-07-19): the nudge vanished into the killed session, so the
-// Claude that came back on the fallback model had nothing to do and sat idle
+// Claude that came back on its replacement route had nothing to do and sat idle
 // while its pane still showed the limit message - looking hung when it was
 // actually fine.
 //
@@ -617,129 +608,126 @@ function resolvePermission(requestId: string, behavior: 'allow' | 'deny'): boole
   return true
 }
 
-// ---- multiplexer (port + adapters) ------------------------------------------
+// ---- multiplexer port -------------------------------------------------------
 //
-// The proxy's core is multiplexer-agnostic: it needs exactly two operations on
-// the host that keeps detached topic-Claudes alive - "which sessions are live"
-// (by name) and "kill this session" (by name). This PORT captures that; the
-// two ADAPTERS below implement it for tmux and herdr. Spawning is NOT part of
-// the port: scripts/launch-topic.sh owns spawn mechanics for both backends
-// (branching on TG_MUX), because spawning is where all the backend-specific
-// ceremony lives (env propagation, the dev-channel dialog watcher).
-// Session NAMES are the shared currency: `claude-<slug>-<tid>` strings recorded
-// in st.session / the registry work identically for both backends (a tmux
-// session name == a herdr agent/pane label).
+// The domain/application code depends only on this port. Concrete tmux and
+// herdr process control lives in adapters/multiplexer.ts.
 
-interface Multiplexer {
-  readonly kind: 'tmux' | 'herdr'
-  liveSessions(): Set<string>
-  kill(session: string): boolean
+const mux: MultiplexerPort = createMultiplexer(MUX_KIND)
+
+type PanePumpState = {
+  timer?: ReturnType<typeof setTimeout>
+  inFlight: boolean
+  observedActive: boolean
+  submittedAt: number
 }
 
-class TmuxMux implements Multiplexer {
-  readonly kind = 'tmux' as const
+const panePumps = new Map<string, PanePumpState>()
 
-  liveSessions(): Set<string> {
-    const r = spawnSync('tmux', ['ls', '-F', '#{session_name}'], { encoding: 'utf8' })
-    if (r.status !== 0) return new Set() // no server running -> no sessions
-    return new Set(
-      (r.stdout ?? '')
-        .split('\n')
-        .map(s => s.trim())
-        .filter(Boolean),
-    )
+function panePumpState(topic: string): PanePumpState {
+  let state = panePumps.get(topic)
+  if (!state) {
+    state = { inFlight: false, observedActive: false, submittedAt: 0 }
+    panePumps.set(topic, state)
   }
-
-  kill(session: string): boolean {
-    // '=' forces an exact-name match (claude-x-4 must not match claude-x-45).
-    const r = spawnSync('tmux', ['kill-session', '-t', `=${session}`], { encoding: 'utf8' })
-    return r.status === 0
-  }
+  return state
 }
 
-class HerdrMux implements Multiplexer {
-  readonly kind = 'herdr' as const
-  // launchd/detached parents run with a minimal PATH; prefer the brew path.
-  private readonly bin = existsSync('/opt/homebrew/bin/herdr') ? '/opt/homebrew/bin/herdr' : 'herdr'
+function schedulePanePump(topic: string, delayMs = 0): void {
+  const st = getTopic(topic)
+  if (inboundModeForRoute(currentRoute(st)) !== 'pane') return
+  const state = panePumpState(topic)
+  if (state.timer) return
+  state.timer = setTimeout(() => {
+    state.timer = undefined
+    pumpPane(topic)
+  }, delayMs)
+}
 
-  // `herdr pane list` emits one JSON object; panes carry the agent NAME as
-  // `label` (set by `herdr agent start <name>` in the launcher), which is our
-  // session-name currency. pane_id is a herdr-internal handle we only need
-  // transiently for kill().
-  private panes(): Map<string, { paneId: string; status: string }> {
-    const out = new Map<string, { paneId: string; status: string }>()
-    const r = spawnSync(this.bin, ['pane', 'list'], { encoding: 'utf8' })
-    if (r.status !== 0) return out // server not running -> no sessions
-    try {
-      const parsed = JSON.parse(r.stdout ?? '{}')
-      for (const p of parsed?.result?.panes ?? []) {
-        // Keep STALE panes too (agent_status 'unknown'): kill() must be able to
-        // close them; only liveSessions() filters them out.
-        if (p?.label) {
-          out.set(String(p.label), {
-            paneId: String(p.pane_id ?? ''),
-            status: String(p.agent_status ?? 'unknown'),
-          })
-        }
-      }
-    } catch {
-      // Unparseable output = treat as no live sessions; callers re-spawn, and
-      // the launcher's own dedup guard prevents doubles if herdr was just slow.
+function pendingPaneMessage(topic: string, st: TopicState): { message: InboundMsg; resumeNotice: boolean } | undefined {
+  if (st.pendingResumeNotice) {
+    return {
+      message: {
+        content: st.pendingResumeNotice,
+        meta: {
+          chat_id: String(GROUP_CHAT_ID),
+          user: 'telegram-topics-proxy',
+          ts: new Date().toISOString(),
+          ...(topic !== 'general' ? { message_thread_id: topic } : {}),
+          route_switch: '1',
+        },
+      },
+      resumeNotice: true,
     }
-    return out
   }
+  const message = st.queue[0]
+  return message ? { message, resumeNotice: false } : undefined
+}
 
-  // A LABEL ALONE DOES NOT MEAN LIVE. herdr restores its panes on login (from
-  // session.json) with their labels intact, but the claude process inside died
-  // with the logout - leaving an empty shell that herdr reports as
-  // `agent_status: "unknown"` (a real agent reports idle/working/done/blocked).
-  // Counting those as live made the proxy "re-adopt" the corpse on boot and
-  // NEVER respawn the topic, so messages queued for a session that did not
-  // exist. Measured 2026-07-23 after a logout/login: claude-general and
-  // claude-macos-944 were labeled panes with agent_status 'unknown' and zero
-  // claude processes, yet were re-adopted as live. Require a real agent.
-  // NB 'unknown' is also reported for ~2s while a freshly spawned pane boots,
-  // so ensureSession additionally honors a short post-spawn grace window.
-  //
-  // 'unknown' can also cover a healthy pane running an agent herdr does not
-  // recognize. For those panes ask what runs in the foreground
-  // (pane process-info):
-  // a non-shell foreground process means the pane is live; the bare shell
-  // (or nothing) is a corpse. The name check distinguishes an exec-chained
-  // agent from the shell it replaced.
-  liveSessions(): Set<string> {
-    const out = new Set<string>()
-    for (const [label, p] of this.panes()) {
-      if (p.status && p.status !== 'unknown') {
-        out.add(label)
-        continue
-      }
-      if (this.foregroundIsAgent(p.paneId)) out.add(label)
+/**
+ * Deliver queued turns to a proxied Claude through its foreground prompt.
+ * Claude Code disables Channels under custom API billing, but its normal REPL
+ * and MCP tools remain available. We submit only while the pane is idle, wait
+ * for the resulting turn to become active and settle, then deliver the next
+ * queued turn. The Claude UUID and transcript are untouched.
+ */
+function pumpPane(topic: string): void {
+  const st = getTopic(topic)
+  if (inboundModeForRoute(currentRoute(st)) !== 'pane') return
+
+  ensureSession(topic)
+  const state = panePumpState(topic)
+  const runtime = st.session ? mux.runtime(st.session) : 'missing'
+
+  if (state.inFlight) {
+    if (runtime === 'busy' || runtime === 'blocked' || runtime === 'starting') {
+      state.observedActive = true
     }
-    return out
-  }
-
-  private foregroundIsAgent(paneId: string): boolean {
-    const r = spawnSync(this.bin, ['pane', 'process-info', '--pane', paneId], { encoding: 'utf8' })
-    if (r.status !== 0) return false
-    try {
-      const procs =
-        JSON.parse(r.stdout ?? '{}')?.result?.process_info?.foreground_processes ?? []
-      return procs.some((p: any) => !/^(zsh|bash|sh|fish|dash|ksh)$/.test(String(p?.name ?? '')))
-    } catch {
-      return false
+    // A very short turn can finish between status samples. Five seconds after
+    // an accepted prompt, an idle pane is safe even if we missed its busy edge.
+    if (runtime === 'idle' && (state.observedActive || Date.now() - state.submittedAt >= 5000)) {
+      state.inFlight = false
+      state.observedActive = false
+    } else {
+      schedulePanePump(topic, 250)
+      return
     }
   }
 
-  kill(session: string): boolean {
-    const paneId = this.panes().get(session)?.paneId
-    if (!paneId) return false
-    const r = spawnSync(this.bin, ['pane', 'close', paneId], { encoding: 'utf8' })
-    return r.status === 0
+  if (st.pendingRoute) {
+    if (runtime === 'idle' || runtime === 'missing') {
+      const pending = st.pendingRoute
+      applyRouteNow(topic, pending.route, pending.reason)
+    } else {
+      schedulePanePump(topic, 500)
+    }
+    return
   }
-}
 
-const mux: Multiplexer = MUX_KIND === 'herdr' ? new HerdrMux() : new TmuxMux()
+  const pending = pendingPaneMessage(topic, st)
+  if (!pending) return
+  if (runtime !== 'idle' || !st.session) {
+    schedulePanePump(topic, 500)
+    return
+  }
+
+  if (!mux.prompt(st.session, renderPaneTurn(pending.message))) {
+    schedulePanePump(topic, 500)
+    return
+  }
+
+  if (pending.resumeNotice) {
+    st.pendingResumeNotice = undefined
+    saveRegistry()
+  } else {
+    st.queue.shift()
+  }
+  state.inFlight = true
+  state.observedActive = false
+  state.submittedAt = Date.now()
+  log(`delivered Telegram turn to proxied Claude pane ${st.session} for topic ${topic}`)
+  schedulePanePump(topic, 150)
+}
 
 // How long after a spawn we still treat a topic as live even if the multiplexer
 // cannot see an agent yet (herdr reports `agent_status: "unknown"` for the first
@@ -755,34 +743,62 @@ type RegistryEntry = {
   name: string
   spawned_at: number
   claude_session_id: string | null
-  fallback_model?: string | null
-  fallback_until?: number | null
-  active_backend?: BackendKind
-  opencode_session_id?: string | null
-  last_handoff_at?: number | null
-  handoff_reason?: string | null
+  route?: TopicRoute | null
+  pending_route?: PendingRouteChange | null
+  exhausted_routes?: TopicRoute[] | null
+  pending_resume_notice?: string | null
+}
+
+function parseRoute(value: unknown): TopicRoute | undefined {
+  const raw = value as any
+  if (!raw || !isProviderId(raw.provider) || typeof raw.model !== 'string') return undefined
+  try {
+    return topicRoute({
+      provider: raw.provider,
+      model: raw.model,
+      effort: isEffort(raw.effort) ? raw.effort : undefined,
+    })
+  } catch {
+    return undefined
+  }
+}
+
+function routeFromRegistry(value: unknown, fallback = DEFAULT_TOPIC_ROUTE): TopicRoute {
+  return parseRoute(value) ?? fallback
+}
+
+function pendingRouteFromRegistry(value: unknown): PendingRouteChange | undefined {
+  const raw = value as any
+  if (!raw || !['manual', 'quota', 'reset', 'migration'].includes(raw.reason)) return undefined
+  const route = parseRoute(raw.route)
+  if (!route) return undefined
+  return {
+    route,
+    reason: raw.reason,
+    requestedAt: Number(raw.requestedAt) || Date.now(),
+  }
 }
 
 function saveRegistry(): void {
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
   const out: Record<string, RegistryEntry> = {}
   for (const [topic, st] of topics) {
-    // Persist any topic that has been spawned at least once (has a claude OR
-    // opencode session id - needed to resume the SAME conversation on the next
+    // Persist any topic that has been spawned at least once (has a Claude
+    // session id, needed to resume the SAME conversation on the next
     // message) OR that has a known NAME with no session yet (a proxy-created
     // topic, registered at creation time; without persisting it here a proxy
     // restart would make it invisible again until a human messaged it).
-    if (!st.claudeSessionId && !st.opencodeSessionId && !st.name) continue
+    if (!st.claudeSessionId && !st.name) continue
     out[topic] = {
       tmux_session: st.session,
       thread_id: st.threadId ?? null,
       name: st.name,
       spawned_at: st.spawnedAt,
       claude_session_id: st.claudeSessionId,
-      ...(st.fallbackModel ? { fallback_model: st.fallbackModel, fallback_until: st.fallbackUntil ?? null } : {}),
-      ...(st.activeBackend ? { active_backend: st.activeBackend } : {}),
-      ...(st.opencodeSessionId ? { opencode_session_id: st.opencodeSessionId } : {}),
-      ...(st.lastHandoffAt ? { last_handoff_at: st.lastHandoffAt, handoff_reason: st.handoffReason ?? null } : {}),
+      route: st.route ?? DEFAULT_TOPIC_ROUTE,
+      ...(st.pendingRoute ? { pending_route: st.pendingRoute } : {}),
+      ...(st.exhaustedRoutes.length ? { exhausted_routes: st.exhaustedRoutes } : {}),
+      ...(st.pendingResumeNotice ? { pending_resume_notice: st.pendingResumeNotice } : {}),
     }
   }
   const tmp = REGISTRY_FILE + '.tmp'
@@ -806,12 +822,15 @@ function loadAndReconcileRegistry(): void {
     st.threadId = entry.thread_id ?? undefined
     st.name = entry.name
     st.claudeSessionId = entry.claude_session_id ?? undefined
-    st.fallbackModel = entry.fallback_model ?? undefined
-    st.fallbackUntil = entry.fallback_until ?? undefined
-    st.activeBackend = entry.active_backend ?? undefined
-    st.opencodeSessionId = entry.opencode_session_id ?? undefined
-    st.lastHandoffAt = entry.last_handoff_at ?? undefined
-    st.handoffReason = (entry.handoff_reason as 'quota' | 'manual' | undefined) ?? undefined
+    st.route = routeFromRegistry(entry.route)
+    st.pendingRoute = pendingRouteFromRegistry(entry.pending_route)
+    st.exhaustedRoutes = Array.isArray(entry.exhausted_routes)
+      ? entry.exhausted_routes.flatMap(route => {
+          const parsed = parseRoute(route)
+          return parsed ? [parsed] : []
+        })
+      : []
+    st.pendingResumeNotice = entry.pending_resume_notice ?? undefined
     if (entry.name) topicNames.set(topic, entry.name)
     if (entry.tmux_session && live.has(entry.tmux_session)) {
       st.session = entry.tmux_session
@@ -1066,107 +1085,69 @@ async function handleSquareReply(req: Request): Promise<Response> {
   return json({ message_id: sent.message_id })
 }
 
-// POST /rate-limit {topic, error, details} - a topic-Claude's turn died on a
-// plan usage limit (429), reported by the StopFailure hook. Fail the topic
-// over to MODEL_FALLBACK: pin the model, kill the stalled session, and
-// enqueue a nudge so the RESPAWNED session (which --resumes the same
-// conversation on the new model) picks up where it left off. Without the
-// nudge the respawn would sit idle: the user's message was already consumed
-// by the turn that failed, so nothing would be left in the queue to trigger
-// a reply.
-//
-// Idempotent: a repeat report for an already-failed-over topic is a no-op
-// (a claude can hit the limit again mid-recovery), so a burst of hook calls
-// cannot spawn a respawn loop.
+// POST /rate-limit {topic, error, details, reset_at}. The failed user turn is
+// already in Claude's transcript. Stop the exhausted route and let Telegram
+// offer another provider; after the operator chooses one, the same Claude UUID
+// resumes and receives a one-time nudge to finish that turn.
 async function handleRateLimit(req: Request): Promise<Response> {
   const b = (await req.json()) as any
   const topic = String(b.topic ?? '')
   if (!topic) return new Response('topic required', { status: 400 })
   const st = getTopic(topic)
   const label = st.name || topic
-
-  // The StopFailure hook is claude-side, so a report for an opencode topic is
-  // a stale or malformed POST: claude is not running, there is nothing to
-  // fail over, and acting on it would kill the oc TUI and deliver a
-  // claude-shaped nudge into an opencode session.
-  if (st.activeBackend === 'opencode') {
-    log(`rate limit report for opencode topic ${topic} "${label}"; ignoring`)
-    return json({ ok: true, ignored: 'opencode backend' })
+  const exhaustedRoute = st.route ?? DEFAULT_TOPIC_ROUTE
+  const alreadyReported = exhaustedRouteFor(st.exhaustedRoutes, exhaustedRoute.provider)
+  if (!st.session && alreadyReported && sameRoute(alreadyReported, exhaustedRoute)) {
+    return json({ ok: true, provider: exhaustedRoute.provider, awaiting_selection: true, duplicate: true })
   }
-
-  if (!MODEL_FALLBACK) {
-    log(`rate limit on topic ${topic} "${label}" but no fallback model configured; leaving stalled`)
-    return json({ ok: false, reason: 'no fallback configured' })
-  }
-  if (st.fallbackModel) {
-    // A SECOND consecutive report while already on the fallback: the whole
-    // claude family is exhausted. AUTO_HANDOFF degrades the topic to opencode
-    // so the conversation continues somewhere; manual /handoff claude brings
-    // it back (and the spawn-time window probe does so automatically).
-    if (AUTO_HANDOFF && st.activeBackend !== 'opencode') {
-      log(`rate limit on topic ${topic} "${label}" while already on fallback ${st.fallbackModel}; auto-handoff to opencode`)
-      // The oc leg becomes the probe window: when it passes, maybeAutoReturn
-      // gives claude another chance. The fallback pin is dropped so the
-      // return probes the PRIMARY, and no lingering pin can re-fail-over the
-      // topic the moment it is back on claude.
-      st.fallbackModel = undefined
-      st.fallbackUntil = Date.now() + FALLBACK_PROBE_MIN * 60_000
-      await handoffTopic(String(GROUP_CHAT_ID), topic, 'opencode', 'quota')
-      return json({ ok: true, escalated: 'opencode' })
-    }
-    log(`rate limit on topic ${topic} "${label}" already on fallback ${st.fallbackModel}; no action`)
-    return json({ ok: true, already: st.fallbackModel })
-  }
-
-  // When may we retry the primary? Prefer the reset time the error carried
-  // (exact); otherwise probe after FALLBACK_PROBE_MIN.
   const resetAt = Number(b.reset_at)
-  const until =
-    Number.isFinite(resetAt) && resetAt * 1000 > Date.now()
-      ? resetAt * 1000
-      : Date.now() + FALLBACK_PROBE_MIN * 60_000
-  st.fallbackModel = MODEL_FALLBACK
-  st.fallbackUntil = until
-  saveRegistry()
-  log(
-    `rate limit on topic ${topic} "${label}": failing over ${MODEL || '(account default)'} -> ${MODEL_FALLBACK}; ` +
-      `will retry primary after ${new Date(until).toISOString()}` +
-      (Number.isFinite(resetAt) ? ' (reset time from the error)' : ' (probe interval; error carried no reset time)'),
-  )
-
-  // Tell the operator IN the affected topic's thread - a silent model swap
-  // would leave them wondering why the voice changed mid-conversation. Sent
-  // by the proxy (not the topic-Claude): the session is being killed right
-  // now, so it is in no position to announce anything.
-  const tid = threadIdForTopic(topic)
-  bot.api
-    .sendMessage(
-      String(GROUP_CHAT_ID),
-      `⚠️ Hit the usage limit on ${MODEL || 'the default model'} - resuming this conversation on ${MODEL_FALLBACK}. ` +
-        `Will retry ${MODEL || 'the primary model'} after ${new Date(until).toLocaleTimeString()}.`,
-      { ...(tid != null ? { message_thread_id: tid } : {}) },
-    )
-    .catch(e => log(`failover notice failed for topic ${topic}: ${e}`))
-
-  // Kill the stalled session AND drop its stale long-polls before enqueueing:
-  // otherwise the nudge is handed to the dying MCP and lost (see killSession).
+  const resetMs = Number.isFinite(resetAt) && resetAt * 1000 > Date.now()
+    ? resetAt * 1000
+    : undefined
+  observeCapacity(providerCapacity(exhaustedRoute.provider, [{
+    name: 'current window',
+    usedPercent: 100,
+    availability: 'exhausted',
+    ...(resetMs ? { resetsAt: resetMs } : {}),
+  }], Date.now()))
+  st.exhaustedRoutes = rememberExhaustedRoute(st.exhaustedRoutes, exhaustedRoute)
+  st.pendingRoute = undefined
   killSession(st, topic)
+  saveRegistry()
+  log(`rate limit on topic ${topic} "${label}" for ${exhaustedRoute.provider}/${exhaustedRoute.model}`)
+  await sendProviderPicker(
+    String(GROUP_CHAT_ID),
+    topic,
+    'quota',
+    `${providerLabel(exhaustedRoute.provider)} · ${modelLabel(exhaustedRoute.model)} reached its usage limit.` +
+      (resetMs ? `\nExpected reset: ${formatTime(resetMs)}.` : '') +
+      `\n\nContinue this same Claude session with:`,
+    exhaustedRoute.provider,
+  )
+  return json({ ok: true, provider: exhaustedRoute.provider, awaiting_selection: true })
+}
 
-  enqueue(topic, {
-    content:
-      `SYSTEM NOTICE (not a user message): your previous turn failed because the ${MODEL || 'default'} ` +
-      `usage limit was reached, so this session has been restarted on ${MODEL_FALLBACK} with your full ` +
-      `conversation intact. Continue where you left off: answer the user's most recent message now. ` +
-      `Mention the model switch only if it affects the answer.`,
-    meta: {
-      chat_id: String(GROUP_CHAT_ID),
-      failover: '1',
-      model: MODEL_FALLBACK,
-      ts: new Date().toISOString(),
-    },
+// POST /capacity is fed by the Claude status-line adapter. External-provider
+// capacity is probed directly by their infrastructure adapters.
+async function handleCapacity(req: Request): Promise<Response> {
+  const body = (await req.json()) as any
+  if (body?.provider !== 'anthropic' || !Array.isArray(body?.windows)) {
+    return new Response('invalid capacity payload', { status: 400 })
+  }
+  const windows = body.windows.flatMap((raw: any) => {
+    const availability = raw?.availability
+    if (!['available', 'exhausted', 'unknown'].includes(availability)) return []
+    const usedPercent = Number(raw.used_percent)
+    const resetsAt = Number(raw.resets_at)
+    return [{
+      name: String(raw.name ?? 'window'),
+      ...(Number.isFinite(usedPercent) ? { usedPercent } : {}),
+      ...(Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}),
+      availability,
+    }]
   })
-  ensureSession(topic)
-  return json({ ok: true, model: MODEL_FALLBACK })
+  observeCapacity(providerCapacity('anthropic', windows, Date.now()))
+  return json({ ok: true })
 }
 
 // POST /turn-failed {topic, error, details} - a topic-Claude's turn died on a
@@ -1319,104 +1300,7 @@ function handleSquareUserMessage(msg: any, text: string): void {
 
 // ---- spawn (single-flight) -------------------------------------------------
 
-// Drop a topic's usage-limit failover once its retry window has passed, so the
-// next SPAWN uses the primary model again.
-//
-// Deliberately lazy - checked at spawn time, never on a timer:
-//   - A topic whose session is already LIVE is left alone. Killing a running
-//     Claude mid-task to upgrade its model would be a worse bug than the one
-//     this feature fixes; it picks the primary up at its next natural respawn.
-//   - Idle topics cost nothing to revert, matching the plugin's passive design
-//     (sessions exist only when in use).
-// If the quota turns out to still be exhausted, the very next turn fails over
-// again - one notice, conversation continues - so probing early is cheap.
-function maybeRevertFallback(st: TopicState, topic: string): void {
-  if (st.activeBackend === 'opencode') return // claude-side state; maybeAutoReturn owns this topic
-  if (!st.fallbackModel) return
-  if (st.fallbackUntil && Date.now() < st.fallbackUntil) return
-  if (st.session && mux.liveSessions().has(st.session)) return // live: leave it be
-  const was = st.fallbackModel
-  st.fallbackModel = undefined
-  st.fallbackUntil = undefined
-  saveRegistry()
-  log(`topic ${topic} "${st.name}": retry window elapsed, reverting ${was} -> ${MODEL || '(account default)'}`)
-  const tid = threadIdForTopic(topic)
-  bot.api
-    .sendMessage(
-      String(GROUP_CHAT_ID),
-      `✅ Usage window elapsed - back on ${MODEL || 'the default model'} for this topic.`,
-      { ...(tid != null ? { message_thread_id: tid } : {}) },
-    )
-    .catch(e => log(`revert notice failed for topic ${topic}: ${e}`))
-}
-
-// Mirror of maybeRevertFallback for quota-degraded OPENCODE topics: when the
-// claude quota window recorded at auto-handoff time has passed, the topic
-// returns to claude at its next spawn. Manual handoffs never auto-return. A
-// live session is left alone (same laziness); if claude is STILL limited the
-// topic simply fails over and auto-handoff degrades it again - one notice,
-// conversation continues, so probing early is cheap.
-function maybeAutoReturn(st: TopicState, topic: string): void {
-  if (st.activeBackend !== 'opencode' || st.handoffReason !== 'quota') return
-  if (st.fallbackUntil && Date.now() < st.fallbackUntil) return
-  if (st.session && mux.liveSessions().has(st.session)) return
-  st.activeBackend = undefined
-  st.handoffReason = undefined
-  // Drop the pin the escalation left behind so the return probes the PRIMARY
-  // (a lingering fallback pin would re-fail-over the topic immediately, and
-  // the live-session guard below would then keep it forever).
-  st.fallbackModel = undefined
-  st.fallbackUntil = undefined
-  st.lastHandoffAt = Date.now()
-  saveRegistry()
-  log(`topic ${topic} "${st.name}": quota window elapsed, returning to claude`)
-  const tid = threadIdForTopic(topic)
-  bot.api
-    .sendMessage(String(GROUP_CHAT_ID), `✅ Claude quota window elapsed - switching this topic back to claude.`, {
-      ...(tid != null ? { message_thread_id: tid } : {}),
-    })
-    .catch(e => log(`auto-return notice failed for topic ${topic}: ${e}`))
-  // Carry the oc-era turns to the respawned claude the same way a manual
-  // /handoff claude does. Fire-and-forget: ensureSession's cold-start window
-  // (FIRST_POLL_DELAY) covers the export, and the queue holds the notice.
-  void opencodeDeltaFor(st).then(delta => {
-    if (!delta) return
-    enqueue(topic, {
-      content:
-        `SYSTEM NOTICE (not a user message): this topic ran on opencode while the claude usage limit was ` +
-        `exhausted, and has now switched back to you. The opencode-era conversation follows so you can ` +
-        `continue seamlessly; answer the user's latest unanswered message via the reply tool.\n\n` +
-        `--- OPENCODE-ERA CONVERSATION (oldest first) ---\n\n${delta}`,
-      meta: {
-        chat_id: String(GROUP_CHAT_ID),
-        user: 'telegram-topics-proxy',
-        ts: new Date().toISOString(),
-        ...(topic !== 'general' ? { message_thread_id: topic } : {}),
-        handoff: '1',
-      },
-    })
-  })
-}
-
-// The recent turns of the topic's CLAUDE conversation, read from the session
-// transcript. [] when there is no claude session or the file is unreadable
-// (the seed still forms, just with the omission marker).
-function claudeTurnsFor(st: TopicState): { turns: ReturnType<typeof claudeTranscriptTurns>; found: boolean } {
-  if (!st.claudeSessionId) return { turns: [], found: false }
-  // Claude munges the session cwd into its project dir name (non-alnum -> '-').
-  const munged = SPAWN_DIR.replace(/[^a-zA-Z0-9]/g, '-')
-  const path = join(homedir(), '.claude', 'projects', munged, `${st.claudeSessionId}.jsonl`)
-  try {
-    const jsonl = readFileSync(path, 'utf8')
-    return { turns: claudeTranscriptTurns(jsonl, HANDOFF_MAX_TURNS), found: true }
-  } catch (e) {
-    log(`could not read claude transcript ${path}: ${e}`)
-    return { turns: [], found: true }
-  }
-}
-
-// Ensure a live topic session exists for a topic (claude or opencode TUI, per
-// the topic's active backend). Single-flight: the synchronous
+// Ensure a live Claude Code session exists for a topic. Single-flight: the synchronous
 // spawnSync blocks the event loop for the whole launch, so two inbound
 // messages for a brand-new topic cannot spawn two sessions; the spawning
 // flag + the live-session dedup are belt and suspenders.
@@ -1425,8 +1309,6 @@ function ensureSession(topic: string): void {
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
   const st = getTopic(topic)
   if (st.spawning) return
-  maybeRevertFallback(st, topic)
-  maybeAutoReturn(st, topic)
   const live = mux.liveSessions()
   // Dedup on the RECORDED session name (stable for a live session's whole life;
   // '' for a brand-new / dead topic, so we fall through and spawn). We do NOT
@@ -1470,25 +1352,18 @@ function ensureSession(topic: string): void {
   try {
     const label = st.name || topicNames.get(topic) || topic
     st.name = label
-    // The harness-specific pane env comes from the topic's AgentBackend. The
-    // core never branches on the backend kind; it only carries the state.
-    const backend = backendFor(st.activeBackend)
-    const isOc = backend.kind === 'opencode'
-    // Session continuity is per-harness: claude resumes via --resume of the
-    // minted id; opencode via the TUI's --session id. A fresh
-    // opencode spawn (no id yet) consumes the seed: the handoff delta from
-    // the claude transcript, or this backend's startup notice.
-    const resuming = isOc ? !!st.opencodeSessionId : !!st.claudeSessionId
-    if (!isOc && !st.claudeSessionId) st.claudeSessionId = crypto.randomUUID()
+    const resuming = !!st.claudeSessionId
+    if (!st.claudeSessionId) st.claudeSessionId = crypto.randomUUID()
+    const route = st.route ?? DEFAULT_TOPIC_ROUTE
+    st.route = route
     // Name the mux session from the CURRENT label (fresh each spawn, so a
     // rename takes effect on the next respawn); recorded in st.session after a
-    // successful spawn so dedup + kill target this exact string. The prefix
-    // doubles as the harness marker (`claude-...` / `oc-...`).
-    const name = sessionNameFor(topic, label, isOc ? 'oc' : 'claude')
+    // successful spawn so dedup + kill target this exact string.
+    const name = sessionNameFor(topic, label)
     // Regenerate the effective settings for THIS spawn so it reflects the current
     // committed base + the ultracode config (fresh on every respawn).
     const settingsPath = resolveSettings()
-    const spec: SpawnSpec = {
+    const spec: ClaudeSpawnSpec = {
       topic,
       label,
       sessionName: name,
@@ -1497,31 +1372,18 @@ function ensureSession(topic: string): void {
       proxyUrl: PROXY_URL,
       squareTopic: SQUARE_TOPIC,
       marketplace: MARKETPLACE,
-      // A topic failed over by handleRateLimit keeps its fallback model on
-      // every respawn until the nightly restart clears it.
-      model: st.fallbackModel || MODEL,
+      route,
       claudeSessionId: st.claudeSessionId ?? '',
       resume: resuming,
       settingsPath,
       stopHook: STOP_HOOK,
       failoverHook: FAILOVER_HOOK,
-      kickoff: '',
-      opencodeSessionId: st.opencodeSessionId ?? '',
-      opencodeBin: opencodeBin(),
-      opencodeModel: OPENCODE_MODEL,
-      opencodeVariant: OPENCODE_VARIANT,
-      opencodeSeed: '',
-    }
-    if (isOc) {
-      // Seed precedence: a pending handoff delta (carried until the plugin
-      // acks), else the startup notice for a fresh topic. A resumed topic
-      // with neither gets nothing.
-      if (st.pendingSeed) spec.opencodeSeed = st.pendingSeed
-      else if (!resuming) spec.opencodeSeed = opencodeKickoff(spec)
+      capacityHook: CAPACITY_HOOK,
+      providerProxyUrl: PROVIDER_PROXY_URL,
     }
     const env = {
       ...process.env,
-      ...backend.spawnEnv(spec),
+      ...claudeSpawnEnv(spec),
     }
     const r = spawnSync('bash', [LAUNCH_SCRIPT], { env, encoding: 'utf8' })
     if (r.status !== 0) {
@@ -1530,8 +1392,10 @@ function ensureSession(topic: string): void {
     st.session = name
     st.spawnedAt = Date.now()
     saveRegistry()
-    const idPart = isOc ? (resuming ? `oc ${st.opencodeSessionId}` : 'oc minting') : `claude ${st.claudeSessionId}`
-    log(`${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" (${idPart}) -> ${mux.kind} ${name}`)
+    log(
+      `${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" ` +
+      `(claude ${st.claudeSessionId}; ${route.provider}/${route.model}; ${route.effort}) -> ${mux.kind} ${name}`,
+    )
   } catch (e) {
     log(`spawn failed for topic ${topic}: ${e}`)
   } finally {
@@ -1852,7 +1716,7 @@ const sayIn = (chatId: string, topic: string, t: string) =>
 const tilde = (p: string) => (p.startsWith(homedir() + sep) ? '~' + p.slice(homedir().length) : p)
 const reason = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
-// Same kill-then-nudge sequence as the usage-limit failover: killSession
+// Same kill-then-nudge sequence as a provider-route recovery: killSession
 // drains the dying MCP's long-polls first so the nudge cannot be handed to it
 // and lost. The nudge asks for one line back, so a respawn that fails is a
 // visible silence rather than a quiet one.
@@ -1892,162 +1756,311 @@ async function handleRelaunch(chatId: string, topic: string, fromId: string): Pr
   ensureSession(topic)
 }
 
-// The /handoff engine: switch a topic's session between harnesses. Both the
-// operator command and the automatic quota degradation (handleRateLimit) land
-// here. killSession first (drains the dying long-polls so nothing enqueued
-// next is lost), then persist the switch, then respawn via ensureSession -
-// which asks the NEW backend for the pane env.
-//
-// Seed direction, per target:
-//   opencode  the claude transcript delta rides the spawn env (TG_OC_SEED)
-//             and initializes the minting session - it can never interleave
-//             with a live queued message.
-//   claude    `--resume` takes no kickoff, so the opencode-era delta arrives
-//             as an enqueued SYSTEM NOTICE (the nudge mechanism) instead.
-async function handoffTopic(chatId: string, topic: string, target: 'opencode' | 'claude', why: 'quota' | 'manual'): Promise<void> {
-  const st = getTopic(topic)
-  const from = st.activeBackend ?? 'claude'
-  if (from === target) {
-    await sayIn(chatId, topic, `🤝 this topic already runs on ${target}.`)
-    return
-  }
-  const wasLive = killSession(st, topic)
-  st.activeBackend = target === 'claude' ? undefined : 'opencode'
-  st.lastHandoffAt = Date.now()
-  st.handoffReason = why
-  saveRegistry()
-  const label = st.name || topic
-  log(`handoff topic ${topic} "${label}": ${from} -> ${target} (${why}; was ${wasLive ? 'live' : 'not running'})`)
-  await sayIn(
-    chatId, topic,
-    why === 'quota'
-      ? `⚠️ The fallback model also hit its usage limit - continuing this conversation on opencode/GLM. ` +
-          `Say "/handoff claude" once the claude window resets.`
-      : `🤝 handing this topic from ${from} to ${target}: same conversation, recent turns carried over.`,
-  )
-  if (target === 'claude') {
-    const delta = await opencodeDeltaFor(st)
-    ensureSession(topic)
-    if (delta) {
-      enqueue(topic, {
-        content:
-          `SYSTEM NOTICE (not a user message): this topic ran on opencode while the claude usage limit was ` +
-          `exhausted, and has now switched back to you. The opencode-era conversation follows so you can ` +
-          `continue seamlessly; answer the user's latest unanswered message via the reply tool.\n\n` +
-          `--- OPENCODE-ERA CONVERSATION (oldest first) ---\n\n${delta}`,
-        meta: {
-          chat_id: String(GROUP_CHAT_ID),
-          user: 'telegram-topics-proxy',
-          ts: new Date().toISOString(),
-          ...(topic !== 'general' ? { message_thread_id: topic } : {}),
-          handoff: '1',
-        },
-      })
-    }
-  } else {
-    // Frame the claude-era delta NOW and carry it on every opencode spawn
-    // until the plugin acks it. In-memory: a proxy restart mid-handoff drops
-    // it (the oc session then misses the delta turns; accepted).
-    const { turns } = claudeTurnsFor(st)
-    st.pendingSeed = opencodeHandoffSeed(
-      { label, spawnDir: SPAWN_DIR, squareTopic: SQUARE_TOPIC },
-      renderDelta(turns, HANDOFF_MAX_CHARS),
-    )
-    ensureSession(topic)
-  }
-}
+// ---- provider routing application service + Telegram adapter ---------------
 
-// The opencode-era turns for a handoff BACK to claude, via `opencode export`.
-// Proxy-constructed seeds and startup notices are stripped (the claude
-// transcript already holds the pre-handoff history they summarized); null =
-// nothing to carry (no oc session, or the export failed).
-async function opencodeDeltaFor(st: TopicState): Promise<string | null> {
-  if (!st.opencodeSessionId) return null
+const capacities = new Map<ProviderId, ProviderCapacity>()
+type PickerReason = 'manual' | 'quota' | 'reset'
+type ModelSelection = {
+  topic: string
+  provider: ProviderId
+  model: ProviderModel
+  reason: PickerReason
+  expiresAt: number
+}
+const modelSelections = new Map<string, ModelSelection>()
+const PICKER_TTL_MS = 10 * 60_000
+const MODELS_PER_PAGE = 8
+let catalogCache: { value: ProviderCatalog; at: number } | undefined
+let codexAccountModels: ProviderModel[] | undefined
+const resetTimers = new Map<ProviderId, ReturnType<typeof setTimeout>>()
+
+const providerCode = (provider: ProviderId): string =>
+  provider === 'anthropic' ? 'a' : provider === 'codex' ? 'c' : 'o'
+const providerFromCode = (code: string): ProviderId | undefined =>
+  code === 'a' ? 'anthropic' : code === 'c' ? 'codex' : code === 'o' ? 'opencode-go' : undefined
+const reasonCode = (reason: PickerReason): string => reason === 'manual' ? 'm' : reason === 'quota' ? 'q' : 'r'
+const reasonFromCode = (code: string): PickerReason | undefined =>
+  code === 'm' ? 'manual' : code === 'q' ? 'quota' : code === 'r' ? 'reset' : undefined
+
+function modelCatalog(): ProviderCatalog {
+  if (catalogCache && Date.now() - catalogCache.at < 60_000) return catalogCache.value
   try {
-    const stdout = await new Promise<string>((resolve, reject) => {
-      execFile(opencodeBin(), ['export', st.opencodeSessionId!], { maxBuffer: 64 * 1024 * 1024, timeout: 60_000 },
-        (err, stdout) => (err ? reject(err) : resolve(String(stdout))))
-    })
-    const turns = parseOpencodeExport(stdout, HANDOFF_MAX_TURNS).filter(
-      t => !(t.role === 'user' && /^(SYSTEM HANDOFF NOTICE|SYSTEM STARTUP NOTICE)/.test(t.text)),
-    )
-    if (!turns.length) return null
-    return renderDelta(turns, HANDOFF_MAX_CHARS)
+    const output = execFileSync(PROVIDER_PROXY_BIN, ['models'], { encoding: 'utf8', timeout: 15_000 })
+    const value = catalogFromBridge(output, codexAccountModels)
+    catalogCache = { value, at: Date.now() }
+    return value
   } catch (e) {
-    log(`could not export opencode session ${st.opencodeSessionId}: ${e}`)
-    return null
+    log(`provider model catalog failed: ${e}`)
+    const value = catalogFromBridge('')
+    catalogCache = { value, at: Date.now() }
+    return value
   }
 }
 
-// The "/"-menu /handoff command. Operator-gated (ADMIN_USER_ID), debounced,
-// and usable on live or dormant topics alike. A BARE /handoff opens a
-// clickable prompt (inline keyboard) instead of demanding the argument - the
-// verb is discoverable in the "/" menu and should be usable without memorizing
-// sub-commands. /handoff status stays textual; explicit targets skip the menu.
-async function handleHandoffCommand(chatId: string, topic: string, fromId: string, arg: string): Promise<void> {
+function formatTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleString(undefined, {
+    weekday: 'short', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  })
+}
+
+function currentRoute(st: TopicState): TopicRoute {
+  return st.route ?? DEFAULT_TOPIC_ROUTE
+}
+
+function routeSummary(route: TopicRoute): string {
+  return `${providerLabel(route.provider)} · ${modelLabel(route.model)} · ${route.effort}`
+}
+
+function providerKeyboard(topic: string, reason: PickerReason, exclude?: ProviderId): InlineKeyboard {
+  const keyboard = new InlineKeyboard()
+  const providers: ProviderId[] = ['anthropic', 'codex', 'opencode-go']
+  for (const provider of providers.filter(value => value !== exclude)) {
+    const availability = capacities.get(provider)?.availability
+    const suffix = availability === 'exhausted' ? ' · limit reached' : availability === 'available' ? ' · available' : ''
+    keyboard.text(`${providerLabel(provider)}${suffix}`, `tgroute:p:${providerCode(provider)}:${reasonCode(reason)}:${topic}`).row()
+  }
+  keyboard.text('Usage', `tgroute:usage:${topic}`)
+  return keyboard
+}
+
+async function sendProviderPicker(
+  chatId: string,
+  topic: string,
+  reason: PickerReason,
+  text: string,
+  exclude?: ProviderId,
+): Promise<void> {
+  await bot.api.sendMessage(chatId, text, {
+    ...threadOf(topic),
+    reply_markup: providerKeyboard(topic, reason, exclude),
+  }).catch(e => log(`provider picker failed for topic ${topic}: ${e}`))
+}
+
+function modelToken(selection: ModelSelection): string {
+  const token = crypto.randomUUID().replace(/-/g, '').slice(0, 10)
+  modelSelections.set(token, selection)
+  return token
+}
+
+function pruneModelSelections(): void {
+  const now = Date.now()
+  for (const [token, selection] of modelSelections) {
+    if (selection.expiresAt < now) modelSelections.delete(token)
+  }
+}
+
+function modelPicker(
+  topic: string,
+  provider: ProviderId,
+  reason: PickerReason,
+  page: number,
+): { text: string; keyboard: InlineKeyboard } {
+  pruneModelSelections()
+  const models = modelCatalog()[provider]
+  const pages = Math.max(1, Math.ceil(models.length / MODELS_PER_PAGE))
+  const safePage = Math.max(0, Math.min(page, pages - 1))
+  const keyboard = new InlineKeyboard()
+  for (const model of models.slice(safePage * MODELS_PER_PAGE, (safePage + 1) * MODELS_PER_PAGE)) {
+    const token = modelToken({ topic, provider, model, reason, expiresAt: Date.now() + PICKER_TTL_MS })
+    keyboard.text(model.label, `tgroute:m:${token}`).row()
+  }
+  if (pages > 1) {
+    if (safePage > 0) {
+      keyboard.text('Previous', `tgroute:models:${providerCode(provider)}:${reasonCode(reason)}:${topic}:${safePage - 1}`)
+    }
+    if (safePage + 1 < pages) {
+      keyboard.text('Next', `tgroute:models:${providerCode(provider)}:${reasonCode(reason)}:${topic}:${safePage + 1}`)
+    }
+    keyboard.row()
+  }
+  keyboard.text('Back', `tgroute:providers:${reasonCode(reason)}:${topic}`)
+  return {
+    text: models.length
+      ? `${providerLabel(provider)} models${pages > 1 ? ` (${safePage + 1}/${pages})` : ''}:`
+      : `${providerLabel(provider)} model catalog is temporarily unavailable. Go back and try again.`,
+    keyboard,
+  }
+}
+
+function topicRuntime(topic: string, st: TopicState): 'idle' | 'busy' {
+  const live = !!(st.session && mux.liveSessions().has(st.session))
+  if (!live) return 'idle'
+  if (inboundModeForRoute(currentRoute(st)) === 'pane') {
+    if (panePumps.get(topic)?.inFlight) return 'busy'
+    return mux.runtime(st.session) === 'idle' ? 'idle' : 'busy'
+  }
+  if (st.waiters.length > 0) return 'idle'
+  return 'busy'
+}
+
+function recoveryNotice(from: TopicRoute, to: TopicRoute): string {
+  return (
+    `SYSTEM NOTICE (not a user message): the previous turn failed because ${providerLabel(from.provider)} ` +
+    `reached its usage limit. This same Claude Code session has resumed through ${providerLabel(to.provider)} ` +
+    `on ${modelLabel(to.model)}, with the full conversation intact. Continue where you left off and answer ` +
+    `the user's most recent unanswered message now. Mention the provider switch only if it affects the answer.`
+  )
+}
+
+function applyRouteNow(topic: string, route: TopicRoute, reason: RouteChangeReason): void {
+  const st = getTopic(topic)
+  const from = currentRoute(st)
+  killSession(st, topic)
+  st.route = route
+  st.pendingRoute = undefined
+  if (reason === 'quota') {
+    const exhausted = st.exhaustedRoutes.at(-1) ?? from
+    st.pendingResumeNotice = recoveryNotice(exhausted, route)
+  }
+  if (reason === 'reset' || exhaustedRouteFor(st.exhaustedRoutes, route.provider)) {
+    st.exhaustedRoutes = forgetExhaustedProvider(st.exhaustedRoutes, route.provider)
+  }
+  saveRegistry()
+  ensureSession(topic)
+  schedulePanePump(topic)
+  log(`topic ${topic} route applied: ${routeSummary(from)} -> ${routeSummary(route)} (${reason})`)
+}
+
+function requestRouteChange(topic: string, route: TopicRoute, reason: RouteChangeReason): 'unchanged' | 'applied' | 'queued' {
+  const st = getTopic(topic)
+  const plan = planRouteChange(currentRoute(st), route, reason, topicRuntime(topic, st), Date.now())
+  if (plan.kind === 'unchanged') return 'unchanged'
+  if (plan.kind === 'wait-for-turn-boundary') {
+    st.pendingRoute = plan.pending
+    if (reason === 'quota') {
+      st.pendingResumeNotice = recoveryNotice(st.exhaustedRoutes.at(-1) ?? currentRoute(st), route)
+    }
+    saveRegistry()
+    if (inboundModeForRoute(currentRoute(st)) === 'pane') schedulePanePump(topic, 250)
+    return 'queued'
+  }
+  applyRouteNow(topic, plan.route, plan.reason)
+  return 'applied'
+}
+
+async function handleModelCommand(chatId: string, topic: string, fromId: string, arg: string): Promise<void> {
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
-    await sayIn(chatId, topic, '🤝 the square has no claude of its own; run /handoff in a topic.')
+    await sayIn(chatId, topic, 'The square has no Claude session of its own. Run /model in a topic.')
     return
   }
-  if (!ADMIN_USER_ID) {
-    await sayIn(chatId, topic, '🤝 /handoff is disabled (TELEGRAM_TOPICS_ADMIN_USER_ID is unset).')
+  if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
+    await sayIn(chatId, topic, 'Only the operator can change provider or model routes.')
     return
   }
-  if (fromId !== ADMIN_USER_ID) {
-    await sayIn(chatId, topic, '🤝 only the operator can hand a topic off.')
-    return
-  }
-  const a = arg.trim().toLowerCase()
-  if (!a) {
-    const backend = getTopic(topic).activeBackend ?? 'claude'
-    const keyboard = new InlineKeyboard()
-      .text('🤖 opencode (GLM)', `tghandoff:opencode:${topic}`)
-      .row()
-      .text('🧑‍💻 claude', `tghandoff:claude:${topic}`)
-    await bot.api
-      .sendMessage(chatId, `🤝 This topic currently runs on ${backend}. Switch to:`, {
-        ...threadOf(topic),
-        reply_markup: keyboard,
-      })
-      .catch(() => {})
-    return
-  }
-  if (a === 'status') {
+  const value = arg.trim().toLowerCase()
+  if (value === 'status') {
     const st = getTopic(topic)
-    const backend = st.activeBackend ?? 'claude'
-    const id =
-      backend === 'claude'
-        ? `claude session ${st.claudeSessionId ?? 'none yet'}`
-        : `opencode session ${st.opencodeSessionId ?? 'minting on next spawn'}`
-    await sayIn(chatId, topic, `🤝 backend: ${backend} (${id}). Use /handoff opencode or /handoff claude.`)
+    await sayIn(chatId, topic, `Claude session: ${st.claudeSessionId ?? 'not started'}\nRoute: ${routeSummary(currentRoute(st))}`)
     return
   }
-  if (a !== 'opencode' && a !== 'claude') {
-    await sayIn(chatId, topic, '🤝 usage: /handoff [opencode|claude|status]')
+  const requestedProvider = value === 'chatgpt' || value === 'codex'
+    ? 'codex'
+    : value === 'opencode' || value === 'opencode-go'
+      ? 'opencode-go'
+      : value === 'anthropic' || value === 'claude'
+        ? 'anthropic'
+        : undefined
+  if (requestedProvider) {
+    const picker = modelPicker(topic, requestedProvider, 'manual', 0)
+    await bot.api.sendMessage(chatId, picker.text, { ...threadOf(topic), reply_markup: picker.keyboard }).catch(() => {})
     return
   }
-  const since = Date.now() - (lastHandoff.get(topic) ?? 0)
-  if (since < HANDOFF_DEBOUNCE_MS) {
-    await sayIn(chatId, topic, '🤝 a handoff just ran; wait a moment.')
-    return
-  }
-  lastHandoff.set(topic, Date.now())
-  await handoffTopic(chatId, topic, a as 'opencode' | 'claude', 'manual')
+  const route = currentRoute(getTopic(topic))
+  await sendProviderPicker(chatId, topic, 'manual', `Current route: ${routeSummary(route)}\n\nChoose a provider:`)
 }
 
-// Button taps from the bare-/handoff menu. Same gate + debounce as the typed
-// command; the prompt message is edited to the outcome so a tap cannot be
-// replayed and the thread records what was chosen.
-async function handleHandoffButton(topic: string, target: 'opencode' | 'claude', fromId: string, editPrompt: (t: string) => Promise<void>): Promise<boolean> {
-  if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) return false
-  const cur = getTopic(topic).activeBackend ?? 'claude'
-  if (cur === target) return false
-  const since = Date.now() - (lastHandoff.get(topic) ?? 0)
-  if (since < HANDOFF_DEBOUNCE_MS) return false
-  lastHandoff.set(topic, Date.now())
-  await editPrompt(`🤝 handing off to ${target}...`)
-  await handoffTopic(String(GROUP_CHAT_ID), topic, target, 'manual')
-  return true
+function capacityText(): string {
+  const lines: string[] = []
+  for (const provider of ['anthropic', 'codex', 'opencode-go'] as ProviderId[]) {
+    const capacity = capacities.get(provider)
+    if (!capacity) {
+      lines.push(`${providerLabel(provider)}: usage not observed yet`)
+      continue
+    }
+    const windows = capacity.windows.map(window => {
+      const used = window.usedPercent == null ? window.availability : `${window.usedPercent}% used`
+      return `${window.name}: ${used}${window.resetsAt ? `, resets ${formatTime(window.resetsAt)}` : ''}`
+    })
+    lines.push(`${providerLabel(provider)}: ${capacity.availability}\n  ${windows.join('\n  ')}`)
+    if (capacity.resetCredits) lines.push(`  ${capacity.resetCredits} reset credit(s) available`)
+  }
+  return `Provider usage\n\n${lines.join('\n\n')}`
+}
+
+function switchBackKeyboard(topic: string, route: TopicRoute): InlineKeyboard {
+  const model: ProviderModel = {
+    id: route.model,
+    label: modelLabel(route.model),
+    efforts: [route.effort],
+    defaultEffort: route.effort,
+  }
+  const token = modelToken({
+    topic,
+    provider: route.provider,
+    model,
+    reason: 'reset',
+    expiresAt: Date.now() + PICKER_TTL_MS,
+  })
+  return new InlineKeyboard()
+    .text(`Switch back to ${model.label}`, `tgroute:m:${token}`)
+    .row()
+    .text(`Choose ${providerLabel(route.provider)} model`, `tgroute:p:${providerCode(route.provider)}:r:${topic}`)
+    .row()
+    .text('Dismiss', 'tgroute:dismiss')
+}
+
+async function notifyProviderReset(provider: ProviderId): Promise<void> {
+  for (const [topic, st] of topics) {
+    const route = exhaustedRouteFor(st.exhaustedRoutes, provider)
+    if (!route) continue
+    await bot.api.sendMessage(
+      String(GROUP_CHAT_ID),
+      `${providerLabel(provider)} is available again. This topic switched away after its limit was reached.`,
+      { ...threadOf(topic), reply_markup: switchBackKeyboard(topic, route) },
+    ).catch(e => log(`reset notice failed for ${provider} topic ${topic}: ${e}`))
+  }
+}
+
+function scheduleCapacityReset(capacity: ProviderCapacity): void {
+  const existing = resetTimers.get(capacity.provider)
+  if (existing) clearTimeout(existing)
+  const at = nextResetAt(capacity)
+  if (!at || capacity.availability !== 'exhausted') return
+  const delay = Math.min(Math.max(1000, at - Date.now() + 1000), 2_147_000_000)
+  resetTimers.set(capacity.provider, setTimeout(() => {
+    const current = capacities.get(capacity.provider)
+    if (!current) return
+    const now = Date.now()
+    const windows = current.windows.map(window =>
+      window.resetsAt && window.resetsAt <= now
+        ? { ...window, usedPercent: 0, availability: 'available' as const }
+        : window,
+    )
+    observeCapacity(providerCapacity(capacity.provider, windows, now, current.resetCredits))
+  }, delay))
+}
+
+function observeCapacity(capacity: ProviderCapacity): void {
+  const previous = capacities.get(capacity.provider)
+  capacities.set(capacity.provider, capacity)
+  scheduleCapacityReset(capacity)
+  if (capacityTransition(previous, capacity) === 'reset') void notifyProviderReset(capacity.provider)
+}
+
+async function refreshProviderCapacity(): Promise<void> {
+  const [codex, opencode] = await Promise.allSettled([
+    readCodexSnapshot(),
+    readOpenCodeGoCapacity(OPENCODE_AUTH_FILE),
+  ])
+  if (codex.status === 'fulfilled') {
+    codexAccountModels = codex.value.models
+    catalogCache = undefined
+    observeCapacity(codex.value.capacity)
+  } else {
+    log(`Codex capacity probe failed: ${codex.reason}`)
+  }
+  if (opencode.status === 'fulfilled') observeCapacity(opencode.value)
+  else log(`OpenCode Go capacity probe failed: ${opencode.reason}`)
 }
 
 // The "/" menu: discoverable, autocompleted, and free of the "--" a phone
@@ -2057,7 +2070,10 @@ async function registerCommands(): Promise<void> {
   const commands = [
     { command: 'relaunch', description: "restart this topic's agent (same conversation, reloads MCP config)" },
     ...(ADMIN_USER_ID
-      ? [{ command: 'handoff', description: 'switch this topic between claude and opencode (shows options)' }]
+      ? [
+          { command: 'model', description: 'choose this topic\'s provider and model' },
+          { command: 'usage', description: 'show usage and reset times for every provider' },
+        ]
       : []),
     ...(SECRETS_USER_ID
       ? [
@@ -2092,9 +2108,18 @@ bot.on('message', async ctx => {
     await handleRelaunch(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
     return
   }
-  const handoffMatch = HANDOFF_RE.exec(msg.text ?? '')
-  if (handoffMatch) {
-    await handleHandoffCommand(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), handoffMatch[1] ?? '')
+  const modelMatch = MODEL_RE.exec(msg.text ?? '')
+  if (modelMatch) {
+    await handleModelCommand(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), modelMatch[1] ?? '')
+    return
+  }
+  if (USAGE_RE.test(msg.text ?? '')) {
+    if (!ADMIN_USER_ID || String(ctx.from?.id ?? '') !== ADMIN_USER_ID) {
+      await sayIn(String(ctx.chat.id), topic, 'Only the operator can inspect provider usage.')
+    } else {
+      await refreshProviderCapacity()
+      await sayIn(String(ctx.chat.id), topic, capacityText())
+    }
     return
   }
   // A reply to a guided-flow prompt (name or value) belongs to the flow and is
@@ -2224,31 +2249,146 @@ bot.on('callback_query:data', async ctx => {
   const data = ctx.callbackQuery.data ?? ''
   const m = /^tgperm:(allow|deny):(.+)$/.exec(data)
   if (!m) {
-    // The bare-/handoff menu's buttons.
-    const h = /^tghandoff:(opencode|claude):(.+)$/.exec(data)
-    if (h) {
-      const cbChatId = ctx.callbackQuery.message?.chat.id
-      if (String(cbChatId) !== String(GROUP_CHAT_ID)) {
-        await ctx.answerCallbackQuery({ text: 'Not authorized.' }).catch(() => {})
-        return
-      }
-      const fromId = String(ctx.callbackQuery.from.id)
-      const topic = h[2]
-      const cur = getTopic(topic).activeBackend ?? 'claude'
-      if (cur === h[1] as 'opencode' | 'claude') {
-        await ctx.answerCallbackQuery({ text: `Already on ${cur}.` }).catch(() => {})
-        return
-      }
-      const msg = ctx.callbackQuery.message
-      const editPrompt = async (t: string) => {
-        if (msg && 'text' in msg && msg.text) await ctx.editMessageText(t).catch(() => {})
-      }
-      const ran = await handleHandoffButton(topic, h[1] as 'opencode' | 'claude', fromId, editPrompt)
-      await ctx
-        .answerCallbackQuery({ text: ran ? `Handed off to ${h[1]}.` : 'Only the operator can hand off.' })
-        .catch(() => {})
+    const cbChatId = ctx.callbackQuery.message?.chat.id
+    const fromId = String(ctx.callbackQuery.from.id)
+    if (String(cbChatId) !== String(GROUP_CHAT_ID) || !ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
+      await ctx.answerCallbackQuery({ text: 'Not authorized.' }).catch(() => {})
       return
     }
+
+    const providerPick = /^tgroute:p:([aco]):([mqr]):(.+)$/.exec(data)
+    const pagePick = /^tgroute:models:([aco]):([mqr]):([^:]+):(\d+)$/.exec(data)
+    if (providerPick || pagePick) {
+      const match = providerPick ?? pagePick!
+      const provider = providerFromCode(match[1])
+      const reason = reasonFromCode(match[2])
+      const topic = match[3]
+      const page = pagePick ? Number(match[4]) : 0
+      if (!provider || !reason) {
+        await ctx.answerCallbackQuery({ text: 'This picker is no longer valid.' }).catch(() => {})
+        return
+      }
+      if (capacities.get(provider)?.availability === 'exhausted') {
+        await ctx.answerCallbackQuery({
+          text: `${providerLabel(provider)} is still at its usage limit. Use /usage for the reset time.`,
+          show_alert: true,
+        }).catch(() => {})
+        return
+      }
+      const picker = modelPicker(topic, provider, reason, page)
+      await ctx.editMessageText(picker.text, { reply_markup: picker.keyboard }).catch(() => {})
+      await ctx.answerCallbackQuery().catch(() => {})
+      return
+    }
+
+    const back = /^tgroute:providers:([mqr]):(.+)$/.exec(data)
+    if (back) {
+      const reason = reasonFromCode(back[1])
+      const topic = back[2]
+      if (!reason) return
+      const st = getTopic(topic)
+      const exclude = reason === 'quota' ? st.exhaustedRoutes.at(-1)?.provider : undefined
+      await ctx.editMessageText('Choose a provider:', {
+        reply_markup: providerKeyboard(topic, reason, exclude),
+      }).catch(() => {})
+      await ctx.answerCallbackQuery().catch(() => {})
+      return
+    }
+
+    const modelPick = /^tgroute:m:([a-f0-9]+)$/.exec(data)
+    if (modelPick) {
+      pruneModelSelections()
+      const selection = modelSelections.get(modelPick[1])
+      if (!selection) {
+        await ctx.answerCallbackQuery({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
+        return
+      }
+      if (capacities.get(selection.provider)?.availability === 'exhausted') {
+        await ctx.answerCallbackQuery({
+          text: `${providerLabel(selection.provider)} is still at its usage limit.`,
+          show_alert: true,
+        }).catch(() => {})
+        return
+      }
+      if (selection.model.efforts.length > 1) {
+        const keyboard = new InlineKeyboard()
+        for (const effort of selection.model.efforts) {
+          keyboard.text(effort, `tgroute:e:${modelPick[1]}:${effort}`).row()
+        }
+        await ctx.editMessageText(`${selection.model.label}: choose effort`, { reply_markup: keyboard }).catch(() => {})
+        await ctx.answerCallbackQuery().catch(() => {})
+        return
+      }
+      const route = topicRoute({
+        provider: selection.provider,
+        model: selection.model.id,
+        effort: selection.model.defaultEffort,
+      })
+      const result = requestRouteChange(selection.topic, route, selection.reason)
+      modelSelections.delete(modelPick[1])
+      await ctx.editMessageText(
+        result === 'queued'
+          ? `Queued ${routeSummary(route)}. It will switch when the current Claude turn finishes.`
+          : result === 'unchanged'
+            ? `Already using ${routeSummary(route)}.`
+            : `Now using ${routeSummary(route)} in the same Claude session.`,
+      ).catch(() => {})
+      await ctx.answerCallbackQuery({ text: result === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
+      return
+    }
+
+    const effortPick = /^tgroute:e:([a-f0-9]+):(low|medium|high|xhigh|max)$/.exec(data)
+    if (effortPick) {
+      pruneModelSelections()
+      const selection = modelSelections.get(effortPick[1])
+      const effort = effortPick[2] as Effort
+      if (!selection || !selection.model.efforts.includes(effort)) {
+        await ctx.answerCallbackQuery({ text: 'This effort picker expired.' }).catch(() => {})
+        return
+      }
+      if (capacities.get(selection.provider)?.availability === 'exhausted') {
+        await ctx.answerCallbackQuery({
+          text: `${providerLabel(selection.provider)} is still at its usage limit.`,
+          show_alert: true,
+        }).catch(() => {})
+        return
+      }
+      const since = Date.now() - (lastRouteChange.get(selection.topic) ?? 0)
+      if (since < ROUTE_DEBOUNCE_MS) {
+        await ctx.answerCallbackQuery({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
+        return
+      }
+      lastRouteChange.set(selection.topic, Date.now())
+      const route = topicRoute({ provider: selection.provider, model: selection.model.id, effort })
+      const result = requestRouteChange(selection.topic, route, selection.reason)
+      modelSelections.delete(effortPick[1])
+      await ctx.editMessageText(
+        result === 'queued'
+          ? `Queued ${routeSummary(route)}. It will switch when the current Claude turn finishes.`
+          : result === 'unchanged'
+            ? `Already using ${routeSummary(route)}.`
+            : `Now using ${routeSummary(route)} in the same Claude session.`,
+      ).catch(() => {})
+      await ctx.answerCallbackQuery({ text: result === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
+      return
+    }
+
+    const usagePick = /^tgroute:usage:(.+)$/.exec(data)
+    if (usagePick) {
+      await refreshProviderCapacity()
+      await ctx.editMessageText(capacityText(), {
+        reply_markup: new InlineKeyboard().text('Back', `tgroute:providers:m:${usagePick[1]}`),
+      }).catch(() => {})
+      await ctx.answerCallbackQuery().catch(() => {})
+      return
+    }
+
+    if (data === 'tgroute:dismiss') {
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {})
+      await ctx.answerCallbackQuery({ text: 'Dismissed.' }).catch(() => {})
+      return
+    }
+
     await ctx.answerCallbackQuery().catch(() => {})
     return
   }
@@ -2297,6 +2437,36 @@ function threadIdForTopic(topic: string): number | undefined {
 function handlePoll(url: URL): Promise<Response> {
   const topic = url.searchParams.get('topic') ?? 'general'
   const st = getTopic(topic)
+  // Claude Code rejects Channel notifications under custom provider/API
+  // billing. A stale MCP from an older launch may still call /poll, so never
+  // let it drain a proxied route's queue. The pane pump owns that ingress.
+  if (inboundModeForRoute(currentRoute(st)) === 'pane') {
+    schedulePanePump(topic)
+    return Promise.resolve(new Response(null, { status: 204 }))
+  }
+  // A polling Claude has completed its previous turn, so this is the safe
+  // boundary for a route change that was requested while it was busy. Return
+  // 204 to the old process after restarting; the resumed process polls again.
+  if (st.pendingRoute) {
+    const pending = st.pendingRoute
+    applyRouteNow(topic, pending.route, pending.reason)
+    return Promise.resolve(new Response(null, { status: 204 }))
+  }
+  if (st.pendingResumeNotice) {
+    const content = st.pendingResumeNotice
+    st.pendingResumeNotice = undefined
+    saveRegistry()
+    return Promise.resolve(json({
+      content,
+      meta: {
+        chat_id: String(GROUP_CHAT_ID),
+        user: 'telegram-topics-proxy',
+        ts: new Date().toISOString(),
+        ...(topic !== 'general' ? { message_thread_id: topic } : {}),
+        route_switch: '1',
+      },
+    }))
+  }
   const existing = st.queue.shift()
   if (existing) return Promise.resolve(json(existing))
   return new Promise<Response>(resolve => {
@@ -2312,45 +2482,6 @@ function handlePoll(url: URL): Promise<Response> {
     }, 25000)
     st.waiters.push(wrapped)
   })
-}
-
-// POST /oc-session {topic, session_id} - the TUI plugin registers the session
-// id it adopted, so every later spawn (and proxy restart) resumes the SAME
-// conversation via `opencode run -s`. An EMPTY session_id clears it: the
-// caller reports that an id is stale, and the next spawn creates fresh.
-async function handleOcSession(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  const topic = String(b.topic ?? '')
-  const sessionId = String(b.session_id ?? '').trim()
-  if (!topic) return new Response('topic required', { status: 400 })
-  const st = getTopic(topic)
-  st.opencodeSessionId = sessionId || undefined
-  saveRegistry()
-  if (!sessionId) {
-    log(`opencode session cleared for topic ${topic} "${st.name}"; next spawn mints fresh`)
-    return json({ ok: true, cleared: true })
-  }
-  log(`opencode session registered for topic ${topic} "${st.name}": ${sessionId}`)
-  return json({ ok: true })
-}
-
-// POST /oc-seed-done {topic} - the TUI plugin consumed the pending handoff seed
-// (its first run used it). Clears the in-memory pendingSeed so later spawns
-// stop re-delivering it.
-async function handleOcSeedDone(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  const topic = String(b.topic ?? '')
-  if (!topic) return new Response('topic required', { status: 400 })
-  getTopic(topic).pendingSeed = undefined
-  return json({ ok: true })
-}
-
-// GET /last-reply?topic=T - the marker the opencode plugin's stranded-reply
-// backstop compares across a turn: if the topic's last outbound reply did not
-// move while the turn produced text, the plugin ships the text itself.
-function handleLastReply(url: URL): Response {
-  const topic = url.searchParams.get('topic') ?? 'general'
-  return json({ last_reply_at: getTopic(topic).lastReplyAt ?? null })
 }
 
 async function handleSend(req: Request): Promise<Response> {
@@ -2396,9 +2527,6 @@ async function handleSend(req: Request): Promise<Response> {
     ids.push(sent.message_id)
   }
 
-  // Reply marker for the opencode plugin's stranded-reply backstop: it ships
-  // a run's text itself only when this marker did not move across the run.
-  getTopic(topic).lastReplyAt = Date.now()
   return json({ message_ids: ids })
 }
 
@@ -2511,6 +2639,18 @@ writeFileSync(PID_FILE, String(process.pid))
 
 loadAndReconcileRegistry()
 loadConvs()
+for (const [topic, st] of topics) {
+  if (
+    inboundModeForRoute(currentRoute(st)) === 'pane' &&
+    (st.queue.length > 0 || !!st.pendingResumeNotice || !!st.pendingRoute)
+  ) {
+    schedulePanePump(topic)
+  }
+}
+void refreshProviderCapacity()
+if (Number.isFinite(CAPACITY_POLL_MS) && CAPACITY_POLL_MS >= 60_000) {
+  setInterval(() => void refreshProviderCapacity(), CAPACITY_POLL_MS)
+}
 
 // polling liveness for /health. Set on each (re)start of the poll, cleared if
 // polling stops. A monitor can tell "process up but deaf" from this alone.
@@ -2556,10 +2696,8 @@ async function serveWithRetry(): Promise<void> {
                 polling_since: pollingSince != null ? new Date(pollingSince).toISOString() : null,
               })
             }
-            if (req.method === 'POST' && url.pathname === '/oc-session') return await handleOcSession(req)
-            if (req.method === 'POST' && url.pathname === '/oc-seed-done') return await handleOcSeedDone(req)
-            if (req.method === 'GET' && url.pathname === '/last-reply') return handleLastReply(url)
             if (req.method === 'POST' && url.pathname === '/rate-limit') return await handleRateLimit(req)
+            if (req.method === 'POST' && url.pathname === '/capacity') return await handleCapacity(req)
             if (req.method === 'POST' && url.pathname === '/turn-failed') return await handleTurnFailed(req)
             if (req.method === 'GET' && url.pathname === '/topics') return handleTopics()
             if (req.method === 'POST' && url.pathname === '/topic/create') return await handleTopicCreate(req)
@@ -2672,30 +2810,8 @@ function nightlyRestart(): void {
       log(`nightly restart: failed to kill topic ${topic} "${st.name}"`)
     }
   }
-  // Clear every usage-limit failover: quotas reset on their own schedule, so
-  // the nightly restart is when topics get to try their primary model again.
-  // (A topic still over its limit simply fails over once more.)
-  let reverted = 0
-  for (const [topic, st] of topics) {
-    if (!st.fallbackModel) continue
-    log(`nightly restart: topic ${topic} "${st.name}" reverting from fallback ${st.fallbackModel} to ${MODEL || '(account default)'}`)
-    st.fallbackModel = undefined
-    reverted++
-  }
-  // Quota-degraded opencode topics also get to try claude again at the nightly
-  // restart (manual handoffs stay until manually reversed). The oc session id
-  // persists, so the conversation continues if claude is still limited and
-  // auto-handoff degrades the topic again.
-  let returned = 0
-  for (const [topic, st] of topics) {
-    if (st.activeBackend !== 'opencode' || st.handoffReason !== 'quota') continue
-    st.activeBackend = undefined
-    st.handoffReason = undefined
-    returned++
-    log(`nightly restart: topic ${topic} "${st.name}" returning from opencode to claude`)
-  }
   saveRegistry()
-  log(`nightly restart complete: ${killed} topic session(s) killed, ${reverted} model failover(s) reverted, ${returned} opencode handoff(s) returned`)
+  log(`nightly restart complete: ${killed} topic session(s) killed; provider routes preserved`)
 }
 
 const NIGHTLY_HOUR_RAW = process.env.TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR ?? ''
