@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isIdleEvent, renderChannel, textFromParts } from './telegram-channel'
+import { isIdleEvent, renderChannel, textFromParts } from './channel-core'
 
 describe('opencode event adapter', () => {
   test('recognizes session.idle with the SDK event shape', () => {
