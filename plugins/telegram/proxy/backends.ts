@@ -192,6 +192,10 @@ export const opencodeBackend: AgentBackend = {
       // The registry session id: the launcher opens the TUI with `--session`
       // when present; empty = fresh topic, the plugin adopts the new session.
       TG_OC_SESSION_ID: spec.opencodeSessionId,
+      // The CLI flag overrides the model stored in a resumed session. The
+      // variant comes from the global agent config for the interactive TUI.
+      TG_OC_MODEL: spec.opencodeModel,
+      TG_OC_VARIANT: spec.opencodeVariant,
       // Pane-mode gates: OUTBOUND_ONLY puts the injected telegram MCP into
       // outbound-only mode (the plugin owns /poll); CHANNEL activates the
       // telegram-channel plugin in this opencode instance and nothing else.
