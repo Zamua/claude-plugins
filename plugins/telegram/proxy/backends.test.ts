@@ -92,8 +92,9 @@ describe('opencodeBackend.spawnEnv', () => {
     expect(mint.TG_OC_SESSION_ID).toBe('')
     expect(mint.TG_OC_SEED).toBe('SEED TEXT')
     expect(mint.TG_OC_BIN).toBe('/etc/profiles/per-user/zamua/bin/opencode')
-    expect(mint.TG_OC_MODEL).toBe('opencode-go/glm-5.3-flash')
-    expect(mint.TG_OC_VARIANT).toBe('')
+    // Pane-mode gates: the plugin activates, the MCP stays outbound-only.
+    expect(mint.TELEGRAM_CHANNEL).toBe('1')
+    expect(mint.TELEGRAM_OUTBOUND_ONLY).toBe('1')
     expect(mint.TG_SESSION).toBe('oc-hostthis-34')
     // Shared vars match the claude backend's shape exactly.
     expect(mint.TG_MUX).toBe('herdr')
@@ -108,10 +109,6 @@ describe('opencodeBackend.spawnEnv', () => {
     // No seed pending: both are empty.
     expect(opencodeBackend.spawnEnv(spec()).TG_OC_SEED).toBe('')
     expect(opencodeBackend.spawnEnv(spec({ opencodeSessionId: 'ses_x' })).TG_OC_SEED).toBe('')
-  })
-
-  test('variant passes through when set', () => {
-    expect(opencodeBackend.spawnEnv(spec({ opencodeVariant: 'high' })).TG_OC_VARIANT).toBe('high')
   })
 })
 
