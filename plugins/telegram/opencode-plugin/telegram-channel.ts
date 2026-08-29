@@ -21,6 +21,8 @@
  *             move, the latest assistant text is sent through /send.
  */
 
+import { isIdleEvent, renderChannel, textFromParts } from './channel-core'
+
 const TOPIC = process.env.TELEGRAM_TOPIC_ID ?? ''
 const PROXY = (process.env.TELEGRAM_PROXY_URL ?? 'http://localhost:8790').replace(/\/+$/, '')
 const BOOT_SESSION = (process.env.TG_OC_SESSION_ID ?? '').trim()
@@ -69,34 +71,6 @@ async function lastReplyMarker(): Promise<string> {
   } catch {
     return 'unknown'
   }
-}
-
-// The same shape a Claude topic receives, so shared channel instructions apply
-// without a second message format.
-export function renderChannel(content: string, meta: Record<string, string>): string {
-  const attrs = Object.entries(meta)
-    .map(([k, v]) => ` ${k}="${String(v).replace(/"/g, '&quot;').replace(/[\r\n]+/g, ' ')}"`)
-    .join('')
-  return `<channel source="plugin:telegram:telegram"${attrs}>\n${content}\n</channel>`
-}
-
-export function isIdleEvent(event: any, sessionId: string): boolean {
-  if (event?.type === 'session.idle') {
-    return event.properties?.sessionID === sessionId
-  }
-  return (
-    event?.type === 'session.status' &&
-    event.properties?.sessionID === sessionId &&
-    event.properties?.status?.type === 'idle'
-  )
-}
-
-export function textFromParts(parts: any[]): string {
-  return parts
-    .filter((p: any) => p?.type === 'text' && typeof p.text === 'string')
-    .map((p: any) => p.text)
-    .join('\n')
-    .trim()
 }
 
 async function latestAssistantText(client: any, sessionId: string, parentId: string): Promise<string> {
