@@ -2,29 +2,23 @@
  * telegram-channel: the opencode-side counterpart of the telegram MCP's
  * inbound loop.
  *
- * Loaded ONLY in topic panes (env-gated: TELEGRAM_CHANNEL=1 +
- * TELEGRAM_TOPIC_ID, both set by the launcher for opencode backends), so
- * casual opencode sessions never poll. Runs inside the TUI's own opencode
- * server process and delivers inbound Telegram messages by submitting them
- * INTO the session the attached TUI is displaying, so the pane and the
- * Telegram thread stay the same conversation:
+ * Loaded only in topic panes (TELEGRAM_CHANNEL=1 plus a topic id), so normal
+ * opencode sessions never poll. It runs inside the TUI's opencode instance:
+ * the TUI remains the persistent, herdr-recognized session while this plugin
+ * submits Telegram messages to that same session.
  *
- *   SESSION   the launcher opens the TUI with `--session <registry id>` when
- *             one exists; a fresh topic boots a new session and the plugin
- *             adopts it (latest session of this instance) and registers it
- *             via POST /oc-session for the proxy's registry.
- *   SEED      a pending handoff delta or startup notice (TG_OC_SEED) is the
- *             FIRST prompt of the session, then acked via POST /oc-seed-done.
- *   INBOUND   long-poll GET {PROXY}/poll?topic={TOPIC} (same contract as
- *             server.ts), render the SAME <channel> block a claude topic
- *             gets, and `client.session.prompt` it. Prompts serialize per
- *             session, matching the one-turn-at-a-time claude behavior.
- *   OUTBOUND  the injected telegram MCP (outbound-only) provides reply/react/
- *             edit/download to the agent; env it inherits carries topic
- *             identity (spike-verified).
- *   BACKSTOP  opencode has no Stop hook: around each injected turn, compare
- *             GET /last-reply markers; if the turn produced text but no tool
- *             ran and the marker did not move, POST the text to /send.
+ *   SESSION   the launcher opens the registered session with --session; a
+ *             fresh topic adopts the TUI instance's newest session.
+ *   READY     initialization waits for the session status to become idle.
+ *   SEED      a handoff delta or startup notice is appended with noReply and
+ *             acknowledged through /oc-seed-done.
+ *   INBOUND   /poll messages become the same <channel> blocks Claude receives,
+ *             submitted with promptAsync one at a time.
+ *   OUTBOUND  the injected telegram MCP supplies reply/react/edit/download;
+ *             it is outbound-only because this plugin owns /poll.
+ *   BACKSTOP  session.idle ends an injected turn. tool.execute.before records
+ *             a telegram_reply call; if none fired and the marker did not
+ *             move, the latest assistant text is sent through /send.
  */
 
 const TOPIC = process.env.TELEGRAM_TOPIC_ID ?? ''
@@ -33,14 +27,15 @@ const BOOT_SESSION = (process.env.TG_OC_SESSION_ID ?? '').trim()
 const SEED = process.env.TG_OC_SEED ?? ''
 
 const POLL_TIMEOUT_MS = 30_000
-// Boot grace, the same lesson as server.ts's FIRST_POLL_DELAY_MS: a prompt
-// injected while the TUI is still loading the session (a big transcript takes
-// seconds) is silently never processed - measured: injected at ~300ms post-boot
-// it vanishes, at ~8s it runs. Only the first poll waits; warm ones are fine.
-const BOOT_DELAY_MS = Number(process.env.TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS ?? 6000)
+const SESSION_READY_TRIES = 60
+const SESSION_READY_DELAY_MS = 500
 
 function log(m: string): void {
   process.stderr.write(`${new Date().toISOString()} telegram-channel [${TOPIC}]: ${m}\n`)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 async function proxyFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -60,158 +55,248 @@ async function postWithRetry(path: string, body: unknown, tries: number): Promis
     } catch (e) {
       log(`${path} failed (attempt ${attempt}/${tries}): ${e}`)
     }
-    if (attempt < tries) await new Promise(r => setTimeout(r, 2000 * attempt))
+    if (attempt < tries) await sleep(2000 * attempt)
   }
   return false
 }
 
-// ---- channel block -----------------------------------------------------------
-// The SAME shape a claude topic receives, so the shared CLAUDE.md discipline
-// and the MCP instructions apply verbatim.
-
-function escAttr(s: string): string {
-  return s.replace(/"/g, '&quot;').replace(/[\r\n]+/g, ' ')
+async function lastReplyMarker(): Promise<string> {
+  try {
+    const res = await proxyFetch(`/last-reply?topic=${encodeURIComponent(TOPIC)}`)
+    if (!res.ok) return 'unknown'
+    const d = (await res.json()) as { last_reply_at?: number | null }
+    return String(d.last_reply_at ?? '')
+  } catch {
+    return 'unknown'
+  }
 }
 
-function renderChannel(content: string, meta: Record<string, string>): string {
+// The same shape a Claude topic receives, so shared channel instructions apply
+// without a second message format.
+export function renderChannel(content: string, meta: Record<string, string>): string {
   const attrs = Object.entries(meta)
-    .map(([k, v]) => ` ${k}="${escAttr(String(v))}"`)
+    .map(([k, v]) => ` ${k}="${String(v).replace(/"/g, '&quot;').replace(/[\r\n]+/g, ' ')}"`)
     .join('')
   return `<channel source="plugin:telegram:telegram"${attrs}>\n${content}\n</channel>`
 }
 
+export function isIdleEvent(event: any, sessionId: string): boolean {
+  if (event?.type === 'session.idle') {
+    return event.properties?.sessionID === sessionId
+  }
+  return (
+    event?.type === 'session.status' &&
+    event.properties?.sessionID === sessionId &&
+    event.properties?.status?.type === 'idle'
+  )
+}
+
+export function textFromParts(parts: any[]): string {
+  return parts
+    .filter((p: any) => p?.type === 'text' && typeof p.text === 'string')
+    .map((p: any) => p.text)
+    .join('\n')
+    .trim()
+}
+
+async function latestAssistantText(client: any, sessionId: string, parentId: string): Promise<string> {
+  const result = await client.session.messages({
+    path: { id: sessionId },
+    query: { limit: 20 },
+  })
+  const assistant = (result?.data ?? []).find(
+    (m: any) => m?.info?.role === 'assistant' && m.info.parentID === parentId,
+  )
+  return textFromParts(assistant?.parts ?? [])
+}
+
 export default async ({ client }: { client: any }) => {
-  // Gate: topic panes only (the launcher exports both for opencode backends).
   if (process.env.TELEGRAM_CHANNEL !== '1' || !TOPIC) return {}
 
-  // Resolve the session this TUI displays. A resumed spawn boots with
-  // --session <registry id>; a fresh topic's TUI creates one at boot, so wait
-  // for the instance's first session to appear.
   let sessionId = BOOT_SESSION
-  if (!sessionId) {
-    for (let attempt = 1; attempt <= 15 && !sessionId; attempt++) {
-      try {
-        const res = await client.session.list()
-        const sessions: Array<any> = res.data ?? []
-        const latest = sessions
-          .filter((s: any) => s?.id)
-          .sort((a: any, b: any) => (b?.time?.created ?? 0) - (a?.time?.created ?? 0))[0]
-        if (latest) sessionId = latest.id
-      } catch (e) {
-        log(`session list failed (attempt ${attempt}): ${e}`)
+  let activeTurn: {
+    messageId: string
+    marker: string
+    chatId: string
+    replyFired: boolean
+    started: boolean
+  } | null = null
+  let turnDone: (() => void) | null = null
+
+  async function resolveSession(): Promise<boolean> {
+    if (!sessionId) {
+      for (let attempt = 1; attempt <= 30 && !sessionId; attempt++) {
+        try {
+          const result = await client.session.list()
+          const sessions: any[] = result?.data ?? []
+          const latest = sessions
+            .filter(s => s?.id)
+            .sort((a, b) => (b?.time?.created ?? 0) - (a?.time?.created ?? 0))[0]
+          if (latest) sessionId = latest.id
+        } catch (e) {
+          log(`session list failed (attempt ${attempt}): ${e}`)
+        }
+        if (!sessionId) await sleep(1000)
       }
-      if (!sessionId) await new Promise(r => setTimeout(r, 1000))
     }
     if (!sessionId) {
-      log('no session appeared; telegram delivery disabled for this instance')
-      return {}
+      log('no session appeared; Telegram delivery disabled for this instance')
+      return false
     }
+
+    await postWithRetry('/oc-session', { topic: TOPIC, session_id: sessionId }, 3)
+    for (let attempt = 1; attempt <= SESSION_READY_TRIES; attempt++) {
+      try {
+        await client.session.get({ path: { id: sessionId } })
+        const result = await client.session.status()
+        if (result?.data?.[sessionId]?.type === 'idle') return true
+      } catch (e) {
+        if (attempt === SESSION_READY_TRIES) log(`session readiness failed: ${e}`)
+      }
+      await sleep(SESSION_READY_DELAY_MS)
+    }
+    log(`session ${sessionId} never became idle; Telegram delivery disabled`)
+    return false
   }
-  log(`serving topic "${TOPIC}" via proxy ${PROXY} (session ${sessionId})`)
-  await postWithRetry('/oc-session', { topic: TOPIC, session_id: sessionId }, 3)
 
-  // Let the TUI finish loading the session before the first prompt (see
-  // BOOT_DELAY_MS; the seed counts as the first prompt).
-  if (BOOT_DELAY_MS > 0) await new Promise(r => setTimeout(r, BOOT_DELAY_MS))
-
-  // The seed (handoff delta or startup notice) is the session's first prompt;
-  // ack it so the proxy stops re-delivering on later respawns.
-  if (SEED) {
+  async function deliverSeed(): Promise<void> {
+    if (!SEED) return
     try {
-      await client.session.prompt({
+      await client.session.promptAsync({
         path: { id: sessionId },
-        body: { parts: [{ type: 'text', text: SEED }] },
+        body: { noReply: true, parts: [{ type: 'text', text: SEED }] },
       })
       log('seed delivered')
     } catch (e) {
-      log(`seed run failed: ${e}`)
+      log(`seed delivery failed: ${e}`)
     }
     await postWithRetry('/oc-seed-done', { topic: TOPIC }, 3)
   }
 
-  async function lastReplyMarker(): Promise<string> {
-    try {
-      const res = await proxyFetch(`/last-reply?topic=${encodeURIComponent(TOPIC)}`)
-      if (!res.ok) return 'unknown'
-      const d = (await res.json()) as { last_reply_at?: number | null }
-      return String(d.last_reply_at ?? '')
-    } catch {
-      return 'unknown'
+  async function runTurn(prompt: string, chatId: string): Promise<void> {
+    const messageId = `msg_${crypto.randomUUID().replace(/-/g, '')}`
+    activeTurn = {
+      messageId,
+      marker: await lastReplyMarker(),
+      chatId,
+      replyFired: false,
+      started: false,
     }
+    const completed = new Promise<void>(resolve => {
+      turnDone = resolve
+    })
+    try {
+      await client.session.promptAsync({
+        path: { id: sessionId },
+        body: { messageID: messageId, parts: [{ type: 'text', text: prompt }] },
+      })
+    } catch (e) {
+      activeTurn = null
+      const resolve = turnDone
+      turnDone = null
+      resolve?.()
+      throw e
+    }
+    await completed
   }
 
-  // Inbound loop: one injected turn at a time (client.session.prompt awaits
-  // the assistant reply, so the queue drains serially).
-  let backoff = 500
-  while (true) {
-    let msg: { content: string; meta: Record<string, string> } | null = null
-    try {
-      const res = await proxyFetch(`/poll?topic=${encodeURIComponent(TOPIC)}`)
-      if (res.status === 204) {
-        backoff = 500
-        continue
-      }
-      if (!res.ok) throw new Error(`poll HTTP ${res.status}`)
-      msg = (await res.json()) as any
-      backoff = 500
-    } catch (err) {
-      if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-        backoff = 500 // held too long / no data - re-poll immediately
-        continue
-      }
-      log(`poll error: ${err}, retrying in ${backoff}ms`)
-      await new Promise(r => setTimeout(r, backoff))
-      backoff = Math.min(backoff * 2, 15_000)
-      continue
-    }
-    if (!msg) continue
+  async function backstop(turn: NonNullable<typeof activeTurn>): Promise<void> {
+    if (turn.replyFired || turn.marker === 'unknown') return
+    await sleep(1500)
+    const after = await lastReplyMarker()
+    if (after !== turn.marker) return
+    const text = await latestAssistantText(client, sessionId, turn.messageId)
+    if (!text) return
+    log('no reply tool call observed; shipping the turn text via /send')
+    await postWithRetry('/send', { topic: TOPIC, chat_id: turn.chatId, text }, 2)
+  }
 
-    const marker = await lastReplyMarker()
-    // Channel discipline, restated per message (the claude side backstops
-    // with a Stop hook; this is the only net here).
-    const prompt =
-      renderChannel(msg.content, msg.meta ?? {}) +
-      '\n\n(Inbound Telegram message above. Answer the user through the telegram reply tool with ' +
-      'the chat_id from the channel block - text you print here never reaches them.)'
-    log(`turn for message ${msg.meta?.message_id ?? '?'} (${prompt.length} chars)`)
-    let text = ''
-    let usedTool = false
-    try {
-      const out = await client.session.prompt({
-        path: { id: sessionId },
-        body: { parts: [{ type: 'text', text: prompt }] },
-      })
-      const parts: Array<any> = out?.data?.parts ?? []
-      for (const p of parts) {
-        if (p?.type === 'tool') usedTool = true
-        if (p?.type === 'text' && typeof p.text === 'string') text += (text ? '\n' : '') + p.text
+  async function pollLoop(): Promise<void> {
+    let backoff = 500
+    while (true) {
+      let msg: { content: string; meta: Record<string, string> } | null = null
+      try {
+        const res = await proxyFetch(`/poll?topic=${encodeURIComponent(TOPIC)}`)
+        if (res.status === 204) {
+          backoff = 500
+          continue
+        }
+        if (!res.ok) throw new Error(`poll HTTP ${res.status}`)
+        msg = (await res.json()) as any
+        backoff = 500
+      } catch (err) {
+        if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+          backoff = 500
+          continue
+        }
+        log(`poll error: ${err}, retrying in ${backoff}ms`)
+        await sleep(backoff)
+        backoff = Math.min(backoff * 2, 15_000)
+        continue
       }
-    } catch (e) {
-      log(`turn failed: ${e}`)
+      if (!msg) continue
       const chatId = msg.meta?.chat_id
-      if (chatId) {
+      if (!chatId) {
+        log('dropping inbound message without chat_id')
+        continue
+      }
+      const prompt =
+        renderChannel(msg.content, msg.meta ?? {}) +
+        '\n\n(Inbound Telegram message above. Answer the user through the telegram reply tool with ' +
+        'the chat_id from the channel block - text you print here never reaches them.)'
+      log(`turn for message ${msg.meta?.message_id ?? '?'} (${prompt.length} chars)`)
+      try {
+        await runTurn(prompt, chatId)
+      } catch (e) {
+        log(`turn failed: ${e}`)
         await postWithRetry('/send', {
           topic: TOPIC,
           chat_id: chatId,
           text: 'the agent hit an error running that message and it may be unanswered - resend it or say "continue".',
         }, 2)
       }
-      continue
-    }
-    // Backstop: text produced, no reply tool fired, marker unmoved (re-checked
-    // after a short grace for an MCP reply still in flight; unknown markers
-    // never fire - a proxy blip must not cause a duplicate).
-    if (text && !usedTool && marker !== 'unknown' && msg.meta?.chat_id) {
-      await new Promise(r => setTimeout(r, 2000))
-      const after = await lastReplyMarker()
-      if (after === marker) {
-        log('no reply tool call observed; shipping the turn text via /send')
-        await postWithRetry('/send', {
-          topic: TOPIC,
-          chat_id: msg.meta.chat_id,
-          text,
-        }, 2)
-      }
     }
   }
+
+  const hooks = {
+    async event({ event }: { event: any }) {
+      if (
+        activeTurn &&
+        event?.type === 'message.updated' &&
+        event.properties?.info?.id === activeTurn.messageId
+      ) {
+        activeTurn.started = true
+        return
+      }
+      if (!activeTurn || !isIdleEvent(event, sessionId) || !activeTurn.started) return
+      const turn = activeTurn
+      activeTurn = null
+      try {
+        await backstop(turn)
+      } catch (e) {
+        log(`backstop failed: ${e}`)
+      } finally {
+        const resolve = turnDone
+        turnDone = null
+        resolve?.()
+      }
+    },
+
+    async 'tool.execute.before'({ tool, sessionID }: { tool: string; sessionID: string }) {
+      if (activeTurn && sessionID === sessionId && tool === 'telegram_reply') {
+        activeTurn.replyFired = true
+      }
+    },
+  }
+
+  // Return hooks before any network or session work. Initialization can then
+  // safely submit a seed and receive the idle event that completes a turn.
+  void (async () => {
+    if (!(await resolveSession())) return
+    await deliverSeed()
+    log(`serving topic "${TOPIC}" via proxy ${PROXY} (session ${sessionId})`)
+    await pollLoop()
+  })().catch(e => log(`plugin stopped: ${e}`))
+
+  return hooks
 }

@@ -30,7 +30,7 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 : "${TELEGRAM_TOPIC_ID:?TELEGRAM_TOPIC_ID required}"
 : "${TELEGRAM_PROXY_URL:?TELEGRAM_PROXY_URL required}"
 # TG_BACKEND: which HARNESS runs in the pane (default claude, the original
-# topic session; opencode = scripts/opencode-driver.ts driving `opencode run`).
+# topic session; opencode = the interactive opencode TUI).
 # Independent axis from TG_MUX: the mux mechanics (workspace, env propagation,
 # dialog watcher) are shared, the pane command is per backend. Defaulted BEFORE
 # the per-backend gates below reference it (set -u).
@@ -57,7 +57,7 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 # settings, hooks, session id) is meaningless to an opencode pane, so the
 # required-var gate is per backend.
 
-# -- opencode backend: only the driver + its state.
+# -- opencode backend: only the TUI + plugin state.
 if [ "$TG_BACKEND" = "opencode" ]; then
   if [ -z "$TG_OC_BIN" ]; then
     echo "telegram-topics: TG_OC_BIN required (absolute opencode path resolved by the proxy)" >&2
@@ -183,9 +183,8 @@ CLAUDE_PANE_CMD='export PATH="$TG_PATH"; \
    exec "$TG_CLAUDE_BIN" "$@" --session-id "$TG_CLAUDE_SESSION_ID" "$TG_KICKOFF"; \
  fi'
 
-# opencode pane: the driver IS the process. It polls the proxy, feeds each
-# message to `opencode run` (one session per topic, minted on first run), and
-# runs for the pane's whole life - exec so the pane dies with it.
+# opencode pane: the TUI IS the process. The injected plugin polls the proxy
+# and submits turns into this session; exec so the pane dies with the TUI.
 # opencode pane: the TUI itself, bound to the topic's session when one exists
 # (full history on screen; the telegram-channel plugin injects inbound turns
 # and the user can drop in and type directly). exec so the pane dies with it.
