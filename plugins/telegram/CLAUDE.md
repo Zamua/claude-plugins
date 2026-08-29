@@ -261,7 +261,7 @@ not end-to-end) and the client's own message cache until the delete lands.
 
 ## Relaunch (`/relaunch`)
 
-A topic session is one long-lived claude process, and MCP servers and settings
+A topic session is one long-lived agent process, and MCP servers and settings
 load only at spawn, so a change to either needs a respawn. `/relaunch` in a
 topic does exactly what the nightly restart and the usage-limit failover do,
 on demand: `killSession` (which also drains the dying MCP's long-polls, so the
