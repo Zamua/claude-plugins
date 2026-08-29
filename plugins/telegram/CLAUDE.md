@@ -338,10 +338,11 @@ Details that matter:
   observed,” never assumed available.
 - Proxied routes set `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
   `ANTHROPIC_MODEL`, and `ANTHROPIC_SMALL_FAST_MODEL` only in the spawned
-  Claude environment and lower the auto-compact window to 100k. The two model
-  env overrides are load-bearing for exact-UUID resumes: `--model` alone can
-  leave an Anthropic-authenticated session on its restored native plan route.
-  Native Anthropic explicitly unsets every bridge override.
+  Claude environment. Codex models use the bridge's `[1m]` model suffix and a
+  272k auto-compact window; OpenCode Go retains its conservative 100k window.
+  The two model env overrides are load-bearing for exact-UUID resumes:
+  `--model` alone can leave an Anthropic-authenticated session on its restored
+  native plan route. Native Anthropic explicitly unsets every bridge override.
 - `claude-code-proxy` is an unofficial local compatibility bridge. It binds to
   loopback, owns no Telegram state, and receives the OpenCode credential at
   process start from OpenCode's existing auth file; the key is not copied into

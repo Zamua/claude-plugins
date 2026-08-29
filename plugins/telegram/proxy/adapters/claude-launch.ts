@@ -43,8 +43,37 @@ function kickoff(spec: ClaudeSpawnSpec): string {
   )
 }
 
+function bridgeModel(model: string): string {
+  return /\[[^\]]+\]$/.test(model) ? model : `${model}[1m]`
+}
+
+function providerLaunchProfile(route: TopicRoute): {
+  model: string
+  autoCompactWindow: string
+} {
+  if (route.provider === 'codex') {
+    return {
+      model: bridgeModel(route.model),
+      autoCompactWindow: '272000',
+    }
+  }
+
+  if (route.provider === 'opencode-go') {
+    return {
+      model: route.model,
+      autoCompactWindow: '100000',
+    }
+  }
+
+  return {
+    model: route.model,
+    autoCompactWindow: '',
+  }
+}
+
 export function claudeSpawnEnv(spec: ClaudeSpawnSpec): Record<string, string> {
   const proxied = spec.route.provider !== 'anthropic'
+  const profile = providerLaunchProfile(spec.route)
   return {
     TG_SESSION: spec.sessionName,
     TG_MUX: spec.muxKind,
@@ -60,8 +89,8 @@ export function claudeSpawnEnv(spec: ClaudeSpawnSpec): Record<string, string> {
     TG_INBOUND_MODE: inboundModeForRoute(spec.route),
     TG_PROVIDER_BASE_URL: proxied ? spec.providerProxyUrl : '',
     TG_PROVIDER_AUTH_TOKEN: proxied ? 'unused' : '',
-    TG_AUTO_COMPACT_WINDOW: proxied ? '100000' : '',
-    TG_MODEL: spec.route.model,
+    TG_AUTO_COMPACT_WINDOW: profile.autoCompactWindow,
+    TG_MODEL: profile.model,
     TG_EFFORT: spec.route.effort,
     TG_KICKOFF: kickoff(spec),
     TG_CLAUDE_SESSION_ID: spec.claudeSessionId,
