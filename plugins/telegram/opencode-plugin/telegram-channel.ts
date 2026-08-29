@@ -123,7 +123,9 @@ export default async ({ client }: { client: any }) => {
       try {
         await client.session.get({ path: { id: sessionId } })
         const result = await client.session.status()
-        if (result?.data?.[sessionId]?.type === 'idle') return true
+        // opencode lists busy/retrying sessions here but omits idle ones.
+        const status = result?.data?.[sessionId]
+        if (!status || status.type === 'idle') return true
       } catch (e) {
         if (attempt === SESSION_READY_TRIES) log(`session readiness failed: ${e}`)
       }

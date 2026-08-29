@@ -92,6 +92,8 @@ describe('opencodeBackend.spawnEnv', () => {
     expect(mint.TG_OC_SESSION_ID).toBe('')
     expect(mint.TG_OC_SEED).toBe('SEED TEXT')
     expect(mint.TG_OC_BIN).toBe('/etc/profiles/per-user/zamua/bin/opencode')
+    expect(mint.TG_OC_MODEL).toBe('opencode-go/glm-5.3-flash')
+    expect(mint.TG_OC_VARIANT).toBe('')
     // Pane-mode gates: the plugin activates, the MCP stays outbound-only.
     expect(mint.TELEGRAM_CHANNEL).toBe('1')
     expect(mint.TELEGRAM_OUTBOUND_ONLY).toBe('1')
