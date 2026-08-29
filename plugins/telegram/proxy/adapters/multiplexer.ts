@@ -11,9 +11,20 @@ export interface MultiplexerPort {
   kill(session: string): boolean
 }
 
-export function herdrRuntime(status: string, foregroundIsAgent: boolean): AgentRuntime {
+export function claudePromptVisible(visible: string): boolean {
+  const lines = visible.split(/\r?\n/)
+  const prompt = lines.findLastIndex(line => /^\s*❯\s*$/.test(line))
+  if (prompt < 0) return false
+  return lines.slice(prompt + 1).some(line => /^\s*Claude\s+·/.test(line))
+}
+
+export function herdrRuntime(
+  status: string,
+  foregroundIsAgent: boolean,
+  foregroundPromptVisible = false,
+): AgentRuntime {
   if (status === 'idle' || status === 'done') return 'idle'
-  if (status === 'working') return 'busy'
+  if (status === 'working') return foregroundPromptVisible ? 'idle' : 'busy'
   if (status === 'blocked') return 'blocked'
   return foregroundIsAgent ? 'starting' : 'missing'
 }
@@ -95,6 +106,11 @@ export class HerdrMux implements MultiplexerPort {
     }
   }
 
+  private foregroundPromptVisible(paneId: string): boolean {
+    const result = spawnSync(this.bin, ['pane', 'read', paneId, '--source', 'visible'], { encoding: 'utf8' })
+    return result.status === 0 && claudePromptVisible(result.stdout ?? '')
+  }
+
   liveSessions(): Set<string> {
     const sessions = new Set<string>()
     for (const [label, pane] of this.panes()) {
@@ -106,13 +122,19 @@ export class HerdrMux implements MultiplexerPort {
   runtime(session: string): AgentRuntime {
     const pane = this.panes().get(session)
     if (!pane) return 'missing'
-    return herdrRuntime(pane.status, this.foregroundIsAgent(pane.paneId))
+    const promptVisible = pane.status === 'working' && this.foregroundPromptVisible(pane.paneId)
+    return herdrRuntime(pane.status, this.foregroundIsAgent(pane.paneId), promptVisible)
   }
 
   prompt(session: string, text: string): boolean {
     const pane = this.panes().get(session)
-    if (!pane || herdrRuntime(pane.status, this.foregroundIsAgent(pane.paneId)) !== 'idle') return false
-    return spawnSync(this.bin, ['agent', 'prompt', pane.paneId, text], {
+    if (!pane) return false
+    const promptVisible = pane.status === 'working' && this.foregroundPromptVisible(pane.paneId)
+    if (herdrRuntime(pane.status, this.foregroundIsAgent(pane.paneId), promptVisible) !== 'idle') return false
+    const args = promptVisible
+      ? ['pane', 'run', pane.paneId, text]
+      : ['agent', 'prompt', pane.paneId, text]
+    return spawnSync(this.bin, args, {
       encoding: 'utf8',
       maxBuffer: 1024 * 1024,
     }).status === 0

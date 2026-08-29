@@ -306,6 +306,12 @@ multiplexer port. The Telegram MCP remains loaded for replies and attachments.
 This changes transport only: it does not fork the UUID, replace Claude Code, or
 introduce another harness.
 
+Herdr's aggregate `working` state can remain set while background workflows run
+even though Claude's blank foreground `❯` prompt is ready. The Herdr adapter
+checks that prompt explicitly and uses the pane's atomic run operation for this
+case, so background agents do not starve Telegram delivery. A non-empty prompt,
+active foreground turn, or approval dialog remains non-promptable.
+
 The operator runs `/model` proactively: provider buttons -> model buttons ->
 effort buttons. `/model status` shows the active route. `/usage` shows observed
 quota windows and reset times. A route change while Claude is idle is applied
