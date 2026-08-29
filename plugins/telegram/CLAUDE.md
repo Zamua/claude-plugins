@@ -556,7 +556,7 @@ Details that matter:
   plugin (runs inside the topic TUI's server process).
 - `scripts/start-proxy.sh`: foreground proxy starter.
 - `server.ts`: ALSO loaded by opencode topics (outbound-only mode via
-  `TELEGRAM_OUTBOUND_ONLY=1`, set by the driver; the bg-agent guard ORs it).
+  `TELEGRAM_OUTBOUND_ONLY=1`, set by the launcher; the bg-agent guard ORs it).
 - `hooks/stop-reply-guard.py`: the Stop hook (reply guard). Blocks a
   Telegram-triggered turn that ended without a `reply` call and reminds Claude to
   resend via the reply tool (once per turn). Wired via `override-settings.json`
@@ -670,10 +670,10 @@ The layering (see `proxy/backends.ts`, the port; pure, snapshot-tested):
   `backends.test.ts`), so topics that never hand off spawn byte-identically.
 - **Session continuity is per-harness, both persisted in the registry**:
   claude keeps `claude_session_id` (`--resume`); opencode keeps
-  `opencode_session_id` (the driver mints the session on the topic's first
-  opencode run and POSTs it to `/oc-session`; later runs and respawns continue
-  it with `opencode run -s <id>`). A handoff cycle therefore RESUMES the prior
-  opencode session rather than spawning a fresh one.
+  `opencode_session_id` (the TUI opens the id with `--session`; a fresh TUI
+  session is adopted and POSTed to `/oc-session`; later respawns open the same
+  id). A handoff cycle therefore RESUMES the prior opencode session rather than
+  spawning a fresh one.
 - **Seeding** (`claudeTurnsFor` / `opencodeDeltaFor` + `renderDelta`): the
   switch to opencode rides the spawn env (`TG_OC_SEED` = handoff delta from
   the claude .jsonl transcript, newest-kept, oldest-omitted marker). The
@@ -688,17 +688,18 @@ The layering (see `proxy/backends.ts`, the port; pure, snapshot-tested):
   launcher-injected `OPENCODE_CONFIG_CONTENT`): env-gated on
   `TELEGRAM_CHANNEL=1` + `TELEGRAM_TOPIC_ID` so no other opencode session
   ever polls, it long-polls `/poll` exactly like server.ts, injects each
-  message as a `<channel>` turn via `client.session.prompt`, handles the
-  seed + /oc-session contracts, and backstops stranded replies via
-  `/last-reply` + `/send`. The SAME injected config registers the telegram
+  message as a `<channel>` turn via `client.session.promptAsync`, handles the
+  seed + /oc-session contracts, and backstops stranded replies from
+  `session.idle` via `/last-reply` + `/send`. The SAME injected config registers the telegram
   MCP (outbound-only) and the permission policy (broad allow, raw-Bot-API +
   sudo denies, `question: deny`) so they exist ONLY for topic panes - never
   in a global/project opencode config, where an inbound-polling MCP would
   steal topic queues.
-- **Reply backstop**: opencode has no Stop hook, so the driver snapshots
-  `GET /last-reply?topic=` around each run and, if the marker did not move
-  while the run produced text, POSTs the run text to `/send` itself. The
-  marker moves in `handleSend` (any successful reply).
+- **Reply backstop**: opencode has no Stop hook, so the plugin watches the
+  `session.idle` event after each injected turn. `tool.execute.before` records
+  `telegram_reply`; if no reply tool ran and `GET /last-reply?topic=` did not
+  move, the plugin fetches the assistant message and POSTs it to `/send`.
+  The marker moves in `handleSend` (any successful reply).
 
 **Auto-handoff** (`TELEGRAM_TOPICS_AUTO_HANDOFF`, default OFF): a SECOND
 consecutive rate-limit report for a topic already pinned to its fallback
