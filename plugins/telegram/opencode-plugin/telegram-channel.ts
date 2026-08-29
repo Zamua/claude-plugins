@@ -201,13 +201,14 @@ export default async ({ client }: { client: any }) => {
   }
 
   async function backstop(turn: NonNullable<typeof activeTurn>): Promise<void> {
-    if (turn.replyFired || turn.marker === 'unknown') return
+    // A tool attempt can fail, so the outbound marker is authoritative.
+    if (turn.marker === 'unknown') return
     await sleep(1500)
     const after = await lastReplyMarker()
     if (after !== turn.marker) return
     const text = await latestAssistantText(client, sessionId, turn.messageId)
     if (!text) return
-    log('no reply tool call observed; shipping the turn text via /send')
+    log(`${turn.replyFired ? 'reply tool did not move the marker' : 'no reply tool call observed'}; shipping via /send`)
     await postWithRetry('/send', { topic: TOPIC, chat_id: turn.chatId, text }, 2)
   }
 
