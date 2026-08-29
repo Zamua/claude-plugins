@@ -554,6 +554,8 @@ Details that matter:
   the multiplexer, `TG_BACKEND` picks the harness - independent axes).
 - `opencode-plugin/telegram-channel.ts`: the opencode backend's inbound
   plugin (runs inside the topic TUI's server process).
+- `opencode-plugin/channel-core.ts` + `telegram-channel.test.ts`: pure channel
+  rendering, idle-event matching and message-part helpers used by that plugin.
 - `scripts/start-proxy.sh`: foreground proxy starter.
 - `server.ts`: ALSO loaded by opencode topics (outbound-only mode via
   `TELEGRAM_OUTBOUND_ONLY=1`, set by the launcher; the bg-agent guard ORs it).
