@@ -33,6 +33,11 @@ const BOOT_SESSION = (process.env.TG_OC_SESSION_ID ?? '').trim()
 const SEED = process.env.TG_OC_SEED ?? ''
 
 const POLL_TIMEOUT_MS = 30_000
+// Boot grace, the same lesson as server.ts's FIRST_POLL_DELAY_MS: a prompt
+// injected while the TUI is still loading the session (a big transcript takes
+// seconds) is silently never processed - measured: injected at ~300ms post-boot
+// it vanishes, at ~8s it runs. Only the first poll waits; warm ones are fine.
+const BOOT_DELAY_MS = Number(process.env.TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS ?? 6000)
 
 function log(m: string): void {
   process.stderr.write(`${new Date().toISOString()} telegram-channel [${TOPIC}]: ${m}\n`)
@@ -104,6 +109,10 @@ export default async ({ client }: { client: any }) => {
   }
   log(`serving topic "${TOPIC}" via proxy ${PROXY} (session ${sessionId})`)
   await postWithRetry('/oc-session', { topic: TOPIC, session_id: sessionId }, 3)
+
+  // Let the TUI finish loading the session before the first prompt (see
+  // BOOT_DELAY_MS; the seed counts as the first prompt).
+  if (BOOT_DELAY_MS > 0) await new Promise(r => setTimeout(r, BOOT_DELAY_MS))
 
   // The seed (handoff delta or startup notice) is the session's first prompt;
   // ack it so the proxy stops re-delivering on later respawns.
