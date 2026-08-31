@@ -22,14 +22,16 @@ export function parseCodexModels(result: any): ProviderModel[] {
     const efforts = (raw?.supportedReasoningEfforts ?? [])
       .map((option: any) => String(option?.reasoningEffort ?? ''))
       .filter((value: string): value is Effort => CLAUDE_EFFORTS.has(value as Effort))
-    const defaultEffort = CLAUDE_EFFORTS.has(raw?.defaultReasoningEffort)
+    const providerDefault = CLAUDE_EFFORTS.has(raw?.defaultReasoningEffort)
       ? raw.defaultReasoningEffort as Effort
       : efforts.includes('high') ? 'high' : efforts[0] ?? 'medium'
+    const defaultEffort = id === 'gpt-5.6-sol' && efforts.includes('medium') ? 'medium' : providerDefault
     out.push({
       id,
       label: String(raw?.displayName ?? id),
       efforts: efforts.length ? efforts : ['medium'],
       defaultEffort,
+      supportsUltracode: efforts.includes('xhigh'),
     })
     const priority = (raw?.serviceTiers ?? []).some((tier: any) => tier?.id === 'priority')
     if (priority) {
@@ -38,6 +40,7 @@ export function parseCodexModels(result: any): ProviderModel[] {
         label: `${String(raw?.displayName ?? id)} Fast`,
         efforts: efforts.length ? efforts : ['medium'],
         defaultEffort,
+        supportsUltracode: efforts.includes('xhigh'),
       })
     }
   }

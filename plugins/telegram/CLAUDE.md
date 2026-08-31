@@ -289,7 +289,7 @@ Telegram topic -> Claude Code session UUID -> launch profile
                                       OpenCode Go via loopback bridge
 ```
 
-`TopicRoute {provider, model, effort}` is domain state persisted in
+`TopicRoute {provider, model, effort, ultracode}` is domain state persisted in
 `registry.json`. `proxy/domain/` owns route validation and safe-turn-boundary
 planning; `proxy/adapters/` owns provider catalogs, capacity reads, Codex
 app-server JSON-RPC, OpenCode Go usage HTTP, and Claude launch environments.
@@ -313,7 +313,11 @@ case, so background agents do not starve Telegram delivery. A non-empty prompt,
 active foreground turn, or approval dialog remains non-promptable.
 
 The operator runs `/model` proactively: provider buttons -> model buttons ->
-effort buttons. `/model status` shows the active route. `/usage` shows observed
+effort buttons -> Ultracode on/off. The effort step is always shown; models
+without selectable variants use `auto` (shown as “Provider default”). Ultracode
+is per-topic and defaults off. Turning it on forces xhigh effort and dynamic
+workflow orchestration; the picker offers it only for compatible models.
+`/model status` shows the active route. `/usage` shows observed
 quota windows and reset times. A route change while Claude is idle is applied
 immediately; one requested during a turn is persisted as `pending_route` and
 applied when the old process polls again after finishing the turn.
@@ -325,7 +329,7 @@ Quota recovery is deliberately operator-driven:
 2. The proxy marks the current provider exhausted, stops the stalled process,
    and posts provider buttons in that topic. It does not silently choose or
    consume a reset credit.
-3. After a provider/model/effort is selected, the launcher starts Claude Code
+3. After provider, model, effort, and Ultracode are selected, the launcher starts Claude Code
    with `--resume <the-same-uuid>` and the new launch profile. A durable
    `pending_resume_notice` tells it to answer the most recent unanswered user
    message; that notice is cleared only after its active inbound adapter accepts
@@ -345,7 +349,13 @@ Details that matter:
 - Proxied routes set `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
   `ANTHROPIC_MODEL`, and `ANTHROPIC_SMALL_FAST_MODEL` only in the spawned
   Claude environment. Codex models use the bridge's `[1m]` model suffix and a
-  272k auto-compact window; OpenCode Go retains its conservative 100k window.
+  deliberate 272k auto-compact window (the long-context pricing boundary).
+  OpenCode Go reads each installed model's actual context window from
+  `opencode models opencode-go --verbose`, clamps it to Claude Code's 100k-1m
+  accepted range, and falls back to 200k only when metadata is unavailable.
+  This variable is the capacity used for compaction calculations, not the exact
+  trigger; Claude Code still applies its normal near-capacity percentage.
+  Native Anthropic leaves compaction provider-managed.
   The two model env overrides are load-bearing for exact-UUID resumes:
   `--model` alone can leave an Anthropic-authenticated session on its restored
   native plan route. Native Anthropic explicitly unsets every bridge override.
@@ -576,8 +586,10 @@ Details that matter:
 - `override-settings.json`: the BASE session settings - enables `telegram@zamua`
   AND wires the Stop hook (`hooks.Stop` -> `python3 "$TG_HOOK"`). The proxy does
   NOT hand this to the launcher directly; it generates
-  `~/.claude/channels/telegram-topics/effective-settings.json` from it (adding
-  `ultracode`, see Config) and passes THAT as `TG_SETTINGS`. (Its four-tool
+  one file per topic under
+  `~/.claude/channels/telegram-topics/effective-settings/` from it (adding that
+  route's `ultracode` value) and passes THAT as `TG_SETTINGS`. Per-topic files
+  prevent concurrent spawns from racing through shared settings. (Its four-tool
   pre-allow is redundant under `--permission-mode auto`, which the launcher
   passes: the guard already approves the channel tools.)
 - `.env.example`: the config contract (deny-list of known keys).
@@ -595,29 +607,22 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 (required); `TELEGRAM_TOPICS_SPAWN_DIR` (default `$HOME`), `TELEGRAM_PROXY_PORT`
 (default `8790`), `TELEGRAM_TOPICS_MARKETPLACE` (default `plugin:telegram@zamua`),
 `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled),
-`TELEGRAM_TOPICS_ULTRACODE` (default ON, see below),
 `TELEGRAM_TOPICS_MODEL` (default the `fable` alias, see below),
 `TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
 backends" above).
 Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
 
-**Topic effort / ultracode.** Every topic-Claude starts at xhigh effort by
-default. The proxy keeps the historical `ultracode` settings key and also
-persists the explicit route effort; the launcher supplies `--effort` on every
-spawn. Repeated `--settings` is last-wins, not merged, so
-`resolveSettings()` bakes `ultracode` into the ONE settings file the
-launcher passes: on each start it writes
-`~/.claude/channels/telegram-topics/effective-settings.json` = the committed
-`override-settings.json` base + `"ultracode": <TELEGRAM_TOPICS_ULTRACODE>`
-(default true; `false`/`0`/`no`/`off` -> the default medium effort), and hands
-that path to the launcher as `TG_SETTINGS` (falls back to `override-settings.json`
-un-generated if the read/write fails). A change takes effect on the NEXT proxy
-restart; LIVE topics keep their current effort until they re-spawn (nightly 3am or
-a kill). Measured via the Stop-hook input's `effort.level` field: `ultracode:true`
-flips it `medium` -> `xhigh` (verified end-to-end through a real proxy-style
-spawn). A `/model` selection persists its own effort and overrides this default
-for that topic.
+**Topic effort / ultracode.** Both values live on the persisted route and are
+configured through `/model`; no global environment toggle is used. Ultracode
+defaults off. If enabled, the domain model pins effort to xhigh because Claude
+Code's Ultracode mode requires xhigh and enables standing dynamic workflows.
+Models with no explicit effort variants persist `auto`, which omits `--effort`
+so the provider owns the choice. Repeated `--settings` is last-wins, not merged,
+so each spawn writes a topic-specific effective settings file containing the
+route's Ultracode value. Legacy GPT-5.6 Sol routes that were implicitly xhigh
+before this schema migrate once to medium + Ultracode off; all other legacy
+routes retain their prior effort with Ultracode off.
 
 **Topic model (the `--model` FLAG, NOT a settings key).** The proxy passes
 `TELEGRAM_TOPICS_MODEL` (default the `fable` alias; `default`/`inherit`/empty =

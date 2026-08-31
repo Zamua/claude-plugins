@@ -1,4 +1,5 @@
 import type { TopicRoute } from '../domain/model-routing'
+import { autoCompactWindow } from '../domain/model-routing'
 import { inboundModeForRoute } from '../domain/inbound-delivery'
 
 export type ClaudeSpawnSpec = {
@@ -18,6 +19,7 @@ export type ClaudeSpawnSpec = {
   failoverHook: string
   capacityHook: string
   providerProxyUrl: string
+  modelContextWindow?: number
 }
 
 function kickoff(spec: ClaudeSpawnSpec): string {
@@ -47,21 +49,21 @@ function bridgeModel(model: string): string {
   return /\[[^\]]+\]$/.test(model) ? model : `${model}[1m]`
 }
 
-function providerLaunchProfile(route: TopicRoute): {
+function providerLaunchProfile(route: TopicRoute, modelContextWindow?: number): {
   model: string
   autoCompactWindow: string
 } {
   if (route.provider === 'codex') {
     return {
       model: bridgeModel(route.model),
-      autoCompactWindow: '272000',
+      autoCompactWindow: String(autoCompactWindow(route.provider, modelContextWindow)),
     }
   }
 
   if (route.provider === 'opencode-go') {
     return {
       model: route.model,
-      autoCompactWindow: '100000',
+      autoCompactWindow: String(autoCompactWindow(route.provider, modelContextWindow)),
     }
   }
 
@@ -73,7 +75,7 @@ function providerLaunchProfile(route: TopicRoute): {
 
 export function claudeSpawnEnv(spec: ClaudeSpawnSpec): Record<string, string> {
   const proxied = spec.route.provider !== 'anthropic'
-  const profile = providerLaunchProfile(spec.route)
+  const profile = providerLaunchProfile(spec.route, spec.modelContextWindow)
   return {
     TG_SESSION: spec.sessionName,
     TG_MUX: spec.muxKind,
@@ -91,7 +93,7 @@ export function claudeSpawnEnv(spec: ClaudeSpawnSpec): Record<string, string> {
     TG_PROVIDER_AUTH_TOKEN: proxied ? 'unused' : '',
     TG_AUTO_COMPACT_WINDOW: profile.autoCompactWindow,
     TG_MODEL: profile.model,
-    TG_EFFORT: spec.route.effort,
+    TG_EFFORT: spec.route.effort === 'auto' ? '' : spec.route.effort,
     TG_KICKOFF: kickoff(spec),
     TG_CLAUDE_SESSION_ID: spec.claudeSessionId,
     TG_RESUME: spec.resume ? '1' : '',

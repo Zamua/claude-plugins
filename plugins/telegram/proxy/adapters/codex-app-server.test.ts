@@ -17,8 +17,8 @@ describe('Codex app-server adapter', () => {
       serviceTiers: [{ id: 'priority' }],
     }] })
     expect(models).toEqual([
-      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['low', 'high'], defaultEffort: 'high' },
-      { id: 'gpt-5.6-sol-fast', label: 'GPT-5.6 Sol Fast', efforts: ['low', 'high'], defaultEffort: 'high' },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['low', 'high'], defaultEffort: 'high', supportsUltracode: false },
+      { id: 'gpt-5.6-sol-fast', label: 'GPT-5.6 Sol Fast', efforts: ['low', 'high'], defaultEffort: 'high', supportsUltracode: false },
     ])
   })
 
