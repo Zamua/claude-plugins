@@ -12,6 +12,7 @@ export type ClaudeSpawnSpec = {
   squareTopic: string
   marketplace: string
   route: TopicRoute
+  auxiliaryModel: string
   claudeSessionId: string
   resume: boolean
   settingsPath: string
@@ -49,13 +50,19 @@ function bridgeModel(model: string): string {
   return /\[[^\]]+\]$/.test(model) ? model : `${model}[1m]`
 }
 
-function providerLaunchProfile(route: TopicRoute, modelContextWindow?: number): {
+function providerLaunchProfile(
+  route: TopicRoute,
+  auxiliaryModel: string,
+  modelContextWindow?: number,
+): {
   model: string
+  auxiliaryModel: string
   autoCompactWindow: string
 } {
   if (route.provider === 'codex') {
     return {
       model: bridgeModel(route.model),
+      auxiliaryModel: bridgeModel(auxiliaryModel),
       autoCompactWindow: String(autoCompactWindow(route.provider, modelContextWindow)),
     }
   }
@@ -63,19 +70,21 @@ function providerLaunchProfile(route: TopicRoute, modelContextWindow?: number): 
   if (route.provider === 'opencode-go') {
     return {
       model: route.model,
+      auxiliaryModel,
       autoCompactWindow: String(autoCompactWindow(route.provider, modelContextWindow)),
     }
   }
 
   return {
     model: route.model,
+    auxiliaryModel,
     autoCompactWindow: '',
   }
 }
 
 export function claudeSpawnEnv(spec: ClaudeSpawnSpec): Record<string, string> {
   const proxied = spec.route.provider !== 'anthropic'
-  const profile = providerLaunchProfile(spec.route, spec.modelContextWindow)
+  const profile = providerLaunchProfile(spec.route, spec.auxiliaryModel, spec.modelContextWindow)
   return {
     TG_SESSION: spec.sessionName,
     TG_MUX: spec.muxKind,
@@ -93,7 +102,9 @@ export function claudeSpawnEnv(spec: ClaudeSpawnSpec): Record<string, string> {
     TG_PROVIDER_AUTH_TOKEN: proxied ? 'unused' : '',
     TG_AUTO_COMPACT_WINDOW: profile.autoCompactWindow,
     TG_MODEL: profile.model,
+    TG_AUX_MODEL: profile.auxiliaryModel,
     TG_EFFORT: spec.route.effort === 'auto' ? '' : spec.route.effort,
+    TG_DISALLOWED_TOOLS: spec.route.ultracode ? 'AskUserQuestion' : 'AskUserQuestion,Workflow',
     TG_KICKOFF: kickoff(spec),
     TG_CLAUDE_SESSION_ID: spec.claudeSessionId,
     TG_RESUME: spec.resume ? '1' : '',

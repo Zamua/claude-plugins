@@ -91,6 +91,27 @@ export function defaultEffort(provider: ProviderId): Effort {
   return 'xhigh'
 }
 
+const AUXILIARY_MODEL_PREFERENCES: Record<ProviderId, readonly string[]> = {
+  anthropic: ['haiku'],
+  codex: ['gpt-5.6-luna'],
+  'opencode-go': [
+    'opencode-go/gpt-5.6-luna',
+    'opencode-go/glm-5.3-flash',
+    'opencode-go/deepseek-v4-flash',
+  ],
+}
+
+// Auxiliary traffic must stay inside the selected provider's allowance. Prefer
+// that provider's efficient model, but fall back to the selected main model if
+// the installed/account catalog does not currently expose one of our choices.
+export function auxiliaryModelForRoute(
+  route: TopicRoute,
+  availableModels: readonly string[],
+): string {
+  const available = new Set(availableModels)
+  return AUXILIARY_MODEL_PREFERENCES[route.provider].find(model => available.has(model)) ?? route.model
+}
+
 export function sameRoute(left: TopicRoute, right: TopicRoute): boolean {
   return left.provider === right.provider && left.model === right.model &&
     left.effort === right.effort && left.ultracode === right.ultracode

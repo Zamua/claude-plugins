@@ -10,4 +10,10 @@ describe('provider proxy launcher', () => {
     expect(script).toContain('.local/state/nix/profiles/home-manager/home-path/bin/claude-code-proxy')
     expect(script).toContain('exec "$proxy_bin" serve')
   })
+
+  test('enables safe Codex continuation by default while allowing an operator override', () => {
+    expect(script).toContain(
+      'export CCP_CODEX_PREVIOUS_RESPONSE_ID="${CCP_CODEX_PREVIOUS_RESPONSE_ID:-1}"',
+    )
+  })
 })

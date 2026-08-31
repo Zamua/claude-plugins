@@ -150,7 +150,11 @@ For Codex/OpenCode Go routes, start `scripts/start-provider-proxy.sh` under your
 service manager. It binds only to loopback. The script reads the existing
 OpenCode Go key at process start; do not copy that key into `.env`. When no
 explicit bridge binary is configured, the launcher prefers the active
-home-manager profile before falling back to `PATH`.
+home-manager profile before falling back to `PATH`. Codex response continuation
+is enabled by default, so established main/subagent streams send only their new
+turn through the Responses API instead of repeatedly uploading the complete
+Claude transcript. The bridge safely falls back to full context when it cannot
+continue a chain.
 
 ## Use it
 
@@ -164,7 +168,8 @@ Attach through the selected multiplexer when you need to inspect a pane. Normal
 provider/model management stays in Telegram:
 
 - `/model` — choose provider, model, effort, and Ultracode on/off with inline buttons.
-- `/model status` — show this topic's Claude UUID and active route.
+- `/model status` — show this topic's Claude UUID, active route, and enforced
+  subagent/auxiliary/effort/Workflow policy.
 - `/usage` — show observed provider windows and reset times.
 
 When a provider hits its limit, the proxy stops the stalled route and offers
@@ -183,6 +188,13 @@ capacity used by Claude Code's compaction calculation; Claude Code still applies
 its own near-capacity trigger percentage. The OpenCode picker is
 built from the full installed catalog, so newly installed models remain visible;
 the bridge reports clearly if its allowlist still needs updating.
+
+The Telegram route also owns nested execution. Ordinary subagents are pinned to
+the selected main model and effort. Auxiliary/title work uses a cheaper model
+from the same provider (Anthropic Haiku, Codex GPT-5.6 Luna, or OpenCode Go
+GPT-5.6 Luna, with main-model fallback). Ultracode off blocks the Workflow tool
+at launch, so stale Claude settings cannot start an expensive workflow fan-out;
+turning it on explicitly is the only way to expose Workflow.
 
 Provider switching does not fork the conversation. The same Claude UUID is
 resumed with the selected provider/model. Only inbound transport differs:
