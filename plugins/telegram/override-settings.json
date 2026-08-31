@@ -12,6 +12,16 @@
       "mcp__plugin_telegram_telegram__edit_message"
     ]
   },
+  "_comment_auto_mode": "Keep all built-in reviewer rules, but make the built-in data-exfiltration boundary reviewer-judged instead of unconditional. The operator can clear it only by explicitly approving the exact data, destination, and transfer. This keeps natural-language judgment and avoids command allowlists or bypass flags.",
+  "autoMode": {
+    "soft_deny": [
+      "$defaults",
+      "Data Exfiltration [named+specifics; must name the exact data, destination, and transfer]: Block sending sensitive, private, credential-bearing, personal, or entrusted data outside its current trust boundary, including direct uploads and changes that arm an automated transfer. Trace the final destination and treat encoded payloads as their decoded content. This rule can be cleared only when a human user directly and specifically authorizes the exact data, exact destination, and exact transfer. General approval, inferred intent, or agent-authored justification is insufficient."
+    ],
+    "hard_deny": [
+      "No unconditional classifier blocks are configured. This policy marker exists only to replace the built-in hard-deny list and does not match or block any action. Evaluate actions through soft_deny, allow exceptions, and exact human intent."
+    ]
+  },
   "_comment_failover": "The StopFailure hook reports a plan USAGE-LIMIT stall (error == rate_limit, i.e. HTTP 429) to the proxy. The proxy pauses that route and offers provider/model buttons in Telegram; after the operator chooses, it resumes the same Claude Code session through the selected route. It never switches providers automatically. Registered with NO matcher because the hook filters on the error field itself. Path comes from $TG_FAILOVER_HOOK (set by the proxy, forwarded by the launcher) to keep this committed file portable.",
   "hooks": {
     "Stop": [
@@ -30,6 +40,28 @@
           {
             "type": "command",
             "command": "python3 \"$TG_FAILOVER_HOOK\""
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$TG_AUTHORIZATION_HOOK\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$TG_AUTHORIZATION_HOOK\"",
+            "timeout": 10
           }
         ]
       }

@@ -4,6 +4,20 @@
 # adapter reads it at process start and exports it only to the bridge process.
 set -eu
 
+# The bridge writes operational metadata locally. Keep new logs private and
+# repair older rotations that predate this wrapper's restrictive umask.
+umask 077
+proxy_state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/claude-code-proxy"
+if [ -d "$proxy_state_dir" ]; then
+  find "$proxy_state_dir" -maxdepth 1 -type f -name 'proxy*' -exec chmod 600 {} +
+fi
+for pm2_log in \
+  "$HOME/.pm2/logs/claude-code-proxy-out.log" \
+  "$HOME/.pm2/logs/claude-code-proxy-error.log"
+do
+  [ ! -f "$pm2_log" ] || chmod 600 "$pm2_log"
+done
+
 export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/etc/profiles/per-user/$USER/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # The bridge validates Claude's session/Agent identity and only continues an

@@ -35,6 +35,7 @@ proxy/proxy.ts ── grammy inbound ── group-chat gate ── topic = messa
    ├── GET  /permission-poll?topic=T  long-poll ~25s, 200 {request_id,behavior}
    ├── POST /send /react /edit /download   (keyed by topic -> message_thread_id)
    ├── POST /permission-request       {topic,request_id,tool,input} -> prompt in topic
+   ├── POST /permission-denied        auto-mode hook -> durable exact-action approval
    └── GET  /health                   {ok, topics, port, polling, polling_since}
 
 scripts/launch-topic.sh ── spawn in the selected multiplexer (TG_MUX: tmux new-session -d
@@ -45,6 +46,10 @@ scripts/launch-topic.sh ── spawn in the selected multiplexer (TG_MUX: tmux n
                first spawn: --session-id <id> "<kickoff>"   (mints the session)
                re-spawn:    --resume <id>                    (no kickoff, keeps history)
    + a short-lived detached watcher answers the "local development" confirm dialog
+
+hooks/permission-denied.py
+   ├── PermissionDenied -> POST /permission-denied (never executes or retries a tool)
+   └── SessionStart -> injects the exact-action approval/retry protocol as context
 
 server.ts (the MCP, one per multiplexer session)
    ├── inbound     Anthropic only: long-poll GET /poll -> notifications/claude/channel
@@ -388,7 +393,12 @@ Details that matter:
 - `claude-code-proxy` is an unofficial local compatibility bridge. It binds to
   loopback, owns no Telegram state, and receives the OpenCode credential at
   process start from OpenCode's existing auth file; the key is not copied into
-  the plugin `.env`, PM2 config, or registry.
+  the plugin `.env`, PM2 config, or registry. The installed Nix derivation is
+  source-pinned; review its new revision before upgrades. Normal request logging
+  records metadata rather than prompt bodies, opt-in traffic capture stays off,
+  and the start adapter applies `umask 077` plus mode `0600` to bridge state logs.
+  The bridge still necessarily sees proxied prompts/tool payloads and provider
+  credentials, and unofficial-client provider/account risk remains.
 - The hook must stay compatible with the macOS Python used by the detached
   process. `from __future__ import annotations` keeps newer type syntax lazy.
 
@@ -507,18 +517,39 @@ Details that matter:
   topic == `String(message_thread_id)`, thread id == `Number(topic)`.
 - **Topic names.** Learned from `forum_topic_created` service messages (cached
   in `topicNames`) for the kickoff prompt; falls back to the thread id.
-- **`--permission-mode auto`: checked auto-approve, no prompts for routine work.**
+- **`--permission-mode auto`: checked auto-approve, Telegram for denials.**
   The launcher runs every topic-Claude with `--permission-mode auto`. This is NOT
   skip-all-checks: a guard model vets each command and auto-approves the SAFE ones,
   so routine work (edits, builds, tests, normal bash) runs with NO prompt. Verified
   live: a test topic-Claude ran a bash command with no prompt and the status bar
-  read "auto mode on". The operator wanted this precisely because a detached pane
-  has no one to answer prompts. Caveat: if auto mode ever escalates a genuinely
-  RISKY command to an interactive confirm, a detached pane cannot answer it, so
-  that call BLOCKS until someone attaches to the tmux pane. `override-settings.json`
-  still ENABLES the plugin for the session (its four-tool pre-allow is redundant
-  under auto mode - the guard already approves the channel tools).
-- **Permission relay: PRESENT but DORMANT.** The whole permission round-trip
+  read "auto mode on". `override-settings.json` expands the built-in policy under
+  `soft_deny`, keeps the exact data/destination/transfer exfiltration rule there,
+  and replaces the built-in unconditional `hard_deny` list with a deliberately
+  non-matching policy marker. Consequently all real decisions remain reviewable:
+  exact human intent can clear a soft denial, but no matchable hard rule can ignore
+  that intent. `override-settings.json` still ENABLES the plugin for the session
+  (its four-tool pre-allow is redundant under auto mode - the guard already
+  approves the channel tools).
+- **Action authorization: active, exact, durable, and no bypass.**
+  `hooks/permission-denied.py` forwards a denied action to
+  `POST /permission-denied`. The domain aggregate in
+  `proxy/domain/action-authorization.ts` creates a redacted summary and security
+  fingerprint; the application service deduplicates it and the JSON repository
+  atomically persists it in `action-authorizations.json` with mode `0600`. Raw
+  tool input is never persisted. The proxy posts **Approve once** / **Deny**
+  buttons; the configured admin may also reply naturally with `yes`, `approve`,
+  `do it`, `no`, or `cancel`. A bare answer resolves only the sole pending request
+  in that topic; replying to a prompt binds directly to that request. Every
+  decision is checked against the Telegram admin, original topic, active Claude
+  UUID, and 15-minute TTL. Approval does NOT return `allow`, call a tool, or skip
+  the reviewer: it enqueues one exact-action user turn into the SAME Claude
+  session. Claude retries that action once and the guard re-reviews the action
+  together with explicit consent. A second denial transitions to
+  `reviewer-denied`; no loop, SSH workaround, or alternate execution path is
+  suggested. Boot recovery re-prompts unresolved records and replays an approved
+  but not-yet-delivered exact turn after a crash.
+- **Legacy harness permission relay: PRESENT but DORMANT.** The separate
+  permission round-trip
   (the `claude/channel/permission` capability, the MCP's `permission_request`
   handler, `POST /permission-request`, `GET /permission-poll`, `pendingPerms`,
   and the inline Allow/Deny buttons + `yes <id>` / `no <id>` text-reply handling)
@@ -538,6 +569,8 @@ Details that matter:
   chat) routes `{request_id, behavior}` to the ORIGIN topic's `GET /permission-poll`,
   which fires `notifications/claude/channel/permission` to unblock the call.
   `pendingPerms` entries are pruned after 1h so the map cannot grow unbounded.
+  Do not confuse this dormant harness-prompt relay with the active
+  `PermissionDenied` action-authorization path above.
 - **Stop hook: replies can't get stranded in the transcript.**
   `hooks/stop-reply-guard.py` runs on every Stop. If a turn was triggered by an
   inbound Telegram `<channel>` message but never called the `reply` tool, the
@@ -715,12 +748,15 @@ runtime registry contract.
 
 No session reaping/TTL, no per-topic cwd, no pairing/allowlist beyond the
 group-chat-id gate. Runs under `--permission-mode auto` (guard-checked
-auto-approve); the permission-relay path that would route an escalated confirm to
-Telegram is coded but dormant (see above).
+auto-approve). Auto-mode action denials have a durable Telegram authorization
+path; the older Claude Channels harness-prompt relay is coded but dormant.
 
-The inbound + permission queues are IN-MEMORY per topic: if the proxy crashes
+The inbound + legacy permission queues are IN-MEMORY per topic: if the proxy crashes
 between enqueue and the MCP's first drain, those undelivered messages/answers
 are lost. `registry.json` persists session identity (topic -> tmux session +
 `claude_session_id`) but NOT the queues, so a crashed-and-restarted topic
 `--resume`s the SAME conversation but loses any message caught mid-flight.
-Acceptable for v1 (the drain window is ~1-2s); durable queues are a future step.
+Action authorizations are the exception: their lifecycle and delivery marker are
+persisted in `action-authorizations.json` for crash recovery. Acceptable for v1
+(the ordinary inbound drain window is ~1-2s); durable inbound queues are a future
+step.
