@@ -86,6 +86,12 @@ import { capacityTransition, nextResetAt, providerCapacity } from './domain/prov
 import type { ProviderCapacity } from './domain/provider-capacity'
 import { environmentFlag } from './domain/env-flag'
 import { launchProfileNeedsRefresh } from './domain/launch-profile'
+import { ActionAuthorizationService } from './application/action-authorization-service'
+import { JsonActionAuthorizationRepository } from './adapters/json-action-authorization-repository'
+import type {
+  ActionAuthorization,
+  AuthorizationDecision,
+} from './domain/action-authorization'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -106,6 +112,8 @@ const STOP_HOOK = join(PLUGIN_ROOT, 'hooks', 'stop-reply-guard.py')
 // swaps providers without the operator's selection.
 const FAILOVER_HOOK = join(PLUGIN_ROOT, 'hooks', 'rate-limit-failover.py')
 const CAPACITY_HOOK = join(PLUGIN_ROOT, 'hooks', 'provider-capacity-status.py')
+const AUTHORIZATION_HOOK = join(PLUGIN_ROOT, 'hooks', 'permission-denied.py')
+const AUTHORIZATIONS_FILE = join(STATE_DIR, 'action-authorizations.json')
 const LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-topic.sh')
 // The token-bearing .env files. assertSendable refuses to ship these so a
 // prompt-injected topic-Claude cannot exfil the bot token via reply(files:[...]).
@@ -229,7 +237,7 @@ const EFFECTIVE_SETTINGS_DIR = join(STATE_DIR, 'effective-settings')
 // Persisted with every successful topic launch. Increment whenever launch-time
 // behavior changes in a way an already-running pane cannot absorb. A stale
 // pane is reconciled at its next safe turn boundary, preserving its UUID.
-const TOPIC_LAUNCH_PROFILE_VERSION = 2
+const TOPIC_LAUNCH_PROFILE_VERSION = 4
 // Called PER SPAWN (not once at module load) so each (re)spawn reflects the
 // CURRENT committed override-settings.json - a base-settings edit (e.g. a git
 // pull) then reaches topics on their next respawn (the nightly restart, a kill),
@@ -611,6 +619,32 @@ function resolvePermission(requestId: string, behavior: 'allow' | 'deny'): boole
 // herdr process control lives in adapters/multiplexer.ts.
 
 const mux: MultiplexerPort = createMultiplexer(MUX_KIND)
+
+// Action authorization is its own bounded context. The domain/service know
+// nothing about Telegram, Claude process control, or JSON files. This adapter
+// delivers an approved action as a new user turn to the same topic/session;
+// the normal auto-mode reviewer still owns the retry decision.
+const authorizationRepository = new JsonActionAuthorizationRepository(AUTHORIZATIONS_FILE)
+const authorizationService = new ActionAuthorizationService(authorizationRepository, {
+  turnPort: {
+    deliver(request, turn) {
+      ensureSession(request.topic)
+      enqueue(request.topic, {
+        content: turn,
+        meta: {
+          chat_id: String(GROUP_CHAT_ID),
+          user: 'telegram-operator',
+          user_id: ADMIN_USER_ID,
+          ts: new Date().toISOString(),
+          ...(request.topic !== 'general' ? { message_thread_id: request.topic } : {}),
+          action_approval: '1',
+          action_authorization_id: request.id,
+          action_fingerprint: request.fingerprint,
+        },
+      })
+    },
+  },
+})
 
 type PanePumpState = {
   timer?: ReturnType<typeof setTimeout>
@@ -1396,6 +1430,7 @@ function ensureSession(topic: string): void {
       stopHook: STOP_HOOK,
       failoverHook: FAILOVER_HOOK,
       capacityHook: CAPACITY_HOOK,
+      authorizationHook: AUTHORIZATION_HOOK,
       providerProxyUrl: PROVIDER_PROXY_URL,
       modelContextWindow: routeModel?.contextWindow,
     }
@@ -1545,6 +1580,66 @@ const bot = new Bot(TOKEN)
 bot.catch(err => {
   process.stderr.write(`telegram-topics-proxy: handler error (polling continues): ${err.error}\n`)
 })
+
+function authorizationPromptText(request: ActionAuthorization): string {
+  return (
+    `Approval needed\n\n${request.summary}\n\n` +
+    `Tool: ${request.toolName}\n${request.details}\n\n` +
+    `Reviewer: ${request.reason}\n\n` +
+    `Claude's reviewer blocked this action. Approving sends this exact action back to the same ` +
+    `Claude session once, where the reviewer evaluates it again with your explicit consent.\n\n` +
+    `Tap a button, or reply to this message with yes, approve, do it, no, or cancel.`
+  )
+}
+
+function authorizationOutcomeText(
+  request: ActionAuthorization,
+  outcome: 'approved' | 'denied' | 'reviewer-denied',
+): string {
+  const suffix = outcome === 'approved'
+    ? 'Approved once. Sent to the same Claude session for the normal reviewer check.'
+    : outcome === 'denied'
+      ? 'Denied. The action was not retried.'
+      : 'You approved this exact action, but the reviewer still denied it. I will not loop or work around that decision.'
+  return `${authorizationPromptText(request)}\n\n${suffix}`
+}
+
+async function sendAuthorizationPrompt(request: ActionAuthorization): Promise<void> {
+  const keyboard = new InlineKeyboard()
+    .text('Approve once', `tgauth:a:${request.id}`)
+    .text('Deny', `tgauth:d:${request.id}`)
+  const sent = await bot.api.sendMessage(String(GROUP_CHAT_ID), authorizationPromptText(request), {
+    ...threadOf(request.topic),
+    reply_markup: keyboard,
+  })
+  authorizationService.attachPrompt(request.id, sent.message_id)
+}
+
+async function updateAuthorizationPrompt(
+  request: ActionAuthorization,
+  outcome: 'approved' | 'denied' | 'reviewer-denied',
+): Promise<void> {
+  if (request.telegramMessageId == null) return
+  await bot.api.editMessageText(
+    String(GROUP_CHAT_ID),
+    request.telegramMessageId,
+    authorizationOutcomeText(request, outcome),
+  ).catch(() => {})
+  await bot.api.editMessageReplyMarkup(
+    String(GROUP_CHAT_ID),
+    request.telegramMessageId,
+    { reply_markup: undefined },
+  ).catch(() => {})
+}
+
+async function decideAuthorization(
+  request: ActionAuthorization,
+  decision: AuthorizationDecision,
+): Promise<ActionAuthorization> {
+  const result = authorizationService.resolve(request.id, decision, Date.now())
+  await updateAuthorizationPrompt(result.request, decision)
+  return result.request
+}
 
 // A "/secret <name>" message is stored to SECRETS_DIR and deleted from the
 // chat without ever being enqueued: a topic-Claude's transcript persists every
@@ -2214,6 +2309,36 @@ bot.on('message', async ctx => {
     }
   }
 
+  // Natural-language action approval. A reply binds to that prompt; a bare
+  // yes/no is accepted only when exactly one action is pending in this topic.
+  // Only the configured operator can resolve an authorization.
+  if (
+    typeof msg.text === 'string' &&
+    ADMIN_USER_ID &&
+    String(ctx.from?.id ?? '') === ADMIN_USER_ID
+  ) {
+    const natural = authorizationService.requestForNaturalReply(
+      topic,
+      topics.get(topic)?.claudeSessionId ?? '',
+      msg.text,
+      msg.reply_to_message?.message_id,
+      Date.now(),
+    )
+    if (natural) {
+      try {
+        await decideAuthorization(natural.request, natural.decision)
+        await bot.api.setMessageReaction(String(ctx.chat.id), msg.message_id, [{
+          type: 'emoji',
+          emoji: (natural.decision === 'approved' ? '✅' : '❌') as ReactionTypeEmoji['emoji'],
+        }]).catch(() => {})
+      } catch (error) {
+        log(`could not resolve action authorization ${natural.request.id}: ${error}`)
+        await sayIn(String(ctx.chat.id), topic, 'That approval is no longer pending.').catch(() => {})
+      }
+      return
+    }
+  }
+
   // Square-topic USER messages route by conversation membership / @tags -
   // there is no claude "for" the square, so they never hit the normal path.
   // (Service messages fall through to the name-learning handlers below.)
@@ -2334,6 +2459,40 @@ bot.on('callback_query:data', async ctx => {
     const fromId = String(ctx.callbackQuery.from.id)
     if (String(cbChatId) !== String(GROUP_CHAT_ID) || !ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
       await ctx.answerCallbackQuery({ text: 'Not authorized.' }).catch(() => {})
+      return
+    }
+
+    const authorizationPick = /^tgauth:([ad]):([a-f0-9-]+)$/.exec(data)
+    if (authorizationPick) {
+      const request = authorizationService.get(authorizationPick[2])
+      if (!request) {
+        await ctx.answerCallbackQuery({ text: 'This approval is no longer pending.' }).catch(() => {})
+        return
+      }
+      const callbackTopic = (ctx.callbackQuery.message as any)?.message_thread_id != null
+        ? String((ctx.callbackQuery.message as any).message_thread_id)
+        : 'general'
+      const state = topics.get(request.topic)
+      if (
+        callbackTopic !== request.topic ||
+        !state?.claudeSessionId ||
+        state.claudeSessionId !== request.sessionId
+      ) {
+        await ctx.answerCallbackQuery({
+          text: 'This approval belongs to a different topic or Claude session.',
+          show_alert: true,
+        }).catch(() => {})
+        return
+      }
+      const decision: AuthorizationDecision = authorizationPick[1] === 'a' ? 'approved' : 'denied'
+      try {
+        await decideAuthorization(request, decision)
+        await ctx.answerCallbackQuery({
+          text: decision === 'approved' ? 'Approved once.' : 'Denied.',
+        }).catch(() => {})
+      } catch {
+        await ctx.answerCallbackQuery({ text: 'This approval is no longer pending.' }).catch(() => {})
+      }
       return
     }
 
@@ -2710,6 +2869,54 @@ async function handlePermissionRequest(req: Request): Promise<Response> {
   return json({ ok: true })
 }
 
+// Claude Code's PermissionDenied hook reports auto-mode classifier denials
+// here. This is deliberately separate from the harness permission protocol:
+// approving does not reverse a denial or execute a tool. It creates a new,
+// exact-action user turn in the same Claude session for normal re-review.
+async function handleActionDenial(req: Request): Promise<Response> {
+  if (!ADMIN_USER_ID) return json({ error: 'action authorization is not configured' }, 503)
+  const body = (await req.json()) as Record<string, unknown>
+  const topic = String(body.topic ?? '')
+  const sessionId = String(body.session_id ?? '')
+  const toolName = String(body.tool_name ?? '')
+  const toolInput = body.tool_input
+  const reason = String(body.reason ?? 'Blocked by auto-mode reviewer')
+  if (!topic || !sessionId || !toolName || !toolInput || typeof toolInput !== 'object' || Array.isArray(toolInput)) {
+    return json({ error: 'invalid PermissionDenied event' }, 400)
+  }
+  const state = topics.get(topic)
+  if (!state?.claudeSessionId || state.claudeSessionId !== sessionId) {
+    return json({ error: 'topic or Claude session does not match the active registry' }, 409)
+  }
+
+  authorizationService.prune(Date.now())
+  const result = authorizationService.requestForDenial({
+    id: crypto.randomUUID(),
+    topic,
+    sessionId,
+    toolName,
+    toolInput: toolInput as Record<string, unknown>,
+    reason,
+    now: Date.now(),
+  })
+
+  if (
+    result.kind === 'created' ||
+    (result.kind === 'existing' && result.request.status === 'pending' && result.request.telegramMessageId == null)
+  ) {
+    await sendAuthorizationPrompt(result.request)
+  } else if (result.kind === 'reviewer-denied') {
+    await updateAuthorizationPrompt(result.request, 'reviewer-denied')
+    await bot.api.sendMessage(
+      String(GROUP_CHAT_ID),
+      `The reviewer still denied the approved action: ${result.request.summary}\n\n` +
+      `I will not loop or work around it. Ask Claude for a safer alternative if you want to continue.`,
+      threadOf(topic),
+    )
+  }
+  return json({ ok: true, kind: result.kind, authorization_id: result.request.id })
+}
+
 // Long-poll for a permission answer for a topic. Mirrors handlePoll: ~25s hold,
 // 204 on idle, 200 {request_id, behavior} when the user answers.
 function handlePermissionPoll(url: URL): Promise<Response> {
@@ -2730,6 +2937,19 @@ function handlePermissionPoll(url: URL): Promise<Response> {
     }, 25000)
     st.permWaiters.push(wrapped)
   })
+}
+
+async function recoverActionAuthorizations(): Promise<void> {
+  authorizationService.prune(Date.now())
+  for (const request of authorizationService.list()) {
+    if (request.status === 'pending' && request.telegramMessageId == null) {
+      await sendAuthorizationPrompt(request).catch(error => {
+        log(`could not restore authorization prompt ${request.id}: ${error}`)
+      })
+    }
+  }
+  const replayed = authorizationService.replayApproved(Date.now())
+  if (replayed.length) log(`replayed ${replayed.length} approved action turn(s) after restart`)
 }
 
 // ---- boot ------------------------------------------------------------------
@@ -2760,6 +2980,7 @@ writeFileSync(PID_FILE, String(process.pid))
 
 loadAndReconcileRegistry()
 loadConvs()
+void recoverActionAuthorizations()
 for (const [topic, st] of topics) {
   if (
     inboundModeForRoute(currentRoute(st)) === 'pane' &&
@@ -2830,6 +3051,9 @@ async function serveWithRetry(): Promise<void> {
             if (req.method === 'POST' && url.pathname === '/download') return await handleDownload(req)
             if (req.method === 'POST' && url.pathname === '/permission-request') {
               return await handlePermissionRequest(req)
+            }
+            if (req.method === 'POST' && url.pathname === '/permission-denied') {
+              return await handleActionDenial(req)
             }
             return new Response('not found', { status: 404 })
           } catch (e) {

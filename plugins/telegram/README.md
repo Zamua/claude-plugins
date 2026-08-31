@@ -50,16 +50,19 @@ Code disables Channels under API billing).
   the proxy submits an equivalent `<channel>` envelope through the idle Claude
   pane. The four tools POST to the proxy (`/send`, `/react`, `/edit`,
   `/download`), each carrying its topic.
-  It also carries a permission-relay path (forward a prompt to the proxy, answer
-  from an approve/deny in the topic), but that path is DORMANT under the current
-  auto mode - see the launcher below.
+  It also retains Claude Channels' permission-relay path, but that older harness
+  prompt path is dormant under auto mode. Auto-mode action denials use the hook
+  path described below instead.
 - **Launcher** (`scripts/launch-topic.sh`): spawns one detached multiplexer pane
   per topic running a foreground `claude` with the channel loaded, under
   `--permission-mode auto`. That is checked auto-approve, not skip-all-checks: a
-  guard model vets each command and auto-approves the SAFE ones, so routine work
-  runs with no prompt (a detached pane could not answer one). A genuinely risky
-  command can still escalate to a confirm, which would block the pane until
-  someone attaches. It also handles session continuity: it mints a claude session
+  guard model vets each command and auto-approves the safe ones, so routine work
+  runs with no prompt. If the guard denies an action, a hook posts a concise
+  approval card in that same Telegram topic. The administrator can tap **Approve
+  once** or **Deny**, or reply naturally with `yes`/`approve` or `no`/`cancel`.
+  Approval sends one exact-action retry into the same Claude session; it never
+  bypasses the guard or executes a tool from the proxy. It also handles session
+  continuity: it mints a claude session
   id on the first spawn and `--resume`s that same id on every later spawn, so a
   topic is one continuous conversation across kills, route changes, crashes,
   and proxy restarts. Native Anthropic launches without overrides; Codex and
@@ -113,7 +116,7 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_TOPICS_SPAWN_DIR` | no | `$HOME` | cwd for every spawned topic-Claude |
 | `TELEGRAM_PROXY_PORT` | no | `8790` | HTTP port for the MCP clients |
 | `TELEGRAM_TOPICS_MARKETPLACE` | no | `plugin:telegram@zamua` | channel ref for the launcher |
-| `TELEGRAM_TOPICS_ADMIN_USER_ID` | for routing | secrets user id | Telegram user allowed to change routes |
+| `TELEGRAM_TOPICS_ADMIN_USER_ID` | for routing/approvals | secrets user id | Telegram user allowed to change routes and approve denied actions |
 | `TELEGRAM_PROVIDER_PROXY_URL` | no | `http://127.0.0.1:18765` | loopback compatibility bridge |
 | `TELEGRAM_PROVIDER_PROXY_BIN` | no | `claude-code-proxy` | bridge CLI used to enumerate models |
 | `TELEGRAM_OPENCODE_BIN` | no | `opencode` | CLI used to read OpenCode model names, efforts, and context windows |
@@ -154,7 +157,9 @@ home-manager profile before falling back to `PATH`. Codex response continuation
 is enabled by default, so established main/subagent streams send only their new
 turn through the Responses API instead of repeatedly uploading the complete
 Claude transcript. The bridge safely falls back to full context when it cannot
-continue a chain.
+continue a chain. The script also sets a private umask and restricts the bridge's
+local metadata/error logs to the current user. Prompt traffic capture is not
+enabled by this plugin.
 
 ## Use it
 
@@ -218,6 +223,7 @@ Loopback only (`127.0.0.1:8790`).
 | `POST /edit` | `{topic, chat_id, message_id, text, format?}` | `{message_id}` |
 | `POST /download` | `{topic, file_id}` | `{path}` |
 | `POST /permission-request` | `{topic, request_id, tool, input}` | `{ok: true}` |
+| `POST /permission-denied` | Claude `PermissionDenied` hook payload | creates or deduplicates a Telegram approval request |
 | `POST /rate-limit` | `{topic, error, details, reset_at?}` | pauses the exhausted route and opens the Telegram picker |
 | `POST /capacity` | Anthropic capacity windows | `{ok: true}` |
 | `GET /health` | | `{ok, topics, port, polling, polling_since}` |
@@ -236,13 +242,22 @@ prompt into the topic and the user's answer is routed back over
 `GET /permission-poll` as `{request_id, behavior}` (`behavior` is `"allow"` or
 `"deny"`).
 
+`POST /permission-denied` is the active auto-mode authorization path. It stores
+only a redacted action summary, reason, fingerprint, topic, and Claude session id
+in `action-authorizations.json` (mode `0600`). Pending approvals expire after 15
+minutes. The raw tool input is not persisted. An approval is valid only for its
+original topic and active Claude UUID and triggers a single exact-action retry;
+a second reviewer denial ends the request instead of looping or suggesting a
+workaround.
+
 ## Scope (v1)
 
 No deletion / reaping / TTL of sessions, no per-topic directory config (every
 topic uses `TELEGRAM_TOPICS_SPAWN_DIR`), and no pairing / allowlist beyond the
 single group-chat-id gate. Runs under `--permission-mode auto` (guard-checked
-auto-approve); the permission-relay path that would route an escalated confirm to
-Telegram is coded but dormant. A proxy restart re-adopts still-live tmux sessions
+auto-approve). Auto-mode denials are routed through the active Telegram
+exact-action approval flow; the separate Claude Channels permission relay remains
+dormant. A proxy restart re-adopts still-live tmux sessions
 and, for topics whose session has died, keeps the recorded claude session id so
 the next message resumes the same conversation (registry reconcile against
 `tmux ls`, session id persisted in `registry.json`).
@@ -256,12 +271,19 @@ the next message resumes the same conversation (registry reconcile against
   configured group.
 - Topic-Claudes run under `--permission-mode auto`: guard-verified auto-approve,
   not skip-all-checks. A guard model vets each command and auto-approves the safe
-  ones, so routine Bash/WebFetch/etc. runs with no tap; a genuinely risky command
-  can still escalate to a confirm (which a detached pane cannot answer, so it
-  blocks until someone attaches). Treat every topic as a capable auto-approving
+  ones, so routine Bash/WebFetch/etc. runs with no tap. Denials become Telegram
+  approval requests instead of terminal gates. The default auto-mode policy is
+  preserved as soft review policy, including data-exfiltration checks; there are
+  no matchable unconditional hard-deny rules. Explicit approval is still reviewed
+  by the guard on the one retry. Treat every topic as a capable auto-approving
   local agent; only start topics you would trust with largely unattended shell
-  access. (The permission-relay path that could route an escalated confirm to
-  Telegram is coded but dormant.)
+  access.
+- The Codex/OpenCode compatibility bridge is unofficial and necessarily sees
+  proxied prompts, tool payloads, and provider responses. Pin and review upgrades.
+  This installation binds it only to `127.0.0.1`; local traffic capture is off;
+  credentials stay in the providers' existing stores; and bridge state/logs are
+  private to the local user. Unofficial-client provider/account risk still
+  remains even when the local code is clean.
 - Outbound file sends refuse the proxy's own state and the token-bearing `.env`,
   so a prompt-injected topic-Claude cannot ship the bot token to the group.
 - A Stop hook (`hooks/stop-reply-guard.py`) keeps replies from getting stranded

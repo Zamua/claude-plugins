@@ -36,6 +36,7 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 : "${TG_HOOK:?TG_HOOK required}"
 : "${TG_FAILOVER_HOOK:=}"
 : "${TG_CAPACITY_HOOK:?TG_CAPACITY_HOOK required}"
+: "${TG_AUTHORIZATION_HOOK:?TG_AUTHORIZATION_HOOK required}"
 : "${TG_KICKOFF:?TG_KICKOFF required}"
 : "${TG_CLAUDE_SESSION_ID:?TG_CLAUDE_SESSION_ID required}"
 : "${TG_PROVIDER:=anthropic}"
@@ -194,6 +195,7 @@ spawn_tmux() {
     -e TG_HOOK="$TG_HOOK" \
     -e TG_FAILOVER_HOOK="$TG_FAILOVER_HOOK" \
     -e TG_CAPACITY_HOOK="$TG_CAPACITY_HOOK" \
+    -e TG_AUTHORIZATION_HOOK="$TG_AUTHORIZATION_HOOK" \
     -e TG_PROVIDER="$TG_PROVIDER" \
     -e TG_INBOUND_MODE="$TG_INBOUND_MODE" \
     -e TG_PROVIDER_BASE_URL="$TG_PROVIDER_BASE_URL" \
@@ -319,6 +321,7 @@ print("absent")
     printf 'export TG_HOOK=%q\n' "$TG_HOOK"
     printf 'export TG_FAILOVER_HOOK=%q\n' "$TG_FAILOVER_HOOK"
     printf 'export TG_CAPACITY_HOOK=%q\n' "$TG_CAPACITY_HOOK"
+    printf 'export TG_AUTHORIZATION_HOOK=%q\n' "$TG_AUTHORIZATION_HOOK"
     printf 'export TG_PROVIDER=%q\n' "$TG_PROVIDER"
     printf 'export TG_INBOUND_MODE=%q\n' "$TG_INBOUND_MODE"
     printf 'export TG_PROVIDER_BASE_URL=%q\n' "$TG_PROVIDER_BASE_URL"

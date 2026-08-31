@@ -16,4 +16,12 @@ describe('provider proxy launcher', () => {
       'export CCP_CODEX_PREVIOUS_RESPONSE_ID="${CCP_CODEX_PREVIOUS_RESPONSE_ID:-1}"',
     )
   })
+
+  test('keeps bridge metadata logs private', () => {
+    expect(script).toContain('umask 077')
+    expect(script).toContain("-name 'proxy*' -exec chmod 600")
+    expect(script).toContain('claude-code-proxy-out.log')
+    expect(script).toContain('claude-code-proxy-error.log')
+    expect(script).toContain('chmod 600 "$pm2_log"')
+  })
 })
