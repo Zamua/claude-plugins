@@ -82,6 +82,7 @@ import type {
 } from './domain/model-routing'
 import { capacityTransition, nextResetAt, providerCapacity } from './domain/provider-capacity'
 import type { ProviderCapacity } from './domain/provider-capacity'
+import { environmentFlag } from './domain/env-flag'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -1415,8 +1416,11 @@ async function downloadFile(fileId: string, uniqueHint?: string): Promise<string
 // the attachment meta intact, so the manual download path still works.
 // Subprocesses run ASYNC (execFile, not spawnSync): a long clip must not
 // stall the event loop that serves every topic's /poll.
-const VOICE_TRANSCRIBE = envBool(
-  process.env.TELEGRAM_TOPICS_VOICE_TRANSCRIBE, true, 'TELEGRAM_TOPICS_VOICE_TRANSCRIBE')
+const VOICE_TRANSCRIBE = environmentFlag(
+  process.env.TELEGRAM_TOPICS_VOICE_TRANSCRIBE,
+  true,
+  (value) => log(`TELEGRAM_TOPICS_VOICE_TRANSCRIBE="${value}" is not a recognized boolean; using default (true)`),
+)
 const FFMPEG_BIN = process.env.TELEGRAM_TOPICS_FFMPEG_BIN ?? '/opt/homebrew/bin/ffmpeg'
 const WHISPER_BIN = process.env.TELEGRAM_TOPICS_WHISPER_BIN ?? '/opt/homebrew/bin/whisper-cli'
 const WHISPER_MODEL = process.env.TELEGRAM_TOPICS_WHISPER_MODEL

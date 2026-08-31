@@ -88,7 +88,7 @@ describe('provider catalog adapter', () => {
         efforts: ['high'],
         defaultEffort: 'high',
         contextWindow: 1_000_000,
-        supportsUltracode: false,
+        supportsUltracode: true,
         bridgeSupported: false,
       },
     ])
