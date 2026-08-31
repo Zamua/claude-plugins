@@ -116,11 +116,11 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_TOPICS_ADMIN_USER_ID` | for routing | secrets user id | Telegram user allowed to change routes |
 | `TELEGRAM_PROVIDER_PROXY_URL` | no | `http://127.0.0.1:18765` | loopback compatibility bridge |
 | `TELEGRAM_PROVIDER_PROXY_BIN` | no | `claude-code-proxy` | bridge CLI used to enumerate models |
+| `TELEGRAM_OPENCODE_BIN` | no | `opencode` | CLI used to read OpenCode model names, efforts, and context windows |
 | `TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES` | no | `5` | Codex/OpenCode Go usage refresh interval |
 | `TELEGRAM_OPENCODE_AUTH_FILE` | no | OpenCode's standard auth file | source for OpenCode Go usage auth; the key is never copied into plugin state |
 | `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr`; this changes the pane host, never the harness |
 | `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` | no | (disabled) | 0-23 local; once a day at this hour the proxy kills live topic sessions (each `--resume`s on its next message) |
-| `TELEGRAM_TOPICS_ULTRACODE` | no | `true` | run every topic-Claude at ultracode (xhigh) effort; `false` = default medium. Baked into the generated settings; takes effect on the next proxy restart |
 | `TELEGRAM_TOPICS_MODEL` | no | `fable` | initial model for topics without a persisted route; `/model` selections are persisted per topic |
 | `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` | no | `5000` | MCP-side: how long the first inbound poll is held so the booting REPL is idle before the first message is delivered |
 
@@ -148,7 +148,9 @@ Health check while it runs: `curl -s localhost:8790/health`.
 
 For Codex/OpenCode Go routes, start `scripts/start-provider-proxy.sh` under your
 service manager. It binds only to loopback. The script reads the existing
-OpenCode Go key at process start; do not copy that key into `.env`.
+OpenCode Go key at process start; do not copy that key into `.env`. When no
+explicit bridge binary is configured, the launcher prefers the active
+home-manager profile before falling back to `PATH`.
 
 ## Use it
 
@@ -161,7 +163,7 @@ OpenCode Go key at process start; do not copy that key into `.env`.
 Attach through the selected multiplexer when you need to inspect a pane. Normal
 provider/model management stays in Telegram:
 
-- `/model` — choose provider, model, and effort with inline buttons.
+- `/model` — choose provider, model, effort, and Ultracode on/off with inline buttons.
 - `/model status` — show this topic's Claude UUID and active route.
 - `/usage` — show observed provider windows and reset times.
 
@@ -170,6 +172,15 @@ the other providers. It switches only after the operator chooses. Claude resumes
 the same UUID and is nudged to finish the unanswered message. When the exhausted
 provider resets, Telegram offers a switch-back button; it does not switch
 automatically or spend a banked reset credit.
+
+Auto-compaction is route-aware; do not set it manually for topic sessions.
+Anthropic uses Claude Code's provider-managed value, Codex compacts at 272k,
+and OpenCode Go uses the selected model's installed context metadata (up to 1m,
+with a 200k fallback only when metadata cannot be read). These values set the
+capacity used by Claude Code's compaction calculation; Claude Code still applies
+its own near-capacity trigger percentage. The OpenCode picker is
+built from the full installed catalog, so newly installed models remain visible;
+the bridge reports clearly if its allowlist still needs updating.
 
 Provider switching does not fork the conversation. The same Claude UUID is
 resumed with the selected provider/model. Only inbound transport differs:

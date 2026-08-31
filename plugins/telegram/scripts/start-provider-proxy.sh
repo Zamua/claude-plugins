@@ -14,4 +14,11 @@ if [ -f "$auth_file" ]; then
   fi
 fi
 
-exec claude-code-proxy serve --no-monitor --port "${TELEGRAM_PROVIDER_PROXY_PORT:-18765}"
+proxy_bin="${TELEGRAM_PROVIDER_PROXY_BIN:-}"
+home_manager_proxy="$HOME/.local/state/nix/profiles/home-manager/home-path/bin/claude-code-proxy"
+if [ -z "$proxy_bin" ] && [ -x "$home_manager_proxy" ]; then
+  proxy_bin="$home_manager_proxy"
+fi
+proxy_bin="${proxy_bin:-claude-code-proxy}"
+
+exec "$proxy_bin" serve --no-monitor --port "${TELEGRAM_PROVIDER_PROXY_PORT:-18765}"

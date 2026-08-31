@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  autoCompactWindow,
   DEFAULT_ROUTE,
   exhaustedRouteFor,
   forgetExhaustedProvider,
@@ -7,6 +8,7 @@ import {
   planRouteChange,
   rememberExhaustedRoute,
   topicRoute,
+  topicRouteFromRecord,
 } from './model-routing'
 
 describe('TopicRoute', () => {
@@ -14,12 +16,57 @@ describe('TopicRoute', () => {
     expect(topicRoute({ provider: 'opencode-go', model: 'glm-5.2' })).toEqual({
       provider: 'opencode-go',
       model: 'opencode-go/glm-5.2',
+      effort: 'auto',
+      ultracode: false,
+    })
+  })
+
+  test('keeps Ultracode off by default and pins it to xhigh when enabled', () => {
+    expect(DEFAULT_ROUTE.ultracode).toBeFalse()
+    expect(topicRoute({
+      provider: 'codex',
+      model: 'gpt-5.6-sol',
       effort: 'medium',
+      ultracode: true,
+    })).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.6-sol',
+      effort: 'xhigh',
+      ultracode: true,
     })
   })
 
   test('rejects a non-Codex model on the Codex route', () => {
     expect(() => normalizeModel('codex', 'glm-5.2')).toThrow('invalid Codex model')
+  })
+
+  test('migrates an implicit legacy Sol xhigh route to medium with Ultracode off', () => {
+    expect(topicRouteFromRecord({ provider: 'codex', model: 'gpt-5.6-sol', effort: 'xhigh' })).toEqual({
+      provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', ultracode: false,
+    })
+    expect(topicRouteFromRecord({
+      provider: 'codex', model: 'gpt-5.6-sol', effort: 'xhigh', ultracode: false,
+    })?.effort).toBe('xhigh')
+  })
+})
+
+describe('automatic compaction policy', () => {
+  test('lets native Anthropic choose its own window', () => {
+    expect(autoCompactWindow('anthropic', 1_000_000)).toBeUndefined()
+  })
+
+  test('keeps Codex at the long-context pricing boundary', () => {
+    expect(autoCompactWindow('codex', 1_050_000)).toBe(272_000)
+  })
+
+  test('uses OpenCode model metadata and clamps to Claude Code limits', () => {
+    expect(autoCompactWindow('opencode-go', 1_000_000)).toBe(1_000_000)
+    expect(autoCompactWindow('opencode-go', 1_048_576)).toBe(1_000_000)
+    expect(autoCompactWindow('opencode-go', 202_752)).toBe(202_752)
+  })
+
+  test('uses a conservative explicit fallback when metadata is unavailable', () => {
+    expect(autoCompactWindow('opencode-go')).toBe(200_000)
   })
 })
 

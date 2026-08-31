@@ -51,7 +51,8 @@ import {
 import type { FlowResult, Pending } from './secret'
 import { claudeSpawnEnv } from './adapters/claude-launch'
 import type { ClaudeSpawnSpec } from './adapters/claude-launch'
-import { catalogFromBridge } from './adapters/provider-catalog'
+import { effectiveClaudeSettings } from './adapters/claude-settings'
+import { catalogFromBridge, parseOpenCodeModels } from './adapters/provider-catalog'
 import type { ProviderCatalog, ProviderModel } from './adapters/provider-catalog'
 import { readCodexSnapshot } from './adapters/codex-app-server'
 import { readOpenCodeGoCapacity } from './adapters/opencode-go-capacity'
@@ -61,16 +62,16 @@ import { inboundModeForRoute, renderPaneTurn } from './domain/inbound-delivery'
 import type { InboundMessage } from './domain/inbound-delivery'
 import {
   DEFAULT_ROUTE,
+  autoCompactWindow,
   exhaustedRouteFor,
   forgetExhaustedProvider,
-  isEffort,
-  isProviderId,
   modelLabel,
   planRouteChange,
   providerLabel,
   rememberExhaustedRoute,
   sameRoute,
   topicRoute,
+  topicRouteFromRecord,
 } from './domain/model-routing'
 import type {
   Effort,
@@ -146,30 +147,6 @@ function log(m: string): void {
   process.stderr.write(`${new Date().toISOString()} telegram-topics-proxy: ${m}\n`)
 }
 
-// ---- effort (ultracode) ----------------------------------------------------
-// Every topic-Claude runs at ultracode (xhigh) effort by default. `ultracode` is
-// a SETTINGS key (`"ultracode": true`), NOT a CLI flag (--effort rejects the
-// value), and repeated --settings is last-wins rather than merged - so we bake it
-// into the ONE settings file the launcher passes: an effective-settings.json =
-// the committed override-settings.json base + `ultracode` from
-// TELEGRAM_TOPICS_ULTRACODE (default on). Regenerated on every proxy start, so a
-// config change lands on the next restart. Set TELEGRAM_TOPICS_ULTRACODE=false to
-// run topics at the default (medium) effort. (Measured: ultracode:true flips the
-// hook-reported effort.level medium -> xhigh.)
-// Recognized true/false tokens; an UNRECOGNIZED non-empty value (a typo like
-// "ture") falls back to the default and logs, rather than silently reading as
-// false - for a default-ON flag a silent-OFF typo is exactly the "wrong effort"
-// footgun we want to avoid.
-function envBool(v: string | undefined, dflt: boolean, name: string): boolean {
-  const s = (v ?? '').trim().toLowerCase()
-  if (s === '') return dflt
-  if (s === '1' || s === 'true' || s === 'yes' || s === 'on') return true
-  if (s === '0' || s === 'false' || s === 'no' || s === 'off') return false
-  log(`${name}="${v}" is not a recognized boolean; using default (${dflt})`)
-  return dflt
-}
-const ULTRACODE = envBool(process.env.TELEGRAM_TOPICS_ULTRACODE, true, 'TELEGRAM_TOPICS_ULTRACODE')
-
 // Default model for every topic-Claude, passed to the launcher (TG_MODEL) as the
 // `--model` FLAG. NOT a settings `model` key: that is only a DEFAULT and is
 // IGNORED by a --resume'd interactive session (it restores its own baked-in
@@ -201,14 +178,20 @@ const lastRouteChange = new Map<string, number>()
 const PROVIDER_PROXY_URL = (
   process.env.TELEGRAM_PROVIDER_PROXY_URL ?? 'http://127.0.0.1:18765'
 ).replace(/\/$/, '')
-const PROVIDER_PROXY_BIN = process.env.TELEGRAM_PROVIDER_PROXY_BIN ?? 'claude-code-proxy'
+const HOME_MANAGER_PROVIDER_PROXY_BIN = join(
+  homedir(), '.local', 'state', 'nix', 'profiles', 'home-manager', 'home-path', 'bin', 'claude-code-proxy',
+)
+const PROVIDER_PROXY_BIN = process.env.TELEGRAM_PROVIDER_PROXY_BIN ??
+  (existsSync(HOME_MANAGER_PROVIDER_PROXY_BIN) ? HOME_MANAGER_PROVIDER_PROXY_BIN : 'claude-code-proxy')
+const OPENCODE_BIN = process.env.TELEGRAM_OPENCODE_BIN ?? 'opencode'
 const OPENCODE_AUTH_FILE = process.env.TELEGRAM_OPENCODE_AUTH_FILE ??
   join(homedir(), '.local', 'share', 'opencode', 'auth.json')
 const CAPACITY_POLL_MS = Number(process.env.TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES ?? '5') * 60_000
 const DEFAULT_TOPIC_ROUTE = topicRoute({
   provider: 'anthropic',
   model: MODEL || DEFAULT_ROUTE.model,
-  effort: ULTRACODE ? 'xhigh' : 'medium',
+  effort: 'xhigh',
+  ultracode: false,
 })
 
 // Which terminal multiplexer hosts the detached topic-Claude sessions.
@@ -238,7 +221,7 @@ const SQUARE_TOPIC = (process.env.TELEGRAM_TOPICS_SQUARE_TOPIC_ID ?? '').trim()
 // stops routing). No hop caps / rate limits by design: discipline is the
 // per-delivery norm line; Telegram's per-group limits are the only throttle.
 const CONV_TTL_HOURS = Number(process.env.TELEGRAM_TOPICS_CONV_TTL_HOURS ?? '48')
-const EFFECTIVE_SETTINGS = join(STATE_DIR, 'effective-settings.json')
+const EFFECTIVE_SETTINGS_DIR = join(STATE_DIR, 'effective-settings')
 // Called PER SPAWN (not once at module load) so each (re)spawn reflects the
 // CURRENT committed override-settings.json - a base-settings edit (e.g. a git
 // pull) then reaches topics on their next respawn (the nightly restart, a kill),
@@ -246,18 +229,20 @@ const EFFECTIVE_SETTINGS = join(STATE_DIR, 'effective-settings.json')
 // self-heals if the generated file is removed. On any read/write error it falls
 // back to the committed base un-generated (topics still spawn, just without the
 // ultracode override).
-function resolveSettings(): string {
+function resolveSettings(topic: string, route: TopicRoute): string {
   try {
-    mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+    mkdirSync(EFFECTIVE_SETTINGS_DIR, { recursive: true, mode: 0o700 })
     const base = JSON.parse(readFileSync(OVERRIDE_SETTINGS, 'utf8'))
-    base.ultracode = ULTRACODE
+    const settings = effectiveClaudeSettings(base, route)
+    const safeTopic = topic.replace(/[^a-zA-Z0-9_-]/g, '_')
+    const settingsPath = join(EFFECTIVE_SETTINGS_DIR, `${safeTopic}.json`)
     // NB the MODEL is NOT baked in here: a settings `model` is only a default and
     // is ignored by a --resume'd interactive session. The launcher passes MODEL as
     // the --model FLAG (via TG_MODEL) instead, which overrides even on resume.
-    writeFileSync(EFFECTIVE_SETTINGS, JSON.stringify(base, null, 2) + '\n')
-    return EFFECTIVE_SETTINGS
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
+    return settingsPath
   } catch (e) {
-    log(`could not generate effective settings (${e}); using override-settings.json - ultracode NOT applied`)
+    log(`could not generate effective settings (${e}); using override-settings.json`)
     return OVERRIDE_SETTINGS
   }
 }
@@ -750,17 +735,7 @@ type RegistryEntry = {
 }
 
 function parseRoute(value: unknown): TopicRoute | undefined {
-  const raw = value as any
-  if (!raw || !isProviderId(raw.provider) || typeof raw.model !== 'string') return undefined
-  try {
-    return topicRoute({
-      provider: raw.provider,
-      model: raw.model,
-      effort: isEffort(raw.effort) ? raw.effort : undefined,
-    })
-  } catch {
-    return undefined
-  }
+  return topicRouteFromRecord(value)
 }
 
 function routeFromRegistry(value: unknown, fallback = DEFAULT_TOPIC_ROUTE): TopicRoute {
@@ -1362,7 +1337,8 @@ function ensureSession(topic: string): void {
     const name = sessionNameFor(topic, label)
     // Regenerate the effective settings for THIS spawn so it reflects the current
     // committed base + the ultracode config (fresh on every respawn).
-    const settingsPath = resolveSettings()
+    const settingsPath = resolveSettings(topic, route)
+    const routeModel = modelCatalog()[route.provider].find(model => model.id === route.model)
     const spec: ClaudeSpawnSpec = {
       topic,
       label,
@@ -1380,6 +1356,7 @@ function ensureSession(topic: string): void {
       failoverHook: FAILOVER_HOOK,
       capacityHook: CAPACITY_HOOK,
       providerProxyUrl: PROVIDER_PROXY_URL,
+      modelContextWindow: routeModel?.contextWindow,
     }
     const env = {
       ...process.env,
@@ -1394,7 +1371,9 @@ function ensureSession(topic: string): void {
     saveRegistry()
     log(
       `${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" ` +
-      `(claude ${st.claudeSessionId}; ${route.provider}/${route.model}; ${route.effort}) -> ${mux.kind} ${name}`,
+      `(claude ${st.claudeSessionId}; ${route.provider}/${route.model}; ${route.effort}; ` +
+      `ultracode ${route.ultracode ? 'on' : 'off'}; compact ${autoCompactWindow(route.provider, routeModel?.contextWindow) ?? 'auto'}) ` +
+      `-> ${mux.kind} ${name}`,
     )
   } catch (e) {
     log(`spawn failed for topic ${topic}: ${e}`)
@@ -1766,6 +1745,7 @@ type ModelSelection = {
   model: ProviderModel
   reason: PickerReason
   expiresAt: number
+  effort?: Effort
 }
 const modelSelections = new Map<string, ModelSelection>()
 const PICKER_TTL_MS = 10 * 60_000
@@ -1784,17 +1764,24 @@ const reasonFromCode = (code: string): PickerReason | undefined =>
 
 function modelCatalog(): ProviderCatalog {
   if (catalogCache && Date.now() - catalogCache.at < 60_000) return catalogCache.value
+  let bridgeOutput = ''
+  let openCodeModels = new Map<string, ProviderModel>()
   try {
-    const output = execFileSync(PROVIDER_PROXY_BIN, ['models'], { encoding: 'utf8', timeout: 15_000 })
-    const value = catalogFromBridge(output, codexAccountModels)
-    catalogCache = { value, at: Date.now() }
-    return value
+    bridgeOutput = execFileSync(PROVIDER_PROXY_BIN, ['models'], { encoding: 'utf8', timeout: 15_000 })
   } catch (e) {
-    log(`provider model catalog failed: ${e}`)
-    const value = catalogFromBridge('')
-    catalogCache = { value, at: Date.now() }
-    return value
+    log(`provider bridge model catalog failed: ${e}`)
   }
+  try {
+    const output = execFileSync(OPENCODE_BIN, ['models', 'opencode-go', '--verbose'], {
+      encoding: 'utf8', timeout: 20_000,
+    })
+    openCodeModels = parseOpenCodeModels(output)
+  } catch (e) {
+    log(`OpenCode model metadata failed: ${e}`)
+  }
+  const value = catalogFromBridge(bridgeOutput, codexAccountModels, openCodeModels)
+  catalogCache = { value, at: Date.now() }
+  return value
 }
 
 function formatTime(epochMs: number): string {
@@ -1808,7 +1795,8 @@ function currentRoute(st: TopicState): TopicRoute {
 }
 
 function routeSummary(route: TopicRoute): string {
-  return `${providerLabel(route.provider)} · ${modelLabel(route.model)} · ${route.effort}`
+  return `${providerLabel(route.provider)} · ${modelLabel(route.model)} · ${route.effort} · ` +
+    `Ultracode ${route.ultracode ? 'on' : 'off'}`
 }
 
 function providerKeyboard(topic: string, reason: PickerReason, exclude?: ProviderId): InlineKeyboard {
@@ -1862,7 +1850,7 @@ function modelPicker(
   const keyboard = new InlineKeyboard()
   for (const model of models.slice(safePage * MODELS_PER_PAGE, (safePage + 1) * MODELS_PER_PAGE)) {
     const token = modelToken({ topic, provider, model, reason, expiresAt: Date.now() + PICKER_TTL_MS })
-    keyboard.text(model.label, `tgroute:m:${token}`).row()
+    keyboard.text(`${model.label}${model.bridgeSupported === false ? ' · bridge update needed' : ''}`, `tgroute:m:${token}`).row()
   }
   if (pages > 1) {
     if (safePage > 0) {
@@ -1988,11 +1976,12 @@ function capacityText(): string {
 }
 
 function switchBackKeyboard(topic: string, route: TopicRoute): InlineKeyboard {
-  const model: ProviderModel = {
+  const model = modelCatalog()[route.provider].find(candidate => candidate.id === route.model) ?? {
     id: route.model,
     label: modelLabel(route.model),
     efforts: [route.effort],
     defaultEffort: route.effort,
+    supportsUltracode: route.ultracode,
   }
   const token = modelToken({
     topic,
@@ -2310,40 +2299,64 @@ bot.on('callback_query:data', async ctx => {
         }).catch(() => {})
         return
       }
-      if (selection.model.efforts.length > 1) {
-        const keyboard = new InlineKeyboard()
-        for (const effort of selection.model.efforts) {
-          keyboard.text(effort, `tgroute:e:${modelPick[1]}:${effort}`).row()
-        }
-        await ctx.editMessageText(`${selection.model.label}: choose effort`, { reply_markup: keyboard }).catch(() => {})
-        await ctx.answerCallbackQuery().catch(() => {})
+      if (selection.model.bridgeSupported === false) {
+        await ctx.answerCallbackQuery({
+          text: `${selection.model.label} is installed but this bridge build cannot route it yet.`,
+          show_alert: true,
+        }).catch(() => {})
         return
       }
-      const route = topicRoute({
-        provider: selection.provider,
-        model: selection.model.id,
-        effort: selection.model.defaultEffort,
-      })
-      const result = requestRouteChange(selection.topic, route, selection.reason)
-      modelSelections.delete(modelPick[1])
-      await ctx.editMessageText(
-        result === 'queued'
-          ? `Queued ${routeSummary(route)}. It will switch when the current Claude turn finishes.`
-          : result === 'unchanged'
-            ? `Already using ${routeSummary(route)}.`
-            : `Now using ${routeSummary(route)} in the same Claude session.`,
-      ).catch(() => {})
-      await ctx.answerCallbackQuery({ text: result === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
+      const keyboard = new InlineKeyboard()
+      for (const effort of selection.model.efforts) {
+        const label = effort === 'auto' ? 'Provider default' : effort
+        const suffix = effort === selection.model.defaultEffort ? ' · default' : ''
+        keyboard.text(`${label}${suffix}`, `tgroute:e:${modelPick[1]}:${effort}`).row()
+      }
+      await ctx.editMessageText(`${selection.model.label}: choose reasoning effort`, {
+        reply_markup: keyboard,
+      }).catch(() => {})
+      await ctx.answerCallbackQuery().catch(() => {})
       return
     }
 
-    const effortPick = /^tgroute:e:([a-f0-9]+):(low|medium|high|xhigh|max)$/.exec(data)
+    const effortPick = /^tgroute:e:([a-f0-9]+):(auto|low|medium|high|xhigh|max)$/.exec(data)
     if (effortPick) {
       pruneModelSelections()
       const selection = modelSelections.get(effortPick[1])
       const effort = effortPick[2] as Effort
       if (!selection || !selection.model.efforts.includes(effort)) {
         await ctx.answerCallbackQuery({ text: 'This effort picker expired.' }).catch(() => {})
+        return
+      }
+      selection.effort = effort
+      const keyboard = new InlineKeyboard().text('Off', `tgroute:u:${effortPick[1]}:0`).row()
+      if (selection.model.supportsUltracode) {
+        keyboard.text('On · forces xhigh + workflows', `tgroute:u:${effortPick[1]}:1`).row()
+      }
+      const compact = autoCompactWindow(selection.provider, selection.model.contextWindow)
+      await ctx.editMessageText(
+        `${selection.model.label} · ${effort === 'auto' ? 'provider-default effort' : `${effort} effort`}\n` +
+        `Auto-compaction: ${compact ? `${compact.toLocaleString()} tokens` : 'provider-managed'}\n\n` +
+        (selection.model.supportsUltracode
+          ? 'Choose Ultracode. Turning it on overrides effort to xhigh and enables dynamic workflows.'
+          : 'Ultracode is not supported by this model; choose Off.'),
+        { reply_markup: keyboard },
+      ).catch(() => {})
+      await ctx.answerCallbackQuery().catch(() => {})
+      return
+    }
+
+    const ultracodePick = /^tgroute:u:([a-f0-9]+):([01])$/.exec(data)
+    if (ultracodePick) {
+      pruneModelSelections()
+      const selection = modelSelections.get(ultracodePick[1])
+      const ultracode = ultracodePick[2] === '1'
+      if (!selection || !selection.effort) {
+        await ctx.answerCallbackQuery({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
+        return
+      }
+      if (ultracode && !selection.model.supportsUltracode) {
+        await ctx.answerCallbackQuery({ text: 'Ultracode is not supported by this model.', show_alert: true }).catch(() => {})
         return
       }
       if (capacities.get(selection.provider)?.availability === 'exhausted') {
@@ -2359,9 +2372,14 @@ bot.on('callback_query:data', async ctx => {
         return
       }
       lastRouteChange.set(selection.topic, Date.now())
-      const route = topicRoute({ provider: selection.provider, model: selection.model.id, effort })
+      const route = topicRoute({
+        provider: selection.provider,
+        model: selection.model.id,
+        effort: selection.effort,
+        ultracode,
+      })
       const result = requestRouteChange(selection.topic, route, selection.reason)
-      modelSelections.delete(effortPick[1])
+      modelSelections.delete(ultracodePick[1])
       await ctx.editMessageText(
         result === 'queued'
           ? `Queued ${routeSummary(route)}. It will switch when the current Claude turn finishes.`
@@ -2751,7 +2769,8 @@ async function pollWithRetry(): Promise<void> {
           // and only after a stably-up run (see below).
           pollingSince = Date.now()
           log(
-            `polling as @${info.username}; group ${GROUP_CHAT_ID}; spawn dir ${SPAWN_DIR}; marketplace ${MARKETPLACE}; ultracode ${ULTRACODE ? 'on' : 'off'}; model ${MODEL || '(account default)'}`,
+            `polling as @${info.username}; group ${GROUP_CHAT_ID}; spawn dir ${SPAWN_DIR}; ` +
+            `marketplace ${MARKETPLACE}; default ultracode off; model ${MODEL || '(account default)'}`,
           )
         },
       })

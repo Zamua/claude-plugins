@@ -1,13 +1,14 @@
 export const PROVIDERS = ['anthropic', 'codex', 'opencode-go'] as const
 
 export type ProviderId = (typeof PROVIDERS)[number]
-export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type Effort = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type RouteChangeReason = 'manual' | 'quota' | 'reset' | 'migration'
 
 export type TopicRoute = {
   provider: ProviderId
   model: string
   effort: Effort
+  ultracode: boolean
 }
 
 export type PendingRouteChange = {
@@ -25,6 +26,7 @@ export const DEFAULT_ROUTE: TopicRoute = {
   provider: 'anthropic',
   model: 'fable',
   effort: 'xhigh',
+  ultracode: false,
 }
 
 export function isProviderId(value: unknown): value is ProviderId {
@@ -32,7 +34,7 @@ export function isProviderId(value: unknown): value is ProviderId {
 }
 
 export function isEffort(value: unknown): value is Effort {
-  return typeof value === 'string' && ['low', 'medium', 'high', 'xhigh', 'max'].includes(value)
+  return typeof value === 'string' && ['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value)
 }
 
 export function normalizeModel(provider: ProviderId, model: string): string {
@@ -55,21 +57,53 @@ export function topicRoute(input: {
   provider: ProviderId
   model: string
   effort?: Effort
+  ultracode?: boolean
 }): TopicRoute {
+  const ultracode = input.ultracode ?? false
   return {
     provider: input.provider,
     model: normalizeModel(input.provider, input.model),
-    effort: input.effort ?? defaultEffort(input.provider),
+    effort: ultracode ? 'xhigh' : input.effort ?? defaultEffort(input.provider),
+    ultracode,
+  }
+}
+
+export function topicRouteFromRecord(value: unknown): TopicRoute | undefined {
+  const raw = value as Record<string, unknown> | null
+  if (!raw || !isProviderId(raw.provider) || typeof raw.model !== 'string') return undefined
+  try {
+    const legacyRoute = !Object.prototype.hasOwnProperty.call(raw, 'ultracode')
+    const legacySolXhigh = legacyRoute && raw.provider === 'codex' &&
+      raw.model === 'gpt-5.6-sol' && raw.effort === 'xhigh'
+    return topicRoute({
+      provider: raw.provider,
+      model: raw.model,
+      effort: legacySolXhigh ? 'medium' : isEffort(raw.effort) ? raw.effort : undefined,
+      ultracode: legacyRoute ? false : raw.ultracode === true,
+    })
+  } catch {
+    return undefined
   }
 }
 
 export function defaultEffort(provider: ProviderId): Effort {
-  if (provider === 'opencode-go') return 'medium'
+  if (provider === 'opencode-go') return 'auto'
   return 'xhigh'
 }
 
 export function sameRoute(left: TopicRoute, right: TopicRoute): boolean {
-  return left.provider === right.provider && left.model === right.model && left.effort === right.effort
+  return left.provider === right.provider && left.model === right.model &&
+    left.effort === right.effort && left.ultracode === right.ultracode
+}
+
+// Claude Code accepts explicit compaction thresholds from 100k through 1m.
+// Native Anthropic owns its context accounting. Codex deliberately compacts at
+// its long-context billing boundary; OpenCode follows installed model metadata.
+export function autoCompactWindow(provider: ProviderId, contextWindow?: number): number | undefined {
+  if (provider === 'anthropic') return undefined
+  if (provider === 'codex') return 272_000
+  if (!Number.isFinite(contextWindow) || (contextWindow ?? 0) <= 0) return 200_000
+  return Math.max(100_000, Math.min(1_000_000, Math.floor(contextWindow!)))
 }
 
 // A topic may exhaust more than one provider while continuing the same
