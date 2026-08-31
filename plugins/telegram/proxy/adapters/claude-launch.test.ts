@@ -12,6 +12,7 @@ const spec = (over: Partial<ClaudeSpawnSpec> = {}): ClaudeSpawnSpec => ({
   squareTopic: '123',
   marketplace: 'plugin:telegram@zamua',
   route: { provider: 'anthropic', model: 'fable', effort: 'xhigh', ultracode: false },
+  auxiliaryModel: 'haiku',
   claudeSessionId: 'abc-123',
   resume: false,
   settingsPath: '/settings.json',
@@ -31,7 +32,9 @@ describe('Claude launch adapter', () => {
     expect(env.TG_PROVIDER_AUTH_TOKEN).toBe('')
     expect(env.TG_AUTO_COMPACT_WINDOW).toBe('')
     expect(env.TG_MODEL).toBe('fable')
+    expect(env.TG_AUX_MODEL).toBe('haiku')
     expect(env.TG_EFFORT).toBe('xhigh')
+    expect(env.TG_DISALLOWED_TOOLS).toBe('AskUserQuestion,Workflow')
     expect(env.TG_CLAUDE_SESSION_ID).toBe('abc-123')
     expect(env.TG_CAPACITY_HOOK).toBe('/hooks/provider-capacity-status.py')
     expect(env.TG_RESUME).toBe('')
@@ -41,6 +44,7 @@ describe('Claude launch adapter', () => {
     const env = claudeSpawnEnv(spec({
       resume: true,
       route: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', ultracode: false },
+      auxiliaryModel: 'gpt-5.6-luna',
       modelContextWindow: 1_050_000,
     }))
     expect(env.TG_PROVIDER).toBe('codex')
@@ -49,6 +53,7 @@ describe('Claude launch adapter', () => {
     expect(env.TG_PROVIDER_AUTH_TOKEN).toBe('unused')
     expect(env.TG_AUTO_COMPACT_WINDOW).toBe('272000')
     expect(env.TG_MODEL).toBe('gpt-5.6-sol[1m]')
+    expect(env.TG_AUX_MODEL).toBe('gpt-5.6-luna[1m]')
     expect(env.TG_EFFORT).toBe('high')
     expect(env.TG_CLAUDE_SESSION_ID).toBe('abc-123')
     expect(env.TG_RESUME).toBe('1')
@@ -57,12 +62,14 @@ describe('Claude launch adapter', () => {
   test('OpenCode Go is a provider route, never another harness', () => {
     const env = claudeSpawnEnv(spec({
       route: { provider: 'opencode-go', model: 'opencode-go/glm-5.2', effort: 'medium', ultracode: false },
+      auxiliaryModel: 'opencode-go/gpt-5.6-luna',
       modelContextWindow: 1_000_000,
     }))
     expect(env.TG_PROVIDER).toBe('opencode-go')
     expect(env.TG_INBOUND_MODE).toBe('pane')
     expect(env.TG_AUTO_COMPACT_WINDOW).toBe('1000000')
     expect(env.TG_MODEL).toBe('opencode-go/glm-5.2')
+    expect(env.TG_AUX_MODEL).toBe('opencode-go/gpt-5.6-luna')
     expect(Object.keys(env).some(key => key.startsWith('TG_OC_'))).toBeFalse()
     expect(env).not.toHaveProperty('TG_BACKEND')
   })
@@ -74,5 +81,12 @@ describe('Claude launch adapter', () => {
     }))
     expect(env.TG_EFFORT).toBe('')
     expect(env.TG_AUTO_COMPACT_WINDOW).toBe('262144')
+  })
+
+  test('exposes Workflow only when Ultracode is explicitly enabled', () => {
+    const env = claudeSpawnEnv(spec({
+      route: { provider: 'anthropic', model: 'fable', effort: 'xhigh', ultracode: true },
+    }))
+    expect(env.TG_DISALLOWED_TOOLS).toBe('AskUserQuestion')
   })
 })

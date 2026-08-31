@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  auxiliaryModelForRoute,
   autoCompactWindow,
   DEFAULT_ROUTE,
   exhaustedRouteFor,
@@ -67,6 +68,28 @@ describe('automatic compaction policy', () => {
 
   test('uses a conservative explicit fallback when metadata is unavailable', () => {
     expect(autoCompactWindow('opencode-go')).toBe(200_000)
+  })
+})
+
+describe('auxiliary model policy', () => {
+  test('keeps auxiliary work on the selected provider and prefers its efficient model', () => {
+    expect(auxiliaryModelForRoute(
+      topicRoute({ provider: 'anthropic', model: 'fable', effort: 'medium' }),
+      ['fable', 'haiku'],
+    )).toBe('haiku')
+    expect(auxiliaryModelForRoute(
+      topicRoute({ provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' }),
+      ['gpt-5.6-sol', 'gpt-5.6-luna'],
+    )).toBe('gpt-5.6-luna')
+    expect(auxiliaryModelForRoute(
+      topicRoute({ provider: 'opencode-go', model: 'deepseek-v4-flash', effort: 'medium' }),
+      ['opencode-go/deepseek-v4-flash', 'opencode-go/gpt-5.6-luna'],
+    )).toBe('opencode-go/gpt-5.6-luna')
+  })
+
+  test('falls back to the selected model when no preferred auxiliary is available', () => {
+    const route = topicRoute({ provider: 'opencode-go', model: 'glm-5.3-flash', effort: 'medium' })
+    expect(auxiliaryModelForRoute(route, [route.model])).toBe(route.model)
   })
 })
 

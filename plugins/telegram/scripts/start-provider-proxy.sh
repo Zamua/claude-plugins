@@ -6,6 +6,12 @@ set -eu
 
 export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/etc/profiles/per-user/$USER/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+# The bridge validates Claude's session/Agent identity and only continues an
+# append-only transcript when the request is a safe extension. This avoids
+# resending a large main or subagent transcript on every tool round; an explicit
+# operator value (including 0) still wins.
+export CCP_CODEX_PREVIOUS_RESPONSE_ID="${CCP_CODEX_PREVIOUS_RESPONSE_ID:-1}"
+
 auth_file="${TELEGRAM_OPENCODE_AUTH_FILE:-$HOME/.local/share/opencode/auth.json}"
 if [ -f "$auth_file" ]; then
   opencode_key=$(jq -r '."opencode-go".key // empty' "$auth_file")

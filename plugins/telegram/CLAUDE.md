@@ -317,10 +317,11 @@ effort buttons -> Ultracode on/off. The effort step is always shown; models
 without selectable variants use `auto` (shown as “Provider default”). Ultracode
 is per-topic and defaults off. Turning it on forces xhigh effort and dynamic
 workflow orchestration; the picker offers it only for compatible models.
-`/model status` shows the active route. `/usage` shows observed
-quota windows and reset times. A route change while Claude is idle is applied
-immediately; one requested during a turn is persisted as `pending_route` and
-applied when the old process polls again after finishing the turn.
+`/model status` shows the active route plus its enforced subagent, auxiliary,
+effort, and Workflow policy. `/usage` shows observed quota windows and reset
+times. A route change while Claude is idle is applied immediately; one requested
+during a turn is persisted as `pending_route` and applied when the old process
+polls again after finishing the turn.
 
 Quota recovery is deliberately operator-driven:
 
@@ -349,9 +350,23 @@ Details that matter:
   from `codex app-server` (`model/list`, `account/rateLimits/read`); OpenCode Go
   is read from its authenticated usage endpoint. A missing probe is “not
   observed,” never assumed available.
-- Proxied routes set `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
-  `ANTHROPIC_MODEL`, and `ANTHROPIC_SMALL_FAST_MODEL` only in the spawned
-  Claude environment. Codex models use the bridge's `[1m]` model suffix and a
+- Every topic launch pins `CLAUDE_CODE_SUBAGENT_MODEL` to the Telegram-selected
+  main model and, unless effort is `auto`, pins `CLAUDE_CODE_EFFORT_LEVEL` to
+  the selected effort. Claude Code gives that environment variable precedence
+  over subagent/workflow frontmatter, so a nested agent cannot silently raise
+  medium to high/xhigh. When Ultracode is off, the launcher also denies the
+  `Workflow` tool at the CLI boundary; turning Ultracode on is the only route
+  that exposes it. `AskUserQuestion` stays denied because a detached pane cannot
+  answer its terminal UI.
+- Auxiliary work uses an efficient model from the same provider allowance:
+  Anthropic Haiku, Codex GPT-5.6 Luna, or OpenCode Go GPT-5.6 Luna, with a
+  catalog-aware fallback to the selected main model. The launcher exports the
+  current `ANTHROPIC_DEFAULT_HAIKU_MODEL` and the legacy
+  `ANTHROPIC_SMALL_FAST_MODEL` alias for compatibility. This auxiliary choice
+  does not change the main or ordinary subagent model.
+- Proxied routes set `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and
+  `ANTHROPIC_MODEL` only in the spawned Claude environment. Codex models use the
+  bridge's `[1m]` model suffix and a
   deliberate 272k auto-compact window (the long-context pricing boundary).
   OpenCode Go reads each installed model's actual context window from
   `opencode models opencode-go --verbose`, clamps it to Claude Code's 100k-1m
@@ -359,9 +374,17 @@ Details that matter:
   This variable is the capacity used for compaction calculations, not the exact
   trigger; Claude Code still applies its normal near-capacity percentage.
   Native Anthropic leaves compaction provider-managed.
-  The two model env overrides are load-bearing for exact-UUID resumes:
+  The main and subagent model overrides are load-bearing for exact-UUID resumes:
   `--model` alone can leave an Anthropic-authenticated session on its restored
   native plan route. Native Anthropic explicitly unsets every bridge override.
+- `scripts/start-provider-proxy.sh` enables
+  `CCP_CODEX_PREVIOUS_RESPONSE_ID=1` by default. The bridge then sends only the
+  new turn for an established Codex main-agent or direct-subagent stream and
+  links it to the prior Responses API result. It keeps those chains separate by
+  Claude session/agent headers and falls back to a full-context request whenever
+  a safe continuation key is unavailable. Bridge restarts forget only this
+  in-memory transport cache; Claude's UUID/transcript remains the source of
+  truth, so the next request rebuilds context without forking the session.
 - `claude-code-proxy` is an unofficial local compatibility bridge. It binds to
   loopback, owns no Telegram state, and receives the OpenCode credential at
   process start from OpenCode's existing auth file; the key is not copied into
@@ -572,8 +595,9 @@ Details that matter:
   app-server client, and OpenCode Go capacity client. Tests sit beside them.
 - `scripts/launch-topic.sh`: the one-harness launcher (invoked by the proxy;
   `TG_MUX` picks only the multiplexer). Every pane executes `claude`.
-- `scripts/start-provider-proxy.sh`: starts the loopback compatibility bridge
-  and injects the existing OpenCode Go credential without duplicating it.
+- `scripts/start-provider-proxy.sh`: starts the loopback compatibility bridge,
+  enables safe Codex response continuation, and injects the existing OpenCode
+  Go credential without duplicating it.
 - `scripts/start-proxy.sh`: foreground proxy starter.
 - `server.ts`: the Claude Code Telegram MCP. Background subagents and proxied
   provider sessions inherit outbound tools but do not start another inbound
@@ -621,11 +645,15 @@ configured through `/model`; no global environment toggle is used. Ultracode
 defaults off. If enabled, the domain model pins effort to xhigh because Claude
 Code's Ultracode mode requires xhigh and enables standing dynamic workflows.
 Models with no explicit effort variants persist `auto`, which omits `--effort`
-so the provider owns the choice. Repeated `--settings` is last-wins, not merged,
-so each spawn writes a topic-specific effective settings file containing the
-route's Ultracode value. Legacy GPT-5.6 Sol routes that were implicitly xhigh
-before this schema migrate once to medium + Ultracode off; all other legacy
-routes retain their prior effort with Ultracode off.
+and `CLAUDE_CODE_EFFORT_LEVEL` so the provider owns the choice. Otherwise the
+launcher sets both, and the environment-level value prevents subagent/workflow
+frontmatter from overriding the Telegram selection. Repeated `--settings` is
+last-wins, not merged, so each spawn writes a topic-specific effective settings
+file containing the route's Ultracode value. The CLI independently blocks the
+`Workflow` tool while Ultracode is off, preventing stale/global settings from
+starting a workflow fan-out. Legacy GPT-5.6 Sol routes that were implicitly
+xhigh before this schema migrate once to medium + Ultracode off; all other
+legacy routes retain their prior effort with Ultracode off.
 
 **Topic model (the `--model` FLAG, NOT a settings key).** The proxy passes
 `TELEGRAM_TOPICS_MODEL` (default the `fable` alias; `default`/`inherit`/empty =

@@ -63,6 +63,7 @@ import { inboundModeForRoute, renderPaneTurn } from './domain/inbound-delivery'
 import type { InboundMessage } from './domain/inbound-delivery'
 import {
   DEFAULT_ROUTE,
+  auxiliaryModelForRoute,
   autoCompactWindow,
   exhaustedRouteFor,
   forgetExhaustedProvider,
@@ -228,7 +229,7 @@ const EFFECTIVE_SETTINGS_DIR = join(STATE_DIR, 'effective-settings')
 // Persisted with every successful topic launch. Increment whenever launch-time
 // behavior changes in a way an already-running pane cannot absorb. A stale
 // pane is reconciled at its next safe turn boundary, preserving its UUID.
-const TOPIC_LAUNCH_PROFILE_VERSION = 1
+const TOPIC_LAUNCH_PROFILE_VERSION = 2
 // Called PER SPAWN (not once at module load) so each (re)spawn reflects the
 // CURRENT committed override-settings.json - a base-settings edit (e.g. a git
 // pull) then reaches topics on their next respawn (the nightly restart, a kill),
@@ -1372,7 +1373,12 @@ function ensureSession(topic: string): void {
     // Regenerate the effective settings for THIS spawn so it reflects the current
     // committed base + the ultracode config (fresh on every respawn).
     const settingsPath = resolveSettings(topic, route)
-    const routeModel = modelCatalog()[route.provider].find(model => model.id === route.model)
+    const providerModels = modelCatalog()[route.provider]
+    const routeModel = providerModels.find(model => model.id === route.model)
+    const auxiliaryModel = auxiliaryModelForRoute(
+      route,
+      providerModels.filter(model => model.bridgeSupported !== false).map(model => model.id),
+    )
     const spec: ClaudeSpawnSpec = {
       topic,
       label,
@@ -1383,6 +1389,7 @@ function ensureSession(topic: string): void {
       squareTopic: SQUARE_TOPIC,
       marketplace: MARKETPLACE,
       route,
+      auxiliaryModel,
       claudeSessionId: st.claudeSessionId ?? '',
       resume: resuming,
       settingsPath,
@@ -1407,7 +1414,8 @@ function ensureSession(topic: string): void {
     log(
       `${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" ` +
       `(claude ${st.claudeSessionId}; ${route.provider}/${route.model}; ${route.effort}; ` +
-      `ultracode ${route.ultracode ? 'on' : 'off'}; compact ${autoCompactWindow(route.provider, routeModel?.contextWindow) ?? 'auto'}) ` +
+      `aux ${auxiliaryModel}; subagents locked; ultracode ${route.ultracode ? 'on' : 'off'}; ` +
+      `compact ${autoCompactWindow(route.provider, routeModel?.contextWindow) ?? 'auto'}) ` +
       `-> ${mux.kind} ${name}`,
     )
   } catch (e) {
@@ -1837,6 +1845,24 @@ function routeSummary(route: TopicRoute): string {
     `Ultracode ${route.ultracode ? 'on' : 'off'}`
 }
 
+function auxiliaryModel(route: TopicRoute): string {
+  return auxiliaryModelForRoute(
+    route,
+    modelCatalog()[route.provider]
+      .filter(model => model.bridgeSupported !== false)
+      .map(model => model.id),
+  )
+}
+
+function executionPolicySummary(route: TopicRoute): string {
+  const effort = route.effort === 'auto' ? 'provider default' : `${route.effort} enforced`
+  return [
+    `Subagents: ${modelLabel(route.model)} · ${effort}`,
+    `Auxiliary: ${modelLabel(auxiliaryModel(route))}`,
+    `Workflow: ${route.ultracode ? 'enabled' : 'blocked'}`,
+  ].join('\n')
+}
+
 function providerKeyboard(topic: string, reason: PickerReason, exclude?: ProviderId): InlineKeyboard {
   const keyboard = new InlineKeyboard()
   const providers: ProviderId[] = ['anthropic', 'codex', 'opencode-go']
@@ -1976,7 +2002,13 @@ async function handleModelCommand(chatId: string, topic: string, fromId: string,
   const value = arg.trim().toLowerCase()
   if (value === 'status') {
     const st = getTopic(topic)
-    await sayIn(chatId, topic, `Claude session: ${st.claudeSessionId ?? 'not started'}\nRoute: ${routeSummary(currentRoute(st))}`)
+    const route = currentRoute(st)
+    await sayIn(
+      chatId,
+      topic,
+      `Claude session: ${st.claudeSessionId ?? 'not started'}\n` +
+      `Route: ${routeSummary(route)}\n${executionPolicySummary(route)}`,
+    )
     return
   }
   const requestedProvider = value === 'chatgpt' || value === 'codex'

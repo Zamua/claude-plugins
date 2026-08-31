@@ -49,7 +49,9 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/opt/home
 # TG_MODEL is optional: a model id passed as the --model FLAG (empty = account
 # default). Set by the proxy from TELEGRAM_TOPICS_MODEL.
 : "${TG_MODEL:=}"
+: "${TG_AUX_MODEL:=}"
 : "${TG_EFFORT:=}"
+: "${TG_DISALLOWED_TOOLS:=AskUserQuestion,Workflow}"
 # TG_MUX is optional: which multiplexer hosts the session (default tmux).
 : "${TG_MUX:=tmux}"
 # MCP_TIMEOUT (ms, claude's MCP-startup ceiling) is forwarded into the pane with a
@@ -88,37 +90,56 @@ TG_PATH="$PATH"
 # over --dangerously-skip-permissions, which skips ALL checks). Caveat: a
 # detached pane cannot answer an interactive confirm, so if auto mode ever
 # escalates a genuinely risky command it will block until attended.
-# --disallowedTools=AskUserQuestion REMOVES the AskUserQuestion tool: a detached
-# pane cannot answer its interactive multiple-choice UI. NB the =form is
-# required (variadic, like --channels), and the disallowedTools SETTINGS key
-# does NOT work for it - only the CLI flag does.
+# TG_DISALLOWED_TOOLS always removes AskUserQuestion because a detached pane
+# cannot answer its interactive UI. With Ultracode off it also removes Workflow,
+# so stale/global settings cannot start a workflow fan-out. NB the =form is
+# required (variadic, like --channels), and the disallowedTools SETTINGS key is
+# not honored for AskUserQuestion; only the CLI flag removes it.
 # `exec` so the pane dies with claude and the proxy's reconcile drops it.
 #
 # Session continuity: a FIRST spawn uses --session-id <id> + the kickoff; a
-# re-spawn (TG_RESUME=1) uses --resume <id> and NO kickoff. TG_MODEL is both the
-# --model flag and, for a proxied route, ANTHROPIC_MODEL plus
-# ANTHROPIC_SMALL_FAST_MODEL. The env overrides are required on resume: the
-# flag changes the displayed model but an Anthropic-authenticated session can
-# otherwise restore its native plan route before issuing an HTTP request.
+# re-spawn (TG_RESUME=1) uses --resume <id> and NO kickoff. TG_MODEL controls the
+# foreground and every subagent. TG_AUX_MODEL controls title/background work via
+# both Claude Code's current Haiku override and its legacy small-fast alias.
+# CLAUDE_CODE_EFFORT_LEVEL has higher precedence than skill/subagent frontmatter,
+# so a Telegram-selected medium route cannot be silently raised by a workflow.
+# The provider env overrides are required on resume: --model changes the display,
+# but an Anthropic-authenticated session can otherwise restore its native route
+# before issuing an HTTP request.
 # Args use `set --` so a bracketed id stays one properly quoted argument.
 PANE_CMD='export PATH="$TG_PATH"; \
+ if [ -n "$TG_MODEL" ]; then \
+   export CLAUDE_CODE_SUBAGENT_MODEL="$TG_MODEL"; \
+ else \
+   unset CLAUDE_CODE_SUBAGENT_MODEL; \
+ fi; \
+ if [ -n "$TG_EFFORT" ]; then \
+   export CLAUDE_CODE_EFFORT_LEVEL="$TG_EFFORT"; \
+ else \
+   unset CLAUDE_CODE_EFFORT_LEVEL; \
+ fi; \
+ if [ -n "$TG_AUX_MODEL" ]; then \
+   export ANTHROPIC_DEFAULT_HAIKU_MODEL="$TG_AUX_MODEL" \
+          ANTHROPIC_SMALL_FAST_MODEL="$TG_AUX_MODEL"; \
+ else \
+   unset ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_SMALL_FAST_MODEL; \
+ fi; \
  if [ -n "$TG_PROVIDER_BASE_URL" ]; then \
    export ANTHROPIC_BASE_URL="$TG_PROVIDER_BASE_URL" \
           ANTHROPIC_AUTH_TOKEN="$TG_PROVIDER_AUTH_TOKEN" \
           ANTHROPIC_MODEL="$TG_MODEL" \
-          ANTHROPIC_SMALL_FAST_MODEL="$TG_MODEL" \
           CLAUDE_CODE_AUTO_COMPACT_WINDOW="$TG_AUTO_COMPACT_WINDOW" \
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
           CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1; \
  else \
    unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL \
-         ANTHROPIC_SMALL_FAST_MODEL CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+         CLAUDE_CODE_AUTO_COMPACT_WINDOW \
          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
          CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK; \
  fi; \
  set -- --dangerously-load-development-channels="$TG_MARKETPLACE" \
         --settings "$TG_SETTINGS" --permission-mode auto \
-        --disallowedTools=AskUserQuestion; \
+        --disallowedTools="$TG_DISALLOWED_TOOLS"; \
  [ -n "$TG_MODEL" ] && set -- "$@" --model "$TG_MODEL"; \
  [ -n "$TG_EFFORT" ] && set -- "$@" --effort "$TG_EFFORT"; \
  if [ -n "$TG_RESUME" ]; then \
@@ -179,7 +200,9 @@ spawn_tmux() {
     -e TG_PROVIDER_AUTH_TOKEN="$TG_PROVIDER_AUTH_TOKEN" \
     -e TG_AUTO_COMPACT_WINDOW="$TG_AUTO_COMPACT_WINDOW" \
     -e TG_MODEL="$TG_MODEL" \
+    -e TG_AUX_MODEL="$TG_AUX_MODEL" \
     -e TG_EFFORT="$TG_EFFORT" \
+    -e TG_DISALLOWED_TOOLS="$TG_DISALLOWED_TOOLS" \
     -e TG_KICKOFF="$TG_KICKOFF" \
     -e TG_CLAUDE_SESSION_ID="$TG_CLAUDE_SESSION_ID" \
     -e TG_RESUME="$TG_RESUME" \
@@ -302,7 +325,9 @@ print("absent")
     printf 'export TG_PROVIDER_AUTH_TOKEN=%q\n' "$TG_PROVIDER_AUTH_TOKEN"
     printf 'export TG_AUTO_COMPACT_WINDOW=%q\n' "$TG_AUTO_COMPACT_WINDOW"
     printf 'export TG_MODEL=%q\n' "$TG_MODEL"
+    printf 'export TG_AUX_MODEL=%q\n' "$TG_AUX_MODEL"
     printf 'export TG_EFFORT=%q\n' "$TG_EFFORT"
+    printf 'export TG_DISALLOWED_TOOLS=%q\n' "$TG_DISALLOWED_TOOLS"
     printf 'export TG_KICKOFF=%q\n' "$TG_KICKOFF"
     printf 'export TG_CLAUDE_SESSION_ID=%q\n' "$TG_CLAUDE_SESSION_ID"
     printf 'export TG_RESUME=%q\n' "$TG_RESUME"
