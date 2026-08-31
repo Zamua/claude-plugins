@@ -83,6 +83,7 @@ import type {
 import { capacityTransition, nextResetAt, providerCapacity } from './domain/provider-capacity'
 import type { ProviderCapacity } from './domain/provider-capacity'
 import { environmentFlag } from './domain/env-flag'
+import { launchProfileNeedsRefresh } from './domain/launch-profile'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -223,6 +224,10 @@ const SQUARE_TOPIC = (process.env.TELEGRAM_TOPICS_SQUARE_TOPIC_ID ?? '').trim()
 // per-delivery norm line; Telegram's per-group limits are the only throttle.
 const CONV_TTL_HOURS = Number(process.env.TELEGRAM_TOPICS_CONV_TTL_HOURS ?? '48')
 const EFFECTIVE_SETTINGS_DIR = join(STATE_DIR, 'effective-settings')
+// Persisted with every successful topic launch. Increment whenever launch-time
+// behavior changes in a way an already-running pane cannot absorb. A stale
+// pane is reconciled at its next safe turn boundary, preserving its UUID.
+const TOPIC_LAUNCH_PROFILE_VERSION = 1
 // Called PER SPAWN (not once at module load) so each (re)spawn reflects the
 // CURRENT committed override-settings.json - a base-settings edit (e.g. a git
 // pull) then reaches topics on their next respawn (the nightly restart, a kill),
@@ -430,6 +435,9 @@ type TopicState = {
   // The provider/model/effort used when this Claude session starts or resumes.
   // This is routing state, not a harness choice: every route runs Claude Code.
   route?: TopicRoute
+  // Which launch-time environment/settings contract the live pane received.
+  // Missing means the pane predates versioned launch profiles.
+  launchProfileVersion?: number
   // A proactive switch requested while Claude is inside a turn. It is applied
   // by the next /poll, which is the observable safe turn boundary.
   pendingRoute?: PendingRouteChange
@@ -548,6 +556,7 @@ function killSession(st: TopicState, topic: string): boolean {
   while (st.permWaiters.length) st.permWaiters.shift()?.(null)
   st.session = ''
   st.spawnedAt = 0
+  st.launchProfileVersion = undefined
   return killed
 }
 
@@ -730,6 +739,7 @@ type RegistryEntry = {
   spawned_at: number
   claude_session_id: string | null
   route?: TopicRoute | null
+  launch_profile_version?: number | null
   pending_route?: PendingRouteChange | null
   exhausted_routes?: TopicRoute[] | null
   pending_resume_notice?: string | null
@@ -772,6 +782,9 @@ function saveRegistry(): void {
       spawned_at: st.spawnedAt,
       claude_session_id: st.claudeSessionId,
       route: st.route ?? DEFAULT_TOPIC_ROUTE,
+      ...(st.launchProfileVersion !== undefined
+        ? { launch_profile_version: st.launchProfileVersion }
+        : {}),
       ...(st.pendingRoute ? { pending_route: st.pendingRoute } : {}),
       ...(st.exhaustedRoutes.length ? { exhausted_routes: st.exhaustedRoutes } : {}),
       ...(st.pendingResumeNotice ? { pending_resume_notice: st.pendingResumeNotice } : {}),
@@ -799,6 +812,7 @@ function loadAndReconcileRegistry(): void {
     st.name = entry.name
     st.claudeSessionId = entry.claude_session_id ?? undefined
     st.route = routeFromRegistry(entry.route)
+    st.launchProfileVersion = entry.launch_profile_version ?? undefined
     st.pendingRoute = pendingRouteFromRegistry(entry.pending_route)
     st.exhaustedRoutes = Array.isArray(entry.exhausted_routes)
       ? entry.exhausted_routes.flatMap(route => {
@@ -811,7 +825,25 @@ function loadAndReconcileRegistry(): void {
     if (entry.tmux_session && live.has(entry.tmux_session)) {
       st.session = entry.tmux_session
       st.spawnedAt = entry.spawned_at
-      log(`re-adopted live topic ${topic} "${entry.name}" (${entry.tmux_session})`)
+      const refresh = launchProfileNeedsRefresh(
+        st.launchProfileVersion,
+        TOPIC_LAUNCH_PROFILE_VERSION,
+        entry.route,
+        st.route,
+      )
+      if (refresh && !st.pendingRoute) {
+        st.pendingRoute = {
+          route: st.route,
+          reason: 'migration',
+          requestedAt: Date.now(),
+        }
+        log(
+          `live topic ${topic} "${entry.name}" has a stale launch profile; ` +
+          `queued same-UUID refresh at the next safe turn boundary`,
+        )
+      } else {
+        log(`re-adopted live topic ${topic} "${entry.name}" (${entry.tmux_session})`)
+      }
     } else {
       // Session is dead, but KEEP the claude session id so the next message
       // re-spawns and --resumes the SAME conversation instead of starting fresh.
@@ -1369,6 +1401,7 @@ function ensureSession(topic: string): void {
     }
     st.session = name
     st.spawnedAt = Date.now()
+    st.launchProfileVersion = TOPIC_LAUNCH_PROFILE_VERSION
     saveRegistry()
     log(
       `${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" ` +
