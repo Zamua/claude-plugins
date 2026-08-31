@@ -58,6 +58,7 @@ import { readCodexSnapshot } from './adapters/codex-app-server'
 import { readOpenCodeGoCapacity } from './adapters/opencode-go-capacity'
 import { createMultiplexer } from './adapters/multiplexer'
 import type { MultiplexerPort } from './adapters/multiplexer'
+import { legacySwitchBackTarget, switchBackTarget } from './adapters/telegram-route-callback'
 import { inboundModeForRoute, renderPaneTurn } from './domain/inbound-delivery'
 import type { InboundMessage } from './domain/inbound-delivery'
 import {
@@ -2013,26 +2014,48 @@ function capacityText(): string {
 }
 
 function switchBackKeyboard(topic: string, route: TopicRoute): InlineKeyboard {
-  const model = modelCatalog()[route.provider].find(candidate => candidate.id === route.model) ?? {
-    id: route.model,
-    label: modelLabel(route.model),
-    efforts: [route.effort],
-    defaultEffort: route.effort,
-    supportsUltracode: route.ultracode,
-  }
-  const token = modelToken({
-    topic,
-    provider: route.provider,
-    model,
-    reason: 'reset',
-    expiresAt: Date.now() + PICKER_TTL_MS,
-  })
   return new InlineKeyboard()
-    .text(`Switch back to ${model.label}`, `tgroute:m:${token}`)
+    .text(`Switch back to ${modelLabel(route.model)}`, `tgroute:return:${providerCode(route.provider)}:${topic}`)
     .row()
     .text(`Choose ${providerLabel(route.provider)} model`, `tgroute:p:${providerCode(route.provider)}:r:${topic}`)
     .row()
     .text('Dismiss', 'tgroute:dismiss')
+}
+
+async function applySwitchBackCallback(ctx: any, provider: ProviderId, topic: string): Promise<void> {
+  const st = getTopic(topic)
+  const route = exhaustedRouteFor(st.exhaustedRoutes, provider)
+  if (!route) {
+    await ctx.answerCallbackQuery({ text: 'This switch-back was already handled or is no longer available.' }).catch(() => {})
+    return
+  }
+  if (capacities.get(provider)?.availability === 'exhausted') {
+    await ctx.answerCallbackQuery({
+      text: `${providerLabel(provider)} is still at its usage limit.`,
+      show_alert: true,
+    }).catch(() => {})
+    return
+  }
+  const since = Date.now() - (lastRouteChange.get(topic) ?? 0)
+  if (since < ROUTE_DEBOUNCE_MS) {
+    await ctx.answerCallbackQuery({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
+    return
+  }
+  lastRouteChange.set(topic, Date.now())
+  const result = requestRouteChange(topic, route, 'reset')
+  if (result === 'unchanged') {
+    st.exhaustedRoutes = forgetExhaustedProvider(st.exhaustedRoutes, provider)
+    saveRegistry()
+  }
+  const text = result === 'queued'
+    ? `Queued ${routeSummary(route)}. It will switch when the current Claude turn finishes.`
+    : result === 'unchanged'
+      ? `Already using ${routeSummary(route)}.`
+      : `Now using ${routeSummary(route)} in the same Claude session.`
+  await ctx.editMessageText(text).catch((error: unknown) =>
+    log(`could not update switch-back message for topic ${topic}: ${error}`))
+  await ctx.answerCallbackQuery({ text: result === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
+  log(`switch-back callback for topic ${topic}: ${provider}/${route.model} (${result})`)
 }
 
 async function notifyProviderReset(provider: ProviderId): Promise<void> {
@@ -2282,6 +2305,12 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
+    const returnPick = switchBackTarget(data)
+    if (returnPick) {
+      await applySwitchBackCallback(ctx, returnPick.provider, returnPick.topic)
+      return
+    }
+
     const providerPick = /^tgroute:p:([aco]):([mqr]):(.+)$/.exec(data)
     const pagePick = /^tgroute:models:([aco]):([mqr]):([^:]+):(\d+)$/.exec(data)
     if (providerPick || pagePick) {
@@ -2326,6 +2355,11 @@ bot.on('callback_query:data', async ctx => {
       pruneModelSelections()
       const selection = modelSelections.get(modelPick[1])
       if (!selection) {
+        const legacy = legacySwitchBackTarget(ctx.callbackQuery.message)
+        if (legacy) {
+          await applySwitchBackCallback(ctx, legacy.provider, legacy.topic)
+          return
+        }
         await ctx.answerCallbackQuery({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
         return
       }

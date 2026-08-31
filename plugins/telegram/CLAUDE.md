@@ -336,7 +336,10 @@ Quota recovery is deliberately operator-driven:
    it.
 4. Provider capacity adapters keep watching reset windows. When the exhausted
    provider becomes available, the proxy offers “switch back” and “choose
-   model” buttons. It never switches back automatically.
+   model” buttons. It never switches back automatically. The direct switch-back
+   callback is stateless (`provider + topic`) and resolves the exact prior route
+   from `exhausted_routes`, so a service restart cannot expire it. The callback
+   adapter also recognizes the older token-backed reset keyboard during migration.
 
 Details that matter:
 

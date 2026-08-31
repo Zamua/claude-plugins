@@ -171,7 +171,9 @@ When a provider hits its limit, the proxy stops the stalled route and offers
 the other providers. It switches only after the operator chooses. Claude resumes
 the same UUID and is nudged to finish the unanswered message. When the exhausted
 provider resets, Telegram offers a switch-back button; it does not switch
-automatically or spend a banked reset credit.
+automatically or spend a banked reset credit. Switch-back buttons encode only
+the provider and topic, then recover the exact saved route from durable state,
+so they remain valid across proxy restarts and deployments.
 
 Auto-compaction is route-aware; do not set it manually for topic sessions.
 Anthropic uses Claude Code's provider-managed value, Codex compacts at 272k,
