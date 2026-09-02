@@ -5,6 +5,7 @@ import {
   findAntigravityPane,
   HerdrAntigravityRuntime,
   parseAntigravityConversationId,
+  parseHerdrPromptResult,
 } from './herdr-antigravity-runtime'
 import type { ProcessRunner } from './process-runner'
 
@@ -55,6 +56,45 @@ describe('persistent Herdr Antigravity adapter', () => {
       'n/Users/me/.gemini/antigravity-cli/conversations/6cd329b3-5f61-494c-b283-8a40400e2e32.db',
       'n/Users/me/.gemini/antigravity-cli/conversations/6cd329b3-5f61-494c-b283-8a40400e2e32.db-wal',
     ].join('\n'))).toBe('6cd329b3-5f61-494c-b283-8a40400e2e32')
+  })
+
+  test('distinguishes an accepted prompt from Herdr\'s zero-exit stalled result', () => {
+    expect(parseHerdrPromptResult(JSON.stringify({ result: { type: 'agent_prompted' } })))
+      .toBe('agent_prompted')
+    expect(parseHerdrPromptResult(JSON.stringify({ result: { type: 'agent_prompt_stalled' } })))
+      .toBe('agent_prompt_stalled')
+    expect(parseHerdrPromptResult('not json')).toBeUndefined()
+  })
+
+  test('retries a structured prompt stall instead of silently dropping the turn', async () => {
+    let promptCalls = 0
+    const run: ProcessRunner = async (_command, args) => {
+      if (args[0] === 'pane' && args[1] === 'list') {
+        return {
+          stdout: JSON.stringify({ result: { panes: [{
+            label: 'agy-topic-42', pane_id: 'w2:p1', agent_status: 'idle',
+          }] } }),
+          stderr: '',
+        }
+      }
+      if (args[0] === 'agent' && args[1] === 'prompt') {
+        promptCalls++
+        return {
+          stdout: JSON.stringify({ result: {
+            type: promptCalls === 1 ? 'agent_prompt_stalled' : 'agent_prompted',
+          } }),
+          stderr: '',
+        }
+      }
+      throw new Error(`unexpected args: ${args.join(' ')}`)
+    }
+    const runtime = new HerdrAntigravityRuntime(
+      'agy', '/tmp/project', '/tmp/launcher', 'http://127.0.0.1:8790', 'herdr', run,
+      async () => {},
+    )
+
+    await runtime.prompt('agy-topic-42', 'telegram turn')
+    expect(promptCalls).toBe(2)
   })
 
   test('closes a same-labelled pane when it belongs to the wrong conversation', async () => {
