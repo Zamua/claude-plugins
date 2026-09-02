@@ -564,6 +564,10 @@ function enqueue(topic: string, msg: InboundMsg): void {
     // adapter instead.
     while (st.waiters.length) st.waiters.shift()?.(null)
     st.queue.push(msg)
+    log(
+      `queued Telegram turn ${msg.meta.message_id ?? '(no id)'} for proxied Claude topic ${topic} ` +
+      `(proxy depth ${st.queue.length})`,
+    )
     schedulePanePump(topic)
     return
   }

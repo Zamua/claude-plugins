@@ -65,6 +65,21 @@ export function parseHerdrPromptResult(output: string): string | undefined {
   }
 }
 
+export function parseAntigravityConversationArgument(output: string): string | undefined {
+  try {
+    const processes = JSON.parse(output)?.result?.process_info?.foreground_processes ?? []
+    const argv = processes.find((process: any) => String(process?.name ?? '') === 'agy')?.argv
+    if (!Array.isArray(argv)) return undefined
+    const index = argv.indexOf('--conversation')
+    if (index >= 0 && typeof argv[index + 1] === 'string') return argv[index + 1]
+    const inline = argv.find((argument: unknown) =>
+      typeof argument === 'string' && argument.startsWith('--conversation='))
+    return typeof inline === 'string' ? inline.slice('--conversation='.length) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
 
 export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
@@ -133,6 +148,24 @@ export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
         },
       })
       launched = true
+    }
+
+    // Conversation discovery is a creation-time concern. Antigravity closes
+    // its SQLite conversation file once an interactive session has been idle,
+    // so re-running lsof before every Telegram turn can never prove identity
+    // and instead stalls each message until the discovery timeout. The topic
+    // aggregate already owns the captured id. A resumed process also exposes
+    // that id explicitly in argv, which gives us an additional fork check.
+    if (pane && input.conversationId) {
+      const commanded = await this.commandConversationId(pane.paneId)
+      if (commanded && commanded !== input.conversationId) {
+        await this.stop(input.sessionName).catch(() => false)
+        throw new Error(
+          `Herdr Antigravity pane ${input.sessionName} resumed ${commanded}, ` +
+          `expected ${input.conversationId}`,
+        )
+      }
+      return { sessionName: input.sessionName, conversationId: input.conversationId }
     }
 
     const identity = await this.waitForIdentity(input.sessionName, 180_000)
@@ -255,5 +288,14 @@ export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
       cwd: this.cwd, timeout: 10_000,
     }).catch(() => undefined)
     return openFiles ? parseAntigravityConversationId(openFiles.stdout) : undefined
+  }
+
+  private async commandConversationId(paneId: string): Promise<string | undefined> {
+    const info = await this.run(
+      this.herdrBinary,
+      ['pane', 'process-info', '--pane', paneId],
+      { cwd: this.cwd, timeout: 30_000 },
+    ).catch(() => undefined)
+    return info ? parseAntigravityConversationArgument(info.stdout) : undefined
   }
 }

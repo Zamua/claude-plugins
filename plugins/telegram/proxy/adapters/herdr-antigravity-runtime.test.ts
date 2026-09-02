@@ -4,6 +4,7 @@ import {
   antigravityInteractiveArgs,
   findAntigravityPane,
   HerdrAntigravityRuntime,
+  parseAntigravityConversationArgument,
   parseAntigravityConversationId,
   parseHerdrPromptResult,
 } from './herdr-antigravity-runtime'
@@ -56,6 +57,56 @@ describe('persistent Herdr Antigravity adapter', () => {
       'n/Users/me/.gemini/antigravity-cli/conversations/6cd329b3-5f61-494c-b283-8a40400e2e32.db',
       'n/Users/me/.gemini/antigravity-cli/conversations/6cd329b3-5f61-494c-b283-8a40400e2e32.db-wal',
     ].join('\n'))).toBe('6cd329b3-5f61-494c-b283-8a40400e2e32')
+  })
+
+  test('reads an explicit resume identity from the agy process arguments', () => {
+    const output = JSON.stringify({ result: { process_info: { foreground_processes: [{
+      name: 'agy', argv: ['agy', '--conversation', 'conv-1', '--effort', 'high'],
+    }] } } })
+    expect(parseAntigravityConversationArgument(output)).toBe('conv-1')
+  })
+
+  test('trusts the persisted identity for a long-lived initial pane after its database closes', async () => {
+    let lsofCalls = 0
+    const run: ProcessRunner = async (command, args) => {
+      if (command === '/usr/sbin/lsof') {
+        lsofCalls++
+        return { stdout: '', stderr: '' }
+      }
+      if (args[0] === 'pane' && args[1] === 'list') {
+        return {
+          stdout: JSON.stringify({ result: { panes: [{
+            label: 'agy-topic-42', pane_id: 'w2:p1', agent_status: 'idle',
+          }] } }),
+          stderr: '',
+        }
+      }
+      if (args[0] === 'pane' && args[1] === 'process-info') {
+        return {
+          stdout: JSON.stringify({ result: { process_info: { foreground_processes: [{
+            name: 'agy', pid: 123, argv: ['agy', '--prompt-interactive', 'kickoff'],
+          }] } } }),
+          stderr: '',
+        }
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
+    }
+    const runtime = new HerdrAntigravityRuntime(
+      'agy', '/tmp/project', '/tmp/launcher', 'http://127.0.0.1:8790', 'herdr', run,
+    )
+
+    expect(await runtime.ensureSession({
+      topic: '42',
+      name: 'topic',
+      sessionName: 'agy-topic-42',
+      route: { modelVariant: 'gemini-3.8-flash-high', effort: 'high' },
+      conversationId: '22222222-2222-2222-2222-222222222222',
+      kickoff: 'unused',
+    })).toEqual({
+      sessionName: 'agy-topic-42',
+      conversationId: '22222222-2222-2222-2222-222222222222',
+    })
+    expect(lsofCalls).toBe(0)
   })
 
   test('distinguishes an accepted prompt from Herdr\'s zero-exit stalled result', () => {
@@ -117,7 +168,10 @@ describe('persistent Herdr Antigravity adapter', () => {
       if (args[0] === 'pane' && args[1] === 'process-info') {
         return {
           stdout: JSON.stringify({ result: { process_info: {
-            foreground_processes: [{ name: 'agy', pid: 123 }],
+            foreground_processes: [{
+              name: 'agy', pid: 123,
+              argv: ['agy', '--conversation', '11111111-1111-1111-1111-111111111111'],
+            }],
           } } }),
           stderr: '',
         }
@@ -139,7 +193,7 @@ describe('persistent Herdr Antigravity adapter', () => {
       route: { modelVariant: 'gemini-3.8-flash-high', effort: 'high' },
       conversationId: '22222222-2222-2222-2222-222222222222',
       kickoff: 'unused',
-    })).rejects.toThrow('opened 11111111-1111-1111-1111-111111111111')
+    })).rejects.toThrow('resumed 11111111-1111-1111-1111-111111111111')
     expect(closed).toEqual(['w2:p1'])
   })
 })

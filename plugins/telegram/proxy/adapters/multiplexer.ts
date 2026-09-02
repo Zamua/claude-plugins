@@ -13,7 +13,11 @@ export interface MultiplexerPort {
 
 export function claudePromptVisible(visible: string): boolean {
   const lines = visible.split(/\r?\n/)
-  const prompt = lines.findLastIndex(line => /^\s*❯\s*$/.test(line))
+  // Claude keeps accepting queued user turns while background work runs. Once
+  // one turn is queued, the otherwise blank prompt grows this helper label;
+  // it is still an input surface, not active output.
+  const prompt = lines.findLastIndex(line =>
+    /^\s*❯(?:\s+Press up to edit queued messages)?\s*$/.test(line))
   if (prompt < 0) return false
   return lines.slice(prompt + 1).some(line => /^\s*Claude\s+·/.test(line))
 }
