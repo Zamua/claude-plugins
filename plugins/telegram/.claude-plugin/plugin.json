@@ -1,7 +1,7 @@
 {
   "name": "telegram",
-  "description": "Telegram forum-topics channel for Claude Code: one bot token multiplexed across many concurrent Claude sessions, one per Telegram topic, via a local proxy. A drop-in replacement for the single-session telegram channel.",
-  "version": "0.1.0",
+  "description": "Telegram forum-topic agent router: multiplex one bot token across concurrent Claude Code conversations, plus opt-in harness-locked Google Antigravity topics with dynamic subscription model and effort selection.",
+  "version": "0.2.0",
   "author": {
     "name": "Zamua"
   },

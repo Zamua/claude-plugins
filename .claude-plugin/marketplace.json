@@ -13,7 +13,7 @@
     {
       "name": "telegram",
       "source": "./plugins/telegram",
-      "description": "Telegram forum-topics channel: multiplex ONE bot token across MANY concurrent Claude sessions, one foreground Claude per Telegram topic, via a local proxy. Drop-in for the single-session telegram channel."
+      "description": "Telegram forum-topic agent router: multiplex one bot token across concurrent Claude Code conversations, plus opt-in harness-locked Google Antigravity topics with dynamic subscription model and effort selection."
     },
     {
       "name": "reexplain",
