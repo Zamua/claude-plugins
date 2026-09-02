@@ -56,6 +56,15 @@ export function parseAntigravityConversationId(output: string): string | undefin
   return undefined
 }
 
+export function parseHerdrPromptResult(output: string): string | undefined {
+  try {
+    const type = JSON.parse(output)?.result?.type
+    return typeof type === 'string' ? type : undefined
+  } catch {
+    return undefined
+  }
+}
+
 const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
 
 export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
@@ -70,6 +79,7 @@ export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
       ? '/opt/homebrew/bin/herdr'
       : 'herdr',
     private readonly run: ProcessRunner = nodeProcessRunner,
+    private readonly pause: (milliseconds: number) => Promise<unknown> = wait,
   ) {
     this.catalog = new AntigravityCli(antigravityBinary, cwd, run)
   }
@@ -139,17 +149,31 @@ export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
     // TUI accepts another bracketed-paste prompt. Without a short cold-start
     // grace, `agent prompt` can return agent_prompt_stalled and drop the first
     // Telegram turn even though the pane looks idle.
-    if (launched) await wait(2_000)
+    if (launched) await this.pause(2_000)
     return { sessionName: input.sessionName, conversationId: identity }
   }
 
   async prompt(sessionName: string, prompt: string): Promise<void> {
-    const pane = await this.waitUntilIdle(sessionName, 31 * 60_000)
-    await this.run(
-      this.herdrBinary,
-      ['agent', 'prompt', pane.paneId, prompt, '--wait', '--timeout', String(31 * 60_000)],
-      { cwd: this.cwd, timeout: 31 * 60_000 + 10_000 },
-    )
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const pane = await this.waitUntilIdle(sessionName, 31 * 60_000)
+      const result = await this.run(
+        this.herdrBinary,
+        ['agent', 'prompt', pane.paneId, prompt, '--wait', '--timeout', String(31 * 60_000)],
+        { cwd: this.cwd, timeout: 31 * 60_000 + 10_000 },
+      )
+      const outcome = parseHerdrPromptResult(result.stdout)
+      if (outcome === 'agent_prompted') return
+      if (outcome !== 'agent_prompt_stalled') {
+        throw new Error(
+          `Herdr did not accept the Antigravity prompt (result: ${outcome ?? 'unrecognized'})`,
+        )
+      }
+      // Herdr reports a readiness race as structured JSON with exit code zero.
+      // Treating that as success silently loses the Telegram turn. Re-check the
+      // pane and retry only this explicit not-delivered outcome.
+      if (attempt < 3) await this.pause(1_000)
+    }
+    throw new Error('Herdr could not deliver the Antigravity prompt after 3 readiness retries')
   }
 
   async stop(sessionName: string): Promise<boolean> {
@@ -194,7 +218,7 @@ export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
         const identity = await this.conversationId(pane.paneId)
         if (identity && lastState === 'idle') return identity
       }
-      await wait(250)
+      await this.pause(250)
     }
     throw new Error(`Antigravity pane ${sessionName} did not become ready (last state: ${lastState})`)
   }
@@ -207,7 +231,7 @@ export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
       const state = await this.status(sessionName)
       if (state === 'idle') return pane
       if (state === 'blocked') throw new Error(`Antigravity pane ${sessionName} is blocked`)
-      await wait(500)
+      await this.pause(500)
     }
     throw new Error(`Antigravity pane ${sessionName} stayed busy for ${timeoutMs}ms`)
   }

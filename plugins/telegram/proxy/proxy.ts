@@ -1645,6 +1645,7 @@ const antigravityService = new AntigravityTopicService(
       void bot.api.sendChatAction(String(GROUP_CHAT_ID), 'typing', threadOf(topic)).catch(() => {})
     },
     async error(topic, text) {
+      log(`Antigravity turn failed for topic ${topic}: ${text}`)
       await bot.api.sendMessage(
         String(GROUP_CHAT_ID),
         `⚠️ ${text.slice(0, MAX_CHUNK_LIMIT - 3)}`,
@@ -2821,7 +2822,9 @@ bot.on('message', async ctx => {
   }
 
   if (antigravityService.isLocked(topic)) {
+    log(`received Antigravity Telegram turn ${msg.message_id ?? '(no id)'} for topic ${topic}`)
     void antigravityService.submitTurn(topic, { content: desc.content, meta })
+      .then(() => log(`settled Antigravity Telegram turn ${msg.message_id ?? '(no id)'} for topic ${topic}`))
     return
   }
 
@@ -3298,6 +3301,10 @@ async function handleSend(req: Request): Promise<Response> {
       ? await bot.api.sendPhoto(chatId, input, opts)
       : await bot.api.sendDocument(chatId, input, opts)
     ids.push(sent.message_id)
+  }
+
+  if (antigravityService.isLocked(topic)) {
+    log(`sent Antigravity Telegram reply for topic ${topic} (${ids.length} message${ids.length === 1 ? '' : 's'})`)
   }
 
   return json({ message_ids: ids })
