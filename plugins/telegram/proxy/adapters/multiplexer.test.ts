@@ -27,6 +27,17 @@ describe('multiplexer adapter status mapping', () => {
 `)).toBeTrue()
   })
 
+  test('keeps the foreground prompt ready after Claude displays a queued-message hint', () => {
+    expect(claudePromptVisible(`
+  Updating runbooks…n…
+  ← telegram · user: first queued turn
+
+❯ Press up to edit queued messages
+----------------------------------------------------------
+  Claude · codex · gpt-5.6-sol[1m] · medium
+`)).toBeTrue()
+  })
+
   test('does not mistake active output or a partially typed prompt for readiness', () => {
     expect(claudePromptVisible('Thinking…\n  esc to interrupt')).toBeFalse()
     expect(claudePromptVisible('❯ partially typed text\n---\n  Claude · codex')).toBeFalse()
