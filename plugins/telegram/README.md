@@ -1,11 +1,11 @@
 # telegram-topics
 
-One Telegram bot, many Claudes. This plugin multiplexes a SINGLE bot token
-across MANY concurrent Claude Code sessions, routed by Telegram forum
-**topics**. Each topic in your group gets its own foreground Claude Code
-session in a detached tmux or herdr pane; you talk to a different Claude by
-switching topics. Claude Code is the only harness. Each topic can route that
-same Claude session to native Anthropic, Codex, or OpenCode Go models.
+One Telegram bot, many agent conversations. This plugin multiplexes a SINGLE
+bot token across MANY sessions, routed by Telegram forum **topics**. Ordinary
+topics keep the established foreground Claude Code harness in a detached tmux
+or herdr pane and may route that same Claude session to Anthropic, Codex, or
+OpenCode Go. A fresh topic can instead be explicitly and permanently locked to
+Google's official Antigravity CLI harness with `/antigravity`.
 
 It is a drop-in for the single-session telegram channel: the plugin is named
 `telegram`, the MCP server is named `telegram`, and the four tools keep their
@@ -37,6 +37,13 @@ Code disables Channels under API billing).
                  │ telegram   │  │ telegram   │  │ telegram    │
                  │ MCP client │  │ MCP client │  │ MCP client  │
                  └────────────┘  └────────────┘  └────────────┘
+
+          fresh topic + /antigravity
+                        │
+                 ┌──────▼──────────────┐
+                 │ official agy CLI   │  one persisted conversation id
+                 │ headless per turn  │  live subscription model catalog
+                 └─────────────────────┘
 ```
 
 - **Proxy** (`proxy/proxy.ts`): the only `getUpdates` consumer of the token. It
@@ -68,10 +75,20 @@ Code disables Channels under API billing).
   and proxy restarts. Native Anthropic launches without overrides; Codex and
   OpenCode Go launch the same `claude` binary through a loopback compatibility
   bridge.
+- **Antigravity application service** (`proxy/application/` +
+  `proxy/adapters/antigravity-*`): owns a separate, private topic registry and
+  serializes headless `agy` turns. The first result persists the Antigravity
+  conversation id; every later turn passes `--conversation <same-id>`. A model
+  switch changes only the next launch route, never the conversation. Its
+  callback namespace is separate, and stale/forged Claude route callbacks are
+  rejected at the topic-harness boundary.
 
 ## Prerequisites
 
 - `bun`, `claude`, a Bash shell, and either `tmux` or `herdr` on the proxy's PATH.
+- Optional Antigravity topics: Google's official `agy` CLI, already authenticated
+  by running `agy` once interactively. The picker is read dynamically from
+  `agy models`; it is not a hard-coded model list.
 - Optional provider routing: `claude-code-proxy` on PATH. Codex must already be
   authenticated; OpenCode Go must already exist in OpenCode's local auth file.
 - A Telegram bot token (BotFather).
@@ -122,6 +139,7 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_OPENCODE_BIN` | no | `opencode` | CLI used to read OpenCode model names, efforts, and context windows |
 | `TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES` | no | `5` | Codex/OpenCode Go usage refresh interval |
 | `TELEGRAM_OPENCODE_AUTH_FILE` | no | OpenCode's standard auth file | source for OpenCode Go usage auth; the key is never copied into plugin state |
+| `TELEGRAM_ANTIGRAVITY_BIN` | no | Nix per-user `agy`, then `PATH` | official Antigravity CLI used by harness-locked topics |
 | `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr`; this changes the pane host, never the harness |
 | `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` | no | (disabled) | 0-23 local; once a day at this hour the proxy kills live topic sessions (each `--resume`s on its next message) |
 | `TELEGRAM_TOPICS_MODEL` | no | `fable` | initial model for topics without a persisted route; `/model` selections are persisted per topic |
@@ -168,6 +186,49 @@ enabled by this plugin.
 3. The proxy spawns a Claude for that topic (`claude-<slug>-<threadid>`), which
    replies back INTO that topic.
 4. Different topic, different Claude. They run concurrently and independently.
+
+For an Antigravity topic, create a **fresh** forum topic and run
+`/antigravity` before sending it normal work. The command refuses to convert a
+topic that already owns a Claude UUID. After the lock:
+
+- `/model` shows only models returned by the authenticated Antigravity
+  subscription, then an effort picker. It never shows Anthropic, Codex, or
+  OpenCode provider routes.
+- `/model status` shows the Antigravity conversation id and locked route.
+- `/usage` shows only Antigravity subscription pools and exact reset times.
+- The existing capacity interval also watches Antigravity pools; after an
+  observed exhausted-to-available transition, each locked topic gets a reset
+  notice and an Antigravity-only model button. It never switches automatically.
+- `/relaunch` explains that every turn already starts a fresh CLI process and
+  resumes the same conversation, so new config is picked up on the next turn.
+
+The lock is enforced behind the UI as well: old or forged `tgroute:*` callbacks
+cannot switch the topic to the Claude harness. Antigravity turns are queued per
+topic, and model changes made during a running turn apply to the next one.
+
+### Antigravity configuration interop
+
+Interop is deliberate rather than pretending the two harnesses have identical
+plugin systems:
+
+- `AGENTS.md` and `GEMINI.md` are native Antigravity project instructions.
+- On a topic's first turn, the compatibility context tells Antigravity to read
+  applicable project `CLAUDE.md` files (and relevant general guidance from
+  `~/.claude/CLAUDE.md`) while translating or ignoring Claude-only channel,
+  hook, permission-UI, and harness clauses.
+- At proxy startup, portable Markdown skills from `~/.agents/skills`,
+  `~/.claude/skills`, and the `skills/` folders of enabled Claude plugins are
+  safely linked into Antigravity's native skill directory. Existing native
+  Antigravity skills are preserved. Telegram plugins are explicitly excluded
+  to protect the single `getUpdates` poller.
+- A Claude plugin manifest, hook, custom agent, or channel is not automatically
+  executable in Antigravity. Those need an explicit adapter. Antigravity-native
+  plugins and MCP servers continue to use Antigravity's own configuration.
+
+Antigravity topics run `agy --dangerously-skip-permissions` because they are
+non-interactive and the requested contract is zero terminal hard gates. This is
+an unreviewed auto-approval mode, not Claude's reviewer-backed auto mode; only
+use it in topics you trust with the Mac mini account's filesystem access.
 
 Attach through the selected multiplexer when you need to inspect a pane. Normal
 provider/model management stays in Telegram:
@@ -226,6 +287,7 @@ Loopback only (`127.0.0.1:8790`).
 | `POST /permission-denied` | Claude `PermissionDenied` hook payload | creates or deduplicates a Telegram approval request |
 | `POST /rate-limit` | `{topic, error, details, reset_at?}` | pauses the exhausted route and opens the Telegram picker |
 | `POST /capacity` | Anthropic capacity windows | `{ok: true}` |
+| `POST /topic/create` | `{name, harness?: "claude" | "antigravity"}` | creates and registers a topic after validating the selected harness |
 | `GET /health` | | `{ok, topics, port, polling, polling_since}` |
 
 `topic` is the `message_thread_id` as a string, or `"general"`. On `/send`,
@@ -278,6 +340,9 @@ the next message resumes the same conversation (registry reconcile against
   by the guard on the one retry. Treat every topic as a capable auto-approving
   local agent; only start topics you would trust with largely unattended shell
   access.
+- Antigravity topics deliberately run the CLI's skip-permissions mode so no
+  detached approval prompt can become a hard gate. They do not use the Claude
+  reviewer classifier or Telegram exact-action approval flow.
 - The Codex/OpenCode compatibility bridge is unofficial and necessarily sees
   proxied prompts, tool payloads, and provider responses. Pin and review upgrades.
   This installation binds it only to `127.0.0.1`; local traffic capture is off;

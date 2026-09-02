@@ -88,6 +88,24 @@ import { environmentFlag } from './domain/env-flag'
 import { launchProfileNeedsRefresh } from './domain/launch-profile'
 import { ActionAuthorizationService } from './application/action-authorization-service'
 import { JsonActionAuthorizationRepository } from './adapters/json-action-authorization-repository'
+import { AntigravityTopicService } from './application/antigravity-topic-service'
+import { AntigravityCli, routeLabel as antigravityRouteLabel } from './adapters/antigravity-cli'
+import { JsonAntigravityTopicRepository } from './adapters/json-antigravity-topic-repository'
+import {
+  claudePluginSkillRoots,
+  syncAntigravitySkills,
+} from './adapters/antigravity-skill-interop'
+import {
+  antigravityRoute,
+  antigravityTopic,
+} from './domain/antigravity-topic'
+import type {
+  AntigravityEffort,
+  AntigravityModel,
+} from './domain/antigravity-topic'
+import { callbackBelongsToHarness, callbackTopicTarget } from './domain/topic-harness'
+import { antigravityResetPools } from './domain/antigravity-capacity'
+import type { AntigravityUsageWindow } from './application/antigravity-ports'
 import type {
   ActionAuthorization,
   AuthorizationDecision,
@@ -114,6 +132,7 @@ const FAILOVER_HOOK = join(PLUGIN_ROOT, 'hooks', 'rate-limit-failover.py')
 const CAPACITY_HOOK = join(PLUGIN_ROOT, 'hooks', 'provider-capacity-status.py')
 const AUTHORIZATION_HOOK = join(PLUGIN_ROOT, 'hooks', 'permission-denied.py')
 const AUTHORIZATIONS_FILE = join(STATE_DIR, 'action-authorizations.json')
+const ANTIGRAVITY_TOPICS_FILE = join(STATE_DIR, 'antigravity-topics.json')
 const LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-topic.sh')
 // The token-bearing .env files. assertSendable refuses to ship these so a
 // prompt-injected topic-Claude cannot exfil the bot token via reply(files:[...]).
@@ -185,6 +204,7 @@ const MODEL = resolveModel()
 const ADMIN_USER_ID = (process.env.TELEGRAM_TOPICS_ADMIN_USER_ID ?? SECRETS_USER_ID).trim()
 const MODEL_RE = /^\/model(?:@\w+)?(?:\s+(\S+))?\s*$/
 const USAGE_RE = /^\/usage(?:@\w+)?\s*$/
+const ANTIGRAVITY_RE = /^\/antigravity(?:@\w+)?\s*$/
 const ROUTE_DEBOUNCE_MS = 10_000
 const lastRouteChange = new Map<string, number>()
 const PROVIDER_PROXY_URL = (
@@ -198,6 +218,11 @@ const PROVIDER_PROXY_BIN = process.env.TELEGRAM_PROVIDER_PROXY_BIN ??
 const OPENCODE_BIN = process.env.TELEGRAM_OPENCODE_BIN ?? 'opencode'
 const OPENCODE_AUTH_FILE = process.env.TELEGRAM_OPENCODE_AUTH_FILE ??
   join(homedir(), '.local', 'share', 'opencode', 'auth.json')
+const NIX_ANTIGRAVITY_BIN = join(
+  '/etc', 'profiles', 'per-user', process.env.USER ?? homedir().split(sep).at(-1) ?? 'zamua', 'bin', 'agy',
+)
+const ANTIGRAVITY_BIN = process.env.TELEGRAM_ANTIGRAVITY_BIN ??
+  (existsSync(NIX_ANTIGRAVITY_BIN) ? NIX_ANTIGRAVITY_BIN : 'agy')
 const CAPACITY_POLL_MS = Number(process.env.TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES ?? '5') * 60_000
 const DEFAULT_TOPIC_ROUTE = topicRoute({
   provider: 'anthropic',
@@ -950,7 +975,7 @@ function topicDirectory(): Array<{ slug: string; name: string; topic: string; li
   const live = mux.liveSessions()
   const out: Array<{ slug: string; name: string; topic: string; live: boolean }> = []
   for (const [topic, st] of topics) {
-    if (topic === SQUARE_TOPIC) continue
+    if (topic === SQUARE_TOPIC || antigravityService.isLocked(topic)) continue
     const name = st.name || topicNames.get(topic) || ''
     const slug = topic === 'general' ? 'general' : slugify(name) !== 'topic' ? slugify(name) : topic
     out.push({ slug, name: name || topic, topic, live: !!(st.session && live.has(st.session)) })
@@ -1253,14 +1278,32 @@ async function handleTopicCreate(req: Request): Promise<Response> {
   const b = (await req.json()) as any
   const name = String(b.name ?? '').trim()
   if (!name) return new Response('name required', { status: 400 })
+  const harness = b.harness == null ? 'claude' : String(b.harness)
+  if (harness !== 'claude' && harness !== 'antigravity') {
+    return new Response('harness must be claude or antigravity', { status: 400 })
+  }
+  // Resolve a viable route before creating the Telegram topic. A catalog/auth
+  // failure must not strand an empty forum topic.
+  const initialAntigravityRoute = harness === 'antigravity'
+    ? await defaultAntigravityRoute()
+    : undefined
   const created = await bot.api.createForumTopic(String(GROUP_CHAT_ID), name)
   const topic = String(created.message_thread_id)
   const st = getTopic(topic)
   st.name = name
   topicNames.set(topic, name)
   saveRegistry()
+  if (initialAntigravityRoute) {
+    antigravityService.activate(antigravityTopic(topic, name, initialAntigravityRoute))
+  }
   log(`created + registered topic ${topic} "${name}"`)
-  return json({ topic, thread_id: created.message_thread_id, name, slug: slugForTopic(topic) })
+  return json({
+    topic,
+    thread_id: created.message_thread_id,
+    name,
+    harness,
+    slug: harness === 'antigravity' ? slugify(name) : slugForTopic(topic),
+  })
 }
 
 // Inbound handling for USER messages posted in the square topic. Reply-chain
@@ -1349,6 +1392,9 @@ function handleSquareUserMessage(msg: any, text: string): void {
 // messages for a brand-new topic cannot spawn two sessions; the spawning
 // flag + the live-session dedup are belt and suspenders.
 function ensureSession(topic: string): void {
+  // Harness lock: an Antigravity topic must never fall through to the Claude
+  // launcher, even if a stale queue/callback reaches this defensive boundary.
+  if (antigravityService.isLocked(topic)) return
   // The square topic hosts conversations, not a claude of its own.
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
   const st = getTopic(topic)
@@ -1576,6 +1622,63 @@ async function transcribeVoice(fileId: string): Promise<string | null> {
 // ---- grammy inbound --------------------------------------------------------
 
 const bot = new Bot(TOKEN)
+
+// Antigravity is a separate harness-bounded context. It shares only the one
+// Telegram Bot API adapter with Claude topics; its session identity, model
+// catalog, route, and persistence are deliberately separate.
+const antigravityRepository = new JsonAntigravityTopicRepository(ANTIGRAVITY_TOPICS_FILE)
+const antigravityRuntime = new AntigravityCli(ANTIGRAVITY_BIN, SPAWN_DIR)
+const antigravityService = new AntigravityTopicService(
+  antigravityRepository,
+  antigravityRuntime,
+  {
+    typing(topic) {
+      void bot.api.sendChatAction(String(GROUP_CHAT_ID), 'typing', threadOf(topic)).catch(() => {})
+    },
+    async reply(topic, text) {
+      for (const part of chunk(text, MAX_CHUNK_LIMIT)) {
+        await bot.api.sendMessage(String(GROUP_CHAT_ID), part, threadOf(topic))
+      }
+    },
+    async error(topic, text) {
+      await bot.api.sendMessage(
+        String(GROUP_CHAT_ID),
+        `⚠️ ${text.slice(0, MAX_CHUNK_LIMIT - 3)}`,
+        threadOf(topic),
+      )
+      if (/limit|quota|resource exhausted/i.test(text)) void refreshAntigravityUsage(true).catch(() => {})
+    },
+  },
+)
+
+function syncAntigravityInterop(): void {
+  const roots = [
+    join(homedir(), '.agents', 'skills'),
+    join(homedir(), '.claude', 'skills'),
+    ...claudePluginSkillRoots(
+      join(homedir(), '.claude', 'settings.json'),
+      join(homedir(), '.claude', 'plugins', 'installed_plugins.json'),
+      // The proxy itself is the Telegram adapter. Importing either Claude
+      // Telegram plugin would start incompatible channel mechanics and risks a
+      // second getUpdates consumer for the same token.
+      new Set(['telegram']),
+    ),
+  ]
+  try {
+    const result = syncAntigravitySkills(
+      join(homedir(), '.gemini', 'antigravity-cli', 'skills'),
+      roots,
+    )
+    log(
+      `Antigravity skill interop: ${result.linked.length} linked, ` +
+      `${result.skipped.length} native/existing preserved`,
+    )
+  } catch (error) {
+    log(`Antigravity skill interop failed (turns still work): ${error}`)
+  }
+}
+
+syncAntigravityInterop()
 
 bot.catch(err => {
   process.stderr.write(`telegram-topics-proxy: handler error (polling continues): ${err.error}\n`)
@@ -1815,7 +1918,7 @@ async function deleteAndAck(
 // has no Claude of its own. secret_drop=1 lets the reply guard accept silence:
 // the proxy already acked in the topic.
 function notifyTopic(chatId: string, topic: string, fromId: string, what: string): void {
-  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
+  if ((SQUARE_TOPIC && topic === SQUARE_TOPIC) || antigravityService.isLocked(topic)) return
   ensureSession(topic)
   enqueue(topic, {
     content: `SYSTEM NOTICE (not a user message): ${what} No reply is required.`,
@@ -1836,11 +1939,226 @@ const sayIn = (chatId: string, topic: string, t: string) =>
 const tilde = (p: string) => (p.startsWith(homedir() + sep) ? '~' + p.slice(homedir().length) : p)
 const reason = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
+// ---- Google Antigravity harness -------------------------------------------
+
+type AntigravityModelSelection = {
+  topic: string
+  model: AntigravityModel
+  expiresAt: number
+}
+
+const antigravityModelSelections = new Map<string, AntigravityModelSelection>()
+let antigravityCatalogCache: { models: AntigravityModel[]; at: number } | undefined
+let antigravityUsageSnapshot: AntigravityUsageWindow[] = []
+
+async function antigravityModels(force = false): Promise<AntigravityModel[]> {
+  if (!force && antigravityCatalogCache && Date.now() - antigravityCatalogCache.at < 60_000) {
+    return antigravityCatalogCache.models
+  }
+  const models = await antigravityService.models()
+  antigravityCatalogCache = { models, at: Date.now() }
+  return models
+}
+
+async function defaultAntigravityRoute() {
+  const models = await antigravityModels()
+  const model = models.find(candidate => candidate.id === 'gemini-3.8-flash') ?? models[0]
+  if (!model) throw new Error('Antigravity has no available subscription models')
+  return antigravityRoute(model, model.defaultEffort)
+}
+
+function antigravitySelection(model: AntigravityModel, topic: string): string {
+  const token = crypto.randomUUID().replace(/-/g, '').slice(0, 10)
+  antigravityModelSelections.set(token, {
+    topic,
+    model,
+    expiresAt: Date.now() + PICKER_TTL_MS,
+  })
+  return token
+}
+
+function pruneAntigravitySelections(): void {
+  const now = Date.now()
+  for (const [token, selection] of antigravityModelSelections) {
+    if (selection.expiresAt < now) antigravityModelSelections.delete(token)
+  }
+}
+
+async function antigravityModelPicker(
+  topic: string,
+  page = 0,
+): Promise<{ text: string; keyboard: InlineKeyboard }> {
+  pruneAntigravitySelections()
+  const models = await antigravityModels()
+  const pages = Math.max(1, Math.ceil(models.length / MODELS_PER_PAGE))
+  const safePage = Math.max(0, Math.min(page, pages - 1))
+  const keyboard = new InlineKeyboard()
+  for (const model of models.slice(safePage * MODELS_PER_PAGE, (safePage + 1) * MODELS_PER_PAGE)) {
+    keyboard.text(model.label, `agroute:m:${antigravitySelection(model, topic)}`).row()
+  }
+  if (pages > 1) {
+    if (safePage > 0) keyboard.text('Previous', `agroute:models:${topic}:${safePage - 1}`)
+    if (safePage + 1 < pages) keyboard.text('Next', `agroute:models:${topic}:${safePage + 1}`)
+    keyboard.row()
+  }
+  keyboard.text('Usage', `agroute:usage:${topic}`)
+  return {
+    text: `Google / Antigravity subscription models${pages > 1 ? ` (${safePage + 1}/${pages})` : ''}:`,
+    keyboard,
+  }
+}
+
+function antigravityUsageText(windows: Awaited<ReturnType<AntigravityTopicService['usage']>>): string {
+  if (!windows.length) return 'Antigravity subscription usage is temporarily unavailable.'
+  const pools = new Map<string, typeof windows>()
+  for (const window of windows) {
+    const list = pools.get(window.pool) ?? []
+    list.push(window)
+    pools.set(window.pool, list)
+  }
+  const lines = [...pools.entries()].map(([pool, values]) =>
+    `${pool}:\n${values.map(value =>
+      `  ${value.window}: ${value.remainingPercent}% remaining, resets ${formatTime(value.resetsAt)}`,
+    ).join('\n')}`,
+  )
+  return `Google / Antigravity subscription usage\n\n${lines.join('\n\n')}`
+}
+
+async function refreshAntigravityUsage(notifyResets: boolean): Promise<AntigravityUsageWindow[]> {
+  if (!antigravityService.list().length) return []
+  try {
+    const current = await antigravityService.usage()
+    const resets = notifyResets ? antigravityResetPools(antigravityUsageSnapshot, current) : []
+    antigravityUsageSnapshot = current
+    for (const pool of resets) {
+      for (const topic of antigravityService.list()) {
+        await bot.api.sendMessage(
+          String(GROUP_CHAT_ID),
+          `${pool} is available again on your Google / Antigravity subscription. ` +
+          'This topic was not switched automatically.',
+          {
+            ...threadOf(topic.topic),
+            reply_markup: new InlineKeyboard()
+              .text('Choose Antigravity model', `agroute:models:${topic.topic}:0`),
+          },
+        ).catch(error => log(`Antigravity reset notice failed for topic ${topic.topic}: ${error}`))
+      }
+    }
+    return current
+  } catch (error) {
+    log(`Antigravity capacity probe failed: ${error}`)
+    throw error
+  }
+}
+
+async function activateAntigravityTopic(
+  chatId: string,
+  topic: string,
+  fromId: string,
+): Promise<void> {
+  if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
+    await sayIn(chatId, topic, 'Only the operator can lock a topic to Antigravity.')
+    return
+  }
+  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
+    await sayIn(chatId, topic, 'The square cannot be assigned an agent harness.')
+    return
+  }
+  const existing = antigravityService.get(topic)
+  if (existing) {
+    await sayIn(
+      chatId,
+      topic,
+      `This topic is already locked to ${antigravityRouteLabel(existing.route)}. ` +
+      `Conversation: ${existing.conversationId ?? 'not started'}.`,
+    )
+    return
+  }
+  const claude = getTopic(topic)
+  if (claude.claudeSessionId || claude.session) {
+    await sayIn(
+      chatId,
+      topic,
+      'This topic already owns a Claude Code conversation, so it cannot be converted in place. ' +
+      'Create a fresh topic and run /antigravity there.',
+    )
+    return
+  }
+  try {
+    const route = await defaultAntigravityRoute()
+    const name = claude.name || topicNames.get(topic) || `Antigravity ${topic}`
+    antigravityService.activate(antigravityTopic(topic, name, route))
+    claude.name = name
+    topicNames.set(topic, name)
+    saveRegistry()
+    void refreshAntigravityUsage(false).catch(() => {})
+    await sayIn(
+      chatId,
+      topic,
+      `Locked this topic to ${antigravityRouteLabel(route)}. Other harness/provider routes are ` +
+      'disabled here. Send a message to start its continuous Antigravity conversation; use /model to switch ' +
+      'only among models included with the Antigravity subscription.',
+    )
+  } catch (error) {
+    await sayIn(chatId, topic, `Could not enable Antigravity: ${reason(error)}`)
+  }
+}
+
+async function handleAntigravityModelCommand(
+  chatId: string,
+  topic: string,
+  fromId: string,
+  arg: string,
+): Promise<void> {
+  if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
+    await sayIn(chatId, topic, 'Only the operator can change this topic\'s model.')
+    return
+  }
+  const current = antigravityService.get(topic)!
+  const value = arg.trim().toLowerCase()
+  if (value === 'status') {
+    await sayIn(
+      chatId,
+      topic,
+      `Antigravity conversation: ${current.conversationId ?? 'not started'}\n` +
+      `Route: ${antigravityRouteLabel(current.route)}\n` +
+      'Harness: Antigravity (locked)\nPermissions: non-interactive; no hard gates\n' +
+      'Context: AGENTS.md/GEMINI.md native; CLAUDE.md and Markdown skills via compatibility adapter',
+    )
+    return
+  }
+  if (value) {
+    await sayIn(
+      chatId,
+      topic,
+      'This topic is harness-locked to Google / Antigravity. Run bare /model and choose from its subscription catalog.',
+    )
+    return
+  }
+  try {
+    const picker = await antigravityModelPicker(topic)
+    await bot.api.sendMessage(chatId, picker.text, { ...threadOf(topic), reply_markup: picker.keyboard })
+  } catch (error) {
+    await sayIn(chatId, topic, `Could not load Antigravity models: ${reason(error)}`)
+  }
+}
+
 // Same kill-then-nudge sequence as a provider-route recovery: killSession
 // drains the dying MCP's long-polls first so the nudge cannot be handed to it
 // and lost. The nudge asks for one line back, so a respawn that fails is a
 // visible silence rather than a quiet one.
 async function handleRelaunch(chatId: string, topic: string, fromId: string): Promise<void> {
+  if (antigravityService.isLocked(topic)) {
+    const current = antigravityService.get(topic)!
+    await sayIn(
+      chatId,
+      topic,
+      `Antigravity already starts a fresh CLI process for every Telegram turn and resumes the same ` +
+      `conversation (${current.conversationId ?? 'not started'}). Configuration is reloaded on the next message; ` +
+      'no relaunch is needed.',
+    )
+    return
+  }
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
     await sayIn(chatId, topic, '♻️ the square has no agent of its own; run /relaunch in a topic.')
     return
@@ -2247,6 +2565,7 @@ async function registerCommands(): Promise<void> {
     { command: 'relaunch', description: "restart this topic's agent (same conversation, reloads MCP config)" },
     ...(ADMIN_USER_ID
       ? [
+          { command: 'antigravity', description: 'lock a fresh topic to the Antigravity harness' },
           { command: 'model', description: 'choose this topic\'s provider and model' },
           { command: 'usage', description: 'show usage and reset times for every provider' },
         ]
@@ -2280,18 +2599,34 @@ bot.on('message', async ctx => {
     await handleSecretDrop(String(ctx.chat.id), topic, msg.message_id, String(ctx.from?.id ?? ''), msg.text)
     return
   }
+  if (typeof msg.text === 'string' && ANTIGRAVITY_RE.test(msg.text)) {
+    await activateAntigravityTopic(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
+    return
+  }
   if (typeof msg.text === 'string' && RELAUNCH_RE.test(msg.text)) {
     await handleRelaunch(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
     return
   }
   const modelMatch = MODEL_RE.exec(msg.text ?? '')
   if (modelMatch) {
-    await handleModelCommand(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), modelMatch[1] ?? '')
+    if (antigravityService.isLocked(topic)) {
+      await handleAntigravityModelCommand(
+        String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), modelMatch[1] ?? '',
+      )
+    } else {
+      await handleModelCommand(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), modelMatch[1] ?? '')
+    }
     return
   }
   if (USAGE_RE.test(msg.text ?? '')) {
     if (!ADMIN_USER_ID || String(ctx.from?.id ?? '') !== ADMIN_USER_ID) {
       await sayIn(String(ctx.chat.id), topic, 'Only the operator can inspect provider usage.')
+    } else if (antigravityService.isLocked(topic)) {
+      try {
+        await sayIn(String(ctx.chat.id), topic, antigravityUsageText(await refreshAntigravityUsage(true)))
+      } catch (error) {
+        await sayIn(String(ctx.chat.id), topic, `Could not read Antigravity usage: ${reason(error)}`)
+      }
     } else {
       await refreshProviderCapacity()
       await sayIn(String(ctx.chat.id), topic, capacityText())
@@ -2354,6 +2689,7 @@ bot.on('message', async ctx => {
     topicNames.set(topic, nm)
     const st = topics.get(topic)
     if (st && !st.name) st.name = nm
+    if (antigravityService.isLocked(topic)) antigravityService.rename(topic, nm)
     log(`learned topic ${topic} name "${nm}"`)
     return
   }
@@ -2371,6 +2707,7 @@ bot.on('message', async ctx => {
         st.name = nm
         saveRegistry()
       }
+      if (antigravityService.isLocked(topic)) antigravityService.rename(topic, nm)
       log(`topic ${topic} renamed to "${nm}"`)
     }
     return
@@ -2410,6 +2747,15 @@ bot.on('message', async ctx => {
     imagePath = (await downloadFile(desc.photo.file_id, desc.photo.file_unique_id)) ?? undefined
   }
 
+  // Claude topics can lazily call download_attachment through their MCP. The
+  // Antigravity harness intentionally does not load that Claude plugin, so its
+  // adapter eagerly materializes non-photo attachments and supplies the safe
+  // local path in the channel metadata instead.
+  let attachmentPath: string | undefined
+  if (antigravityService.isLocked(topic) && desc.attachment && !imagePath) {
+    attachmentPath = (await downloadFile(desc.attachment.file_id, desc.attachment.name)) ?? undefined
+  }
+
   let voiceTranscribed = false
   if (desc.attachment?.kind === 'voice') {
     const text = await transcribeVoice(desc.attachment.file_id)
@@ -2428,6 +2774,7 @@ bot.on('message', async ctx => {
     ts: new Date((msg.date ?? 0) * 1000).toISOString(),
     ...(msg.message_thread_id != null ? { message_thread_id: String(msg.message_thread_id) } : {}),
     ...(imagePath ? { image_path: imagePath } : {}),
+    ...(attachmentPath ? { attachment_path: attachmentPath } : {}),
     ...(voiceTranscribed ? { voice_transcribed: '1' } : {}),
     ...(desc.attachment
       ? {
@@ -2438,6 +2785,11 @@ bot.on('message', async ctx => {
           ...(desc.attachment.name ? { attachment_name: desc.attachment.name } : {}),
         }
       : {}),
+  }
+
+  if (antigravityService.isLocked(topic)) {
+    void antigravityService.submitTurn(topic, { content: desc.content, meta })
+    return
   }
 
   // Spawn the topic's Claude if none is live, then enqueue. The message waits
@@ -2462,6 +2814,28 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
+    const callbackTopic = (ctx.callbackQuery.message as any)?.message_thread_id != null
+      ? String((ctx.callbackQuery.message as any).message_thread_id)
+      : 'general'
+    const callbackHarness = antigravityService.isLocked(callbackTopic) ? 'antigravity' : 'claude'
+    const explicitCallbackTopic = callbackTopicTarget(data)
+    if (explicitCallbackTopic && explicitCallbackTopic !== callbackTopic) {
+      await ctx.answerCallbackQuery({
+        text: 'This control belongs to a different Telegram topic.',
+        show_alert: true,
+      }).catch(() => {})
+      return
+    }
+    if (!callbackBelongsToHarness(callbackHarness, data)) {
+      await ctx.answerCallbackQuery({
+        text: callbackHarness === 'antigravity'
+          ? 'This topic is locked to Google / Antigravity. External provider routes are disabled.'
+          : 'This picker belongs to an Antigravity-locked topic.',
+        show_alert: true,
+      }).catch(() => {})
+      return
+    }
+
     const authorizationPick = /^tgauth:([ad]):([a-f0-9-]+)$/.exec(data)
     if (authorizationPick) {
       const request = authorizationService.get(authorizationPick[2])
@@ -2469,9 +2843,6 @@ bot.on('callback_query:data', async ctx => {
         await ctx.answerCallbackQuery({ text: 'This approval is no longer pending.' }).catch(() => {})
         return
       }
-      const callbackTopic = (ctx.callbackQuery.message as any)?.message_thread_id != null
-        ? String((ctx.callbackQuery.message as any).message_thread_id)
-        : 'general'
       const state = topics.get(request.topic)
       if (
         callbackTopic !== request.topic ||
@@ -2492,6 +2863,95 @@ bot.on('callback_query:data', async ctx => {
         }).catch(() => {})
       } catch {
         await ctx.answerCallbackQuery({ text: 'This approval is no longer pending.' }).catch(() => {})
+      }
+      return
+    }
+
+    const antigravityPage = /^agroute:models:([^:]+):(\d+)$/.exec(data)
+    if (antigravityPage) {
+      const topic = antigravityPage[1]
+      if (topic !== callbackTopic || !antigravityService.isLocked(topic)) {
+        await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
+        return
+      }
+      try {
+        const picker = await antigravityModelPicker(topic, Number(antigravityPage[2]))
+        await ctx.editMessageText(picker.text, { reply_markup: picker.keyboard })
+        await ctx.answerCallbackQuery()
+      } catch (error) {
+        await ctx.answerCallbackQuery({ text: `Could not load models: ${reason(error)}`, show_alert: true }).catch(() => {})
+      }
+      return
+    }
+
+    const antigravityModel = /^agroute:m:([a-f0-9]+)$/.exec(data)
+    if (antigravityModel) {
+      pruneAntigravitySelections()
+      const selection = antigravityModelSelections.get(antigravityModel[1])
+      if (!selection) {
+        await ctx.answerCallbackQuery({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
+        return
+      }
+      if (selection.topic !== callbackTopic || !antigravityService.isLocked(selection.topic)) {
+        await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
+        return
+      }
+      const keyboard = new InlineKeyboard()
+      for (const effort of selection.model.efforts) {
+        const suffix = effort === selection.model.defaultEffort ? ' · default' : ''
+        keyboard.text(`${effort}${suffix}`, `agroute:e:${antigravityModel[1]}:${effort}`).row()
+      }
+      keyboard.text('Back', `agroute:models:${selection.topic}:0`)
+      await ctx.editMessageText(`${selection.model.label}: choose reasoning effort`, {
+        reply_markup: keyboard,
+      }).catch(() => {})
+      await ctx.answerCallbackQuery().catch(() => {})
+      return
+    }
+
+    const antigravityEffort = /^agroute:e:([a-f0-9]+):(low|medium|high)$/.exec(data)
+    if (antigravityEffort) {
+      pruneAntigravitySelections()
+      const selection = antigravityModelSelections.get(antigravityEffort[1])
+      const effort = antigravityEffort[2] as AntigravityEffort
+      if (!selection || !selection.model.efforts.includes(effort)) {
+        await ctx.answerCallbackQuery({ text: 'This effort picker expired. Run /model again.' }).catch(() => {})
+        return
+      }
+      if (selection.topic !== callbackTopic || !antigravityService.isLocked(selection.topic)) {
+        await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
+        return
+      }
+      const busy = antigravityService.busy(selection.topic)
+      const changed = antigravityService.changeRoute(
+        selection.topic,
+        antigravityRoute(selection.model, effort),
+      )
+      antigravityModelSelections.delete(antigravityEffort[1])
+      await ctx.editMessageText(
+        `${busy ? 'Next turn will use' : 'Now using'} ${antigravityRouteLabel(changed.route)} ` +
+        `in the same Antigravity conversation (${changed.conversationId ?? 'starts on your first message'}).\n\n` +
+        'This topic remains harness-locked; Anthropic, Codex, and OpenCode routes are unavailable here.',
+      ).catch(() => {})
+      await ctx.answerCallbackQuery({ text: busy ? 'Model set for the next turn.' : 'Model updated.' }).catch(() => {})
+      return
+    }
+
+    const antigravityUsage = /^agroute:usage:(.+)$/.exec(data)
+    if (antigravityUsage) {
+      const topic = antigravityUsage[1]
+      if (topic !== callbackTopic || !antigravityService.isLocked(topic)) {
+        await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
+        return
+      }
+      try {
+        const usage = antigravityUsageText(await refreshAntigravityUsage(true))
+        await ctx.editMessageText(usage, {
+          reply_markup: new InlineKeyboard().text('Back', `agroute:models:${topic}:0`),
+        })
+        await ctx.answerCallbackQuery()
+      } catch (error) {
+        await ctx.answerCallbackQuery({ text: `Could not read usage: ${reason(error)}`, show_alert: true }).catch(() => {})
       }
       return
     }
@@ -2990,8 +3450,10 @@ for (const [topic, st] of topics) {
   }
 }
 void refreshProviderCapacity()
+void refreshAntigravityUsage(false).catch(() => {})
 if (Number.isFinite(CAPACITY_POLL_MS) && CAPACITY_POLL_MS >= 60_000) {
   setInterval(() => void refreshProviderCapacity(), CAPACITY_POLL_MS)
+  setInterval(() => void refreshAntigravityUsage(true).catch(() => {}), CAPACITY_POLL_MS)
 }
 
 // polling liveness for /health. Set on each (re)start of the poll, cleared if

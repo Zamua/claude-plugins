@@ -3,7 +3,9 @@
 ## What it is
 
 A drop-in replacement for the single-session `telegram` channel that fans ONE
-bot token out to MANY concurrent Claude sessions, one per Telegram forum topic.
+bot token out to MANY concurrent agent conversations, one per Telegram forum
+topic. Ordinary topics are Claude Code sessions; a fresh topic can be explicitly
+and permanently harness-locked to Google's official Antigravity CLI.
 Forked from the official `telegram` plugin 0.0.6; the only real change is the
 transport: the token + getUpdates + access logic moved OUT of the MCP into a
 standalone proxy, and the MCP became a thin HTTP client of that proxy.
@@ -37,6 +39,12 @@ proxy/proxy.ts ── grammy inbound ── group-chat gate ── topic = messa
    ├── POST /permission-request       {topic,request_id,tool,input} -> prompt in topic
    ├── POST /permission-denied        auto-mode hook -> durable exact-action approval
    └── GET  /health                   {ok, topics, port, polling, polling_since}
+
+fresh `/antigravity` topic ── separate aggregate/repository ── headless `agy`
+   ├── live `agy models` catalog -> model -> effort Telegram picker
+   ├── first result persists conversation_id
+   ├── every later turn passes --conversation <same-id>
+   └── final response -> the same single grammy outbound adapter
 
 scripts/launch-topic.sh ── spawn in the selected multiplexer (TG_MUX: tmux new-session -d
    with vars via -e, or herdr agent start with vars via /usr/bin/env; see
@@ -284,8 +292,8 @@ is not destructive: the conversation resumes.
 
 ## Provider/model routing and quota recovery
 
-There is exactly one agent harness: foreground Claude Code. Provider/model is
-a route below that harness:
+For ordinary topics there is exactly one agent harness: foreground Claude Code.
+Provider/model is a route below that harness:
 
 ```
 Telegram topic -> Claude Code session UUID -> launch profile
@@ -401,6 +409,61 @@ Details that matter:
   credentials, and unofficial-client provider/account risk remains.
 - The hook must stay compatible with the macOS Python used by the detached
   process. `from __future__ import annotations` keeps newer type syntax lazy.
+
+## Harness-locked Antigravity topics
+
+The one-harness statement above applies to ordinary topics. Antigravity is a
+separate opt-in bounded context; it is never another value in Claude's
+`ProviderId` or `TopicRoute`.
+
+`/antigravity` may be run only by the configured admin and only in a fresh
+topic with no Claude UUID/live pane. It creates an `AntigravityTopic` aggregate
+in private, atomic `antigravity-topics.json` state. There is no unlock/conversion
+path: keeping the harness identity explicit prevents a model name from silently
+changing which runtime owns the conversation.
+
+The runtime is Google's official authenticated `agy` CLI, not the unofficial
+Claude provider bridge. Each Telegram turn starts one headless process with
+`--output-format json --dangerously-skip-permissions`, and turns are serialized
+per topic by `AntigravityTopicService`. The first successful result records its
+`conversation_id`; every later invocation passes exactly that id through
+`--conversation`, including after proxy restarts and after changing models. If
+the CLI ever returns a different id for an established topic, the service
+refuses to persist or present that result as continuity.
+
+`/model` in a locked topic reads `agy models` dynamically (60-second cache),
+groups concrete `-low`/`-medium`/`-high` variants into model then effort steps,
+and emits only `agroute:*` callbacks. It has no provider step and no Ultracode.
+Conversely, the Claude picker emits only `tgroute:*`. The callback boundary
+checks both the callback namespace and Telegram thread id, so an old or forged
+Claude-route button cannot mutate an Antigravity topic (and vice versa).
+`/usage` runs Antigravity's native `/usage` command and reports only its
+subscription pools. `/relaunch` is informational because every turn already
+uses a fresh process and the persisted conversation.
+
+Configuration interop is explicit:
+
+- Antigravity handles `AGENTS.md` and `GEMINI.md` natively.
+- The first-turn compatibility context requires applicable project
+  `CLAUDE.md` files, and relevant general guidance from `~/.claude/CLAUDE.md`,
+  to be read as supplemental instructions while translating or ignoring
+  clauses tied to Claude Channels, Claude hooks, Claude permissions, or the
+  Claude harness itself. The driver posts the final result, so the model must
+  not call the Claude Telegram reply tool.
+- On proxy boot, `antigravity-skill-interop.ts` safely links portable Markdown
+  skills from `~/.agents/skills`, `~/.claude/skills`, and enabled Claude plugin
+  `skills/` folders into `~/.gemini/antigravity-cli/skills`. A private manifest
+  means it removes only links it previously created; native/user-managed
+  Antigravity skills are preserved. Every plugin named `telegram` is excluded
+  to protect the one Bot API poller.
+- Claude manifests, hooks, custom agents, and channels are not claimed as
+  portable. They need specific adapters. Antigravity-native plugin/MCP config
+  remains independent.
+
+`--dangerously-skip-permissions` is intentional for this bounded context: the
+headless process cannot answer a terminal prompt and the operator requested no
+hard gates. It is not Claude's reviewer-backed auto mode and has no Terra
+classifier; the topic should be treated as an unreviewed local agent.
 
 ## Key mechanics / gotchas (baked into the code)
 
@@ -623,9 +686,13 @@ Details that matter:
 - `.mcp.json`: starts the MCP via `bun run --cwd ${CLAUDE_PLUGIN_ROOT} ... start`.
 - `server.ts` + `package.json`: the thin MCP client (dep: `@modelcontextprotocol/sdk`).
 - `proxy/proxy.ts` + `proxy/package.json`: the daemon (dep: `grammy`).
-- `proxy/domain/`: pure provider-route, inbound-delivery, and capacity types/transitions.
+- `proxy/domain/`: pure provider-route, harness-lock, Antigravity-topic,
+  inbound-delivery, and capacity types/transitions.
 - `proxy/adapters/`: Claude launch profiles, bridge model catalog, Codex
-  app-server client, and OpenCode Go capacity client. Tests sit beside them.
+  app-server client, OpenCode Go capacity client, official Antigravity CLI,
+  Antigravity JSON repository, and portable-skill interop. Tests sit beside them.
+- `proxy/application/antigravity-topic-service.ts`: serializes turns and keeps
+  exact Antigravity conversation identity independent of Telegram and process I/O.
 - `scripts/launch-topic.sh`: the one-harness launcher (invoked by the proxy;
   `TG_MUX` picks only the multiplexer). Every pane executes `claude`.
 - `scripts/start-provider-proxy.sh`: starts the loopback compatibility bridge,
@@ -669,7 +736,8 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled),
 `TELEGRAM_TOPICS_MODEL` (default the `fable` alias, see below),
 `TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
-backends" above).
+backends" above); `TELEGRAM_ANTIGRAVITY_BIN` (optional path to official `agy`,
+defaults to the Nix per-user profile and then PATH).
 Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
 
