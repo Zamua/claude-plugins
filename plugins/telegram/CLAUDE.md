@@ -40,11 +40,11 @@ proxy/proxy.ts ── grammy inbound ── group-chat gate ── topic = messa
    ├── POST /permission-denied        auto-mode hook -> durable exact-action approval
    └── GET  /health                   {ok, topics, port, polling, polling_since}
 
-fresh `/antigravity` topic ── separate aggregate/repository ── headless `agy`
+fresh `/antigravity` topic ── separate aggregate/repository ── persistent Herdr `agy`
    ├── live `agy models` catalog -> model -> effort Telegram picker
-   ├── first result persists conversation_id
-   ├── every later turn passes --conversation <same-id>
-   └── final response -> the same single grammy outbound adapter
+   ├── first interactive launch persists conversation_id + Herdr label
+   ├── Telegram prompt -> Herdr agent prompt -> outbound-only Telegram MCP
+   └── relaunch/model switch -> --conversation <same-id>
 
 scripts/launch-topic.sh ── spawn in the selected multiplexer (TG_MUX: tmux new-session -d
    with vars via -e, or herdr agent start with vars via /usr/bin/env; see
@@ -423,13 +423,23 @@ path: keeping the harness identity explicit prevents a model name from silently
 changing which runtime owns the conversation.
 
 The runtime is Google's official authenticated `agy` CLI, not the unofficial
-Claude provider bridge. Each Telegram turn starts one headless process with
-`--output-format json --dangerously-skip-permissions`, and turns are serialized
-per topic by `AntigravityTopicService`. The first successful result records its
-`conversation_id`; every later invocation passes exactly that id through
-`--conversation`, including after proxy restarts and after changing models. If
-the CLI ever returns a different id for an established topic, the service
-refuses to persist or present that result as continuity.
+Claude provider bridge. `launch-antigravity-topic.sh` creates one visible Herdr
+workspace per topic (`agy-<slug>-<threadid>`) and runs a persistent interactive
+CLI under `--dangerously-skip-permissions`. `AntigravityTopicService` serializes
+Telegram turns and injects each one through `herdr agent prompt`; the operator
+can monitor or interact with that same pane directly. The first launch records
+both the Herdr label and `conversation_id`; relaunch and model changes pass
+exactly that id through `--conversation`. The adapter discovers the active id
+from the `agy` process's open conversation database and refuses a mismatch, so
+it cannot silently present a fork as continuity.
+
+Antigravity loads the existing `server.ts` MCP as an outbound-only adapter. On
+proxy boot, `antigravity-mcp-config.ts` atomically adds the `telegram-topics`
+entry to `~/.gemini/config/mcp_config.json` while preserving user servers. The
+Herdr launcher binds `TELEGRAM_TOPIC_ID`, `TELEGRAM_PROXY_URL`, and
+`TG_INBOUND_MODE=pane`; therefore the MCP exposes reply/react/edit/download in
+that pane but never starts a second Bot API poller. With no explicit topic (an
+ordinary manual `agy` session), it exposes zero tools and stays dormant.
 
 `/model` in a locked topic reads `agy models` dynamically (60-second cache),
 groups concrete `-low`/`-medium`/`-high` variants into model then effort steps,
@@ -438,8 +448,10 @@ Conversely, the Claude picker emits only `tgroute:*`. The callback boundary
 checks both the callback namespace and Telegram thread id, so an old or forged
 Claude-route button cannot mutate an Antigravity topic (and vice versa).
 `/usage` runs Antigravity's native `/usage` command and reports only its
-subscription pools. `/relaunch` is informational because every turn already
-uses a fresh process and the persisted conversation.
+subscription pools. `/relaunch` closes and recreates the Herdr process with the
+same conversation. A route switch does the same with the chosen model/effort.
+Both changes queue while either a Telegram or direct Herdr turn is working, and
+a short reconciliation interval applies them at the next idle boundary.
 
 Configuration interop is explicit:
 
@@ -448,8 +460,8 @@ Configuration interop is explicit:
   `CLAUDE.md` files, and relevant general guidance from `~/.claude/CLAUDE.md`,
   to be read as supplemental instructions while translating or ignoring
   clauses tied to Claude Channels, Claude hooks, Claude permissions, or the
-  Claude harness itself. The driver posts the final result, so the model must
-  not call the Claude Telegram reply tool.
+  Claude harness itself. A channel turn must use the outbound Telegram MCP; a
+  prompt typed directly in Herdr answers only there.
 - On proxy boot, `antigravity-skill-interop.ts` safely links portable Markdown
   skills from `~/.agents/skills`, `~/.claude/skills`, and enabled Claude plugin
   `skills/` folders into `~/.gemini/antigravity-cli/skills`. A private manifest
@@ -459,10 +471,12 @@ Configuration interop is explicit:
 - Claude manifests, hooks, custom agents, and channels are not claimed as
   portable. They need specific adapters. Antigravity-native plugin/MCP config
   remains independent.
+- `antigravity-mcp-config.ts` adds only the outbound Telegram MCP entry to the
+  native config and preserves every user-managed MCP server.
 
 `--dangerously-skip-permissions` is intentional for this bounded context: the
-headless process cannot answer a terminal prompt and the operator requested no
-hard gates. It is not Claude's reviewer-backed auto mode and has no Terra
+operator requested no hard gates even while working unattended from Telegram.
+It is not Claude's reviewer-backed auto mode and has no Terra
 classifier; the topic should be treated as an unreviewed local agent.
 
 ## Key mechanics / gotchas (baked into the code)
@@ -689,12 +703,16 @@ classifier; the topic should be treated as an unreviewed local agent.
 - `proxy/domain/`: pure provider-route, harness-lock, Antigravity-topic,
   inbound-delivery, and capacity types/transitions.
 - `proxy/adapters/`: Claude launch profiles, bridge model catalog, Codex
-  app-server client, OpenCode Go capacity client, official Antigravity CLI,
-  Antigravity JSON repository, and portable-skill interop. Tests sit beside them.
+  app-server client, OpenCode Go capacity client, official Antigravity catalog,
+  persistent Herdr runtime, MCP config, JSON repository, and portable-skill
+  interop. Tests sit beside them.
 - `proxy/application/antigravity-topic-service.ts`: serializes turns and keeps
-  exact Antigravity conversation identity independent of Telegram and process I/O.
+  exact Antigravity conversation identity independent of Telegram and Herdr I/O.
 - `scripts/launch-topic.sh`: the one-harness launcher (invoked by the proxy;
   `TG_MUX` picks only the multiplexer). Every pane executes `claude`.
+- `scripts/launch-antigravity-topic.sh`: creates a separate Herdr workspace and
+  launches/resumes the persistent interactive `agy` process with topic-bound,
+  outbound-only Telegram MCP environment.
 - `scripts/start-provider-proxy.sh`: starts the loopback compatibility bridge,
   enables safe Codex response continuation, and injects the existing OpenCode
   Go credential without duplicating it.
@@ -736,8 +754,9 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled),
 `TELEGRAM_TOPICS_MODEL` (default the `fable` alias, see below),
 `TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
-backends" above); `TELEGRAM_ANTIGRAVITY_BIN` (optional path to official `agy`,
-defaults to the Nix per-user profile and then PATH).
+backends" above; applies to Claude topics); `TELEGRAM_ANTIGRAVITY_BIN` (optional
+path to official `agy`, defaults to the Nix per-user profile and then PATH).
+Antigravity topics always use Herdr so they remain visible and drop-in ready.
 Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
 

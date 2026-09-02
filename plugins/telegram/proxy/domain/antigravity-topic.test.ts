@@ -1,9 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import {
   antigravityRoute,
+  antigravitySessionName,
   antigravityTopic,
+  applyAntigravityPending,
+  renderAntigravityKickoff,
   renderAntigravityTurn,
+  requestAntigravityRoute,
+  requestAntigravityRestart,
   selectAntigravityVariant,
+  withAntigravitySession,
 } from './antigravity-topic'
 
 const flash = {
@@ -39,16 +45,42 @@ describe('Antigravity topic', () => {
     expect(topic.conversationId).toBeUndefined()
   })
 
-  test('imports Claude guidance without pretending Claude channel mechanics work', () => {
+  test('uses a readable, stable Herdr session name', () => {
+    expect(antigravitySessionName('42', 'Antigravity Pilot!')).toBe('agy-antigravity-pilot-42')
+  })
+
+  test('persists pane identity with the exact conversation', () => {
+    const topic = antigravityTopic('42', 'pilot', antigravityRoute(flash, 'medium'), 10)
+    const running = withAntigravitySession(topic, 'agy-pilot-42', 'conv-1', 20)
+    expect(running.sessionName).toBe('agy-pilot-42')
+    expect(running.conversationId).toBe('conv-1')
+  })
+
+  test('queues route and restart changes until the current turn is safe to stop', () => {
+    const topic = antigravityTopic('42', 'pilot', antigravityRoute(flash, 'medium'), 10)
+    const next = antigravityRoute(flash, 'high')
+    const requested = requestAntigravityRestart(requestAntigravityRoute(topic, next, 20), 30)
+    expect(requested.route.effort).toBe('medium')
+    expect(requested.pendingRoute?.effort).toBe('high')
+    expect(requested.restartPending).toBeTrue()
+    const applied = applyAntigravityPending(requested, 40)
+    expect(applied.route.effort).toBe('high')
+    expect(applied.pendingRoute).toBeUndefined()
+    expect(applied.restartPending).toBeUndefined()
+  })
+
+  test('imports Claude guidance and requires outbound Telegram MCP delivery', () => {
+    const kickoff = renderAntigravityKickoff()
     const turn = renderAntigravityTurn({
       content: 'check the GPU project',
       meta: { chat_id: '-1001', user: 'zamua', message_thread_id: '42' },
-    }, true)
-    expect(turn).toContain('CLAUDE.md')
-    expect(turn).toContain('.agents/skills')
-    expect(turn).toContain('.claude/skills')
-    expect(turn).toContain('Do not call a Claude Telegram reply tool')
+    })
+    expect(kickoff).toContain('CLAUDE.md')
+    expect(kickoff).toContain('.agents/skills')
+    expect(kickoff).toContain('.claude/skills')
+    expect(kickoff).toContain('persistent Herdr workspace')
     expect(turn).toContain('<channel source="telegram"')
     expect(turn).toContain('check the GPU project')
+    expect(turn).toContain('Telegram MCP reply tool')
   })
 })

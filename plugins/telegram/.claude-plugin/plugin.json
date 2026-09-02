@@ -1,7 +1,7 @@
 {
   "name": "telegram",
-  "description": "Telegram forum-topic agent router: multiplex one bot token across concurrent Claude Code conversations, plus opt-in harness-locked Google Antigravity topics with dynamic subscription model and effort selection.",
-  "version": "0.2.0",
+  "description": "Telegram forum-topic agent router: multiplex one bot token across concurrent Claude Code conversations, plus opt-in harness-locked Google Antigravity topics in persistent Herdr sessions with dynamic subscription model and effort selection.",
+  "version": "0.3.0",
   "author": {
     "name": "Zamua"
   },

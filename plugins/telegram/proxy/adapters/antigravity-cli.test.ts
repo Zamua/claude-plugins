@@ -1,8 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  antigravityArgs,
   parseAntigravityModels,
-  parseAntigravityResult,
   parseAntigravityUsage,
 } from './antigravity-cli'
 
@@ -44,29 +42,6 @@ describe('Antigravity CLI adapter', () => {
         defaultEffort: 'medium',
       },
     ])
-  })
-
-  test('builds a shell-free, permissionless headless turn on the same conversation', () => {
-    expect(antigravityArgs({
-      prompt: 'hello',
-      modelVariant: 'gemini-3.8-flash-low',
-      effort: 'low',
-      conversationId: 'conv-1',
-    })).toEqual([
-      '--model', 'gemini-3.8-flash-low',
-      '--effort', 'low',
-      '--dangerously-skip-permissions',
-      '--output-format', 'json',
-      '--print-timeout', '30m',
-      '--conversation', 'conv-1',
-      '-p', 'hello',
-    ])
-  })
-
-  test('parses the final response and durable conversation identity', () => {
-    expect(parseAntigravityResult(JSON.stringify({
-      conversation_id: 'conv-1', status: 'SUCCESS', response: 'done\n',
-    }))).toEqual({ conversationId: 'conv-1', response: 'done', status: 'SUCCESS' })
   })
 
   test('parses quota windows and exact resets', () => {

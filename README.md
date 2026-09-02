@@ -19,7 +19,8 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   MANY concurrent agent conversations, routed by forum topics. Ordinary topics
   use foreground Claude Code with provider routing; fresh topics may instead be
   harness-locked to Google's official Antigravity CLI, with a separate dynamic
-  model/effort picker and the same Antigravity conversation resumed each turn.
+  model/effort picker and a persistent, drop-in-ready Herdr session that keeps
+  the same Antigravity conversation across relaunches.
 - **[reexplain](plugins/reexplain/)**: re-explain your last answer for a reader
   who is not a domain expert. Rebuilds the explanation instead of compressing it:
   diagnoses why the first attempt failed, defines each term on first use, keeps

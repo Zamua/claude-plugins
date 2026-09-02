@@ -7,27 +7,40 @@ export type AntigravityUsageWindow = {
   resetsAt: number
 }
 
-export type AntigravityTurnResult = {
+export type AntigravitySessionIdentity = {
+  sessionName: string
   conversationId: string
-  response: string
-  status: string
 }
 
-export type AntigravityTurn = {
-  prompt: string
-  modelVariant: string
-  effort: AntigravityEffort
+export type AntigravitySessionSpec = {
+  topic: string
+  name: string
+  sessionName: string
+  route: {
+    modelVariant: string
+    effort: AntigravityEffort
+  }
   conversationId?: string
+  kickoff: string
 }
 
-export interface AntigravityRuntimePort {
+export type AntigravitySessionStatus = 'missing' | 'starting' | 'idle' | 'busy' | 'blocked'
+
+export interface AntigravityCatalogPort {
   models(): Promise<AntigravityModel[]>
   usage(): Promise<AntigravityUsageWindow[]>
-  turn(input: AntigravityTurn): Promise<AntigravityTurnResult>
 }
+
+export interface AntigravitySessionPort {
+  status(sessionName: string): Promise<AntigravitySessionStatus>
+  ensureSession(input: AntigravitySessionSpec): Promise<AntigravitySessionIdentity>
+  prompt(sessionName: string, prompt: string): Promise<void>
+  stop(sessionName: string): Promise<boolean>
+}
+
+export interface AntigravityRuntimePort extends AntigravityCatalogPort, AntigravitySessionPort {}
 
 export interface AntigravityOutboundPort {
   typing(topic: string): void
-  reply(topic: string, text: string): Promise<void>
   error(topic: string, text: string): Promise<void>
 }
