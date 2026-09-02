@@ -23,6 +23,9 @@ export type AntigravityTopic = {
   name: string
   route: AntigravityRoute
   conversationId?: string
+  sessionName?: string
+  pendingRoute?: AntigravityRoute
+  restartPending?: boolean
   createdAt: number
   updatedAt: number
 }
@@ -86,7 +89,19 @@ export function antigravityTopicFromRecord(value: unknown): AntigravityTopic | u
   const updatedAt = Number(raw.updatedAt)
   if (!Number.isFinite(createdAt) || !Number.isFinite(updatedAt)) return undefined
   if (raw.conversationId !== undefined && typeof raw.conversationId !== 'string') return undefined
+  if (raw.sessionName !== undefined && typeof raw.sessionName !== 'string') return undefined
+  if (raw.pendingRoute !== undefined && !validRoute(raw.pendingRoute)) return undefined
+  if (raw.restartPending !== undefined && typeof raw.restartPending !== 'boolean') return undefined
   return structuredClone(raw) as AntigravityTopic
+}
+
+function validRoute(value: unknown): value is AntigravityRoute {
+  const route = value as any
+  return !!route && typeof route === 'object' &&
+    ['low', 'medium', 'high'].includes(route.effort) &&
+    ['model', 'modelLabel', 'modelVariant'].every(
+      field => typeof route[field] === 'string' && route[field].trim(),
+    )
 }
 
 export function withAntigravityConversation(
@@ -98,12 +113,53 @@ export function withAntigravityConversation(
   return { ...topic, conversationId, updatedAt: now }
 }
 
-export function withAntigravityRoute(
+export function withAntigravitySession(
+  topic: AntigravityTopic,
+  sessionName: string,
+  conversationId: string,
+  now = Date.now(),
+): AntigravityTopic {
+  if (!sessionName.trim()) throw new Error('Antigravity session name is required')
+  return {
+    ...withAntigravityConversation(topic, conversationId, now),
+    sessionName,
+  }
+}
+
+export function requestAntigravityRoute(
   topic: AntigravityTopic,
   route: AntigravityRoute,
   now = Date.now(),
 ): AntigravityTopic {
-  return { ...topic, route, updatedAt: now }
+  return { ...topic, pendingRoute: route, updatedAt: now }
+}
+
+export function requestAntigravityRestart(
+  topic: AntigravityTopic,
+  now = Date.now(),
+): AntigravityTopic {
+  return { ...topic, restartPending: true, updatedAt: now }
+}
+
+export function applyAntigravityPending(
+  topic: AntigravityTopic,
+  now = Date.now(),
+): AntigravityTopic {
+  const { pendingRoute, restartPending: _restartPending, ...rest } = topic
+  return {
+    ...rest,
+    route: pendingRoute ?? topic.route,
+    updatedAt: now,
+  }
+}
+
+export function antigravitySessionName(topic: string, name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24) || 'topic'
+  return `agy-${slug}-${topic}`
 }
 
 function attribute(value: string): string {
@@ -114,13 +170,18 @@ function attribute(value: string): string {
     .replaceAll('>', '&gt;')
 }
 
-const COMPATIBILITY_CONTEXT = `SYSTEM CONTEXT — Telegram Antigravity pilot
+const COMPATIBILITY_CONTEXT = `SYSTEM CONTEXT — Telegram Antigravity session
 
 This is one continuous Google Antigravity CLI conversation driven by a Telegram
-forum topic. The driver posts your final response back to that same topic.
-Do not call a Claude Telegram reply tool; simply return the user-facing response
-as your final answer. Keep working autonomously until the requested outcome is
-complete, and ask a concise question only when progress genuinely requires it.
+forum topic and hosted in a persistent Herdr workspace. The operator can monitor
+and interact with this terminal directly. For every <channel source="telegram">
+turn, anything the sender should see MUST be sent with the Telegram MCP reply
+tool using chat_id from the channel metadata. Terminal output alone never reaches
+Telegram. For an ordinary prompt typed directly into Herdr, respond normally in
+the terminal and do not send it to Telegram unless explicitly asked.
+
+Keep working autonomously until the requested outcome is complete, and ask a
+concise question only when progress genuinely requires it.
 
 Configuration interoperability:
 - AGENTS.md and GEMINI.md are native Antigravity project instructions. Discover
@@ -130,8 +191,8 @@ Configuration interoperability:
   files as supplemental instructions. Also consult ~/.claude/CLAUDE.md when its
   general machine/workflow guidance is relevant. Ignore or translate clauses
   that specifically depend on the Claude Code harness, Claude Channels,
-  Claude-only hooks, or Claude-only permission UI; this driver owns Telegram
-  delivery and launches Antigravity with non-interactive permissions.
+  Claude-only hooks, or Claude-only permission UI. This session uses the
+  outbound-only Telegram MCP and Antigravity's non-interactive permissions.
 - Skills may be read from ~/.agents/skills, ~/.claude/skills, workspace
   .agents/skills, and native Antigravity skill directories. When a task names a
   skill or clearly matches one, read its complete SKILL.md before acting. A
@@ -139,10 +200,15 @@ Configuration interoperability:
   not automatically executable in Antigravity unless separately adapted.
 `
 
-export function renderAntigravityTurn(message: InboundMessage, firstTurn: boolean): string {
+export function renderAntigravityKickoff(): string {
+  return `${COMPATIBILITY_CONTEXT}\nAcknowledge this setup in the terminal only, then wait for the first Telegram or Herdr prompt.`
+}
+
+export function renderAntigravityTurn(message: InboundMessage): string {
   const meta = Object.entries(message.meta)
     .map(([key, value]) => ` ${key}="${attribute(String(value))}"`)
     .join('')
-  const channel = `<channel source="telegram"${meta}>\n${message.content}\n</channel>`
-  return firstTurn ? `${COMPATIBILITY_CONTEXT}\n${channel}` : channel
+  return `<channel source="telegram"${meta}>\n${message.content}\n</channel>\n\n` +
+    'Reply to this Telegram turn through the Telegram MCP reply tool using the chat_id above. ' +
+    'Do not leave the user-facing answer only in the terminal.'
 }

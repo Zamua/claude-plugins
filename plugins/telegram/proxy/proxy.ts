@@ -89,7 +89,9 @@ import { launchProfileNeedsRefresh } from './domain/launch-profile'
 import { ActionAuthorizationService } from './application/action-authorization-service'
 import { JsonActionAuthorizationRepository } from './adapters/json-action-authorization-repository'
 import { AntigravityTopicService } from './application/antigravity-topic-service'
-import { AntigravityCli, routeLabel as antigravityRouteLabel } from './adapters/antigravity-cli'
+import { routeLabel as antigravityRouteLabel } from './adapters/antigravity-cli'
+import { HerdrAntigravityRuntime } from './adapters/herdr-antigravity-runtime'
+import { syncAntigravityTelegramMcp } from './adapters/antigravity-mcp-config'
 import { JsonAntigravityTopicRepository } from './adapters/json-antigravity-topic-repository'
 import {
   claudePluginSkillRoots,
@@ -134,6 +136,7 @@ const AUTHORIZATION_HOOK = join(PLUGIN_ROOT, 'hooks', 'permission-denied.py')
 const AUTHORIZATIONS_FILE = join(STATE_DIR, 'action-authorizations.json')
 const ANTIGRAVITY_TOPICS_FILE = join(STATE_DIR, 'antigravity-topics.json')
 const LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-topic.sh')
+const ANTIGRAVITY_LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-antigravity-topic.sh')
 // The token-bearing .env files. assertSendable refuses to ship these so a
 // prompt-injected topic-Claude cannot exfil the bot token via reply(files:[...]).
 const ENV_FILES = [join(PLUGIN_ROOT, '.env'), join(STATE_DIR, '.env')]
@@ -1295,6 +1298,7 @@ async function handleTopicCreate(req: Request): Promise<Response> {
   saveRegistry()
   if (initialAntigravityRoute) {
     antigravityService.activate(antigravityTopic(topic, name, initialAntigravityRoute))
+    await antigravityService.start(topic)
   }
   log(`created + registered topic ${topic} "${name}"`)
   return json({
@@ -1627,18 +1631,18 @@ const bot = new Bot(TOKEN)
 // Telegram Bot API adapter with Claude topics; its session identity, model
 // catalog, route, and persistence are deliberately separate.
 const antigravityRepository = new JsonAntigravityTopicRepository(ANTIGRAVITY_TOPICS_FILE)
-const antigravityRuntime = new AntigravityCli(ANTIGRAVITY_BIN, SPAWN_DIR)
+const antigravityRuntime = new HerdrAntigravityRuntime(
+  ANTIGRAVITY_BIN,
+  SPAWN_DIR,
+  ANTIGRAVITY_LAUNCH_SCRIPT,
+  PROXY_URL,
+)
 const antigravityService = new AntigravityTopicService(
   antigravityRepository,
   antigravityRuntime,
   {
     typing(topic) {
       void bot.api.sendChatAction(String(GROUP_CHAT_ID), 'typing', threadOf(topic)).catch(() => {})
-    },
-    async reply(topic, text) {
-      for (const part of chunk(text, MAX_CHUNK_LIMIT)) {
-        await bot.api.sendMessage(String(GROUP_CHAT_ID), part, threadOf(topic))
-      }
     },
     async error(topic, text) {
       await bot.api.sendMessage(
@@ -1665,13 +1669,18 @@ function syncAntigravityInterop(): void {
     ),
   ]
   try {
+    const mcpChanged = syncAntigravityTelegramMcp(
+      join(homedir(), '.gemini', 'config', 'mcp_config.json'),
+      process.execPath,
+      join(PLUGIN_ROOT, 'server.ts'),
+    )
     const result = syncAntigravitySkills(
       join(homedir(), '.gemini', 'antigravity-cli', 'skills'),
       roots,
     )
     log(
-      `Antigravity skill interop: ${result.linked.length} linked, ` +
-      `${result.skipped.length} native/existing preserved`,
+      `Antigravity interop: Telegram MCP ${mcpChanged ? 'configured' : 'current'}; ` +
+      `${result.linked.length} skills linked, ${result.skipped.length} native/existing preserved`,
     )
   } catch (error) {
     log(`Antigravity skill interop failed (turns still work): ${error}`)
@@ -1679,6 +1688,19 @@ function syncAntigravityInterop(): void {
 }
 
 syncAntigravityInterop()
+
+// One-time migration from the original headless pilot: those records have no
+// Herdr session name. Start them now so an already-enabled topic becomes
+// visible without requiring the operator to send a throwaway Telegram turn.
+for (const topic of antigravityService.list()) {
+  if (topic.sessionName) continue
+  void antigravityService.start(topic.topic)
+    .then(running => log(
+      `migrated Antigravity topic ${topic.topic} "${topic.name}" to Herdr ` +
+      `${running.sessionName} (${running.conversationId})`,
+    ))
+    .catch(error => log(`Antigravity Herdr migration failed for topic ${topic.topic}: ${error}`))
+}
 
 bot.catch(err => {
   process.stderr.write(`telegram-topics-proxy: handler error (polling continues): ${err.error}\n`)
@@ -2066,12 +2088,17 @@ async function activateAntigravityTopic(
   }
   const existing = antigravityService.get(topic)
   if (existing) {
-    await sayIn(
-      chatId,
-      topic,
-      `This topic is already locked to ${antigravityRouteLabel(existing.route)}. ` +
-      `Conversation: ${existing.conversationId ?? 'not started'}.`,
-    )
+    try {
+      const running = await antigravityService.start(topic)
+      await sayIn(
+        chatId,
+        topic,
+        `This topic is already locked to ${antigravityRouteLabel(running.route)} in Herdr workspace ` +
+        `${running.sessionName}. Conversation: ${running.conversationId}.`,
+      )
+    } catch (error) {
+      await sayIn(chatId, topic, `Could not start the existing Antigravity session: ${reason(error)}`)
+    }
     return
   }
   const claude = getTopic(topic)
@@ -2092,12 +2119,14 @@ async function activateAntigravityTopic(
     topicNames.set(topic, name)
     saveRegistry()
     void refreshAntigravityUsage(false).catch(() => {})
+    await sayIn(chatId, topic, `Starting ${antigravityRouteLabel(route)} in a persistent Herdr workspace…`)
+    const running = await antigravityService.start(topic)
     await sayIn(
       chatId,
       topic,
-      `Locked this topic to ${antigravityRouteLabel(route)}. Other harness/provider routes are ` +
-      'disabled here. Send a message to start its continuous Antigravity conversation; use /model to switch ' +
-      'only among models included with the Antigravity subscription.',
+      `Locked this topic to ${antigravityRouteLabel(route)} in Herdr workspace ${running.sessionName}. ` +
+      `Conversation: ${running.conversationId}. Other harness/provider routes are disabled here. ` +
+      'Use /model to switch only among models included with the Antigravity subscription.',
     )
   } catch (error) {
     await sayIn(chatId, topic, `Could not enable Antigravity: ${reason(error)}`)
@@ -2122,6 +2151,7 @@ async function handleAntigravityModelCommand(
       topic,
       `Antigravity conversation: ${current.conversationId ?? 'not started'}\n` +
       `Route: ${antigravityRouteLabel(current.route)}\n` +
+      `Herdr: ${current.sessionName ?? 'not running'} (${await antigravityService.status(topic)})\n` +
       'Harness: Antigravity (locked)\nPermissions: non-interactive; no hard gates\n' +
       'Context: AGENTS.md/GEMINI.md native; CLAUDE.md and Markdown skills via compatibility adapter',
     )
@@ -2150,12 +2180,15 @@ async function handleAntigravityModelCommand(
 async function handleRelaunch(chatId: string, topic: string, fromId: string): Promise<void> {
   if (antigravityService.isLocked(topic)) {
     const current = antigravityService.get(topic)!
+    const result = await antigravityService.requestRelaunch(topic)
     await sayIn(
       chatId,
       topic,
-      `Antigravity already starts a fresh CLI process for every Telegram turn and resumes the same ` +
-      `conversation (${current.conversationId ?? 'not started'}). Configuration is reloaded on the next message; ` +
-      'no relaunch is needed.',
+      result.pending
+        ? `Antigravity is busy; relaunch is queued for the next idle boundary. It will keep conversation ` +
+          `${current.conversationId ?? 'not started'} and reopen in Herdr.`
+        : `Relaunched Antigravity in Herdr with the same conversation ` +
+          `${result.topic.conversationId ?? 'not started'} and freshly loaded MCP/configuration.`,
     )
     return
   }
@@ -2922,18 +2955,18 @@ bot.on('callback_query:data', async ctx => {
         await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
         return
       }
-      const busy = antigravityService.busy(selection.topic)
-      const changed = antigravityService.changeRoute(
+      const result = await antigravityService.requestRoute(
         selection.topic,
         antigravityRoute(selection.model, effort),
       )
+      const changed = result.topic
       antigravityModelSelections.delete(antigravityEffort[1])
       await ctx.editMessageText(
-        `${busy ? 'Next turn will use' : 'Now using'} ${antigravityRouteLabel(changed.route)} ` +
+        `${result.pending ? 'Switch queued for the next idle boundary:' : 'Now using'} ${antigravityRouteLabel(result.pending ? antigravityRoute(selection.model, effort) : changed.route)} ` +
         `in the same Antigravity conversation (${changed.conversationId ?? 'starts on your first message'}).\n\n` +
         'This topic remains harness-locked; Anthropic, Codex, and OpenCode routes are unavailable here.',
       ).catch(() => {})
-      await ctx.answerCallbackQuery({ text: busy ? 'Model set for the next turn.' : 'Model updated.' }).catch(() => {})
+      await ctx.answerCallbackQuery({ text: result.pending ? 'Model queued.' : 'Model updated in Herdr.' }).catch(() => {})
       return
     }
 
@@ -3595,6 +3628,7 @@ async function pollWithRetry(): Promise<void> {
 await serveWithRetry()
 void pollWithRetry()
 void registerCommands()
+setInterval(() => void antigravityService.reconcilePending(), 2_000).unref()
 
 // ---- nightly restart (passive) ---------------------------------------------
 //

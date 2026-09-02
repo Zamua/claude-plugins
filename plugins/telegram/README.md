@@ -41,8 +41,8 @@ Code disables Channels under API billing).
           fresh topic + /antigravity
                         │
                  ┌──────▼──────────────┐
-                 │ official agy CLI   │  one persisted conversation id
-                 │ headless per turn  │  live subscription model catalog
+                 │ Herdr: agy + MCP   │  one persistent interactive process
+                 │ same conversation  │  live subscription model catalog
                  └─────────────────────┘
 ```
 
@@ -77,18 +77,22 @@ Code disables Channels under API billing).
   bridge.
 - **Antigravity application service** (`proxy/application/` +
   `proxy/adapters/antigravity-*`): owns a separate, private topic registry and
-  serializes headless `agy` turns. The first result persists the Antigravity
-  conversation id; every later turn passes `--conversation <same-id>`. A model
-  switch changes only the next launch route, never the conversation. Its
-  callback namespace is separate, and stale/forged Claude route callbacks are
-  rejected at the topic-harness boundary.
+  launches one persistent interactive `agy` process in a visible Herdr
+  workspace. Telegram turns are injected through Herdr; the existing MCP is
+  loaded outbound-only so replies still use the proxy's single Bot API poller.
+  The first launch persists the Antigravity conversation id and every relaunch
+  passes `--conversation <same-id>`. A model switch restarts only the process
+  with the new route, never the conversation. Its callback namespace is
+  separate, and stale/forged Claude route callbacks are rejected at the
+  topic-harness boundary.
 
 ## Prerequisites
 
 - `bun`, `claude`, a Bash shell, and either `tmux` or `herdr` on the proxy's PATH.
 - Optional Antigravity topics: Google's official `agy` CLI, already authenticated
-  by running `agy` once interactively. The picker is read dynamically from
-  `agy models`; it is not a hard-coded model list.
+  by running `agy` once interactively, plus a running Herdr server. Antigravity
+  topics always use Herdr so they remain visible and interactive. The picker is
+  read dynamically from `agy models`; it is not a hard-coded model list.
 - Optional provider routing: `claude-code-proxy` on PATH. Codex must already be
   authenticated; OpenCode Go must already exist in OpenCode's local auth file.
 - A Telegram bot token (BotFather).
@@ -140,7 +144,7 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES` | no | `5` | Codex/OpenCode Go usage refresh interval |
 | `TELEGRAM_OPENCODE_AUTH_FILE` | no | OpenCode's standard auth file | source for OpenCode Go usage auth; the key is never copied into plugin state |
 | `TELEGRAM_ANTIGRAVITY_BIN` | no | Nix per-user `agy`, then `PATH` | official Antigravity CLI used by harness-locked topics |
-| `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr`; this changes the pane host, never the harness |
+| `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr` for Claude topics; Antigravity topics always use Herdr |
 | `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` | no | (disabled) | 0-23 local; once a day at this hour the proxy kills live topic sessions (each `--resume`s on its next message) |
 | `TELEGRAM_TOPICS_MODEL` | no | `fable` | initial model for topics without a persisted route; `/model` selections are persisted per topic |
 | `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` | no | `5000` | MCP-side: how long the first inbound poll is held so the booting REPL is idle before the first message is delivered |
@@ -189,18 +193,24 @@ enabled by this plugin.
 
 For an Antigravity topic, create a **fresh** forum topic and run
 `/antigravity` before sending it normal work. The command refuses to convert a
-topic that already owns a Claude UUID. After the lock:
+topic that already owns a Claude UUID. It immediately creates a visible
+`agy-<slug>-<threadid>` Herdr workspace. You can watch it, focus it, or type
+directly into the Antigravity REPL; Telegram continues using the same process.
+After the lock:
 
 - `/model` shows only models returned by the authenticated Antigravity
   subscription, then an effort picker. It never shows Anthropic, Codex, or
   OpenCode provider routes.
-- `/model status` shows the Antigravity conversation id and locked route.
+- `/model status` shows the Antigravity conversation id, Herdr workspace/state,
+  and locked route.
 - `/usage` shows only Antigravity subscription pools and exact reset times.
 - The existing capacity interval also watches Antigravity pools; after an
   observed exhausted-to-available transition, each locked topic gets a reset
   notice and an Antigravity-only model button. It never switches automatically.
-- `/relaunch` explains that every turn already starts a fresh CLI process and
-  resumes the same conversation, so new config is picked up on the next turn.
+- `/relaunch` replaces the Herdr process and resumes the exact same conversation
+  with freshly loaded MCP/configuration. Model switches do the same thing with
+  the selected model and effort. If the pane is working, either change is queued
+  for its next idle boundary.
 
 The lock is enforced behind the UI as well: old or forged `tgroute:*` callbacks
 cannot switch the topic to the Claude harness. Antigravity turns are queued per
@@ -224,10 +234,13 @@ plugin systems:
 - A Claude plugin manifest, hook, custom agent, or channel is not automatically
   executable in Antigravity. Those need an explicit adapter. Antigravity-native
   plugins and MCP servers continue to use Antigravity's own configuration.
+- The proxy safely adds one `telegram-topics` entry to Antigravity's global
+  `mcp_config.json`, preserving other servers. It exposes no tools in unrelated
+  Antigravity sessions because a topic must be explicitly bound by the launcher.
 
-Antigravity topics run `agy --dangerously-skip-permissions` because they are
-non-interactive and the requested contract is zero terminal hard gates. This is
-an unreviewed auto-approval mode, not Claude's reviewer-backed auto mode; only
+Antigravity topics run `agy --dangerously-skip-permissions` because the requested
+contract is zero terminal hard gates, including while unattended from Telegram.
+This is an unreviewed auto-approval mode, not Claude's reviewer-backed auto mode; only
 use it in topics you trust with the Mac mini account's filesystem access.
 
 Attach through the selected multiplexer when you need to inspect a pane. Normal
@@ -341,7 +354,7 @@ the next message resumes the same conversation (registry reconcile against
   local agent; only start topics you would trust with largely unattended shell
   access.
 - Antigravity topics deliberately run the CLI's skip-permissions mode so no
-  detached approval prompt can become a hard gate. They do not use the Claude
+  approval prompt can become a hard gate. They do not use the Claude
   reviewer classifier or Telegram exact-action approval flow.
 - The Codex/OpenCode compatibility bridge is unofficial and necessarily sees
   proxied prompts, tool payloads, and provider responses. Pin and review upgrades.

@@ -5,7 +5,11 @@ import type {
   AntigravityTopic,
   AntigravityTopicRepository,
 } from '../domain/antigravity-topic'
-import type { AntigravityRuntimePort, AntigravityTurn } from './antigravity-ports'
+import type {
+  AntigravityRuntimePort,
+  AntigravitySessionSpec,
+  AntigravitySessionStatus,
+} from './antigravity-ports'
 
 const model = {
   id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash',
@@ -23,35 +27,52 @@ class MemoryRepository implements AntigravityTopicRepository {
   save(topic: AntigravityTopic) { this.topics.set(topic.topic, structuredClone(topic)) }
 }
 
+class MemoryRuntime implements AntigravityRuntimePort {
+  launches: AntigravitySessionSpec[] = []
+  prompts: Array<{ sessionName: string; prompt: string }> = []
+  stops: string[] = []
+  currentStatus: AntigravitySessionStatus = 'missing'
+  returnedConversationId = 'conv-1'
+
+  async models() { return [model] }
+  async usage() { return [] }
+  async status() { return this.currentStatus }
+  async ensureSession(input: AntigravitySessionSpec) {
+    this.launches.push(structuredClone(input))
+    this.currentStatus = 'idle'
+    return { sessionName: input.sessionName, conversationId: this.returnedConversationId }
+  }
+  async prompt(sessionName: string, prompt: string) {
+    this.prompts.push({ sessionName, prompt })
+  }
+  async stop(sessionName: string) {
+    this.stops.push(sessionName)
+    this.currentStatus = 'missing'
+    return true
+  }
+}
+
 describe('AntigravityTopicService', () => {
-  test('persists and reuses one exact Antigravity conversation across turns', async () => {
+  test('launches one persistent Herdr session and injects later Telegram turns into it', async () => {
     const repository = new MemoryRepository()
     repository.save(antigravityTopic('42', 'pilot', antigravityRoute(model, 'medium'), 10))
-    const calls: AntigravityTurn[] = []
-    const runtime: AntigravityRuntimePort = {
-      async models() { return [model] },
-      async usage() { return [] },
-      async turn(input) {
-        calls.push(input)
-        return { conversationId: 'conv-1', response: calls.length === 1 ? 'first' : 'second', status: 'SUCCESS' }
-      },
-    }
-    const replies: string[] = []
+    const runtime = new MemoryRuntime()
     const service = new AntigravityTopicService(repository, runtime, {
       typing() {},
-      async reply(_topic, text) { replies.push(text) },
       async error(_topic, text) { throw new Error(text) },
     }, () => 20)
 
     await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
     await service.submitTurn('42', { content: 'two', meta: { chat_id: '-1', user: 'u' } })
 
-    expect(calls[0].conversationId).toBeUndefined()
-    expect(calls[0].prompt).toContain('Configuration interoperability')
-    expect(calls[1].conversationId).toBe('conv-1')
-    expect(calls[1].prompt).not.toContain('Configuration interoperability')
+    expect(runtime.launches).toHaveLength(2)
+    expect(runtime.launches[0].kickoff).toContain('persistent Herdr workspace')
+    expect(runtime.launches[1].conversationId).toBe('conv-1')
+    expect(runtime.prompts).toHaveLength(2)
+    expect(runtime.prompts[0].sessionName).toBe('agy-pilot-42')
+    expect(runtime.prompts[0].prompt).toContain('<channel source="telegram"')
     expect(repository.get('42')?.conversationId).toBe('conv-1')
-    expect(replies).toEqual(['first', 'second'])
+    expect(repository.get('42')?.sessionName).toBe('agy-pilot-42')
   })
 
   test('refuses a runtime that silently forks the conversation', async () => {
@@ -61,27 +82,29 @@ describe('AntigravityTopicService', () => {
       conversationId: 'conv-1',
     })
     const errors: string[] = []
-    const service = new AntigravityTopicService(repository, {
-      async models() { return [model] },
-      async usage() { return [] },
-      async turn() { return { conversationId: 'conv-2', response: 'wrong', status: 'SUCCESS' } },
-    }, {
-      typing() {}, async reply() {}, async error(_topic, text) { errors.push(text) },
+    const runtime = new MemoryRuntime()
+    runtime.returnedConversationId = 'conv-2'
+    const service = new AntigravityTopicService(repository, runtime, {
+      typing() {}, async error(_topic, text) { errors.push(text) },
     })
 
     await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
     expect(repository.get('42')?.conversationId).toBe('conv-1')
     expect(errors[0]).toContain('changed conversation identity')
+    expect(runtime.prompts).toHaveLength(0)
   })
 
-  test('changes only model and effort while retaining the conversation id', () => {
+  test('relaunches an idle pane onto a new route with the same conversation id', async () => {
     const repository = new MemoryRepository()
     repository.save({
       ...antigravityTopic('42', 'pilot', antigravityRoute(model, 'medium'), 10),
       conversationId: 'conv-1',
+      sessionName: 'agy-pilot-42',
     })
-    const service = new AntigravityTopicService(repository, {} as any, {} as any, () => 30)
-    const changed = service.changeRoute('42', antigravityRoute({
+    const runtime = new MemoryRuntime()
+    runtime.currentStatus = 'idle'
+    const service = new AntigravityTopicService(repository, runtime, { typing() {}, async error() {} }, () => 30)
+    const result = await service.requestRoute('42', antigravityRoute({
       ...model,
       id: 'claude-opus-4-6-thinking',
       label: 'Claude Opus 4.6 (Thinking)',
@@ -89,7 +112,53 @@ describe('AntigravityTopicService', () => {
       efforts: ['high'],
       defaultEffort: 'high',
     }, 'high'))
-    expect(changed.conversationId).toBe('conv-1')
-    expect(changed.route.model).toBe('claude-opus-4-6-thinking')
+    expect(result.pending).toBeFalse()
+    expect(runtime.stops).toEqual(['agy-pilot-42'])
+    expect(runtime.launches.at(-1)?.conversationId).toBe('conv-1')
+    expect(runtime.launches.at(-1)?.route.modelVariant).toBe('claude-opus-4-6-thinking')
+    expect(repository.get('42')?.conversationId).toBe('conv-1')
+    expect(repository.get('42')?.route.model).toBe('claude-opus-4-6-thinking')
+  })
+
+  test('queues a route change while Herdr is busy and applies it after the turn', async () => {
+    const repository = new MemoryRepository()
+    repository.save({
+      ...antigravityTopic('42', 'pilot', antigravityRoute(model, 'medium'), 10),
+      conversationId: 'conv-1', sessionName: 'agy-pilot-42',
+    })
+    const runtime = new MemoryRuntime()
+    runtime.currentStatus = 'busy'
+    const service = new AntigravityTopicService(repository, runtime, { typing() {}, async error() {} })
+    const next = antigravityRoute({ ...model, id: 'next', label: 'Next' }, 'medium')
+
+    const result = await service.requestRoute('42', next)
+    expect(result.pending).toBeTrue()
+    expect(repository.get('42')?.pendingRoute?.model).toBe('next')
+    expect(runtime.stops).toHaveLength(0)
+
+    runtime.currentStatus = 'idle'
+    await service.reconcilePending()
+    expect(runtime.stops).toEqual(['agy-pilot-42'])
+    expect(repository.get('42')?.pendingRoute).toBeUndefined()
+    expect(repository.get('42')?.route.model).toBe('next')
+  })
+
+  test('queues a relaunch while busy and resumes the same conversation when idle', async () => {
+    const repository = new MemoryRepository()
+    repository.save({
+      ...antigravityTopic('42', 'pilot', antigravityRoute(model, 'medium'), 10),
+      conversationId: 'conv-1', sessionName: 'agy-pilot-42',
+    })
+    const runtime = new MemoryRuntime()
+    runtime.currentStatus = 'busy'
+    const service = new AntigravityTopicService(repository, runtime, { typing() {}, async error() {} })
+
+    expect((await service.requestRelaunch('42')).pending).toBeTrue()
+    runtime.currentStatus = 'idle'
+    await service.reconcilePending()
+
+    expect(runtime.stops).toEqual(['agy-pilot-42'])
+    expect(runtime.launches.at(-1)?.conversationId).toBe('conv-1')
+    expect(repository.get('42')?.restartPending).toBeUndefined()
   })
 })
