@@ -519,6 +519,25 @@ turn. `/relaunch` closes and recreates
 the pane with the same session (queued at the idle boundary while a turn is
 working, like Antigravity).
 
+A turn is settled only after the pane has stayed idle (or done) for a
+continuous `OPENCODE_SETTLE_MS` (6 s, polled every second; any non-idle
+observation restarts the window; blocked throws). Herdr reports the pane idle
+between OpenCode tool calls, and `herdr agent prompt --wait` returns on the
+first such report, so without the window the service dequeued the next
+Telegram turn mid-turn and the injected prompt aborted the running one
+(`MessageAbortedError`). The window applies both before delivery
+(`waitUntilIdle`) and after `agent_prompted`, under the same 31-minute ceiling.
+
+Reply backstop: OpenCode has no Stop hook, so a turn can end with nothing sent
+(the model answers only in the terminal, or hits its 8192-token output cap
+mid-reasoning with `finish: length`). `/send` records the last outbound time per
+locked topic; when a turn ends with no send since it started, the service runs
+`opencode export <session id>` (cwd = project dir), and posts the last assistant
+message's text parts as a proxy notice prefixed `↩︎ ` (capped at 3500 chars).
+No text and `finish: length` yields an output-limit notice; no export at all
+yields a generic "finished without sending a reply". The backstop never fails
+the turn; a failed notice goes through the error path.
+
 `--pure` is load-bearing. The operator's global `tui.json` loads
 `@leohenon/opencode-vim-plugin`, which puts the input box in vim normal mode, so
 text injected by `herdr agent prompt` is eaten as vim commands (a leading `R`

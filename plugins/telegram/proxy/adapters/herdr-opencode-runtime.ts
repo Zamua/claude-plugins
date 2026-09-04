@@ -1,5 +1,6 @@
 import { existsSync } from 'fs'
 import type {
+  OpencodeAssistantText,
   OpencodeRuntimePort,
   OpencodeSessionSpec,
   OpencodeSessionStatus,
@@ -14,6 +15,11 @@ export type OpencodePane = { paneId: string; status: string }
 
 // Clock skew between the launcher and OpenCode's session timestamps.
 const SESSION_CREATED_SLACK_MS = 5_000
+// Herdr flickers idle between OpenCode tool calls, and a prompt injected then
+// aborts the running turn. A turn counts as settled only after this much
+// continuous idle.
+export const OPENCODE_SETTLE_MS = 6_000
+const SETTLE_POLL_MS = 1_000
 export const DEFAULT_OPENCODE_MODEL = 'qwen-local/Qwen3.8-27B'
 
 export function opencodeInteractiveArgs(input: {
@@ -104,6 +110,27 @@ export function parseOpencodeSessionArgument(output: string): string | undefined
   }
 }
 
+// `opencode export` output: the last assistant message's text parts and finish
+// reason. Reasoning and tool parts are not user-facing.
+export function parseOpencodeExport(output: string): OpencodeAssistantText | undefined {
+  try {
+    const messages = JSON.parse(output)?.messages
+    if (!Array.isArray(messages)) return undefined
+    const last = [...messages].reverse().find((message: any) => message?.info?.role === 'assistant')
+    if (!last) return undefined
+    const parts = Array.isArray(last.parts) ? last.parts : []
+    const text = parts
+      .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
+      .map((part: any) => part.text as string)
+      .join('\n')
+      .trim()
+    const finish = typeof last.info.finish === 'string' ? last.info.finish : undefined
+    return finish === undefined ? { text } : { text, finish }
+  } catch {
+    return undefined
+  }
+}
+
 const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
 
 export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
@@ -125,9 +152,16 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
 
   async status(sessionName: string): Promise<OpencodeSessionStatus> {
     const pane = await this.pane(sessionName)
-    if (!pane) return 'missing'
-    const foreground = pane.status === 'unknown' ? await this.foregroundOpencode(pane.paneId) : true
-    return opencodeHerdrStatus(pane, foreground)
+    return pane ? this.paneStatus(pane) : 'missing'
+  }
+
+  async lastAssistantText(opencodeSessionId: string): Promise<OpencodeAssistantText | undefined> {
+    const result = await this.run(
+      this.opencodeBinary,
+      ['export', opencodeSessionId],
+      { cwd: this.projectDir, timeout: 30_000 },
+    ).catch(() => undefined)
+    return result ? parseOpencodeExport(result.stdout) : undefined
   }
 
   async ensureSession(input: OpencodeSessionSpec) {
@@ -215,7 +249,11 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
         { cwd: this.projectDir, timeout: 31 * 60_000 + 10_000 },
       )
       const outcome = parseHerdrPromptResult(result.stdout)
-      if (outcome === 'agent_prompted') return
+      if (outcome === 'agent_prompted') {
+        // `--wait` returns on the first idle report, which can be mid-turn.
+        await this.waitUntilIdle(sessionName, 31 * 60_000)
+        return
+      }
       if (outcome !== 'agent_prompt_stalled') {
         throw new Error(
           `Herdr did not accept the OpenCode prompt (result: ${outcome ?? 'unrecognized'})`,
@@ -242,6 +280,11 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
       cwd: this.projectDir, timeout: 30_000,
     })
     return findOpencodePane(result.stdout, sessionName)
+  }
+
+  private async paneStatus(pane: OpencodePane): Promise<OpencodeSessionStatus> {
+    const foreground = pane.status === 'unknown' ? await this.foregroundOpencode(pane.paneId) : true
+    return opencodeHerdrStatus(pane, foreground)
   }
 
   private async processInfo(paneId: string): Promise<string | undefined> {
@@ -288,7 +331,7 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
     while (Date.now() < deadline) {
       const pane = await this.pane(sessionName)
       if (pane) {
-        lastState = await this.status(sessionName)
+        lastState = await this.paneStatus(pane)
         if (lastState === 'blocked') throw new Error(`OpenCode pane ${sessionName} is blocked`)
         if (lastState === 'idle') {
           const candidates = await this.sessionsCreatedSince(notBeforeMs)
@@ -307,15 +350,23 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
     throw new Error(`OpenCode pane ${sessionName} did not become ready (last state: ${lastState})`)
   }
 
+  // Resolves only after OPENCODE_SETTLE_MS of uninterrupted idle; any other
+  // observation restarts the window.
   private async waitUntilIdle(sessionName: string, timeoutMs: number): Promise<OpencodePane> {
     const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
+    let idleSince: number | undefined
+    while (Date.now() <= deadline) {
       const pane = await this.pane(sessionName)
       if (!pane) throw new Error(`OpenCode pane ${sessionName} is not running`)
-      const state = await this.status(sessionName)
-      if (state === 'idle') return pane
+      const state = await this.paneStatus(pane)
       if (state === 'blocked') throw new Error(`OpenCode pane ${sessionName} is blocked`)
-      await this.pause(500)
+      if (state === 'idle') {
+        idleSince ??= Date.now()
+        if (Date.now() - idleSince >= OPENCODE_SETTLE_MS) return pane
+      } else {
+        idleSince = undefined
+      }
+      await this.pause(SETTLE_POLL_MS)
     }
     throw new Error(`OpenCode pane ${sessionName} stayed busy for ${timeoutMs}ms`)
   }

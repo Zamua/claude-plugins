@@ -6,6 +6,8 @@ import type {
   OpencodeTopicRepository,
 } from '../domain/opencode-topic'
 import type {
+  OpencodeAssistantText,
+  OpencodeOutboundPort,
   OpencodeRuntimePort,
   OpencodeSessionSpec,
   OpencodeSessionStatus,
@@ -28,8 +30,14 @@ class MemoryRuntime implements OpencodeRuntimePort {
   currentStatus: OpencodeSessionStatus = 'missing'
   returnedSessionId = 'ses_1'
   promptError: Error | undefined
+  exported: OpencodeAssistantText | undefined
+  exportedFor: string[] = []
 
   async status() { return this.currentStatus }
+  async lastAssistantText(opencodeSessionId: string) {
+    this.exportedFor.push(opencodeSessionId)
+    return this.exported
+  }
   async ensureSession(input: OpencodeSessionSpec) {
     this.launches.push(structuredClone(input))
     this.currentStatus = 'idle'
@@ -46,17 +54,33 @@ class MemoryRuntime implements OpencodeRuntimePort {
   }
 }
 
-const silent = { typing() {}, async error() {} }
+// Every turn counts as replied unless a test says otherwise.
+const outbound = (overrides: Partial<OpencodeOutboundPort> = {}): OpencodeOutboundPort => ({
+  typing() {},
+  async error() {},
+  repliedSince() { return true },
+  async notice() {},
+  ...overrides,
+})
+const silent = outbound()
+
+const unreplied = () => {
+  const notices: string[] = []
+  const port = outbound({
+    repliedSince() { return false },
+    async notice(_topic, text) { notices.push(text) },
+  })
+  return { port, notices }
+}
 
 describe('OpencodeTopicService', () => {
   test('launches one persistent Herdr session and injects later Telegram turns into it', async () => {
     const repository = new MemoryRepository()
     repository.save(opencodeTopic('42', 'pilot', 10))
     const runtime = new MemoryRuntime()
-    const service = new OpencodeTopicService(repository, runtime, {
-      typing() {},
+    const service = new OpencodeTopicService(repository, runtime, outbound({
       async error(_topic, text) { throw new Error(text) },
-    }, () => 20)
+    }), () => 20)
 
     await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
     await service.submitTurn('42', { content: 'two', meta: { chat_id: '-1', user: 'u' } })
@@ -79,9 +103,9 @@ describe('OpencodeTopicService', () => {
     const errors: string[] = []
     const runtime = new MemoryRuntime()
     runtime.returnedSessionId = 'ses_2'
-    const service = new OpencodeTopicService(repository, runtime, {
-      typing() {}, async error(_topic, text) { errors.push(text) },
-    })
+    const service = new OpencodeTopicService(repository, runtime, outbound({
+      async error(_topic, text) { errors.push(text) },
+    }))
 
     await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
     expect(repository.get('42')?.opencodeSessionId).toBe('ses_1')
@@ -97,9 +121,9 @@ describe('OpencodeTopicService', () => {
     const errors: string[] = []
     const runtime = new MemoryRuntime()
     runtime.promptError = new Error('agent_prompt_stalled')
-    const service = new OpencodeTopicService(repository, runtime, {
-      typing() {}, async error(_topic, text) { errors.push(text) },
-    })
+    const service = new OpencodeTopicService(repository, runtime, outbound({
+      async error(_topic, text) { errors.push(text) },
+    }))
 
     await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
     expect(errors).toEqual(['OpenCode could not complete this turn: agent_prompt_stalled'])
@@ -261,5 +285,75 @@ describe('OpencodeTopicService', () => {
     await service.start('42')
     expect(await service.status('42')).toBe('idle')
     expect(() => service.rename('7', 'x')).toThrow('not an OpenCode topic')
+  })
+
+  describe('reply backstop', () => {
+    const turn = { content: 'one', meta: { chat_id: '-1', user: 'u' } }
+    const setup = () => {
+      const repository = new MemoryRepository()
+      repository.save({ ...opencodeTopic('42', 'pilot', 10), opencodeSessionId: 'ses_1' })
+      return { repository, runtime: new MemoryRuntime() }
+    }
+
+    test('a turn that replied through the MCP gets no notice', async () => {
+      const { repository, runtime } = setup()
+      runtime.exported = { text: 'terminal only', finish: 'stop' }
+      const notices: string[] = []
+      const service = new OpencodeTopicService(repository, runtime, outbound({
+        repliedSince(_topic, since) { return since >= 0 },
+        async notice(_topic, text) { notices.push(text) },
+      }))
+      await service.submitTurn('42', turn)
+      expect(notices).toEqual([])
+      expect(runtime.exportedFor).toEqual([])
+    })
+
+    test('relays the last assistant text when the turn never replied', async () => {
+      const { repository, runtime } = setup()
+      runtime.exported = { text: 'answered in the terminal', finish: 'stop' }
+      const { port, notices } = unreplied()
+      await new OpencodeTopicService(repository, runtime, port).submitTurn('42', turn)
+      expect(runtime.exportedFor).toEqual(['ses_1'])
+      expect(notices).toEqual(['answered in the terminal'])
+    })
+
+    test('caps a long relayed text', async () => {
+      const { repository, runtime } = setup()
+      runtime.exported = { text: 'x'.repeat(5000) }
+      const { port, notices } = unreplied()
+      await new OpencodeTopicService(repository, runtime, port).submitTurn('42', turn)
+      expect(notices[0]).toHaveLength(3501)
+      expect(notices[0]).toEndWith('…')
+    })
+
+    test('names the output cap when the model stopped at finish length', async () => {
+      const { repository, runtime } = setup()
+      runtime.exported = { text: '', finish: 'length' }
+      const { port, notices } = unreplied()
+      await new OpencodeTopicService(repository, runtime, port).submitTurn('42', turn)
+      expect(notices).toEqual([
+        'OpenCode hit its output limit before replying; try a smaller step or say continue.',
+      ])
+    })
+
+    test('falls back to a generic notice when the export is unavailable', async () => {
+      const { repository, runtime } = setup()
+      runtime.exported = undefined
+      const { port, notices } = unreplied()
+      await new OpencodeTopicService(repository, runtime, port).submitTurn('42', turn)
+      expect(notices).toEqual(['OpenCode finished this turn without sending a reply.'])
+    })
+
+    test('a failing notice is reported, never thrown', async () => {
+      const { repository, runtime } = setup()
+      const errors: string[] = []
+      const service = new OpencodeTopicService(repository, runtime, outbound({
+        repliedSince() { return false },
+        async notice() { throw new Error('telegram down') },
+        async error(_topic, text) { errors.push(text) },
+      }))
+      await service.submitTurn('42', turn)
+      expect(errors).toEqual(['OpenCode reply backstop failed: telegram down'])
+    })
   })
 })
