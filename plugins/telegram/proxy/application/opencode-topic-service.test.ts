@@ -1,0 +1,265 @@
+import { describe, expect, test } from 'bun:test'
+import { OpencodeTopicService } from './opencode-topic-service'
+import { opencodeTopic } from '../domain/opencode-topic'
+import type {
+  OpencodeTopic,
+  OpencodeTopicRepository,
+} from '../domain/opencode-topic'
+import type {
+  OpencodeRuntimePort,
+  OpencodeSessionSpec,
+  OpencodeSessionStatus,
+} from './opencode-ports'
+
+class MemoryRepository implements OpencodeTopicRepository {
+  topics = new Map<string, OpencodeTopic>()
+  list() { return [...this.topics.values()].map(value => structuredClone(value)) }
+  get(topic: string) {
+    const value = this.topics.get(topic)
+    return value ? structuredClone(value) : undefined
+  }
+  save(topic: OpencodeTopic) { this.topics.set(topic.topic, structuredClone(topic)) }
+}
+
+class MemoryRuntime implements OpencodeRuntimePort {
+  launches: OpencodeSessionSpec[] = []
+  prompts: Array<{ sessionName: string; prompt: string }> = []
+  stops: string[] = []
+  currentStatus: OpencodeSessionStatus = 'missing'
+  returnedSessionId = 'ses_1'
+  promptError: Error | undefined
+
+  async status() { return this.currentStatus }
+  async ensureSession(input: OpencodeSessionSpec) {
+    this.launches.push(structuredClone(input))
+    this.currentStatus = 'idle'
+    return { sessionName: input.sessionName, opencodeSessionId: this.returnedSessionId }
+  }
+  async prompt(sessionName: string, prompt: string) {
+    if (this.promptError) throw this.promptError
+    this.prompts.push({ sessionName, prompt })
+  }
+  async stop(sessionName: string) {
+    this.stops.push(sessionName)
+    this.currentStatus = 'missing'
+    return true
+  }
+}
+
+const silent = { typing() {}, async error() {} }
+
+describe('OpencodeTopicService', () => {
+  test('launches one persistent Herdr session and injects later Telegram turns into it', async () => {
+    const repository = new MemoryRepository()
+    repository.save(opencodeTopic('42', 'pilot', 10))
+    const runtime = new MemoryRuntime()
+    const service = new OpencodeTopicService(repository, runtime, {
+      typing() {},
+      async error(_topic, text) { throw new Error(text) },
+    }, () => 20)
+
+    await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    await service.submitTurn('42', { content: 'two', meta: { chat_id: '-1', user: 'u' } })
+
+    expect(runtime.launches).toHaveLength(2)
+    expect(runtime.launches[0].opencodeSessionId).toBeUndefined()
+    expect(runtime.launches[0].kickoff).toContain('persistent Herdr workspace')
+    expect(runtime.launches[1].opencodeSessionId).toBe('ses_1')
+    expect(runtime.prompts).toHaveLength(2)
+    expect(runtime.prompts[0].sessionName).toBe('oc-pilot-42')
+    expect(runtime.prompts[0].prompt).toContain('<channel source="telegram"')
+    expect(runtime.prompts[0].prompt).toContain('telegram-topics_reply')
+    expect(repository.get('42')?.opencodeSessionId).toBe('ses_1')
+    expect(repository.get('42')?.sessionName).toBe('oc-pilot-42')
+  })
+
+  test('refuses a runtime that silently forks the session and stops the pane', async () => {
+    const repository = new MemoryRepository()
+    repository.save({ ...opencodeTopic('42', 'pilot', 10), opencodeSessionId: 'ses_1' })
+    const errors: string[] = []
+    const runtime = new MemoryRuntime()
+    runtime.returnedSessionId = 'ses_2'
+    const service = new OpencodeTopicService(repository, runtime, {
+      typing() {}, async error(_topic, text) { errors.push(text) },
+    })
+
+    await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    expect(repository.get('42')?.opencodeSessionId).toBe('ses_1')
+    expect(errors[0]).toStartWith('OpenCode could not complete this turn: ')
+    expect(errors[0]).toContain('changed session identity')
+    expect(runtime.stops).toEqual(['oc-pilot-42'])
+    expect(runtime.prompts).toHaveLength(0)
+  })
+
+  test('reports a prompt failure through the outbound error port', async () => {
+    const repository = new MemoryRepository()
+    repository.save(opencodeTopic('42', 'pilot', 10))
+    const errors: string[] = []
+    const runtime = new MemoryRuntime()
+    runtime.promptError = new Error('agent_prompt_stalled')
+    const service = new OpencodeTopicService(repository, runtime, {
+      typing() {}, async error(_topic, text) { errors.push(text) },
+    })
+
+    await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    expect(errors).toEqual(['OpenCode could not complete this turn: agent_prompt_stalled'])
+  })
+
+  test('serializes turns per topic and clears the queue afterwards', async () => {
+    const repository = new MemoryRepository()
+    repository.save(opencodeTopic('42', 'pilot', 10))
+    const runtime = new MemoryRuntime()
+    const service = new OpencodeTopicService(repository, runtime, silent)
+
+    const first = service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    const second = service.submitTurn('42', { content: 'two', meta: { chat_id: '-1', user: 'u' } })
+    expect(service.busy('42')).toBeTrue()
+    await Promise.all([first, second])
+    expect(service.busy('42')).toBeFalse()
+    expect(runtime.prompts.map(p => p.prompt.includes('\none\n'))).toEqual([true, false])
+  })
+
+  test('relaunches an idle pane onto the same OpenCode session id', async () => {
+    const repository = new MemoryRepository()
+    repository.save({
+      ...opencodeTopic('42', 'pilot', 10),
+      opencodeSessionId: 'ses_1',
+      sessionName: 'oc-pilot-42',
+    })
+    const runtime = new MemoryRuntime()
+    runtime.currentStatus = 'idle'
+    const service = new OpencodeTopicService(repository, runtime, silent, () => 30)
+
+    const result = await service.requestRelaunch('42')
+    expect(result.pending).toBeFalse()
+    expect(runtime.stops).toEqual(['oc-pilot-42'])
+    expect(runtime.launches.at(-1)?.opencodeSessionId).toBe('ses_1')
+    expect(repository.get('42')?.opencodeSessionId).toBe('ses_1')
+    expect(repository.get('42')?.restartPending).toBeUndefined()
+  })
+
+  test('queues a relaunch while busy and resumes the same session when idle', async () => {
+    const repository = new MemoryRepository()
+    repository.save({
+      ...opencodeTopic('42', 'pilot', 10),
+      opencodeSessionId: 'ses_1', sessionName: 'oc-pilot-42',
+    })
+    const runtime = new MemoryRuntime()
+    runtime.currentStatus = 'busy'
+    const service = new OpencodeTopicService(repository, runtime, silent)
+
+    expect((await service.requestRelaunch('42')).pending).toBeTrue()
+    expect(repository.get('42')?.restartPending).toBeTrue()
+    expect(runtime.stops).toHaveLength(0)
+
+    runtime.currentStatus = 'idle'
+    await service.reconcilePending()
+
+    expect(runtime.stops).toEqual(['oc-pilot-42'])
+    expect(runtime.launches.at(-1)?.opencodeSessionId).toBe('ses_1')
+    expect(repository.get('42')?.restartPending).toBeUndefined()
+  })
+
+  test('applies a restart requested during an owned turn once that turn ends', async () => {
+    const repository = new MemoryRepository()
+    repository.save({
+      ...opencodeTopic('42', 'pilot', 10),
+      opencodeSessionId: 'ses_1', sessionName: 'oc-pilot-42',
+    })
+    const runtime = new MemoryRuntime()
+    let release!: () => void
+    runtime.prompt = async (sessionName, prompt) => {
+      runtime.prompts.push({ sessionName, prompt })
+      await new Promise<void>(resolve => { release = resolve })
+    }
+    const service = new OpencodeTopicService(repository, runtime, silent)
+
+    const turn = service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    await Promise.resolve()
+    while (!release) await new Promise(resolve => setTimeout(resolve, 1))
+    expect((await service.requestRelaunch('42')).pending).toBeTrue()
+    expect(runtime.stops).toHaveLength(0)
+
+    release()
+    await turn
+    expect(runtime.stops).toEqual(['oc-pilot-42'])
+    expect(runtime.launches).toHaveLength(2)
+    expect(repository.get('42')?.restartPending).toBeUndefined()
+  })
+
+  test('two concurrent relaunch triggers stop and relaunch exactly once', async () => {
+    const repository = new MemoryRepository()
+    repository.save({
+      ...opencodeTopic('42', 'pilot', 10),
+      opencodeSessionId: 'ses_1', sessionName: 'oc-pilot-42',
+    })
+    const runtime = new MemoryRuntime()
+    runtime.currentStatus = 'idle'
+    const service = new OpencodeTopicService(repository, runtime, silent)
+
+    const results = await Promise.all([
+      service.requestRelaunch('42'),
+      service.reconcilePending(),
+      service.requestRelaunch('42'),
+    ])
+    expect(runtime.stops).toEqual(['oc-pilot-42'])
+    expect(runtime.launches).toHaveLength(1)
+    expect(results[0].pending).toBeFalse()
+    expect(repository.get('42')?.restartPending).toBeUndefined()
+  })
+
+  test('a turn submitted during a relaunch runs only after it', async () => {
+    const repository = new MemoryRepository()
+    repository.save({
+      ...opencodeTopic('42', 'pilot', 10),
+      opencodeSessionId: 'ses_1', sessionName: 'oc-pilot-42',
+    })
+    const runtime = new MemoryRuntime()
+    runtime.currentStatus = 'idle'
+    const order: string[] = []
+    let release!: () => void
+    const baseEnsure = runtime.ensureSession.bind(runtime)
+    runtime.ensureSession = async input => {
+      order.push('launch')
+      if (!release) await new Promise<void>(resolve => { release = resolve })
+      return baseEnsure(input)
+    }
+    runtime.prompt = async (sessionName, prompt) => {
+      order.push('prompt')
+      runtime.prompts.push({ sessionName, prompt })
+    }
+    const service = new OpencodeTopicService(repository, runtime, silent)
+
+    const relaunch = service.requestRelaunch('42')
+    while (!release) await new Promise(resolve => setTimeout(resolve, 1))
+    expect(repository.get('42')?.restartPending).toBeUndefined()
+    const turn = service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(runtime.prompts).toHaveLength(0)
+
+    release()
+    await Promise.all([relaunch, turn])
+    expect(order).toEqual(['launch', 'launch', 'prompt'])
+    expect(runtime.stops).toEqual(['oc-pilot-42'])
+    expect(runtime.launches).toHaveLength(2)
+  })
+
+  test('activate, rename, isLocked, and status follow repository state', async () => {
+    const repository = new MemoryRepository()
+    const runtime = new MemoryRuntime()
+    const service = new OpencodeTopicService(repository, runtime, silent, () => 50)
+
+    expect(service.isLocked('42')).toBeFalse()
+    service.activate(opencodeTopic('42', 'pilot', 10))
+    expect(service.isLocked('42')).toBeTrue()
+    expect(() => service.activate(opencodeTopic('42', 'pilot', 10))).toThrow('already OpenCode-managed')
+    expect(service.rename('42', 'renamed').name).toBe('renamed')
+    expect(service.rename('42', '  ').name).toBe('renamed')
+    expect(repository.get('42')?.updatedAt).toBe(50)
+    expect(service.list()).toHaveLength(1)
+    expect(await service.status('42')).toBe('missing')
+    await service.start('42')
+    expect(await service.status('42')).toBe('idle')
+    expect(() => service.rename('7', 'x')).toThrow('not an OpenCode topic')
+  })
+})

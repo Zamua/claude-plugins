@@ -5,7 +5,8 @@ bot token across MANY sessions, routed by Telegram forum **topics**. Ordinary
 topics keep the established foreground Claude Code harness in a detached tmux
 or herdr pane and may route that same Claude session to Anthropic, Codex, or
 OpenCode Go. A fresh topic can instead be explicitly and permanently locked to
-Google's official Antigravity CLI harness with `/antigravity`.
+Google's official Antigravity CLI harness with `/antigravity`, or to OpenCode on
+a local Qwen server with `/localcode`.
 
 It is a drop-in for the single-session telegram channel: the plugin is named
 `telegram`, the MCP server is named `telegram`, and the four tools keep their
@@ -43,6 +44,13 @@ Code disables Channels under API billing).
                  ┌──────▼──────────────┐
                  │ Herdr: agy + MCP   │  one persistent interactive process
                  │ same conversation  │  live subscription model catalog
+                 └─────────────────────┘
+
+          fresh topic + /localcode
+                        │
+                 ┌──────▼──────────────┐
+                 │ Herdr: opencode +  │  one persistent interactive process
+                 │ MCP, same session  │  single local Qwen model
                  └─────────────────────┘
 ```
 
@@ -85,6 +93,12 @@ Code disables Channels under API billing).
   with the new route, never the conversation. Its callback namespace is
   separate, and stale/forged Claude route callbacks are rejected at the
   topic-harness boundary.
+- **OpenCode (localcode) application service** (`proxy/application/opencode-*` +
+  `proxy/adapters/*opencode-topic*`, `herdr-opencode-runtime.ts`): the same
+  shape for the OpenCode TUI on a local Qwen server. One model, no route or
+  usage; the first launch persists the OpenCode session id and every relaunch
+  resumes it with `-s <same-id>`. The Telegram MCP is injected through
+  `OPENCODE_CONFIG_CONTENT` in the pane environment, outbound-only.
 
 ## Prerequisites
 
@@ -93,6 +107,9 @@ Code disables Channels under API billing).
   by running `agy` once interactively, plus a running Herdr server. Antigravity
   topics always use Herdr so they remain visible and interactive. The picker is
   read dynamically from `agy models`; it is not a hard-coded model list.
+- Optional localcode topics: `opencode` on PATH (or `TELEGRAM_OPENCODE_BIN`), a
+  project dir whose `opencode.jsonc` defines the local provider, the local model
+  server running, and a running Herdr server.
 - Optional provider routing: `claude-code-proxy` on PATH. Codex must already be
   authenticated; OpenCode Go must already exist in OpenCode's local auth file.
 - A Telegram bot token (BotFather).
@@ -140,11 +157,13 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_TOPICS_ADMIN_USER_ID` | for routing/approvals | secrets user id | Telegram user allowed to change routes and approve denied actions |
 | `TELEGRAM_PROVIDER_PROXY_URL` | no | `http://127.0.0.1:18765` | loopback compatibility bridge |
 | `TELEGRAM_PROVIDER_PROXY_BIN` | no | `claude-code-proxy` | bridge CLI used to enumerate models |
-| `TELEGRAM_OPENCODE_BIN` | no | `opencode` | CLI used to read OpenCode model names, efforts, and context windows |
+| `TELEGRAM_OPENCODE_BIN` | no | Nix per-user `opencode`, then `PATH` | CLI used to read OpenCode model metadata and to run `/localcode` topics |
+| `TELEGRAM_OPENCODE_PROJECT_DIR` | no | `~/Dropbox/workspace/macmini/gpu/qwen-opencode` | project dir opened by `/localcode` topics (local provider config + `AGENTS.md`) |
+| `TELEGRAM_OPENCODE_MODEL` | no | `qwen-local/Qwen3.8-27B` | the single model `/localcode` topics run |
 | `TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES` | no | `5` | Codex/OpenCode Go usage refresh interval |
 | `TELEGRAM_OPENCODE_AUTH_FILE` | no | OpenCode's standard auth file | source for OpenCode Go usage auth; the key is never copied into plugin state |
 | `TELEGRAM_ANTIGRAVITY_BIN` | no | Nix per-user `agy`, then `PATH` | official Antigravity CLI used by harness-locked topics |
-| `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr` for Claude topics; Antigravity topics always use Herdr |
+| `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr` for Claude topics; Antigravity and localcode topics always use Herdr |
 | `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` | no | (disabled) | 0-23 local; once a day at this hour the proxy kills live topic sessions (each `--resume`s on its next message) |
 | `TELEGRAM_TOPICS_MODEL` | no | `fable` | initial model for topics without a persisted route; `/model` selections are persisted per topic |
 | `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` | no | `5000` | MCP-side: how long the first inbound poll is held so the booting REPL is idle before the first message is delivered |
@@ -215,6 +234,27 @@ After the lock:
 The lock is enforced behind the UI as well: old or forged `tgroute:*` callbacks
 cannot switch the topic to the Claude harness. Antigravity turns are queued per
 topic, and model changes made during a running turn apply to the next one.
+
+### OpenCode (localcode) topics
+
+`/localcode` locks a **fresh** topic the same way, to the OpenCode TUI running
+a local Qwen model in an `oc-<slug>-<threadid>` Herdr workspace. The pane runs
+`opencode <project dir> -m <model> --pure` (`--pure` keeps external TUI plugins
+such as a vim-mode plugin from eating injected prompts); the Telegram MCP is
+injected through `OPENCODE_CONFIG_CONTENT` in the pane environment and is
+outbound-only. OpenCode loads `AGENTS.md` and `~/.claude/CLAUDE.md` natively,
+so the first reply takes a few minutes while those instructions run; later
+turns are faster. After the lock:
+
+- `/model` only prints status (session id, Herdr workspace/state, model). There
+  is one model and no picker.
+- `/usage` reports that the local server has no quota.
+- `/relaunch` replaces the Herdr process and resumes the same OpenCode session
+  (`-s <id>`); queued while a turn is working.
+- Old or forged `tgroute:*` and `agroute:*` callbacks are rejected.
+
+Requests share the local model server with any interactive `opencode` session
+the operator runs, so they queue behind it.
 
 ### Antigravity configuration interop
 
@@ -300,7 +340,7 @@ Loopback only (`127.0.0.1:8790`).
 | `POST /permission-denied` | Claude `PermissionDenied` hook payload | creates or deduplicates a Telegram approval request |
 | `POST /rate-limit` | `{topic, error, details, reset_at?}` | pauses the exhausted route and opens the Telegram picker |
 | `POST /capacity` | Anthropic capacity windows | `{ok: true}` |
-| `POST /topic/create` | `{name, harness?: "claude" | "antigravity"}` | creates and registers a topic after validating the selected harness |
+| `POST /topic/create` | `{name, harness?: "claude" | "antigravity" | "opencode"}` | creates and registers a topic after validating the selected harness |
 | `GET /health` | | `{ok, topics, port, polling, polling_since}` |
 
 `topic` is the `message_thread_id` as a string, or `"general"`. On `/send`,
