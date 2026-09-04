@@ -89,10 +89,16 @@ export function parseOpencodeSessionList(
   }
 }
 
+// The Nix wrapper execs the real binary as ".opencode-wrapped", which the kernel truncates in process names.
+export function isOpencodeProcessName(name: unknown): boolean {
+  const value = String(name ?? '')
+  return value === 'opencode' || value.startsWith('.opencode-wrap')
+}
+
 export function parseOpencodeSessionArgument(output: string): string | undefined {
   try {
     const processes = JSON.parse(output)?.result?.process_info?.foreground_processes ?? []
-    const argv = processes.find((process: any) => String(process?.name ?? '') === 'opencode')?.argv
+    const argv = processes.find((process: any) => isOpencodeProcessName(process?.name))?.argv
     if (!Array.isArray(argv)) return undefined
     for (const flag of ['-s', '--session']) {
       const index = argv.indexOf(flag)
@@ -289,7 +295,7 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
     if (!output) return false
     try {
       const processes = JSON.parse(output)?.result?.process_info?.foreground_processes ?? []
-      return processes.some((process: any) => String(process?.name ?? '') === 'opencode')
+      return processes.some((process: any) => isOpencodeProcessName(process?.name))
     } catch {
       return false
     }
