@@ -4,6 +4,7 @@ import {
   HerdrOpencodeRuntime,
   opencodeHerdrStatus,
   opencodeInteractiveArgs,
+  isOpencodeProcessName,
   opencodeMcpConfigContent,
   OPENCODE_SETTLE_MS,
   parseOpencodeExport,
@@ -104,6 +105,14 @@ describe('persistent Herdr OpenCode adapter', () => {
       .toEqual(['ses_new', 'ses_manual'])
     expect(parseOpencodeSessionList('[]', 0, 1)).toEqual([])
     expect(parseOpencodeSessionList('not json', 0, 1)).toEqual([])
+  })
+
+  test('recognizes the Nix wrapper process name as opencode', () => {
+    expect(isOpencodeProcessName('opencode')).toBe(true)
+    expect(isOpencodeProcessName('.opencode-wrapp')).toBe(true)
+    expect(isOpencodeProcessName('.opencode-wrapped')).toBe(true)
+    expect(isOpencodeProcessName('bun')).toBe(false)
+    expect(isOpencodeProcessName(undefined)).toBe(false)
   })
 
   test('reads an explicit resume identity from the opencode process arguments', () => {
