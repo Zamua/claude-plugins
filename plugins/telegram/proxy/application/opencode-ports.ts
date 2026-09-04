@@ -18,9 +18,15 @@ export interface OpencodeRuntimePort {
   ensureSession(input: OpencodeSessionSpec): Promise<OpencodeSessionIdentity>
   prompt(sessionName: string, prompt: string): Promise<void>
   stop(sessionName: string): Promise<boolean>
+  lastAssistantText(opencodeSessionId: string): Promise<OpencodeAssistantText | undefined>
 }
+
+export type OpencodeAssistantText = { text: string; finish?: string }
 
 export interface OpencodeOutboundPort {
   typing(topic: string): void
   error(topic: string, text: string): Promise<void>
+  repliedSince(topic: string, sinceMs: number): boolean
+  // Proxy-relayed text in the thread, distinct from the agent's own reply.
+  notice(topic: string, text: string): Promise<void>
 }

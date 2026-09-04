@@ -16,6 +16,11 @@ import type {
   OpencodeRuntimePort,
 } from './opencode-ports'
 
+const NOTICE_LIMIT = 3_500
+const OUTPUT_CAP_NOTICE =
+  'OpenCode hit its output limit before replying; try a smaller step or say continue.'
+const NO_REPLY_NOTICE = 'OpenCode finished this turn without sending a reply.'
+
 export type OpencodeChangeResult = {
   topic: OpencodeTopic
   pending: boolean
@@ -109,14 +114,41 @@ export class OpencodeTopicService {
       const ready = await this.ensureReady(topicId)
       this.outbound.typing(topicId)
       const typing = setInterval(() => this.outbound.typing(topicId), 4_000)
+      const startedAt = this.now()
       try {
         await this.runtime.prompt(ready.sessionName!, renderOpencodeTurn(message))
       } finally {
         clearInterval(typing)
       }
+      await this.backstopReply(topicId, ready.opencodeSessionId, startedAt)
       await this.applyPendingAfterOwnedTurn(topicId)
     } catch (error) {
       await this.reportError(topicId, error)
+    }
+  }
+
+  // OpenCode has no Stop hook: a turn can end in the terminal or at the output
+  // cap with nothing sent. The proxy relays what the model produced instead.
+  private async backstopReply(
+    topicId: string,
+    opencodeSessionId: string | undefined,
+    startedAt: number,
+  ): Promise<void> {
+    if (this.outbound.repliedSince(topicId, startedAt)) return
+    try {
+      const last = opencodeSessionId
+        ? await this.runtime.lastAssistantText(opencodeSessionId).catch(() => undefined)
+        : undefined
+      const text = last?.text ?? ''
+      const notice = text
+        ? (text.length > NOTICE_LIMIT ? `${text.slice(0, NOTICE_LIMIT)}…` : text)
+        : last?.finish === 'length' ? OUTPUT_CAP_NOTICE : NO_REPLY_NOTICE
+      await this.outbound.notice(topicId, notice)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      try {
+        await this.outbound.error(topicId, `OpenCode reply backstop failed: ${detail}`)
+      } catch {}
     }
   }
 

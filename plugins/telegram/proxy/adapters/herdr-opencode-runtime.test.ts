@@ -5,7 +5,9 @@ import {
   opencodeHerdrStatus,
   opencodeInteractiveArgs,
   opencodeMcpConfigContent,
+  OPENCODE_SETTLE_MS,
   parseHerdrPromptResult,
+  parseOpencodeExport,
   parseOpencodeSessionArgument,
   parseOpencodeSessionList,
 } from './herdr-opencode-runtime'
@@ -19,10 +21,43 @@ const processInfo = (argv: string[]) => JSON.stringify({ result: { process_info:
   foreground_processes: [{ name: 'opencode', pid: 123, argv }],
 } } })
 
-const runtime = (run: ProcessRunner) => new HerdrOpencodeRuntime(
-  'opencode', '/tmp/project', '/tmp/launcher', 'http://127.0.0.1:8790',
-  '/tmp/bun', '/tmp/plugin/server.ts', 'herdr', run, async () => {}, 'qwen-local/Qwen3.8-27B',
-)
+const runtime = (run: ProcessRunner, pause: (ms: number) => Promise<unknown> = async () => {}) =>
+  new HerdrOpencodeRuntime(
+    'opencode', '/tmp/project', '/tmp/launcher', 'http://127.0.0.1:8790',
+    '/tmp/bun', '/tmp/plugin/server.ts', 'herdr', run, pause, 'qwen-local/Qwen3.8-27B',
+  )
+
+const paneList = (status: string) => JSON.stringify({ result: { panes: [{
+  label: 'oc-topic-42', pane_id: 'w2:p1', agent_status: status,
+}] } })
+
+// Fake clock: each pause advances time by its argument, nothing else does.
+const settleHarness = (statuses: string[]) => {
+  let clock = 0
+  let observations = 0
+  const promptCalls: number[] = []
+  const now = Date.now
+  Date.now = () => clock
+  const run: ProcessRunner = async (_command, args) => {
+    if (args[0] === 'pane' && args[1] === 'list') {
+      const status = statuses[Math.min(observations, statuses.length - 1)]!
+      observations++
+      return { stdout: paneList(status), stderr: '' }
+    }
+    if (args[0] === 'agent' && args[1] === 'prompt') {
+      promptCalls.push(observations)
+      return { stdout: JSON.stringify({ result: { type: 'agent_prompted' } }), stderr: '' }
+    }
+    throw new Error(`unexpected args: ${args.join(' ')}`)
+  }
+  const pause = async (ms: number) => { clock += ms }
+  return {
+    runtime: runtime(run, pause),
+    promptCalls,
+    observations: () => observations,
+    restore: () => { Date.now = now },
+  }
+}
 
 describe('persistent Herdr OpenCode adapter', () => {
   test('starts a fresh session with the kickoff as the first prompt', () => {
@@ -160,9 +195,16 @@ describe('persistent Herdr OpenCode adapter', () => {
       throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
     }
 
-    expect(await runtime(run).ensureSession({
-      topic: '42', name: 'topic', sessionName: 'oc-topic-42', opencodeSessionId: 'ses_old', kickoff: 'kickoff',
-    })).toEqual({ sessionName: 'oc-topic-42', opencodeSessionId: 'ses_old' })
+    let clock = 0
+    const now = Date.now
+    Date.now = () => clock
+    try {
+      expect(await runtime(run, async ms => { clock += ms }).ensureSession({
+        topic: '42', name: 'topic', sessionName: 'oc-topic-42', opencodeSessionId: 'ses_old', kickoff: 'kickoff',
+      })).toEqual({ sessionName: 'oc-topic-42', opencodeSessionId: 'ses_old' })
+    } finally {
+      Date.now = now
+    }
     expect(listCalls).toBe(0)
   })
 
@@ -315,6 +357,9 @@ describe('persistent Herdr OpenCode adapter', () => {
 
   test('retries a structured prompt stall instead of silently dropping the turn', async () => {
     let promptCalls = 0
+    let clock = 0
+    const now = Date.now
+    Date.now = () => clock
     const run: ProcessRunner = async (_command, args) => {
       if (args[0] === 'pane' && args[1] === 'list') return { stdout: idlePaneList, stderr: '' }
       if (args[0] === 'agent' && args[1] === 'prompt') {
@@ -332,7 +377,87 @@ describe('persistent Herdr OpenCode adapter', () => {
       throw new Error(`unexpected args: ${args.join(' ')}`)
     }
 
-    await runtime(run).prompt('oc-topic-42', 'telegram turn')
+    try {
+      await runtime(run, async ms => { clock += ms }).prompt('oc-topic-42', 'telegram turn')
+    } finally {
+      Date.now = now
+    }
     expect(promptCalls).toBe(2)
+  })
+
+  test('a steady idle pane settles once the stability window elapses', async () => {
+    const h = settleHarness(['idle'])
+    try {
+      await h.runtime.prompt('oc-topic-42', 'telegram turn')
+      // Window before delivery plus window after agent_prompted, one poll per second.
+      const perWindow = OPENCODE_SETTLE_MS / 1000
+      expect(h.promptCalls).toEqual([perWindow + 1])
+      expect(h.observations()).toBe(2 * (perWindow + 1))
+    } finally {
+      h.restore()
+    }
+  })
+
+  test('an idle-working-idle flicker after the prompt delays settle', async () => {
+    const perWindow = OPENCODE_SETTLE_MS / 1000
+    // Delivery window observed idle throughout; after the prompt the pane
+    // reports idle twice, works once, then stays idle.
+    const before = Array(perWindow + 1).fill('idle')
+    const h = settleHarness([...before, 'idle', 'idle', 'working', 'idle'])
+    try {
+      await h.runtime.prompt('oc-topic-42', 'telegram turn')
+      expect(h.promptCalls).toEqual([perWindow + 1])
+      // Two idle polls were discarded by the working observation.
+      expect(h.observations()).toBe(before.length + 3 + perWindow + 1)
+    } finally {
+      h.restore()
+    }
+  })
+
+  test('a blocked pane still throws instead of settling', async () => {
+    const h = settleHarness(['idle', 'idle', 'blocked'])
+    try {
+      await expect(h.runtime.prompt('oc-topic-42', 'telegram turn')).rejects.toThrow('is blocked')
+      expect(h.promptCalls).toEqual([])
+    } finally {
+      h.restore()
+    }
+  })
+
+  test('parses the last assistant message out of an opencode export', () => {
+    const exported = (messages: unknown[]) => JSON.stringify({ info: {}, messages })
+    expect(parseOpencodeExport(exported([
+      { info: { role: 'user' }, parts: [{ type: 'text', text: 'hi' }] },
+      { info: { role: 'assistant', finish: 'stop' }, parts: [{ type: 'text', text: 'old' }] },
+      { info: { role: 'user' }, parts: [{ type: 'text', text: 'again' }] },
+      { info: { role: 'assistant', finish: 'stop' }, parts: [
+        { type: 'step-start' },
+        { type: 'text', text: ' first ' },
+        { type: 'tool', text: 'ignored' },
+        { type: 'text', text: 'second' },
+      ] },
+    ]))).toEqual({ text: 'first \nsecond', finish: 'stop' })
+    expect(parseOpencodeExport(exported([
+      { info: { role: 'assistant', finish: 'length' }, parts: [
+        { type: 'reasoning', text: 'thinking...' },
+      ] },
+    ]))).toEqual({ text: '', finish: 'length' })
+    expect(parseOpencodeExport(exported([{ info: { role: 'user' }, parts: [] }]))).toBeUndefined()
+    expect(parseOpencodeExport('not json')).toBeUndefined()
+    expect(parseOpencodeExport('{}')).toBeUndefined()
+  })
+
+  test('lastAssistantText exports the session from the project dir', async () => {
+    const run: ProcessRunner = async (command, args, options) => {
+      expect(command).toBe('opencode')
+      expect(args).toEqual(['export', 'ses_1'])
+      expect(options.cwd).toBe('/tmp/project')
+      return { stdout: JSON.stringify({ messages: [
+        { info: { role: 'assistant', finish: 'stop' }, parts: [{ type: 'text', text: 'done' }] },
+      ] }), stderr: '' }
+    }
+    expect(await runtime(run).lastAssistantText('ses_1')).toEqual({ text: 'done', finish: 'stop' })
+    const failing: ProcessRunner = async () => { throw new Error('boom') }
+    expect(await runtime(failing).lastAssistantText('ses_1')).toBeUndefined()
   })
 })

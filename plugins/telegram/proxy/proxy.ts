@@ -1703,6 +1703,8 @@ const opencodeRuntime = new HerdrOpencodeRuntime(
   undefined,
   OPENCODE_MODEL,
 )
+// Last /send per locked OpenCode topic; the service's reply backstop reads it.
+const opencodeLastSentAt = new Map<string, number>()
 const opencodeService = new OpencodeTopicService(
   opencodeRepository,
   opencodeRuntime,
@@ -1715,6 +1717,17 @@ const opencodeService = new OpencodeTopicService(
       await bot.api.sendMessage(
         String(GROUP_CHAT_ID),
         `⚠️ ${text.slice(0, MAX_CHUNK_LIMIT - 3)}`,
+        threadOf(topic),
+      )
+    },
+    repliedSince(topic, sinceMs) {
+      return (opencodeLastSentAt.get(topic) ?? 0) >= sinceMs
+    },
+    async notice(topic, text) {
+      log(`OpenCode reply backstop for topic ${topic}: ${text.slice(0, 80)}`)
+      await bot.api.sendMessage(
+        String(GROUP_CHAT_ID),
+        `↩︎ ${text.slice(0, MAX_CHUNK_LIMIT - 2)}`,
         threadOf(topic),
       )
     },
@@ -3508,6 +3521,7 @@ async function handleSend(req: Request): Promise<Response> {
   if (antigravityService.isLocked(topic)) {
     log(`sent Antigravity Telegram reply for topic ${topic} (${ids.length} message${ids.length === 1 ? '' : 's'})`)
   } else if (opencodeService.isLocked(topic)) {
+    opencodeLastSentAt.set(topic, Date.now())
     log(`sent OpenCode Telegram reply for topic ${topic} (${ids.length} message${ids.length === 1 ? '' : 's'})`)
   }
 
