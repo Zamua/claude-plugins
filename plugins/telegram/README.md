@@ -244,13 +244,15 @@ such as a vim-mode plugin from eating injected prompts); the Telegram MCP is
 injected through `OPENCODE_CONFIG_CONTENT` in the pane environment and is
 outbound-only. OpenCode loads `AGENTS.md` and `~/.claude/CLAUDE.md` natively,
 so the first reply takes a few minutes while those instructions run; later
-turns are faster. After the lock:
+turns are faster. Each Telegram turn is typed into the pane immediately as one
+bracketed paste; OpenCode queues it if a turn is still running, so reply
+latency is the model's own time. After the lock:
 
 - `/model` only prints status (session id, Herdr workspace/state, model). There
   is one model and no picker.
 - `/usage` reports that the local server has no quota.
 - `/relaunch` replaces the Herdr process and resumes the same OpenCode session
-  (`-s <id>`); queued while a turn is working.
+  (`-s <id>`); queued until the pane has settled after the current turn.
 - Old or forged `tgroute:*` and `agroute:*` callbacks are rejected.
 
 Requests share the local model server with any interactive `opencode` session
