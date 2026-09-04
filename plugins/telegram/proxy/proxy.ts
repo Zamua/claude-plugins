@@ -105,7 +105,12 @@ import type {
   AntigravityEffort,
   AntigravityModel,
 } from './domain/antigravity-topic'
+import { OpencodeTopicService } from './application/opencode-topic-service'
+import { HerdrOpencodeRuntime } from './adapters/herdr-opencode-runtime'
+import { JsonOpencodeTopicRepository } from './adapters/json-opencode-topic-repository'
+import { opencodeTopic } from './domain/opencode-topic'
 import { callbackBelongsToHarness, callbackTopicTarget } from './domain/topic-harness'
+import type { TopicHarness } from './domain/topic-harness'
 import { antigravityResetPools } from './domain/antigravity-capacity'
 import type { AntigravityUsageWindow } from './application/antigravity-ports'
 import type {
@@ -137,6 +142,8 @@ const AUTHORIZATIONS_FILE = join(STATE_DIR, 'action-authorizations.json')
 const ANTIGRAVITY_TOPICS_FILE = join(STATE_DIR, 'antigravity-topics.json')
 const LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-topic.sh')
 const ANTIGRAVITY_LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-antigravity-topic.sh')
+const OPENCODE_TOPICS_FILE = join(STATE_DIR, 'opencode-topics.json')
+const OPENCODE_LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-opencode-topic.sh')
 // The token-bearing .env files. assertSendable refuses to ship these so a
 // prompt-injected topic-Claude cannot exfil the bot token via reply(files:[...]).
 const ENV_FILES = [join(PLUGIN_ROOT, '.env'), join(STATE_DIR, '.env')]
@@ -218,12 +225,21 @@ const HOME_MANAGER_PROVIDER_PROXY_BIN = join(
 )
 const PROVIDER_PROXY_BIN = process.env.TELEGRAM_PROVIDER_PROXY_BIN ??
   (existsSync(HOME_MANAGER_PROVIDER_PROXY_BIN) ? HOME_MANAGER_PROVIDER_PROXY_BIN : 'claude-code-proxy')
-const OPENCODE_BIN = process.env.TELEGRAM_OPENCODE_BIN ?? 'opencode'
+const NIX_PROFILE_BIN = join(
+  '/etc', 'profiles', 'per-user', process.env.USER ?? homedir().split(sep).at(-1) ?? 'zamua', 'bin',
+)
+// Shared by the OpenCode Go model catalog and the harness-locked localcode topics.
+const NIX_OPENCODE_BIN = join(NIX_PROFILE_BIN, 'opencode')
+// `||`, not `??`: a copied .env.example leaves these as empty strings.
+const OPENCODE_BIN = process.env.TELEGRAM_OPENCODE_BIN ||
+  (existsSync(NIX_OPENCODE_BIN) ? NIX_OPENCODE_BIN : 'opencode')
 const OPENCODE_AUTH_FILE = process.env.TELEGRAM_OPENCODE_AUTH_FILE ??
   join(homedir(), '.local', 'share', 'opencode', 'auth.json')
-const NIX_ANTIGRAVITY_BIN = join(
-  '/etc', 'profiles', 'per-user', process.env.USER ?? homedir().split(sep).at(-1) ?? 'zamua', 'bin', 'agy',
-)
+const OPENCODE_PROJECT_DIR = process.env.TELEGRAM_OPENCODE_PROJECT_DIR ||
+  join(homedir(), 'Dropbox', 'workspace', 'macmini', 'gpu', 'qwen-opencode')
+const OPENCODE_MODEL = process.env.TELEGRAM_OPENCODE_MODEL || 'qwen-local/Qwen3.8-27B'
+const LOCALCODE_RE = /^\/localcode(?:@\w+)?\s*$/
+const NIX_ANTIGRAVITY_BIN = join(NIX_PROFILE_BIN, 'agy')
 const ANTIGRAVITY_BIN = process.env.TELEGRAM_ANTIGRAVITY_BIN ??
   (existsSync(NIX_ANTIGRAVITY_BIN) ? NIX_ANTIGRAVITY_BIN : 'agy')
 const CAPACITY_POLL_MS = Number(process.env.TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES ?? '5') * 60_000
@@ -660,6 +676,10 @@ const authorizationRepository = new JsonActionAuthorizationRepository(AUTHORIZAT
 const authorizationService = new ActionAuthorizationService(authorizationRepository, {
   turnPort: {
     deliver(request, turn) {
+      if (antigravityService.isLocked(request.topic) || opencodeService.isLocked(request.topic)) {
+        log(`dropping action authorization ${request.id}: topic ${request.topic} is harness-locked`)
+        return
+      }
       ensureSession(request.topic)
       enqueue(request.topic, {
         content: turn,
@@ -982,7 +1002,7 @@ function topicDirectory(): Array<{ slug: string; name: string; topic: string; li
   const live = mux.liveSessions()
   const out: Array<{ slug: string; name: string; topic: string; live: boolean }> = []
   for (const [topic, st] of topics) {
-    if (topic === SQUARE_TOPIC || antigravityService.isLocked(topic)) continue
+    if (topic === SQUARE_TOPIC || antigravityService.isLocked(topic) || opencodeService.isLocked(topic)) continue
     const name = st.name || topicNames.get(topic) || ''
     const slug = topic === 'general' ? 'general' : slugify(name) !== 'topic' ? slugify(name) : topic
     out.push({ slug, name: name || topic, topic, live: !!(st.session && live.has(st.session)) })
@@ -1033,6 +1053,10 @@ function deliverSquare(
 ): void {
   for (const topic of recipients) {
     if (topic === SQUARE_TOPIC) continue
+    if (antigravityService.isLocked(topic) || opencodeService.isLocked(topic)) {
+      log(`dropping square delivery (conv ${meta.conv}) to harness-locked topic ${topic}`)
+      continue
+    }
     ensureSession(topic)
     // NB deliberately NO chat_id / message_id keys in this meta: the channel
     // instructions train "reply via the reply tool with chat_id from the
@@ -1286,8 +1310,8 @@ async function handleTopicCreate(req: Request): Promise<Response> {
   const name = String(b.name ?? '').trim()
   if (!name) return new Response('name required', { status: 400 })
   const harness = b.harness == null ? 'claude' : String(b.harness)
-  if (harness !== 'claude' && harness !== 'antigravity') {
-    return new Response('harness must be claude or antigravity', { status: 400 })
+  if (harness !== 'claude' && harness !== 'antigravity' && harness !== 'opencode') {
+    return new Response('harness must be claude, antigravity, or opencode', { status: 400 })
   }
   // Resolve a viable route before creating the Telegram topic. A catalog/auth
   // failure must not strand an empty forum topic.
@@ -1303,6 +1327,9 @@ async function handleTopicCreate(req: Request): Promise<Response> {
   if (initialAntigravityRoute) {
     antigravityService.activate(antigravityTopic(topic, name, initialAntigravityRoute))
     await antigravityService.start(topic)
+  } else if (harness === 'opencode') {
+    opencodeService.activate(opencodeTopic(topic, name))
+    await opencodeService.start(topic)
   }
   log(`created + registered topic ${topic} "${name}"`)
   return json({
@@ -1310,7 +1337,7 @@ async function handleTopicCreate(req: Request): Promise<Response> {
     thread_id: created.message_thread_id,
     name,
     harness,
-    slug: harness === 'antigravity' ? slugify(name) : slugForTopic(topic),
+    slug: harness === 'claude' ? slugForTopic(topic) : slugify(name),
   })
 }
 
@@ -1400,9 +1427,9 @@ function handleSquareUserMessage(msg: any, text: string): void {
 // messages for a brand-new topic cannot spawn two sessions; the spawning
 // flag + the live-session dedup are belt and suspenders.
 function ensureSession(topic: string): void {
-  // Harness lock: an Antigravity topic must never fall through to the Claude
-  // launcher, even if a stale queue/callback reaches this defensive boundary.
-  if (antigravityService.isLocked(topic)) return
+  // Harness lock: an Antigravity or OpenCode topic must never fall through to
+  // the Claude launcher, even if a stale queue/callback reaches this boundary.
+  if (antigravityService.isLocked(topic) || opencodeService.isLocked(topic)) return
   // The square topic hosts conversations, not a claude of its own.
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
   const st = getTopic(topic)
@@ -1659,6 +1686,52 @@ const antigravityService = new AntigravityTopicService(
     },
   },
 )
+
+// OpenCode (localcode) is a third harness-bounded context: one local Qwen
+// model, no route or usage, persisted in its own file. It shares only the
+// Telegram Bot API adapter with the other two.
+const opencodeRepository = new JsonOpencodeTopicRepository(OPENCODE_TOPICS_FILE)
+const opencodeRuntime = new HerdrOpencodeRuntime(
+  OPENCODE_BIN,
+  OPENCODE_PROJECT_DIR,
+  OPENCODE_LAUNCH_SCRIPT,
+  PROXY_URL,
+  process.execPath,
+  join(PLUGIN_ROOT, 'server.ts'),
+  undefined,
+  undefined,
+  undefined,
+  OPENCODE_MODEL,
+)
+const opencodeService = new OpencodeTopicService(
+  opencodeRepository,
+  opencodeRuntime,
+  {
+    typing(topic) {
+      void bot.api.sendChatAction(String(GROUP_CHAT_ID), 'typing', threadOf(topic)).catch(() => {})
+    },
+    async error(topic, text) {
+      log(`OpenCode turn failed for topic ${topic}: ${text}`)
+      await bot.api.sendMessage(
+        String(GROUP_CHAT_ID),
+        `⚠️ ${text.slice(0, MAX_CHUNK_LIMIT - 3)}`,
+        threadOf(topic),
+      )
+    },
+  },
+)
+
+// Records without a Herdr session name are started at boot so an enabled
+// topic is visible without a throwaway Telegram turn.
+for (const topic of opencodeService.list()) {
+  if (topic.sessionName) continue
+  void opencodeService.start(topic.topic)
+    .then(running => log(
+      `started OpenCode topic ${topic.topic} "${topic.name}" in Herdr ` +
+      `${running.sessionName} (${running.opencodeSessionId})`,
+    ))
+    .catch(error => log(`OpenCode Herdr start failed for topic ${topic.topic}: ${error}`))
+}
 
 function syncAntigravityInterop(): void {
   const roots = [
@@ -1945,7 +2018,11 @@ async function deleteAndAck(
 // has no Claude of its own. secret_drop=1 lets the reply guard accept silence:
 // the proxy already acked in the topic.
 function notifyTopic(chatId: string, topic: string, fromId: string, what: string): void {
-  if ((SQUARE_TOPIC && topic === SQUARE_TOPIC) || antigravityService.isLocked(topic)) return
+  if (
+    (SQUARE_TOPIC && topic === SQUARE_TOPIC) ||
+    antigravityService.isLocked(topic) ||
+    opencodeService.isLocked(topic)
+  ) return
   ensureSession(topic)
   enqueue(topic, {
     content: `SYSTEM NOTICE (not a user message): ${what} No reply is required.`,
@@ -2106,6 +2183,10 @@ async function activateAntigravityTopic(
     }
     return
   }
+  if (opencodeService.isLocked(topic)) {
+    await sayIn(chatId, topic, 'This topic is locked to OpenCode / local Qwen. Create a fresh topic and run /antigravity there.')
+    return
+  }
   const claude = getTopic(topic)
   if (claude.claudeSessionId || claude.session) {
     await sayIn(
@@ -2178,6 +2259,87 @@ async function handleAntigravityModelCommand(
   }
 }
 
+// ---- OpenCode (localcode) harness ------------------------------------------
+
+const opencodeRouteLabel = () => `OpenCode / local Qwen · ${OPENCODE_MODEL}`
+
+async function activateLocalcodeTopic(
+  chatId: string,
+  topic: string,
+  fromId: string,
+): Promise<void> {
+  if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
+    await sayIn(chatId, topic, 'Only the operator can lock a topic to OpenCode.')
+    return
+  }
+  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
+    await sayIn(chatId, topic, 'The square cannot be assigned an agent harness.')
+    return
+  }
+  if (antigravityService.isLocked(topic)) {
+    await sayIn(chatId, topic, 'This topic is locked to Google / Antigravity. Create a fresh topic and run /localcode there.')
+    return
+  }
+  const existing = opencodeService.get(topic)
+  if (existing) {
+    try {
+      const running = await opencodeService.start(topic)
+      await sayIn(
+        chatId,
+        topic,
+        `This topic is already locked to ${opencodeRouteLabel()} in Herdr workspace ` +
+        `${running.sessionName}. Session: ${running.opencodeSessionId}.`,
+      )
+    } catch (error) {
+      await sayIn(chatId, topic, `Could not start the existing OpenCode session: ${reason(error)}`)
+    }
+    return
+  }
+  const claude = getTopic(topic)
+  if (claude.claudeSessionId || claude.session) {
+    await sayIn(
+      chatId,
+      topic,
+      'This topic already owns a Claude Code conversation, so it cannot be converted in place. ' +
+      'Create a fresh topic and run /localcode there.',
+    )
+    return
+  }
+  try {
+    const name = claude.name || topicNames.get(topic) || `localcode ${topic}`
+    opencodeService.activate(opencodeTopic(topic, name))
+    claude.name = name
+    topicNames.set(topic, name)
+    saveRegistry()
+    await sayIn(chatId, topic, 'Starting OpenCode on the local Qwen model in a persistent Herdr workspace…')
+    const running = await opencodeService.start(topic)
+    await sayIn(
+      chatId,
+      topic,
+      `Locked this topic to OpenCode / local Qwen (${OPENCODE_MODEL}) in Herdr workspace ${running.sessionName}. ` +
+      `Session: ${running.opencodeSessionId}. Other harness/provider routes are disabled here. ` +
+      'The first reply takes a few minutes while OpenCode loads its instructions.',
+    )
+  } catch (error) {
+    await sayIn(chatId, topic, `Could not enable OpenCode: ${reason(error)}`)
+  }
+}
+
+// Single-model harness: /model only reports status, there is nothing to pick.
+async function handleOpencodeModelCommand(chatId: string, topic: string, argument: string): Promise<void> {
+  const current = opencodeService.get(topic)!
+  await sayIn(
+    chatId,
+    topic,
+    `OpenCode session: ${current.opencodeSessionId ?? 'not started'}\n` +
+    `Route: ${opencodeRouteLabel()}\n` +
+    `Herdr: ${current.sessionName ?? 'not running'} (${await opencodeService.status(topic)})\n` +
+    'Harness: OpenCode (locked)\nPermissions: OpenCode defaults\n' +
+    'Context: AGENTS.md and ~/.claude/CLAUDE.md native' +
+    (argument ? '\n\nThis topic runs a single local model, so there is nothing to pick.' : ''),
+  )
+}
+
 // Same kill-then-nudge sequence as a provider-route recovery: killSession
 // drains the dying MCP's long-polls first so the nudge cannot be handed to it
 // and lost. The nudge asks for one line back, so a respawn that fails is a
@@ -2194,6 +2356,20 @@ async function handleRelaunch(chatId: string, topic: string, fromId: string): Pr
           `${current.conversationId ?? 'not started'} and reopen in Herdr.`
         : `Relaunched Antigravity in Herdr with the same conversation ` +
           `${result.topic.conversationId ?? 'not started'} and freshly loaded MCP/configuration.`,
+    )
+    return
+  }
+  if (opencodeService.isLocked(topic)) {
+    const current = opencodeService.get(topic)!
+    const result = await opencodeService.requestRelaunch(topic)
+    await sayIn(
+      chatId,
+      topic,
+      result.pending
+        ? `OpenCode is busy; relaunch is queued for the next idle boundary. It will keep session ` +
+          `${current.opencodeSessionId ?? 'not started'} and reopen in Herdr.`
+        : `Relaunched OpenCode in Herdr with the same session ` +
+          `${result.topic.opencodeSessionId ?? 'not started'} and freshly loaded MCP/configuration.`,
     )
     return
   }
@@ -2604,6 +2780,7 @@ async function registerCommands(): Promise<void> {
     ...(ADMIN_USER_ID
       ? [
           { command: 'antigravity', description: 'lock a fresh topic to the Antigravity harness' },
+          { command: 'localcode', description: 'lock a fresh topic to the local OpenCode/Qwen harness' },
           { command: 'model', description: 'choose this topic\'s provider and model' },
           { command: 'usage', description: 'show usage and reset times for every provider' },
         ]
@@ -2641,6 +2818,10 @@ bot.on('message', async ctx => {
     await activateAntigravityTopic(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
     return
   }
+  if (typeof msg.text === 'string' && LOCALCODE_RE.test(msg.text)) {
+    await activateLocalcodeTopic(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
+    return
+  }
   if (typeof msg.text === 'string' && RELAUNCH_RE.test(msg.text)) {
     await handleRelaunch(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
     return
@@ -2651,6 +2832,8 @@ bot.on('message', async ctx => {
       await handleAntigravityModelCommand(
         String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), modelMatch[1] ?? '',
       )
+    } else if (opencodeService.isLocked(topic)) {
+      await handleOpencodeModelCommand(String(ctx.chat.id), topic, modelMatch[1] ?? '')
     } else {
       await handleModelCommand(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), modelMatch[1] ?? '')
     }
@@ -2665,6 +2848,8 @@ bot.on('message', async ctx => {
       } catch (error) {
         await sayIn(String(ctx.chat.id), topic, `Could not read Antigravity usage: ${reason(error)}`)
       }
+    } else if (opencodeService.isLocked(topic)) {
+      await sayIn(String(ctx.chat.id), topic, 'OpenCode runs on the local Qwen server; there is no quota to report.')
     } else {
       await refreshProviderCapacity()
       await sayIn(String(ctx.chat.id), topic, capacityText())
@@ -2728,6 +2913,7 @@ bot.on('message', async ctx => {
     const st = topics.get(topic)
     if (st && !st.name) st.name = nm
     if (antigravityService.isLocked(topic)) antigravityService.rename(topic, nm)
+    if (opencodeService.isLocked(topic)) opencodeService.rename(topic, nm)
     log(`learned topic ${topic} name "${nm}"`)
     return
   }
@@ -2746,6 +2932,7 @@ bot.on('message', async ctx => {
         saveRegistry()
       }
       if (antigravityService.isLocked(topic)) antigravityService.rename(topic, nm)
+      if (opencodeService.isLocked(topic)) opencodeService.rename(topic, nm)
       log(`topic ${topic} renamed to "${nm}"`)
     }
     return
@@ -2786,11 +2973,12 @@ bot.on('message', async ctx => {
   }
 
   // Claude topics can lazily call download_attachment through their MCP. The
-  // Antigravity harness intentionally does not load that Claude plugin, so its
-  // adapter eagerly materializes non-photo attachments and supplies the safe
+  // Antigravity and OpenCode harnesses do not load that Claude plugin, so the
+  // proxy eagerly materializes non-photo attachments and supplies the safe
   // local path in the channel metadata instead.
   let attachmentPath: string | undefined
-  if (antigravityService.isLocked(topic) && desc.attachment && !imagePath) {
+  const eagerAttachments = antigravityService.isLocked(topic) || opencodeService.isLocked(topic)
+  if (eagerAttachments && desc.attachment && !imagePath) {
     attachmentPath = (await downloadFile(desc.attachment.file_id, desc.attachment.name)) ?? undefined
   }
 
@@ -2831,6 +3019,12 @@ bot.on('message', async ctx => {
       .then(() => log(`settled Antigravity Telegram turn ${msg.message_id ?? '(no id)'} for topic ${topic}`))
     return
   }
+  if (opencodeService.isLocked(topic)) {
+    log(`received OpenCode Telegram turn ${msg.message_id ?? '(no id)'} for topic ${topic}`)
+    void opencodeService.submitTurn(topic, { content: desc.content, meta })
+      .then(() => log(`settled OpenCode Telegram turn ${msg.message_id ?? '(no id)'} for topic ${topic}`))
+    return
+  }
 
   // Spawn the topic's Claude if none is live, then enqueue. The message waits
   // in the queue until the new MCP's first /poll drains it (nothing is lost
@@ -2857,7 +3051,9 @@ bot.on('callback_query:data', async ctx => {
     const callbackTopic = (ctx.callbackQuery.message as any)?.message_thread_id != null
       ? String((ctx.callbackQuery.message as any).message_thread_id)
       : 'general'
-    const callbackHarness = antigravityService.isLocked(callbackTopic) ? 'antigravity' : 'claude'
+    const callbackHarness: TopicHarness = antigravityService.isLocked(callbackTopic)
+      ? 'antigravity'
+      : opencodeService.isLocked(callbackTopic) ? 'opencode' : 'claude'
     const explicitCallbackTopic = callbackTopicTarget(data)
     if (explicitCallbackTopic && explicitCallbackTopic !== callbackTopic) {
       await ctx.answerCallbackQuery({
@@ -2870,7 +3066,9 @@ bot.on('callback_query:data', async ctx => {
       await ctx.answerCallbackQuery({
         text: callbackHarness === 'antigravity'
           ? 'This topic is locked to Google / Antigravity. External provider routes are disabled.'
-          : 'This picker belongs to an Antigravity-locked topic.',
+          : callbackHarness === 'opencode'
+            ? 'This topic is locked to OpenCode / local Qwen. Model and provider pickers are disabled.'
+            : 'This picker belongs to an Antigravity-locked topic.',
         show_alert: true,
       }).catch(() => {})
       return
@@ -3309,6 +3507,8 @@ async function handleSend(req: Request): Promise<Response> {
 
   if (antigravityService.isLocked(topic)) {
     log(`sent Antigravity Telegram reply for topic ${topic} (${ids.length} message${ids.length === 1 ? '' : 's'})`)
+  } else if (opencodeService.isLocked(topic)) {
+    log(`sent OpenCode Telegram reply for topic ${topic} (${ids.length} message${ids.length === 1 ? '' : 's'})`)
   }
 
   return json({ message_ids: ids })
@@ -3640,6 +3840,7 @@ await serveWithRetry()
 void pollWithRetry()
 void registerCommands()
 setInterval(() => void antigravityService.reconcilePending(), 2_000).unref()
+setInterval(() => void opencodeService.reconcilePending(), 2_000).unref()
 
 // ---- nightly restart (passive) ---------------------------------------------
 //

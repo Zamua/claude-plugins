@@ -5,7 +5,8 @@
 A drop-in replacement for the single-session `telegram` channel that fans ONE
 bot token out to MANY concurrent agent conversations, one per Telegram forum
 topic. Ordinary topics are Claude Code sessions; a fresh topic can be explicitly
-and permanently harness-locked to Google's official Antigravity CLI.
+and permanently harness-locked to Google's official Antigravity CLI
+(`/antigravity`) or to OpenCode on the local Qwen server (`/localcode`).
 Forked from the official `telegram` plugin 0.0.6; the only real change is the
 transport: the token + getUpdates + access logic moved OUT of the MCP into a
 standalone proxy, and the MCP became a thin HTTP client of that proxy.
@@ -45,6 +46,12 @@ fresh `/antigravity` topic ── separate aggregate/repository ── persisten
    ├── first interactive launch persists conversation_id + Herdr label
    ├── Telegram prompt -> Herdr agent prompt -> outbound-only Telegram MCP
    └── relaunch/model switch -> --conversation <same-id>
+
+fresh `/localcode` topic ── separate aggregate/repository ── persistent Herdr `opencode`
+   ├── single local model (qwen-local), no route, no usage
+   ├── first launch persists the OpenCode session id + Herdr label
+   ├── Telegram prompt -> Herdr agent prompt -> env-injected outbound-only Telegram MCP
+   └── relaunch -> -s <same-session-id>
 
 scripts/launch-topic.sh ── spawn in the selected multiplexer (TG_MUX: tmux new-session -d
    with vars via -e, or herdr agent start with vars via /usr/bin/env; see
@@ -479,6 +486,75 @@ operator requested no hard gates even while working unattended from Telegram.
 It is not Claude's reviewer-backed auto mode and has no Terra
 classifier; the topic should be treated as an unreviewed local agent.
 
+## Harness-locked OpenCode (localcode) topics
+
+`/localcode` is the Antigravity pattern applied to a third runtime: the OpenCode
+TUI driving the local Qwen server (`qwen-local/Qwen3.8-27B`, the same thing the
+operator's `localcode` alias runs by hand). It is a separate bounded context
+(`proxy/domain/opencode-topic.ts`, `OpencodeTopicService`,
+`HerdrOpencodeRuntime`, `opencode-topics.json`) and shares no abstraction with
+Antigravity beyond the Telegram Bot API adapter. Same rules: admin only, a fresh
+topic with no Claude UUID/live pane, never the square, no unlock or conversion
+path. A topic locked to one harness refuses the other command, every Claude
+spawn/queue/notice path skips a locked topic, and a square or action
+authorization delivery aimed at one is dropped with a log line (no Claude pane
+would drain that queue).
+
+The runtime is one visible Herdr workspace per topic, `oc-<slug>-<threadid>`,
+running `opencode <project dir> -m <model> --pure` with cwd = the project dir
+(`TELEGRAM_OPENCODE_PROJECT_DIR`, whose `opencode.jsonc` defines the local
+provider and whose `AGENTS.md` is the project instruction file). Session
+identity is captured only from a launch the adapter itself started: a fresh
+launch passes the kickoff as `--prompt`, waits for the pane to go idle, then
+lists recent sessions (`opencode session list --format json -n 20`, cwd =
+project dir) and requires exactly one created since launch (zero keeps polling
+to the deadline; two or more closes the pane and fails, since the operator's
+own manual session in the same project dir is indistinguishable). That id is
+persisted and every later launch resumes it with `-s <id>`. On a resume the
+adapter reads the id back out of the foreground `opencode` argv (`herdr pane
+process-info`) and refuses a mismatch, so a fork can never be presented as
+continuity. A live pane with no persisted id and no `-s` in argv is closed and
+relaunched rather than inspected. Discovery runs at launch only, never per
+turn. `/relaunch` closes and recreates
+the pane with the same session (queued at the idle boundary while a turn is
+working, like Antigravity).
+
+`--pure` is load-bearing. The operator's global `tui.json` loads
+`@leohenon/opencode-vim-plugin`, which puts the input box in vim normal mode, so
+text injected by `herdr agent prompt` is eaten as vim commands (a leading `R`
+enters replace mode and the prompt stalls). `--pure` skips external TUI plugins;
+config-level MCP servers still load, so the Telegram MCP is unaffected.
+
+The Telegram MCP is injected through the environment, never through a config
+file: `launch-opencode-topic.sh` exports `OPENCODE_CONFIG_CONTENT` (a JSON
+`mcp.telegram-topics` local entry pointing at `bun server.ts`, merged last by
+OpenCode) plus `TELEGRAM_TOPIC_ID`, `TELEGRAM_PROXY_URL`, `TG_INBOUND_MODE=pane`,
+and `TELEGRAM_HARNESS=opencode` (a label for operators and scripts inspecting
+the pane; `server.ts` does not read it). The stdio MCP child inherits that pane env, so
+it is topic-bound and outbound-only (no second Bot API poller); a manual
+`opencode` run sees no `OPENCODE_CONFIG_CONTENT` and gets no Telegram tools.
+OpenCode names MCP tools `<server>_<tool>`, so the reply tool is
+`telegram-topics_reply`; the kickoff and every turn envelope say so. Non-photo
+attachments are downloaded eagerly by the proxy and passed as `attachment_path`,
+as for Antigravity.
+
+Instruction loading is untouched: OpenCode reads `AGENTS.md` and
+`~/.claude/CLAUDE.md` natively, and the kickoff tells it to obey both while
+translating Claude-harness clauses into "reply through the Telegram MCP". That
+is why the FIRST turn takes two to three minutes: CLAUDE.md tells the model to
+run `memo wake`, which is about 41k tokens of prefill on a local 27B. Later
+turns resume from the server's prompt checkpoint and are much faster. The
+activation message says so. Herdr reports the pane `unknown -> working -> idle`
+across that first turn.
+
+`/model` in a locked topic only prints status (session id, route, Herdr pane and
+state, `Harness: OpenCode (locked)`); there is one model and no picker.
+`/usage` answers that the local server has no quota. The callback boundary
+treats `opencode` as a third harness that accepts neither `tgroute:*` nor
+`agroute:*`. `POST /topic/create` accepts `harness: "opencode"`. Requests from a
+localcode topic queue behind the operator's own `localcode` session on the same
+Qwen server, so a busy interactive session delays Telegram replies.
+
 ## Key mechanics / gotchas (baked into the code)
 
 - **Foreground only.** Channel injection (the `<channel>` turn from a
@@ -701,18 +777,25 @@ classifier; the topic should be treated as an unreviewed local agent.
 - `server.ts` + `package.json`: the thin MCP client (dep: `@modelcontextprotocol/sdk`).
 - `proxy/proxy.ts` + `proxy/package.json`: the daemon (dep: `grammy`).
 - `proxy/domain/`: pure provider-route, harness-lock, Antigravity-topic,
-  inbound-delivery, and capacity types/transitions.
+  OpenCode-topic, inbound-delivery, and capacity types/transitions.
 - `proxy/adapters/`: Claude launch profiles, bridge model catalog, Codex
   app-server client, OpenCode Go capacity client, official Antigravity catalog,
-  persistent Herdr runtime, MCP config, JSON repository, and portable-skill
-  interop. Tests sit beside them.
+  persistent Herdr runtimes (`herdr-antigravity-runtime.ts`,
+  `herdr-opencode-runtime.ts`), MCP config, JSON repositories, and
+  portable-skill interop. Tests sit beside them.
 - `proxy/application/antigravity-topic-service.ts`: serializes turns and keeps
   exact Antigravity conversation identity independent of Telegram and Herdr I/O.
+- `proxy/application/opencode-topic-service.ts` + `opencode-ports.ts`: the same
+  shape for localcode topics (session id instead of conversation id; no
+  route/usage).
 - `scripts/launch-topic.sh`: the one-harness launcher (invoked by the proxy;
   `TG_MUX` picks only the multiplexer). Every pane executes `claude`.
 - `scripts/launch-antigravity-topic.sh`: creates a separate Herdr workspace and
   launches/resumes the persistent interactive `agy` process with topic-bound,
   outbound-only Telegram MCP environment.
+- `scripts/launch-opencode-topic.sh`: creates the `oc-<slug>-<tid>` Herdr
+  workspace and launches/resumes `opencode --pure` with the env-injected,
+  topic-bound, outbound-only Telegram MCP.
 - `scripts/start-provider-proxy.sh`: starts the loopback compatibility bridge,
   enables safe Codex response continuation, and injects the existing OpenCode
   Go credential without duplicating it.
@@ -755,8 +838,13 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 `TELEGRAM_TOPICS_MODEL` (default the `fable` alias, see below),
 `TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
 backends" above; applies to Claude topics); `TELEGRAM_ANTIGRAVITY_BIN` (optional
-path to official `agy`, defaults to the Nix per-user profile and then PATH).
-Antigravity topics always use Herdr so they remain visible and drop-in ready.
+path to official `agy`, defaults to the Nix per-user profile and then PATH);
+`TELEGRAM_OPENCODE_BIN` (the `opencode` CLI, same fallback order; shared by the
+OpenCode Go catalog and localcode topics), `TELEGRAM_OPENCODE_PROJECT_DIR`
+(default `~/Dropbox/workspace/macmini/gpu/qwen-opencode`), and
+`TELEGRAM_OPENCODE_MODEL` (default `qwen-local/Qwen3.8-27B`) for localcode
+topics. Antigravity and localcode topics always use Herdr so they remain visible
+and drop-in ready.
 Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
 
@@ -823,10 +911,13 @@ and everything else ports as-is.
 
 ## Removed alternate harness
 
-The short-lived OpenCode TUI harness experiment was removed: there is no
-`/handoff`, OpenCode channel plugin, OpenCode pane, second session identity, or
-delta-copy protocol. OpenCode Go remains only as a provider route beneath
-Claude Code through the local compatibility bridge. One pilot topic was
+The short-lived delta-copy OpenCode CHANNEL PLUGIN experiment was removed: there
+is no `/handoff`, no OpenCode channel plugin, and no delta-copy protocol that
+mirrors a Claude topic into a second session identity. OpenCode appears in two
+unrelated forms today: OpenCode Go is a provider route beneath Claude Code
+through the local compatibility bridge, and `/localcode` is a harness-locked
+topic on the Antigravity pattern (its own aggregate, its own pane, never a copy
+of a Claude conversation). The one pilot topic of the removed experiment was
 migrated by exporting its OpenCode dialogue into a one-time resume notice for
 its original Claude UUID before cutover; no legacy harness fields remain in the
 runtime registry contract.

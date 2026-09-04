@@ -1,7 +1,9 @@
-export type TopicHarness = 'claude' | 'antigravity'
+export type TopicHarness = 'claude' | 'antigravity' | 'opencode'
 
 export function topicHarness(record: { harness?: unknown }): TopicHarness {
-  return record.harness === 'antigravity' ? 'antigravity' : 'claude'
+  if (record.harness === 'antigravity') return 'antigravity'
+  if (record.harness === 'opencode') return 'opencode'
+  return 'claude'
 }
 
 export function callbackBelongsToHarness(harness: TopicHarness, data: string): boolean {
