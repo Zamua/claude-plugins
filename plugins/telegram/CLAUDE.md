@@ -50,7 +50,7 @@ fresh `/antigravity` topic ── separate aggregate/repository ── persisten
 fresh `/localcode` topic ── separate aggregate/repository ── persistent Herdr `opencode`
    ├── single local model (qwen-local), no route, no usage
    ├── first launch persists the OpenCode session id + Herdr label
-   ├── Telegram prompt -> Herdr agent prompt -> env-injected outbound-only Telegram MCP
+   ├── Telegram prompt -> typed bracketed paste (immediate) -> env-injected outbound-only Telegram MCP
    └── relaunch -> -s <same-session-id>
 
 scripts/launch-topic.sh ── spawn in the selected multiplexer (TG_MUX: tmux new-session -d
@@ -519,19 +519,34 @@ turn. `/relaunch` closes and recreates
 the pane with the same session (queued at the idle boundary while a turn is
 working, like Antigravity).
 
-A turn is settled only after the pane has stayed idle (or done) for a
-continuous `OPENCODE_SETTLE_MS` (6 s, polled every second; any non-idle
-observation restarts the window; blocked throws). Herdr reports the pane idle
-between OpenCode tool calls, and `herdr agent prompt --wait` returns on the
-first such report, so without the window the service dequeued the next
-Telegram turn mid-turn and the injected prompt aborted the running one
-(`MessageAbortedError`). The window applies both before delivery
-(`waitUntilIdle`) and after `agent_prompted`, under the same 31-minute ceiling.
+Delivery is immediate typed injection. A Telegram turn is typed into the pane
+(`herdr pane send-text <pane> <text>` followed by `herdr pane send-keys <pane>
+Enter`) the moment it arrives; there is no idle wait and no settle window before
+delivery. OpenCode queues a prompt typed while a turn is running and runs it
+after the current turn, so back-to-back messages are never dropped or delayed
+by the proxy. The text is wrapped in bracketed paste (`ESC [200~` ... `ESC
+[201~`), which delivers a multi-line envelope as ONE prompt instead of one
+submission per line (verified live with a 3.2 KB message). `herdr agent prompt`
+is NOT used: that command aborts a running OpenCode turn
+(`MessageAbortedError`); typed text does not. Turn latency is therefore the
+model's own time.
+
+The settle window (`OPENCODE_SETTLE_MS`, 6 s of continuous idle, polled every
+second, any non-idle observation restarts it, blocked throws, 31-minute
+ceiling) now gates only what happens AFTER a turn: the reply backstop and any
+pending relaunch. Each injection records `injectedAt` and arms one detached
+settle watcher per topic; another injection while it waits moves the watcher's
+target to the newest injection (it waits again after its current wait ends).
+`busy(topic)` is true while a watcher is outstanding, so `/relaunch` keeps
+deferring until the pane is between turns, and the typing indicator is
+refreshed every 4 s until settle. Herdr reports the pane idle between OpenCode
+tool calls, which is why the window is needed at all.
 
 Reply backstop: OpenCode has no Stop hook, so a turn can end with nothing sent
 (the model answers only in the terminal, or hits its 8192-token output cap
 mid-reasoning with `finish: length`). `/send` records the last outbound time per
-locked topic; when a turn ends with no send since it started, the service runs
+locked topic; when the pane settles with no send since the latest injection,
+the service runs
 `opencode export <session id>` (cwd = project dir), and posts the last assistant
 message's text parts as a proxy notice prefixed `↩︎ ` (capped at 3500 chars).
 No text and `finish: length` yields an output-limit notice; no export at all
@@ -540,8 +555,8 @@ the turn; a failed notice goes through the error path.
 
 `--pure` is load-bearing. The operator's global `tui.json` loads
 `@leohenon/opencode-vim-plugin`, which puts the input box in vim normal mode, so
-text injected by `herdr agent prompt` is eaten as vim commands (a leading `R`
-enters replace mode and the prompt stalls). `--pure` skips external TUI plugins;
+typed text is eaten as vim commands (a leading `R` enters replace mode and the
+prompt stalls). `--pure` skips external TUI plugins;
 config-level MCP servers still load, so the Telegram MCP is unaffected.
 
 The Telegram MCP is injected through the environment, never through a config

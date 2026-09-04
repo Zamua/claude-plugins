@@ -16,7 +16,12 @@ export type OpencodeSessionStatus = 'missing' | 'starting' | 'idle' | 'busy' | '
 export interface OpencodeRuntimePort {
   status(sessionName: string): Promise<OpencodeSessionStatus>
   ensureSession(input: OpencodeSessionSpec): Promise<OpencodeSessionIdentity>
-  prompt(sessionName: string, prompt: string): Promise<void>
+  // Types the text into the pane and submits it; returns as soon as it is
+  // sent. OpenCode queues a prompt typed while a turn runs.
+  inject(sessionName: string, text: string): Promise<void>
+  // Resolves once the pane has been idle for the settle window; rejects on a
+  // blocked pane or the timeout.
+  awaitSettled(sessionName: string, timeoutMs: number): Promise<void>
   stop(sessionName: string): Promise<boolean>
   lastAssistantText(opencodeSessionId: string): Promise<OpencodeAssistantText | undefined>
 }

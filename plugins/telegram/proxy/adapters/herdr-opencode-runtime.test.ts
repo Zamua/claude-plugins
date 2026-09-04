@@ -6,7 +6,6 @@ import {
   opencodeInteractiveArgs,
   opencodeMcpConfigContent,
   OPENCODE_SETTLE_MS,
-  parseHerdrPromptResult,
   parseOpencodeExport,
   parseOpencodeSessionArgument,
   parseOpencodeSessionList,
@@ -35,7 +34,6 @@ const paneList = (status: string) => JSON.stringify({ result: { panes: [{
 const settleHarness = (statuses: string[]) => {
   let clock = 0
   let observations = 0
-  const promptCalls: number[] = []
   const now = Date.now
   Date.now = () => clock
   const run: ProcessRunner = async (_command, args) => {
@@ -44,16 +42,11 @@ const settleHarness = (statuses: string[]) => {
       observations++
       return { stdout: paneList(status), stderr: '' }
     }
-    if (args[0] === 'agent' && args[1] === 'prompt') {
-      promptCalls.push(observations)
-      return { stdout: JSON.stringify({ result: { type: 'agent_prompted' } }), stderr: '' }
-    }
     throw new Error(`unexpected args: ${args.join(' ')}`)
   }
   const pause = async (ms: number) => { clock += ms }
   return {
     runtime: runtime(run, pause),
-    promptCalls,
     observations: () => observations,
     restore: () => { Date.now = now },
   }
@@ -122,12 +115,6 @@ describe('persistent Herdr OpenCode adapter', () => {
       .toBe('ses_3')
     expect(parseOpencodeSessionArgument(processInfo(['opencode', '--prompt', 'kickoff'])))
       .toBeUndefined()
-  })
-
-  test('distinguishes an accepted prompt from Herdr\'s zero-exit stalled result', () => {
-    expect(parseHerdrPromptResult(JSON.stringify({ result: { type: 'agent_prompted' } })))
-      .toBe('agent_prompted')
-    expect(parseHerdrPromptResult('not json')).toBeUndefined()
   })
 
   test('launches a fresh pane and discovers the session created by that launch', async () => {
@@ -355,72 +342,68 @@ describe('persistent Herdr OpenCode adapter', () => {
     expect(closed).toEqual(['w2:p1'])
   })
 
-  test('retries a structured prompt stall instead of silently dropping the turn', async () => {
-    let promptCalls = 0
-    let clock = 0
-    const now = Date.now
-    Date.now = () => clock
+  test('inject types the turn as one bracketed paste and submits it, never agent prompt', async () => {
+    const calls: string[][] = []
     const run: ProcessRunner = async (_command, args) => {
-      if (args[0] === 'pane' && args[1] === 'list') return { stdout: idlePaneList, stderr: '' }
-      if (args[0] === 'agent' && args[1] === 'prompt') {
-        promptCalls++
-        expect(args.slice(2)).toEqual([
-          'w2:p1', 'telegram turn', '--wait', '--timeout', String(31 * 60_000),
-        ])
-        return {
-          stdout: JSON.stringify({ result: {
-            type: promptCalls === 1 ? 'agent_prompt_stalled' : 'agent_prompted',
-          } }),
-          stderr: '',
-        }
+      if (args[0] === 'pane' && args[1] === 'list') return { stdout: paneList('working'), stderr: '' }
+      if (args[0] === 'pane' && (args[1] === 'send-text' || args[1] === 'send-keys')) {
+        calls.push(args)
+        return { stdout: '', stderr: '' }
       }
       throw new Error(`unexpected args: ${args.join(' ')}`)
     }
 
-    try {
-      await runtime(run, async ms => { clock += ms }).prompt('oc-topic-42', 'telegram turn')
-    } finally {
-      Date.now = now
-    }
-    expect(promptCalls).toBe(2)
+    await runtime(run).inject('oc-topic-42', 'line one\nline two')
+    expect(calls).toEqual([
+      ['pane', 'send-text', 'w2:p1', '\x1b[200~line one\nline two\x1b[201~'],
+      ['pane', 'send-keys', 'w2:p1', 'Enter'],
+    ])
   })
 
-  test('a steady idle pane settles once the stability window elapses', async () => {
+  test('inject does not wait for idle and fails when the pane is missing', async () => {
+    const run: ProcessRunner = async (_command, args) => {
+      if (args[0] === 'pane' && args[1] === 'list') {
+        return { stdout: JSON.stringify({ result: { panes: [] } }), stderr: '' }
+      }
+      throw new Error(`unexpected args: ${args.join(' ')}`)
+    }
+    await expect(runtime(run).inject('oc-topic-42', 'turn')).rejects.toThrow('is not running')
+  })
+
+  test('awaitSettled resolves once the stability window elapses on a steady idle pane', async () => {
     const h = settleHarness(['idle'])
     try {
-      await h.runtime.prompt('oc-topic-42', 'telegram turn')
-      // Window before delivery plus window after agent_prompted, one poll per second.
-      const perWindow = OPENCODE_SETTLE_MS / 1000
-      expect(h.promptCalls).toEqual([perWindow + 1])
-      expect(h.observations()).toBe(2 * (perWindow + 1))
+      await h.runtime.awaitSettled('oc-topic-42', 60_000)
+      expect(h.observations()).toBe(OPENCODE_SETTLE_MS / 1000 + 1)
     } finally {
       h.restore()
     }
   })
 
-  test('an idle-working-idle flicker after the prompt delays settle', async () => {
+  test('an idle-working-idle flicker restarts the settle window', async () => {
     const perWindow = OPENCODE_SETTLE_MS / 1000
-    // Delivery window observed idle throughout; after the prompt the pane
-    // reports idle twice, works once, then stays idle.
-    const before = Array(perWindow + 1).fill('idle')
-    const h = settleHarness([...before, 'idle', 'idle', 'working', 'idle'])
+    const h = settleHarness(['idle', 'idle', 'working', 'idle'])
     try {
-      await h.runtime.prompt('oc-topic-42', 'telegram turn')
-      expect(h.promptCalls).toEqual([perWindow + 1])
+      await h.runtime.awaitSettled('oc-topic-42', 60_000)
       // Two idle polls were discarded by the working observation.
-      expect(h.observations()).toBe(before.length + 3 + perWindow + 1)
+      expect(h.observations()).toBe(3 + perWindow + 1)
     } finally {
       h.restore()
     }
   })
 
-  test('a blocked pane still throws instead of settling', async () => {
-    const h = settleHarness(['idle', 'idle', 'blocked'])
+  test('awaitSettled rejects on a blocked pane and on timeout', async () => {
+    const blocked = settleHarness(['idle', 'idle', 'blocked'])
     try {
-      await expect(h.runtime.prompt('oc-topic-42', 'telegram turn')).rejects.toThrow('is blocked')
-      expect(h.promptCalls).toEqual([])
+      await expect(blocked.runtime.awaitSettled('oc-topic-42', 60_000)).rejects.toThrow('is blocked')
     } finally {
-      h.restore()
+      blocked.restore()
+    }
+    const busy = settleHarness(['working'])
+    try {
+      await expect(busy.runtime.awaitSettled('oc-topic-42', 5_000)).rejects.toThrow('stayed busy')
+    } finally {
+      busy.restore()
     }
   })
 

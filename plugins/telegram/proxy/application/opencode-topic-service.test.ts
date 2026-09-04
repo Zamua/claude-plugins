@@ -32,6 +32,9 @@ class MemoryRuntime implements OpencodeRuntimePort {
   promptError: Error | undefined
   exported: OpencodeAssistantText | undefined
   exportedFor: string[] = []
+  settleCalls = 0
+  // When set, awaitSettled blocks until the test releases it.
+  settleGate: (() => void)[] | undefined
 
   async status() { return this.currentStatus }
   async lastAssistantText(opencodeSessionId: string) {
@@ -43,9 +46,18 @@ class MemoryRuntime implements OpencodeRuntimePort {
     this.currentStatus = 'idle'
     return { sessionName: input.sessionName, opencodeSessionId: this.returnedSessionId }
   }
-  async prompt(sessionName: string, prompt: string) {
+  async inject(sessionName: string, prompt: string) {
     if (this.promptError) throw this.promptError
     this.prompts.push({ sessionName, prompt })
+  }
+  async awaitSettled() {
+    this.settleCalls++
+    if (this.settleGate) await new Promise<void>(resolve => this.settleGate!.push(resolve))
+  }
+  releaseSettle() {
+    const waiting = this.settleGate ?? []
+    this.settleGate = []
+    for (const resolve of waiting) resolve()
   }
   async stop(sessionName: string) {
     this.stops.push(sessionName)
@@ -83,7 +95,9 @@ describe('OpencodeTopicService', () => {
     }), () => 20)
 
     await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    await service.drained('42')
     await service.submitTurn('42', { content: 'two', meta: { chat_id: '-1', user: 'u' } })
+    await service.drained('42')
 
     expect(runtime.launches).toHaveLength(2)
     expect(runtime.launches[0].opencodeSessionId).toBeUndefined()
@@ -139,8 +153,102 @@ describe('OpencodeTopicService', () => {
     const second = service.submitTurn('42', { content: 'two', meta: { chat_id: '-1', user: 'u' } })
     expect(service.busy('42')).toBeTrue()
     await Promise.all([first, second])
+    await service.drained('42')
     expect(service.busy('42')).toBeFalse()
     expect(runtime.prompts.map(p => p.prompt.includes('\none\n'))).toEqual([true, false])
+  })
+
+  test('a second turn is injected immediately while the first has not settled', async () => {
+    const repository = new MemoryRepository()
+    repository.save(opencodeTopic('42', 'pilot', 10))
+    const runtime = new MemoryRuntime()
+    runtime.settleGate = []
+    const service = new OpencodeTopicService(repository, runtime, silent)
+
+    await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    await service.submitTurn('42', { content: 'two', meta: { chat_id: '-1', user: 'u' } })
+    expect(runtime.prompts).toHaveLength(2)
+    expect(runtime.settleCalls).toBe(1)
+    expect(service.busy('42')).toBeTrue()
+
+    // One wait per injection: the second injection restarts the watcher's wait.
+    runtime.releaseSettle()
+    runtime.settleGate = undefined
+    await service.drained('42')
+    expect(runtime.settleCalls).toBe(2)
+    expect(service.busy('42')).toBeFalse()
+  })
+
+  test('the settle watcher debounces to the newest injection', async () => {
+    const repository = new MemoryRepository()
+    repository.save({ ...opencodeTopic('42', 'pilot', 10), opencodeSessionId: 'ses_1' })
+    const runtime = new MemoryRuntime()
+    runtime.settleGate = []
+    runtime.exported = { text: 'terminal only' }
+    const asked: number[] = []
+    const notices: string[] = []
+    let clock = 100
+    const service = new OpencodeTopicService(repository, runtime, outbound({
+      repliedSince(_topic, since) { asked.push(since); return since < 200 },
+      async notice(_topic, text) { notices.push(text) },
+    }), () => clock)
+
+    await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    clock = 200
+    await service.submitTurn('42', { content: 'two', meta: { chat_id: '-1', user: 'u' } })
+    runtime.releaseSettle()
+    await new Promise(resolve => setTimeout(resolve, 1))
+    // The first wait ended after a newer injection, so the watcher waits again.
+    expect(runtime.settleCalls).toBe(2)
+    expect(asked).toEqual([])
+    runtime.releaseSettle()
+    await service.drained('42')
+    expect(asked).toEqual([200])
+    expect(notices).toEqual(['terminal only'])
+  })
+
+  test('a turn injected after settle gets its own watcher', async () => {
+    const repository = new MemoryRepository()
+    repository.save(opencodeTopic('42', 'pilot', 10))
+    const runtime = new MemoryRuntime()
+    const service = new OpencodeTopicService(repository, runtime, silent)
+
+    await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    await service.drained('42')
+    await service.submitTurn('42', { content: 'two', meta: { chat_id: '-1', user: 'u' } })
+    await service.drained('42')
+    expect(runtime.settleCalls).toBe(2)
+  })
+
+  test('a settle failure is reported through the outbound error port', async () => {
+    const repository = new MemoryRepository()
+    repository.save(opencodeTopic('42', 'pilot', 10))
+    const errors: string[] = []
+    const runtime = new MemoryRuntime()
+    runtime.awaitSettled = async () => { throw new Error('pane is blocked') }
+    const service = new OpencodeTopicService(repository, runtime, outbound({
+      async error(_topic, text) { errors.push(text) },
+    }))
+
+    await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    await service.drained('42')
+    expect(errors).toEqual(['OpenCode could not complete this turn: pane is blocked'])
+  })
+
+  test('keeps the typing indicator alive while a watcher is outstanding', async () => {
+    const repository = new MemoryRepository()
+    repository.save(opencodeTopic('42', 'pilot', 10))
+    const runtime = new MemoryRuntime()
+    runtime.settleGate = []
+    let typed = 0
+    const service = new OpencodeTopicService(repository, runtime, outbound({
+      typing() { typed++ },
+    }))
+
+    await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    expect(typed).toBe(1)
+    runtime.releaseSettle()
+    await service.drained('42')
   })
 
   test('relaunches an idle pane onto the same OpenCode session id', async () => {
@@ -191,21 +299,16 @@ describe('OpencodeTopicService', () => {
       opencodeSessionId: 'ses_1', sessionName: 'oc-pilot-42',
     })
     const runtime = new MemoryRuntime()
-    let release!: () => void
-    runtime.prompt = async (sessionName, prompt) => {
-      runtime.prompts.push({ sessionName, prompt })
-      await new Promise<void>(resolve => { release = resolve })
-    }
+    runtime.settleGate = []
     const service = new OpencodeTopicService(repository, runtime, silent)
 
-    const turn = service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
-    await Promise.resolve()
-    while (!release) await new Promise(resolve => setTimeout(resolve, 1))
+    await service.submitTurn('42', { content: 'one', meta: { chat_id: '-1', user: 'u' } })
+    expect(runtime.prompts).toHaveLength(1)
     expect((await service.requestRelaunch('42')).pending).toBeTrue()
     expect(runtime.stops).toHaveLength(0)
 
-    release()
-    await turn
+    runtime.releaseSettle()
+    await service.drained('42')
     expect(runtime.stops).toEqual(['oc-pilot-42'])
     expect(runtime.launches).toHaveLength(2)
     expect(repository.get('42')?.restartPending).toBeUndefined()
@@ -248,7 +351,7 @@ describe('OpencodeTopicService', () => {
       if (!release) await new Promise<void>(resolve => { release = resolve })
       return baseEnsure(input)
     }
-    runtime.prompt = async (sessionName, prompt) => {
+    runtime.inject = async (sessionName, prompt) => {
       order.push('prompt')
       runtime.prompts.push({ sessionName, prompt })
     }
@@ -263,6 +366,7 @@ describe('OpencodeTopicService', () => {
 
     release()
     await Promise.all([relaunch, turn])
+    await service.drained('42')
     expect(order).toEqual(['launch', 'launch', 'prompt'])
     expect(runtime.stops).toEqual(['oc-pilot-42'])
     expect(runtime.launches).toHaveLength(2)
@@ -304,6 +408,7 @@ describe('OpencodeTopicService', () => {
         async notice(_topic, text) { notices.push(text) },
       }))
       await service.submitTurn('42', turn)
+      await service.drained('42')
       expect(notices).toEqual([])
       expect(runtime.exportedFor).toEqual([])
     })
@@ -312,7 +417,9 @@ describe('OpencodeTopicService', () => {
       const { repository, runtime } = setup()
       runtime.exported = { text: 'answered in the terminal', finish: 'stop' }
       const { port, notices } = unreplied()
-      await new OpencodeTopicService(repository, runtime, port).submitTurn('42', turn)
+      const service = new OpencodeTopicService(repository, runtime, port)
+      await service.submitTurn('42', turn)
+      await service.drained('42')
       expect(runtime.exportedFor).toEqual(['ses_1'])
       expect(notices).toEqual(['answered in the terminal'])
     })
@@ -321,7 +428,9 @@ describe('OpencodeTopicService', () => {
       const { repository, runtime } = setup()
       runtime.exported = { text: 'x'.repeat(5000) }
       const { port, notices } = unreplied()
-      await new OpencodeTopicService(repository, runtime, port).submitTurn('42', turn)
+      const service = new OpencodeTopicService(repository, runtime, port)
+      await service.submitTurn('42', turn)
+      await service.drained('42')
       expect(notices[0]).toHaveLength(3501)
       expect(notices[0]).toEndWith('…')
     })
@@ -330,7 +439,9 @@ describe('OpencodeTopicService', () => {
       const { repository, runtime } = setup()
       runtime.exported = { text: '', finish: 'length' }
       const { port, notices } = unreplied()
-      await new OpencodeTopicService(repository, runtime, port).submitTurn('42', turn)
+      const service = new OpencodeTopicService(repository, runtime, port)
+      await service.submitTurn('42', turn)
+      await service.drained('42')
       expect(notices).toEqual([
         'OpenCode hit its output limit before replying; try a smaller step or say continue.',
       ])
@@ -340,7 +451,9 @@ describe('OpencodeTopicService', () => {
       const { repository, runtime } = setup()
       runtime.exported = undefined
       const { port, notices } = unreplied()
-      await new OpencodeTopicService(repository, runtime, port).submitTurn('42', turn)
+      const service = new OpencodeTopicService(repository, runtime, port)
+      await service.submitTurn('42', turn)
+      await service.drained('42')
       expect(notices).toEqual(['OpenCode finished this turn without sending a reply.'])
     })
 
@@ -353,6 +466,7 @@ describe('OpencodeTopicService', () => {
         async error(_topic, text) { errors.push(text) },
       }))
       await service.submitTurn('42', turn)
+      await service.drained('42')
       expect(errors).toEqual(['OpenCode reply backstop failed: telegram down'])
     })
   })

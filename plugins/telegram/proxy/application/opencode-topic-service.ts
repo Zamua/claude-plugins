@@ -20,6 +20,21 @@ const NOTICE_LIMIT = 3_500
 const OUTPUT_CAP_NOTICE =
   'OpenCode hit its output limit before replying; try a smaller step or say continue.'
 const NO_REPLY_NOTICE = 'OpenCode finished this turn without sending a reply.'
+const SETTLE_TIMEOUT_MS = 31 * 60_000
+const TYPING_INTERVAL_MS = 4_000
+
+// One outstanding settle watcher per topic. Every injection while it waits
+// bumps `version` and moves `injectedAt` forward, so the watcher only acts on
+// the newest turn.
+type SettleWatch = {
+  sessionName: string
+  opencodeSessionId?: string
+  injectedAt: number
+  version: number
+  // False once the settle wait has ended; a later injection needs a new watch.
+  waiting: boolean
+  done: Promise<void>
+}
 
 export type OpencodeChangeResult = {
   topic: OpencodeTopic
@@ -28,6 +43,7 @@ export type OpencodeChangeResult = {
 
 export class OpencodeTopicService {
   private readonly queues = new Map<string, Promise<void>>()
+  private readonly watchers = new Map<string, SettleWatch>()
 
   constructor(
     private readonly repository: OpencodeTopicRepository,
@@ -100,8 +116,19 @@ export class OpencodeTopicService {
     return queued
   }
 
+  // True while a turn is queued, being injected, or not yet settled, so a
+  // relaunch keeps deferring until the pane is between turns.
   busy(topicId: string): boolean {
-    return this.queues.has(topicId)
+    return this.queues.has(topicId) || this.watchers.has(topicId)
+  }
+
+  // Resolves once no settle watcher is outstanding for the topic.
+  async drained(topicId: string): Promise<void> {
+    for (;;) {
+      const watch = this.watchers.get(topicId)
+      if (!watch) return
+      await watch.done
+    }
   }
 
   async status(topicId: string) {
@@ -109,21 +136,62 @@ export class OpencodeTopicService {
     return topic.sessionName ? this.runtime.status(topic.sessionName) : 'missing'
   }
 
+  // Injection is immediate: OpenCode queues text typed during a running turn,
+  // so a turn never waits for the previous one to settle.
   private async executeTurn(topicId: string, message: InboundMessage): Promise<void> {
     try {
       const ready = await this.ensureReady(topicId)
-      this.outbound.typing(topicId)
-      const typing = setInterval(() => this.outbound.typing(topicId), 4_000)
-      const startedAt = this.now()
-      try {
-        await this.runtime.prompt(ready.sessionName!, renderOpencodeTurn(message))
-      } finally {
-        clearInterval(typing)
-      }
-      await this.backstopReply(topicId, ready.opencodeSessionId, startedAt)
-      await this.applyPendingAfterOwnedTurn(topicId)
+      await this.runtime.inject(ready.sessionName!, renderOpencodeTurn(message))
+      this.watchSettle(topicId, ready.sessionName!, ready.opencodeSessionId, this.now())
     } catch (error) {
       await this.reportError(topicId, error)
+    }
+  }
+
+  private watchSettle(
+    topicId: string,
+    sessionName: string,
+    opencodeSessionId: string | undefined,
+    injectedAt: number,
+  ): void {
+    const existing = this.watchers.get(topicId)
+    if (existing?.waiting) {
+      existing.injectedAt = injectedAt
+      existing.version++
+      existing.opencodeSessionId = opencodeSessionId
+      return
+    }
+    const watch: SettleWatch = {
+      sessionName, opencodeSessionId, injectedAt, version: 0, waiting: true, done: Promise.resolve(),
+    }
+    watch.done = this.runWatch(topicId, watch)
+    this.watchers.set(topicId, watch)
+  }
+
+  private async runWatch(topicId: string, watch: SettleWatch): Promise<void> {
+    this.outbound.typing(topicId)
+    const typing = setInterval(() => this.outbound.typing(topicId), TYPING_INTERVAL_MS)
+    try {
+      let version: number
+      do {
+        version = watch.version
+        await this.runtime.awaitSettled(watch.sessionName, SETTLE_TIMEOUT_MS)
+      } while (version !== watch.version)
+      watch.waiting = false
+      clearInterval(typing)
+      await this.backstopReply(topicId, watch.opencodeSessionId, watch.injectedAt)
+      // A turn injected after settle has its own watcher, which applies the
+      // restart at its settle instead of mid-turn here.
+      await this.serialize(topicId, async () => {
+        if (this.watchers.get(topicId) !== watch) return
+        await this.applyPendingAfterOwnedTurn(topicId)
+      })
+    } catch (error) {
+      await this.reportError(topicId, error)
+    } finally {
+      watch.waiting = false
+      clearInterval(typing)
+      if (this.watchers.get(topicId) === watch) this.watchers.delete(topicId)
     }
   }
 

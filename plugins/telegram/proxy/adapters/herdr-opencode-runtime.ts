@@ -5,19 +5,15 @@ import type {
   OpencodeSessionSpec,
   OpencodeSessionStatus,
 } from '../application/opencode-ports'
-import { parseHerdrPromptResult } from './herdr-antigravity-runtime'
 import { nodeProcessRunner } from './process-runner'
 import type { ProcessRunner } from './process-runner'
-
-export { parseHerdrPromptResult }
 
 export type OpencodePane = { paneId: string; status: string }
 
 // Clock skew between the launcher and OpenCode's session timestamps.
 const SESSION_CREATED_SLACK_MS = 5_000
-// Herdr flickers idle between OpenCode tool calls, and a prompt injected then
-// aborts the running turn. A turn counts as settled only after this much
-// continuous idle.
+// Herdr flickers idle between OpenCode tool calls. A turn counts as settled
+// only after this much continuous idle.
 export const OPENCODE_SETTLE_MS = 6_000
 const SETTLE_POLL_MS = 1_000
 export const DEFAULT_OPENCODE_MODEL = 'qwen-local/Qwen3.8-27B'
@@ -234,36 +230,28 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
       input.sessionName, launchStartedAt - SESSION_CREATED_SLACK_MS, 180_000,
     )
     // Herdr can report the first post-kickoff idle state a fraction before the
-    // TUI accepts another prompt. Without a short cold-start grace, `agent
-    // prompt` can stall and drop the first Telegram turn.
+    // TUI accepts typed input; text sent in that gap is lost.
     await this.pause(2_000)
     return { sessionName: input.sessionName, opencodeSessionId: identity }
   }
 
-  async prompt(sessionName: string, prompt: string): Promise<void> {
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const pane = await this.waitUntilIdle(sessionName, 31 * 60_000)
-      const result = await this.run(
-        this.herdrBinary,
-        ['agent', 'prompt', pane.paneId, prompt, '--wait', '--timeout', String(31 * 60_000)],
-        { cwd: this.projectDir, timeout: 31 * 60_000 + 10_000 },
-      )
-      const outcome = parseHerdrPromptResult(result.stdout)
-      if (outcome === 'agent_prompted') {
-        // `--wait` returns on the first idle report, which can be mid-turn.
-        await this.waitUntilIdle(sessionName, 31 * 60_000)
-        return
-      }
-      if (outcome !== 'agent_prompt_stalled') {
-        throw new Error(
-          `Herdr did not accept the OpenCode prompt (result: ${outcome ?? 'unrecognized'})`,
-        )
-      }
-      // Herdr reports a readiness race as structured JSON with exit code zero.
-      // Treating that as success silently loses the Telegram turn.
-      if (attempt < 3) await this.pause(1_000)
-    }
-    throw new Error('Herdr could not deliver the OpenCode prompt after 3 readiness retries')
+  // Typed injection, never `herdr agent prompt`: that command aborts a running
+  // OpenCode turn, while typed text is queued behind it. Bracketed paste keeps
+  // a multi-line message one prompt instead of one submission per line.
+  async inject(sessionName: string, text: string): Promise<void> {
+    const pane = await this.pane(sessionName)
+    if (!pane) throw new Error(`OpenCode pane ${sessionName} is not running`)
+    const options = { cwd: this.projectDir, timeout: 30_000 }
+    await this.run(
+      this.herdrBinary,
+      ['pane', 'send-text', pane.paneId, `\x1b[200~${text}\x1b[201~`],
+      options,
+    )
+    await this.run(this.herdrBinary, ['pane', 'send-keys', pane.paneId, 'Enter'], options)
+  }
+
+  async awaitSettled(sessionName: string, timeoutMs: number): Promise<void> {
+    await this.waitUntilIdle(sessionName, timeoutMs)
   }
 
   async stop(sessionName: string): Promise<boolean> {
