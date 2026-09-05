@@ -246,7 +246,6 @@ const CAPACITY_POLL_MS = Number(process.env.TELEGRAM_PROVIDER_CAPACITY_POLL_MINU
 const DEFAULT_TOPIC_ROUTE = topicRoute({
   provider: 'anthropic',
   model: MODEL || DEFAULT_ROUTE.model,
-  effort: 'xhigh',
   ultracode: false,
 })
 

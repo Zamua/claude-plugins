@@ -13,7 +13,7 @@ export type ProviderModel = {
 export type ProviderCatalog = Record<ProviderId, ProviderModel[]>
 
 const CLAUDE_MODELS: ProviderModel[] = [
-  { id: 'fable', label: 'Fable', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'xhigh', supportsUltracode: true },
+  { id: 'fable', label: 'Fable', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium', supportsUltracode: true },
   { id: 'opus', label: 'Opus', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'xhigh', supportsUltracode: true },
   { id: 'sonnet', label: 'Sonnet', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsUltracode: false },
   { id: 'haiku', label: 'Haiku', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium', supportsUltracode: false },
