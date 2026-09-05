@@ -25,7 +25,7 @@ export type RouteChangePlan =
 export const DEFAULT_ROUTE: TopicRoute = {
   provider: 'anthropic',
   model: 'fable',
-  effort: 'xhigh',
+  effort: 'medium',
   ultracode: false,
 }
 
@@ -63,7 +63,7 @@ export function topicRoute(input: {
   return {
     provider: input.provider,
     model: normalizeModel(input.provider, input.model),
-    effort: ultracode ? 'xhigh' : input.effort ?? defaultEffort(input.provider),
+    effort: ultracode ? 'xhigh' : input.effort ?? defaultEffort(input.provider, input.model),
     ultracode,
   }
 }
@@ -86,8 +86,9 @@ export function topicRouteFromRecord(value: unknown): TopicRoute | undefined {
   }
 }
 
-export function defaultEffort(provider: ProviderId): Effort {
+export function defaultEffort(provider: ProviderId, model?: string): Effort {
   if (provider === 'opencode-go') return 'auto'
+  if (provider === 'anthropic' && model === 'fable') return 'medium'
   return 'xhigh'
 }
 

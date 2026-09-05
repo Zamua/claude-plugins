@@ -883,8 +883,9 @@ Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
 
 **Topic effort / ultracode.** Both values live on the persisted route and are
-configured through `/model`; no global environment toggle is used. Ultracode
-defaults off. If enabled, the domain model pins effort to xhigh because Claude
+configured through `/model`; no global environment toggle is used. A new
+topic's route defaults to Fable at medium effort; other models default to
+xhigh (OpenCode Go to `auto`). Ultracode defaults off. If enabled, the domain model pins effort to xhigh because Claude
 Code's Ultracode mode requires xhigh and enables standing dynamic workflows.
 Models with no explicit effort variants persist `auto`, which omits `--effort`
 and `CLAUDE_CODE_EFFORT_LEVEL` so the provider owns the choice. Otherwise the

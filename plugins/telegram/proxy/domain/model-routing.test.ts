@@ -37,6 +37,12 @@ describe('TopicRoute', () => {
     })
   })
 
+  test('defaults a Fable route to medium effort', () => {
+    expect(DEFAULT_ROUTE).toEqual({ provider: 'anthropic', model: 'fable', effort: 'medium', ultracode: false })
+    expect(topicRoute({ provider: 'anthropic', model: 'fable' }).effort).toBe('medium')
+    expect(topicRoute({ provider: 'anthropic', model: 'opus' }).effort).toBe('xhigh')
+  })
+
   test('rejects a non-Codex model on the Codex route', () => {
     expect(() => normalizeModel('codex', 'glm-5.2')).toThrow('invalid Codex model')
   })
