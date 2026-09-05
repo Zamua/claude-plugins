@@ -34,10 +34,12 @@ if [ -f "$auth_file" ]; then
   fi
 fi
 
+# nix-darwin installs the patched bridge into the per-user system profile. The
+# standalone home-manager profile is a stale leftover and must not win.
 proxy_bin="${TELEGRAM_PROVIDER_PROXY_BIN:-}"
-home_manager_proxy="$HOME/.local/state/nix/profiles/home-manager/home-path/bin/claude-code-proxy"
-if [ -z "$proxy_bin" ] && [ -x "$home_manager_proxy" ]; then
-  proxy_bin="$home_manager_proxy"
+system_profile_proxy="/etc/profiles/per-user/$USER/bin/claude-code-proxy"
+if [ -z "$proxy_bin" ] && [ -x "$system_profile_proxy" ]; then
+  proxy_bin="$system_profile_proxy"
 fi
 proxy_bin="${proxy_bin:-claude-code-proxy}"
 
