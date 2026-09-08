@@ -591,6 +591,12 @@ Qwen server, so a busy interactive session delays Telegram replies.
 
 ## Key mechanics / gotchas (baked into the code)
 
+- **Probed CLIs leave MCP servers behind unless their process group is killed.** The 5-minute capacity
+  refresh runs `antigravity -p /usage`; that CLI loads its MCP config, which includes our channel
+  `server.ts`, and exits without stopping it. Each leftover spun at ~50% CPU (13 of them after one
+  night). `nodeProcessRunner` therefore spawns probes `detached` and kills `-pid` on exit and on
+  timeout, and `server.ts` shuts down when `process.ppid` changes from the spawner's pid. Any new
+  probe that shells out to a CLI must go through that runner.
 - **Foreground only.** Channel injection (the `<channel>` turn from a
   notification) only works in a foreground REPL. A `--bg` agent silently drops
   it. That is why every topic gets a real foreground `claude` in tmux, not a
