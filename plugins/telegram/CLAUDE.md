@@ -608,8 +608,8 @@ Qwen server, so a busy interactive session delays Telegram replies.
   launcher passes every per-topic var (`TELEGRAM_TOPIC_ID` / `TELEGRAM_PROXY_URL`
   / `TG_*` / `TG_CLAUDE_SESSION_ID` / `TG_RESUME`) to the new session with
   `tmux new-session -e VAR=...`. It must NOT rely on `new-session` inheriting the
-  launcher's environment: when a tmux server is ALREADY running (e.g. the
-  single-session `claude-telegram` bridge's server) a new session takes the
+  launcher's environment: when a tmux server is ALREADY running (one left by any
+  earlier session) a new session takes the
   SERVER's environment (seeded at server start), NOT the launcher's, so a
   freshly-set var would be empty - the pane command's `$`-refs expand to `""` and
   claude rejects the untagged `--dangerously-load-development-channels=` and dies
@@ -806,9 +806,9 @@ Qwen server, so a busy interactive session delays Telegram replies.
   topic-Claude cannot `reply(files:['.../telegram-topics/.env'])` the bot token
   to the group. Claude can already Read+paste arbitrary OTHER paths, so this is
   not a new exfil channel - it closes only the credentials/state path.
-- **One-token caveat.** Telegram allows one getUpdates consumer per token. The
-  proxy and the single-session `claude-telegram` bridge cannot both poll the
-  same token. Live testing means pausing whichever else polls it.
+- **One-token caveat.** Telegram allows one getUpdates consumer per token. Two
+  proxies cannot poll the same token. Live testing means pausing whichever else
+  polls it.
 
 ## Files
 
