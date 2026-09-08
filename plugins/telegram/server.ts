@@ -383,8 +383,11 @@ process.on('SIGHUP', shutdown)
 // kernel closes it on any CLI death, so poll it. Without this a surviving MCP
 // keeps long-polling /poll and steals the topic's messages from the live
 // session's MCP.
+// A reparented process has lost the CLI that spawned it: the pipe check above
+// misses that when nothing ever reads or closes the pipe.
+const spawnerPid = process.ppid
 setInterval(() => {
-  if (process.stdin.destroyed || process.stdin.readableEnded) shutdown()
+  if (process.stdin.destroyed || process.stdin.readableEnded || process.ppid !== spawnerPid) shutdown()
 }, 5000).unref()
 
 // The proxy holds each long-poll for ~25s; without a client-side timeout a

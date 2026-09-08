@@ -14,11 +14,17 @@ export type ProcessRunner = (
 
 export const nodeProcessRunner: ProcessRunner = (binary, args, options) =>
   new Promise((resolve, reject) => {
+    // own process group: a CLI's helper and MCP children must not outlive the call
     const child = spawn(binary, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     })
+    const killGroup = (signal: NodeJS.Signals) => {
+      if (child.pid === undefined) return
+      try { process.kill(-child.pid, signal) } catch {}
+    }
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -28,6 +34,7 @@ export const nodeProcessRunner: ProcessRunner = (binary, args, options) =>
       clearTimeout(timer)
       child.stdout.destroy()
       child.stderr.destroy()
+      killGroup('SIGTERM')
       if (error) reject(error)
       else resolve({ stdout, stderr })
     }
@@ -35,7 +42,7 @@ export const nodeProcessRunner: ProcessRunner = (binary, args, options) =>
       if (target === 'stdout') stdout += data.toString()
       else stderr += data.toString()
       if (stdout.length + stderr.length > 16 * 1024 * 1024) {
-        child.kill('SIGTERM')
+        killGroup('SIGTERM')
         finish(new Error(`${binary} output exceeded 16 MiB`))
       }
     }
@@ -56,7 +63,7 @@ export const nodeProcessRunner: ProcessRunner = (binary, args, options) =>
       }, 25)
     })
     const timer = setTimeout(() => {
-      child.kill('SIGTERM')
+      killGroup('SIGTERM')
       finish(new Error(`${binary} timed out after ${options.timeout}ms`))
     }, options.timeout)
   })
