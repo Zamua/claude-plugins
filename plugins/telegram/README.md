@@ -1,5 +1,10 @@
 # telegram-topics
 
+The bridge service and Telegram model catalog both prefer the nix-darwin
+per-user binary in `/etc/profiles/per-user/<user>/bin`. Set
+`TELEGRAM_PROVIDER_PROXY_BIN` for an explicit override; an old standalone
+Home Manager installation must not shadow an updated bridge catalog.
+
 One Telegram bot, many agent conversations. This plugin multiplexes a SINGLE
 bot token across MANY sessions, routed by Telegram forum **topics**. Ordinary
 topics keep the established foreground Claude Code harness in a detached tmux

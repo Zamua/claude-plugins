@@ -220,14 +220,13 @@ const lastRouteChange = new Map<string, number>()
 const PROVIDER_PROXY_URL = (
   process.env.TELEGRAM_PROVIDER_PROXY_URL ?? 'http://127.0.0.1:18765'
 ).replace(/\/$/, '')
-const HOME_MANAGER_PROVIDER_PROXY_BIN = join(
-  homedir(), '.local', 'state', 'nix', 'profiles', 'home-manager', 'home-path', 'bin', 'claude-code-proxy',
-)
-const PROVIDER_PROXY_BIN = process.env.TELEGRAM_PROVIDER_PROXY_BIN ??
-  (existsSync(HOME_MANAGER_PROVIDER_PROXY_BIN) ? HOME_MANAGER_PROVIDER_PROXY_BIN : 'claude-code-proxy')
 const NIX_PROFILE_BIN = join(
   '/etc', 'profiles', 'per-user', process.env.USER ?? homedir().split(sep).at(-1) ?? 'zamua', 'bin',
 )
+// Match the service launcher: the old standalone Home Manager profile can be stale.
+const NIX_PROVIDER_PROXY_BIN = join(NIX_PROFILE_BIN, 'claude-code-proxy')
+const PROVIDER_PROXY_BIN = process.env.TELEGRAM_PROVIDER_PROXY_BIN ||
+  (existsSync(NIX_PROVIDER_PROXY_BIN) ? NIX_PROVIDER_PROXY_BIN : 'claude-code-proxy')
 // Shared by the OpenCode Go model catalog and the harness-locked localcode topics.
 const NIX_OPENCODE_BIN = join(NIX_PROFILE_BIN, 'opencode')
 // `||`, not `??`: a copied .env.example leaves these as empty strings.
