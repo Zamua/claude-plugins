@@ -1,5 +1,10 @@
 # telegram-topics: working notes
 
+Bridge binary discovery must match `scripts/start-provider-proxy.sh`: explicit
+`TELEGRAM_PROVIDER_PROXY_BIN`, then `/etc/profiles/per-user/<user>/bin`, then
+PATH. Do not prefer the retired standalone Home Manager profile: its stale
+catalog hides models supported by the running bridge.
+
 ## What it is
 
 A drop-in replacement for the single-session `telegram` channel that fans ONE
