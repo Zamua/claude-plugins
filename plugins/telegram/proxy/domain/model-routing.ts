@@ -143,6 +143,33 @@ export function forgetExhaustedProvider(routes: TopicRoute[], provider: Provider
   return routes.filter(route => route.provider !== provider)
 }
 
+// Fable has its own plan limit ("You've reached your Fable 5 limit"), so Opus on
+// the same plan keeps working when it runs out.
+export function quotaFallbackRoute(route: TopicRoute): TopicRoute | undefined {
+  if (route.provider !== 'anthropic' || route.model !== 'fable') return undefined
+  return topicRoute({ provider: 'anthropic', model: 'opus', effort: 'xhigh', ultracode: route.ultracode })
+}
+
+// The route to offer back after a limit: the original route when the limit hit
+// its automatic fallback, otherwise the route that just hit the limit.
+export function quotaReturnRoute(exhausted: TopicRoute[], current: TopicRoute): TopicRoute {
+  const prior = exhaustedRouteFor(exhausted, current.provider)
+  const fallback = prior && quotaFallbackRoute(prior)
+  return prior && fallback && sameRoute(fallback, current) ? prior : current
+}
+
+// An automatic fallback keeps the exhausted route on record so it can be
+// offered back; any other selection on that provider clears it.
+export function retainsExhaustedRoute(
+  exhausted: TopicRoute | undefined,
+  selected: TopicRoute,
+  reason: RouteChangeReason,
+): boolean {
+  if (!exhausted || reason !== 'quota') return false
+  const fallback = quotaFallbackRoute(exhausted)
+  return !!fallback && sameRoute(fallback, selected)
+}
+
 export function planRouteChange(
   current: TopicRoute,
   requested: TopicRoute,

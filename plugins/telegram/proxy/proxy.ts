@@ -70,7 +70,10 @@ import {
   modelLabel,
   planRouteChange,
   providerLabel,
+  quotaFallbackRoute,
+  quotaReturnRoute,
   rememberExhaustedRoute,
+  retainsExhaustedRoute,
   sameRoute,
   topicRoute,
   topicRouteFromRecord,
@@ -132,9 +135,9 @@ const OVERRIDE_SETTINGS = join(PLUGIN_ROOT, 'override-settings.json')
 // references it as $TG_HOOK (passed to the session via `tmux new-session -e`) so
 // that committed file needs no hardcoded path.
 const STOP_HOOK = join(PLUGIN_ROOT, 'hooks', 'stop-reply-guard.py')
-// The StopFailure hook that reports a usage-limit stall. The proxy pauses the
-// exhausted route and offers provider/model choices in Telegram; it never
-// swaps providers without the operator's selection.
+// The StopFailure hook that reports a usage-limit stall. A Fable limit falls
+// back to Opus automatically; any other limit pauses the route and offers
+// provider/model choices in Telegram.
 const FAILOVER_HOOK = join(PLUGIN_ROOT, 'hooks', 'rate-limit-failover.py')
 const CAPACITY_HOOK = join(PLUGIN_ROOT, 'hooks', 'provider-capacity-status.py')
 const AUTHORIZATION_HOOK = join(PLUGIN_ROOT, 'hooks', 'permission-denied.py')
@@ -1184,45 +1187,88 @@ async function handleSquareReply(req: Request): Promise<Response> {
 }
 
 // POST /rate-limit {topic, error, details, reset_at}. The failed user turn is
-// already in Claude's transcript. Stop the exhausted route and let Telegram
-// offer another provider; after the operator chooses one, the same Claude UUID
-// resumes and receives a one-time nudge to finish that turn.
+// already in Claude's transcript. A route with an automatic quota fallback
+// resumes the same Claude UUID on that fallback; any other route stops and
+// Telegram offers another provider. Either way the resumed session receives a
+// one-time nudge to finish that turn.
 async function handleRateLimit(req: Request): Promise<Response> {
   const b = (await req.json()) as any
   const topic = String(b.topic ?? '')
   if (!topic) return new Response('topic required', { status: 400 })
   const st = getTopic(topic)
   const label = st.name || topic
-  const exhaustedRoute = st.route ?? DEFAULT_TOPIC_ROUTE
-  const alreadyReported = exhaustedRouteFor(st.exhaustedRoutes, exhaustedRoute.provider)
-  if (!st.session && alreadyReported && sameRoute(alreadyReported, exhaustedRoute)) {
-    return json({ ok: true, provider: exhaustedRoute.provider, awaiting_selection: true, duplicate: true })
+  const limitedRoute = st.route ?? DEFAULT_TOPIC_ROUTE
+  const returnRoute = quotaReturnRoute(st.exhaustedRoutes, limitedRoute)
+  const alreadyReported = exhaustedRouteFor(st.exhaustedRoutes, limitedRoute.provider)
+  // A resumed session cannot fail again inside the debounce window, so a report
+  // arriving then belongs to the process that was just replaced.
+  const justRerouted = Date.now() - (lastRouteChange.get(topic) ?? 0) < ROUTE_DEBOUNCE_MS
+  if (justRerouted || (!st.session && alreadyReported && sameRoute(alreadyReported, returnRoute))) {
+    return json({ ok: true, provider: limitedRoute.provider, awaiting_selection: true, duplicate: true })
   }
   const resetAt = Number(b.reset_at)
   const resetMs = Number.isFinite(resetAt) && resetAt * 1000 > Date.now()
     ? resetAt * 1000
     : undefined
-  observeCapacity(providerCapacity(exhaustedRoute.provider, [{
+  const resetText = resetMs ? `\nExpected reset: ${formatTime(resetMs)}.` : ''
+
+  const fallback = quotaFallbackRoute(limitedRoute)
+  if (fallback && capacities.get(fallback.provider)?.availability !== 'exhausted') {
+    st.exhaustedRoutes = rememberExhaustedRoute(st.exhaustedRoutes, limitedRoute)
+    st.pendingRoute = undefined
+    killSession(st, topic)
+    saveRegistry()
+    lastRouteChange.set(topic, Date.now())
+    const result = requestRouteChange(topic, fallback, 'quota')
+    log(`rate limit on topic ${topic} "${label}" for ${limitedRoute.provider}/${limitedRoute.model}; ` +
+      `fell back to ${routeSummary(fallback)} (${result})`)
+    await bot.api.sendMessage(
+      String(GROUP_CHAT_ID),
+      `${modelLabel(limitedRoute.model)} reached its usage limit.${resetText}\n` +
+        `This session continues on ${routeSummary(fallback)}.`,
+      { ...threadOf(topic), reply_markup: switchBackKeyboard(topic, limitedRoute) },
+    ).catch(e => log(`quota fallback notice failed for topic ${topic}: ${e}`))
+    if (resetMs) scheduleFallbackReturnOffer(topic, limitedRoute, fallback, resetMs)
+    return json({ ok: true, provider: limitedRoute.provider, fallback, awaiting_selection: false })
+  }
+
+  observeCapacity(providerCapacity(limitedRoute.provider, [{
     name: 'current window',
     usedPercent: 100,
     availability: 'exhausted',
     ...(resetMs ? { resetsAt: resetMs } : {}),
   }], Date.now()))
-  st.exhaustedRoutes = rememberExhaustedRoute(st.exhaustedRoutes, exhaustedRoute)
+  st.exhaustedRoutes = rememberExhaustedRoute(st.exhaustedRoutes, returnRoute)
   st.pendingRoute = undefined
   killSession(st, topic)
   saveRegistry()
-  log(`rate limit on topic ${topic} "${label}" for ${exhaustedRoute.provider}/${exhaustedRoute.model}`)
+  log(`rate limit on topic ${topic} "${label}" for ${limitedRoute.provider}/${limitedRoute.model}`)
   await sendProviderPicker(
     String(GROUP_CHAT_ID),
     topic,
     'quota',
-    `${providerLabel(exhaustedRoute.provider)} · ${modelLabel(exhaustedRoute.model)} reached its usage limit.` +
-      (resetMs ? `\nExpected reset: ${formatTime(resetMs)}.` : '') +
+    `${providerLabel(limitedRoute.provider)} · ${modelLabel(limitedRoute.model)} reached its usage limit.` +
+      resetText +
       `\n\nContinue this same Claude session with:`,
-    exhaustedRoute.provider,
+    limitedRoute.provider,
   )
-  return json({ ok: true, provider: exhaustedRoute.provider, awaiting_selection: true })
+  return json({ ok: true, provider: limitedRoute.provider, awaiting_selection: true })
+}
+
+// A model-scoped limit never marks the provider exhausted, so provider capacity
+// cannot announce its reset; offer the way back at the reported reset instead.
+function scheduleFallbackReturnOffer(topic: string, limited: TopicRoute, fallback: TopicRoute, resetMs: number): void {
+  const delay = Math.min(Math.max(1000, resetMs - Date.now() + 1000), 2_147_000_000)
+  setTimeout(() => {
+    const st = getTopic(topic)
+    const recorded = exhaustedRouteFor(st.exhaustedRoutes, limited.provider)
+    if (!recorded || !sameRoute(recorded, limited) || !sameRoute(currentRoute(st), fallback)) return
+    bot.api.sendMessage(
+      String(GROUP_CHAT_ID),
+      `${modelLabel(limited.model)} should be available again.`,
+      { ...threadOf(topic), reply_markup: switchBackKeyboard(topic, limited) },
+    ).catch(e => log(`fallback return offer failed for topic ${topic}: ${e}`))
+  }, delay)
 }
 
 // POST /capacity is fed by the Claude status-line adapter. External-provider
@@ -2586,7 +2632,7 @@ function topicRuntime(topic: string, st: TopicState): 'idle' | 'busy' {
 function recoveryNotice(from: TopicRoute, to: TopicRoute): string {
   return (
     `SYSTEM NOTICE (not a user message): the previous turn failed because ${providerLabel(from.provider)} ` +
-    `reached its usage limit. This same Claude Code session has resumed through ${providerLabel(to.provider)} ` +
+    `${modelLabel(from.model)} reached its usage limit. This same Claude Code session has resumed through ${providerLabel(to.provider)} ` +
     `on ${modelLabel(to.model)}, with the full conversation intact. Continue where you left off and answer ` +
     `the user's most recent unanswered message now. Mention the provider switch only if it affects the answer.`
   )
@@ -2602,7 +2648,8 @@ function applyRouteNow(topic: string, route: TopicRoute, reason: RouteChangeReas
     const exhausted = st.exhaustedRoutes.at(-1) ?? from
     st.pendingResumeNotice = recoveryNotice(exhausted, route)
   }
-  if (reason === 'reset' || exhaustedRouteFor(st.exhaustedRoutes, route.provider)) {
+  const recorded = exhaustedRouteFor(st.exhaustedRoutes, route.provider)
+  if (reason === 'reset' || (recorded && !retainsExhaustedRoute(recorded, route, reason))) {
     st.exhaustedRoutes = forgetExhaustedProvider(st.exhaustedRoutes, route.provider)
   }
   saveRegistry()

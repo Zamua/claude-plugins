@@ -8,8 +8,8 @@ picker in Telegram while keeping the same Claude Code session UUID.
 
 StopFailure fires when a turn ends on an API error, with error == "rate_limit"
 for a 429. It is notification-only, so it tells the proxy, which owns the
-session lifecycle and pauses the exhausted route until the operator selects
-another provider/model.
+session lifecycle: a Fable limit falls back to Opus automatically, and any other
+limit pauses the route until the operator selects another provider/model.
 
 Fires and forgets: any failure here is swallowed, because a hook that throws
 must never make a already-failing turn worse.

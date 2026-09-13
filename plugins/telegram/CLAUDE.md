@@ -348,13 +348,18 @@ times. A route change while Claude is idle is applied immediately; one requested
 during a turn is persisted as `pending_route` and applied when the old process
 polls again after finishing the turn.
 
-Quota recovery is deliberately operator-driven:
+Quota recovery:
 
 1. `hooks/rate-limit-failover.py` reports a StopFailure `rate_limit` to
    `POST /rate-limit`.
-2. The proxy marks the current provider exhausted, stops the stalled process,
-   and posts provider buttons in that topic. It does not silently choose or
-   consume a reset credit.
+2. A Fable limit is model-scoped ("You've reached your Fable 5 limit"), so the
+   proxy resumes that topic on Opus at xhigh automatically
+   (`quotaFallbackRoute`), keeps the Fable route in `exhausted_routes`, and posts
+   a "switch back" button, re-offered at the reported reset time. Any other
+   limit, including Opus after that fallback, marks the provider exhausted, stops
+   the stalled process, and posts provider buttons in that topic. The proxy never
+   consumes a reset credit. A report inside `ROUTE_DEBOUNCE_MS` of a route change
+   is treated as coming from the replaced process and ignored.
 3. After provider, model, effort, and Ultracode are selected, the launcher starts Claude Code
    with `--resume <the-same-uuid>` and the new launch profile. A durable
    `pending_resume_notice` tells it to answer the most recent unanswered user
