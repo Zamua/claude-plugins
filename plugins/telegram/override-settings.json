@@ -22,7 +22,7 @@
       "No unconditional classifier blocks are configured. This policy marker exists only to replace the built-in hard-deny list and does not match or block any action. Evaluate actions through soft_deny, allow exceptions, and exact human intent."
     ]
   },
-  "_comment_failover": "The StopFailure hook reports a plan USAGE-LIMIT stall (error == rate_limit, i.e. HTTP 429) to the proxy. The proxy pauses that route and offers provider/model buttons in Telegram; after the operator chooses, it resumes the same Claude Code session through the selected route. It never switches providers automatically. Registered with NO matcher because the hook filters on the error field itself. Path comes from $TG_FAILOVER_HOOK (set by the proxy, forwarded by the launcher) to keep this committed file portable.",
+  "_comment_failover": "The StopFailure hook reports a plan USAGE-LIMIT stall (error == rate_limit, i.e. HTTP 429) to the proxy. A Fable limit resumes the same Claude Code session on Opus at xhigh automatically; any other limit pauses the route and offers provider/model buttons in Telegram, then resumes the same session through the operator's choice. Registered with NO matcher because the hook filters on the error field itself. Path comes from $TG_FAILOVER_HOOK (set by the proxy, forwarded by the launcher) to keep this committed file portable.",
   "hooks": {
     "Stop": [
       {

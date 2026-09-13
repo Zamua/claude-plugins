@@ -7,6 +7,9 @@ import {
   forgetExhaustedProvider,
   normalizeModel,
   planRouteChange,
+  quotaFallbackRoute,
+  quotaReturnRoute,
+  retainsExhaustedRoute,
   rememberExhaustedRoute,
   topicRoute,
   topicRouteFromRecord,
@@ -112,6 +115,35 @@ describe('exhausted provider routes', () => {
 
   test('forgets only the provider selected after its reset', () => {
     expect(forgetExhaustedProvider([anthropic, codex], 'anthropic')).toEqual([codex])
+  })
+})
+
+describe('quota fallback', () => {
+  const fable = DEFAULT_ROUTE
+  const opusXhigh = topicRoute({ provider: 'anthropic', model: 'opus', effort: 'xhigh' })
+  const codex = topicRoute({ provider: 'codex', model: 'gpt-5.6-sol', effort: 'high' })
+
+  test('falls back from Fable to Opus at xhigh, keeping Ultracode', () => {
+    expect(quotaFallbackRoute(fable)).toEqual(opusXhigh)
+    expect(quotaFallbackRoute({ ...fable, ultracode: true, effort: 'xhigh' })?.ultracode).toBeTrue()
+  })
+
+  test('has no automatic fallback for other routes', () => {
+    expect(quotaFallbackRoute(opusXhigh)).toBeUndefined()
+    expect(quotaFallbackRoute(codex)).toBeUndefined()
+  })
+
+  test('offers the original Fable route back when its Opus fallback also hits a limit', () => {
+    expect(quotaReturnRoute([fable], opusXhigh)).toEqual(fable)
+    expect(quotaReturnRoute([], opusXhigh)).toEqual(opusXhigh)
+    expect(quotaReturnRoute([fable], topicRoute({ provider: 'anthropic', model: 'sonnet', effort: 'high' })).model).toBe('sonnet')
+  })
+
+  test('keeps the exhausted route only for its automatic fallback', () => {
+    expect(retainsExhaustedRoute(fable, opusXhigh, 'quota')).toBeTrue()
+    expect(retainsExhaustedRoute(fable, opusXhigh, 'manual')).toBeFalse()
+    expect(retainsExhaustedRoute(fable, topicRoute({ provider: 'anthropic', model: 'sonnet' }), 'quota')).toBeFalse()
+    expect(retainsExhaustedRoute(undefined, opusXhigh, 'quota')).toBeFalse()
   })
 })
 
