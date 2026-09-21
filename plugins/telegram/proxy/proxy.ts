@@ -3016,6 +3016,8 @@ bot.on('message', async ctx => {
   if (String(ctx.chat.id) !== String(GROUP_CHAT_ID)) return
 
   const topic = msg.message_thread_id != null ? String(msg.message_thread_id) : 'general'
+  // One line per inbound message so a topic that never answers can be traced to arrival or to routing.
+  if (localgenService.isLocked(topic)) log(`inbound topic ${topic} message ${msg.message_id ?? '(no id)'} text=${typeof msg.text === 'string'} kind=${Object.keys(msg).filter(k => ['text','photo','document','voice','sticker','forum_topic_created','forum_topic_edited'].includes(k)).join(',') || 'other'}`)
 
   // Secret drop runs before every relay path, the square included, so the
   // value can reach neither a topic-Claude nor a peer. See handleSecretDrop.
