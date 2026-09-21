@@ -114,6 +114,10 @@ import { JsonOpencodeTopicRepository } from './adapters/json-opencode-topic-repo
 import { opencodeTopic } from './domain/opencode-topic'
 import { callbackBelongsToHarness, callbackTopicTarget } from './domain/topic-harness'
 import type { TopicHarness } from './domain/topic-harness'
+import { LocalgenTopicService } from './application/localgen-topic-service'
+import { QwenImageClient } from './adapters/qwen-image-client'
+import { JsonLocalgenTopicRepository } from './adapters/json-localgen-topic-repository'
+import { localgenTopic } from './domain/localgen-topic'
 import { antigravityResetPools } from './domain/antigravity-capacity'
 import type { AntigravityUsageWindow } from './application/antigravity-ports'
 import type {
@@ -147,6 +151,7 @@ const LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-topic.sh')
 const ANTIGRAVITY_LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-antigravity-topic.sh')
 const OPENCODE_TOPICS_FILE = join(STATE_DIR, 'opencode-topics.json')
 const OPENCODE_LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-opencode-topic.sh')
+const LOCALGEN_TOPICS_FILE = join(STATE_DIR, 'localgen-topics.json')
 // The token-bearing .env files. assertSendable refuses to ship these so a
 // prompt-injected topic-Claude cannot exfil the bot token via reply(files:[...]).
 const ENV_FILES = [join(PLUGIN_ROOT, '.env'), join(STATE_DIR, '.env')]
@@ -241,6 +246,12 @@ const OPENCODE_PROJECT_DIR = process.env.TELEGRAM_OPENCODE_PROJECT_DIR ||
   join(homedir(), 'Dropbox', 'workspace', 'macmini', 'gpu', 'qwen-opencode')
 const OPENCODE_MODEL = process.env.TELEGRAM_OPENCODE_MODEL || 'qwen-local/Qwen3.8-27B'
 const LOCALCODE_RE = /^\/localcode(?:@\w+)?\s*$/
+// /localgen [name]: lock the current fresh topic to the image generator.
+const LOCALGEN_RE = /^\/localgen(?:@\w+)?(?:\s+(.+?))?\s*$/
+// The qwen-image server: OpenAI Images API on loopback, never any agent.
+const LOCALGEN_URL = `http://127.0.0.1:${process.env.LOCALGEN_PORT || '8012'}`
+const LOCALGEN_START_CMD = process.env.TELEGRAM_LOCALGEN_START_CMD ||
+  'start the qwen-image server (set TELEGRAM_LOCALGEN_START_CMD to show the exact command here)'
 const NIX_ANTIGRAVITY_BIN = join(NIX_PROFILE_BIN, 'agy')
 const ANTIGRAVITY_BIN = process.env.TELEGRAM_ANTIGRAVITY_BIN ??
   (existsSync(NIX_ANTIGRAVITY_BIN) ? NIX_ANTIGRAVITY_BIN : 'agy')
@@ -677,7 +688,11 @@ const authorizationRepository = new JsonActionAuthorizationRepository(AUTHORIZAT
 const authorizationService = new ActionAuthorizationService(authorizationRepository, {
   turnPort: {
     deliver(request, turn) {
-      if (antigravityService.isLocked(request.topic) || opencodeService.isLocked(request.topic)) {
+      if (
+        antigravityService.isLocked(request.topic) ||
+        opencodeService.isLocked(request.topic) ||
+        localgenService.isLocked(request.topic)
+      ) {
         log(`dropping action authorization ${request.id}: topic ${request.topic} is harness-locked`)
         return
       }
@@ -1003,7 +1018,7 @@ function topicDirectory(): Array<{ slug: string; name: string; topic: string; li
   const live = mux.liveSessions()
   const out: Array<{ slug: string; name: string; topic: string; live: boolean }> = []
   for (const [topic, st] of topics) {
-    if (topic === SQUARE_TOPIC || antigravityService.isLocked(topic) || opencodeService.isLocked(topic)) continue
+    if (topic === SQUARE_TOPIC || harnessLocked(topic)) continue
     const name = st.name || topicNames.get(topic) || ''
     const slug = topic === 'general' ? 'general' : slugify(name) !== 'topic' ? slugify(name) : topic
     out.push({ slug, name: name || topic, topic, live: !!(st.session && live.has(st.session)) })
@@ -1054,7 +1069,7 @@ function deliverSquare(
 ): void {
   for (const topic of recipients) {
     if (topic === SQUARE_TOPIC) continue
-    if (antigravityService.isLocked(topic) || opencodeService.isLocked(topic)) {
+    if (harnessLocked(topic)) {
       log(`dropping square delivery (conv ${meta.conv}) to harness-locked topic ${topic}`)
       continue
     }
@@ -1354,8 +1369,8 @@ async function handleTopicCreate(req: Request): Promise<Response> {
   const name = String(b.name ?? '').trim()
   if (!name) return new Response('name required', { status: 400 })
   const harness = b.harness == null ? 'claude' : String(b.harness)
-  if (harness !== 'claude' && harness !== 'antigravity' && harness !== 'opencode') {
-    return new Response('harness must be claude, antigravity, or opencode', { status: 400 })
+  if (harness !== 'claude' && harness !== 'antigravity' && harness !== 'opencode' && harness !== 'localgen') {
+    return new Response('harness must be claude, antigravity, opencode, or localgen', { status: 400 })
   }
   // Resolve a viable route before creating the Telegram topic. A catalog/auth
   // failure must not strand an empty forum topic.
@@ -1374,6 +1389,8 @@ async function handleTopicCreate(req: Request): Promise<Response> {
   } else if (harness === 'opencode') {
     opencodeService.activate(opencodeTopic(topic, name))
     await opencodeService.start(topic)
+  } else if (harness === 'localgen') {
+    localgenService.activate(localgenTopic(topic, name))
   }
   log(`created + registered topic ${topic} "${name}"`)
   return json({
@@ -1471,9 +1488,9 @@ function handleSquareUserMessage(msg: any, text: string): void {
 // messages for a brand-new topic cannot spawn two sessions; the spawning
 // flag + the live-session dedup are belt and suspenders.
 function ensureSession(topic: string): void {
-  // Harness lock: an Antigravity or OpenCode topic must never fall through to
-  // the Claude launcher, even if a stale queue/callback reaches this boundary.
-  if (antigravityService.isLocked(topic) || opencodeService.isLocked(topic)) return
+  // Harness lock: a locked topic must never fall through to the Claude
+  // launcher, even if a stale queue/callback reaches this boundary.
+  if (harnessLocked(topic)) return
   // The square topic hosts conversations, not a claude of its own.
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
   const st = getTopic(topic)
@@ -1790,6 +1807,52 @@ for (const topic of opencodeService.list()) {
     .catch(error => log(`OpenCode Herdr start failed for topic ${topic.topic}: ${error}`))
 }
 
+// localgen is a fourth harness-bounded context with no agent at all: every
+// text message is an image prompt POSTed to the qwen-image server and the PNG
+// comes back into the same thread.
+const localgenRepository = new JsonLocalgenTopicRepository(LOCALGEN_TOPICS_FILE)
+const localgenService = new LocalgenTopicService(
+  localgenRepository,
+  new QwenImageClient(LOCALGEN_URL, log),
+  {
+    uploading(topic) {
+      void bot.api.sendChatAction(String(GROUP_CHAT_ID), 'upload_photo', threadOf(topic)).catch(() => {})
+    },
+    // Telegram refuses a photo over 10 MB or with a side past its limits; the
+    // document form carries any PNG, so it is the fallback as well as `raw`.
+    async photo(topic, png, filename, caption, asDocument) {
+      const file = new InputFile(png, filename)
+      const opts = { ...threadOf(topic), caption }
+      if (!asDocument) {
+        try {
+          await bot.api.sendPhoto(String(GROUP_CHAT_ID), file, opts)
+          return
+        } catch (error) {
+          log(`localgen sendPhoto failed for topic ${topic}, sending as document: ${error}`)
+        }
+      }
+      await bot.api.sendDocument(String(GROUP_CHAT_ID), new InputFile(png, filename), opts)
+    },
+    async queued(topic, position) {
+      await bot.api.sendMessage(String(GROUP_CHAT_ID), `queued (#${position})`, threadOf(topic))
+    },
+    async error(topic, text) {
+      log(`localgen failed for topic ${topic}: ${text}`)
+      await bot.api.sendMessage(
+        String(GROUP_CHAT_ID),
+        `⚠️ ${text.slice(0, MAX_CHUNK_LIMIT - 3)}`,
+        threadOf(topic),
+      )
+    },
+  },
+  LOCALGEN_START_CMD,
+)
+
+// True for every harness that owns the topic instead of a Claude pane.
+function harnessLocked(topic: string): boolean {
+  return antigravityService.isLocked(topic) || opencodeService.isLocked(topic) || localgenService.isLocked(topic)
+}
+
 function syncAntigravityInterop(): void {
   const roots = [
     join(homedir(), '.agents', 'skills'),
@@ -2075,11 +2138,7 @@ async function deleteAndAck(
 // has no Claude of its own. secret_drop=1 lets the reply guard accept silence:
 // the proxy already acked in the topic.
 function notifyTopic(chatId: string, topic: string, fromId: string, what: string): void {
-  if (
-    (SQUARE_TOPIC && topic === SQUARE_TOPIC) ||
-    antigravityService.isLocked(topic) ||
-    opencodeService.isLocked(topic)
-  ) return
+  if ((SQUARE_TOPIC && topic === SQUARE_TOPIC) || harnessLocked(topic)) return
   ensureSession(topic)
   enqueue(topic, {
     content: `SYSTEM NOTICE (not a user message): ${what} No reply is required.`,
@@ -2244,6 +2303,10 @@ async function activateAntigravityTopic(
     await sayIn(chatId, topic, 'This topic is locked to OpenCode / local Qwen. Create a fresh topic and run /antigravity there.')
     return
   }
+  if (localgenService.isLocked(topic)) {
+    await sayIn(chatId, topic, 'This topic is locked to localgen. Create a fresh topic and run /antigravity there.')
+    return
+  }
   const claude = getTopic(topic)
   if (claude.claudeSessionId || claude.session) {
     await sayIn(
@@ -2337,6 +2400,10 @@ async function activateLocalcodeTopic(
     await sayIn(chatId, topic, 'This topic is locked to Google / Antigravity. Create a fresh topic and run /localcode there.')
     return
   }
+  if (localgenService.isLocked(topic)) {
+    await sayIn(chatId, topic, 'This topic is locked to localgen. Create a fresh topic and run /localcode there.')
+    return
+  }
   const existing = opencodeService.get(topic)
   if (existing) {
     try {
@@ -2397,6 +2464,85 @@ async function handleOpencodeModelCommand(chatId: string, topic: string, argumen
   )
 }
 
+// ---- localgen harness --------------------------------------------------------
+
+const localgenRouteLabel = () => `qwen-image · ${LOCALGEN_URL}`
+
+// Locks the topic the command was posted in, like /localcode: admin only,
+// never the square, never a topic another harness or a Claude UUID owns. The
+// argument renames the topic record; without one the learned name is kept.
+async function activateLocalgenTopic(
+  chatId: string,
+  topic: string,
+  fromId: string,
+  argument: string,
+): Promise<void> {
+  if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
+    await sayIn(chatId, topic, 'Only the operator can lock a topic to localgen.')
+    return
+  }
+  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
+    await sayIn(chatId, topic, 'The square cannot be assigned an agent harness.')
+    return
+  }
+  if (antigravityService.isLocked(topic)) {
+    await sayIn(chatId, topic, 'This topic is locked to Google / Antigravity. Create a fresh topic and run /localgen there.')
+    return
+  }
+  if (opencodeService.isLocked(topic)) {
+    await sayIn(chatId, topic, 'This topic is locked to OpenCode / local Qwen. Create a fresh topic and run /localgen there.')
+    return
+  }
+  if (localgenService.isLocked(topic)) {
+    await sayIn(chatId, topic, `This topic is already locked to ${localgenRouteLabel()}.`)
+    return
+  }
+  const claude = getTopic(topic)
+  if (claude.claudeSessionId || claude.session) {
+    await sayIn(
+      chatId,
+      topic,
+      'This topic already owns a Claude Code conversation, so it cannot be converted in place. ' +
+      'Create a fresh topic and run /localgen there.',
+    )
+    return
+  }
+  try {
+    const name = argument.trim() || claude.name || topicNames.get(topic) || 'localgen'
+    localgenService.activate(localgenTopic(topic, name))
+    claude.name = name
+    topicNames.set(topic, name)
+    saveRegistry()
+    await sayIn(
+      chatId,
+      topic,
+      `Locked this topic to ${localgenRouteLabel()}. Every text message here is an image prompt; ` +
+      'options: size:WxH steps:N seed:N n:K raw. No agent runs in this topic.',
+    )
+  } catch (error) {
+    await sayIn(chatId, topic, `Could not enable localgen: ${reason(error)}`)
+  }
+}
+
+// Single-model harness: /model only reports status, there is nothing to pick.
+async function handleLocalgenModelCommand(chatId: string, topic: string, argument: string): Promise<void> {
+  let health = 'not listening'
+  try {
+    const response = await fetch(`${LOCALGEN_URL}/healthz`, { signal: AbortSignal.timeout(3_000) })
+    const body = (await response.json().catch(() => ({}))) as any
+    health = `${body.status ?? response.status}` +
+      (body.busy != null ? `, busy ${body.busy}, queued ${body.queued}` : '')
+  } catch {}
+  await sayIn(
+    chatId,
+    topic,
+    `Route: ${localgenRouteLabel()}\nServer: ${health}\n` +
+    'Harness: localgen (locked)\nPermissions: none, nothing runs but the generator\n' +
+    'Options: size:WxH steps:N seed:N n:K raw' +
+    (argument ? '\n\nThis topic runs a single local model, so there is nothing to pick.' : ''),
+  )
+}
+
 // Same kill-then-nudge sequence as a provider-route recovery: killSession
 // drains the dying MCP's long-polls first so the nudge cannot be handed to it
 // and lost. The nudge asks for one line back, so a respawn that fails is a
@@ -2428,6 +2574,10 @@ async function handleRelaunch(chatId: string, topic: string, fromId: string): Pr
         : `Relaunched OpenCode in Herdr with the same session ` +
           `${result.topic.opencodeSessionId ?? 'not started'} and freshly loaded MCP/configuration.`,
     )
+    return
+  }
+  if (localgenService.isLocked(topic)) {
+    await sayIn(chatId, topic, 'localgen runs no agent; there is nothing to relaunch. Restart the qwen-image server from the gpu topic if needed.')
     return
   }
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
@@ -2839,6 +2989,7 @@ async function registerCommands(): Promise<void> {
       ? [
           { command: 'antigravity', description: 'lock a fresh topic to the Antigravity harness' },
           { command: 'localcode', description: 'lock a fresh topic to the local OpenCode/Qwen harness' },
+          { command: 'localgen', description: 'lock a fresh topic to the local image generator (prompts in, PNGs out)' },
           { command: 'model', description: 'choose this topic\'s provider and model' },
           { command: 'usage', description: 'show usage and reset times for every provider' },
         ]
@@ -2880,6 +3031,11 @@ bot.on('message', async ctx => {
     await activateLocalcodeTopic(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
     return
   }
+  const localgenMatch = typeof msg.text === 'string' ? LOCALGEN_RE.exec(msg.text) : null
+  if (localgenMatch) {
+    await activateLocalgenTopic(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), localgenMatch[1] ?? '')
+    return
+  }
   if (typeof msg.text === 'string' && RELAUNCH_RE.test(msg.text)) {
     await handleRelaunch(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
     return
@@ -2892,6 +3048,8 @@ bot.on('message', async ctx => {
       )
     } else if (opencodeService.isLocked(topic)) {
       await handleOpencodeModelCommand(String(ctx.chat.id), topic, modelMatch[1] ?? '')
+    } else if (localgenService.isLocked(topic)) {
+      await handleLocalgenModelCommand(String(ctx.chat.id), topic, modelMatch[1] ?? '')
     } else {
       await handleModelCommand(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), modelMatch[1] ?? '')
     }
@@ -2908,6 +3066,8 @@ bot.on('message', async ctx => {
       }
     } else if (opencodeService.isLocked(topic)) {
       await sayIn(String(ctx.chat.id), topic, 'OpenCode runs on the local Qwen server; there is no quota to report.')
+    } else if (localgenService.isLocked(topic)) {
+      await sayIn(String(ctx.chat.id), topic, 'localgen runs on the local qwen-image server; there is no quota to report.')
     } else {
       await refreshProviderCapacity()
       await sayIn(String(ctx.chat.id), topic, capacityText())
@@ -2972,6 +3132,7 @@ bot.on('message', async ctx => {
     if (st && !st.name) st.name = nm
     if (antigravityService.isLocked(topic)) antigravityService.rename(topic, nm)
     if (opencodeService.isLocked(topic)) opencodeService.rename(topic, nm)
+    if (localgenService.isLocked(topic)) localgenService.rename(topic, nm)
     log(`learned topic ${topic} name "${nm}"`)
     return
   }
@@ -2991,6 +3152,7 @@ bot.on('message', async ctx => {
       }
       if (antigravityService.isLocked(topic)) antigravityService.rename(topic, nm)
       if (opencodeService.isLocked(topic)) opencodeService.rename(topic, nm)
+      if (localgenService.isLocked(topic)) localgenService.rename(topic, nm)
       log(`topic ${topic} renamed to "${nm}"`)
     }
     return
@@ -3024,6 +3186,19 @@ bot.on('message', async ctx => {
 
   const desc = describeMessage(msg)
   if (!desc) return // service message with nothing to relay
+
+  // localgen: the text IS the prompt; nothing is downloaded, queued, or spawned.
+  if (localgenService.isLocked(topic)) {
+    if (typeof msg.text !== 'string') {
+      await sayIn(String(ctx.chat.id), topic, 'localgen takes text prompts only.')
+      return
+    }
+    log(`received localgen prompt ${msg.message_id ?? '(no id)'} for topic ${topic}`)
+    void localgenService.submit(topic, msg.text)
+      .then(() => log(`settled localgen prompt ${msg.message_id ?? '(no id)'} for topic ${topic}`))
+      .catch(error => log(`localgen prompt ${msg.message_id ?? '(no id)'} for topic ${topic} threw: ${error}`))
+    return
+  }
 
   let imagePath: string | undefined
   if (desc.photo) {
@@ -3111,7 +3286,9 @@ bot.on('callback_query:data', async ctx => {
       : 'general'
     const callbackHarness: TopicHarness = antigravityService.isLocked(callbackTopic)
       ? 'antigravity'
-      : opencodeService.isLocked(callbackTopic) ? 'opencode' : 'claude'
+      : opencodeService.isLocked(callbackTopic)
+        ? 'opencode'
+        : localgenService.isLocked(callbackTopic) ? 'localgen' : 'claude'
     const explicitCallbackTopic = callbackTopicTarget(data)
     if (explicitCallbackTopic && explicitCallbackTopic !== callbackTopic) {
       await ctx.answerCallbackQuery({
@@ -3126,7 +3303,9 @@ bot.on('callback_query:data', async ctx => {
           ? 'This topic is locked to Google / Antigravity. External provider routes are disabled.'
           : callbackHarness === 'opencode'
             ? 'This topic is locked to OpenCode / local Qwen. Model and provider pickers are disabled.'
-            : 'This picker belongs to an Antigravity-locked topic.',
+            : callbackHarness === 'localgen'
+              ? 'This topic is locked to localgen. Model and provider pickers are disabled.'
+              : 'This picker belongs to an Antigravity-locked topic.',
         show_alert: true,
       }).catch(() => {})
       return

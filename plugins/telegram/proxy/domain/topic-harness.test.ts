@@ -10,12 +10,15 @@ describe('topic harness lock', () => {
     expect(callbackBelongsToHarness('opencode', 'agroute:model:abc')).toBeFalse()
     expect(callbackBelongsToHarness('opencode', 'tgroute:model:abc')).toBeFalse()
     expect(callbackBelongsToHarness('opencode', 'tgauth:a:abc')).toBeTrue()
+    expect(callbackBelongsToHarness('localgen', 'agroute:model:abc')).toBeFalse()
+    expect(callbackBelongsToHarness('localgen', 'tgroute:model:abc')).toBeFalse()
   })
 
   test('persists an explicit harness identity rather than inferring it from a model', () => {
     expect(topicHarness({ harness: 'antigravity' })).toBe('antigravity')
     expect(topicHarness({ harness: 'claude' })).toBe('claude')
     expect(topicHarness({ harness: 'opencode' })).toBe('opencode')
+    expect(topicHarness({ harness: 'localgen' })).toBe('localgen')
     expect(topicHarness({})).toBe('claude')
   })
 
