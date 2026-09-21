@@ -11,7 +11,8 @@ A drop-in replacement for the single-session `telegram` channel that fans ONE
 bot token out to MANY concurrent agent conversations, one per Telegram forum
 topic. Ordinary topics are Claude Code sessions; a fresh topic can be explicitly
 and permanently harness-locked to Google's official Antigravity CLI
-(`/antigravity`) or to OpenCode on the local Qwen server (`/localcode`).
+(`/antigravity`), to OpenCode on the local Qwen server (`/localcode`), or to the
+local qwen-image generator with no agent at all (`/localgen`).
 Forked from the official `telegram` plugin 0.0.6; the only real change is the
 transport: the token + getUpdates + access logic moved OUT of the MCP into a
 standalone proxy, and the MCP became a thin HTTP client of that proxy.
@@ -599,6 +600,52 @@ treats `opencode` as a third harness that accepts neither `tgroute:*` nor
 localcode topic queue behind the operator's own `localcode` session on the same
 Qwen server, so a busy interactive session delays Telegram replies.
 
+## Harness-locked localgen topics
+
+`/localgen [name]` is the fourth harness and the only one with no agent: a
+locked topic sends every text message straight to the qwen-image server
+(`POST http://127.0.0.1:${LOCALGEN_PORT || 8012}/v1/images/generations`, the
+OpenAI Images shape with `n: 1` and `response_format: b64_json`) and posts the
+PNG back into the same thread with `sendPhoto`. Nothing sits in between: no
+Claude, no pane, no queue drain, no MCP. Bounded context:
+`proxy/domain/localgen-topic.ts` (aggregate, option parser, request body,
+caption, failure mapping), `LocalgenTopicService` (per-topic serialization),
+`QwenImageClient` (fetch adapter, logs every request/response with timing),
+`localgen-topics.json` (same shape as `opencode-topics.json`).
+
+Lock rules are the localcode ones: admin only, the topic the command is posted
+in must be fresh (no Claude UUID, no live pane), never the square, no unlock
+path. The optional argument sets the topic record's name (default: the learned
+Telegram name, then `localgen`). `POST /topic/create` accepts
+`harness: "localgen"`. Every Claude spawn/queue/notice path, the square
+directory, square delivery, action-authorization delivery, and the callback
+boundary treat a localgen topic exactly like the other locked harnesses
+(`harnessLocked(topic)` in proxy.ts is the shared guard). A topic created
+through the proxy as a plain Claude topic and never messaged (registry entry
+with no `claude_session_id`) is lockable in place by posting `/localgen` in it;
+that is how an existing "localgen" topic is adopted.
+
+Message grammar: option words `size:WxH` (default 1024x1024), `steps:N` (1..100,
+default 40), `seed:N` (default random; the server range is `[0, 2^31 - 4]`),
+`n:K` (1..4, K sequential requests with seeds `seed..seed+K-1`, one photo each)
+and `raw` (deliver as a document so Telegram keeps the PNG bytes) are stripped
+anywhere in the text; the rest is the prompt. The caption is
+`seed <n> · <size> · <steps> steps · <m>m<s>s`. An `upload_photo` chat action is
+sent and refreshed every 5 s while a request runs. Prompts in one topic run in
+order; a prompt that arrives while one is running gets `queued (#k)`. A photo
+Telegram refuses (over 10 MB or its side limits) is re-sent as a document.
+Non-text messages are answered with "text prompts only".
+
+Errors never reach the proxy's event loop: a refused connection replies
+`localgen server is down` plus `TELEGRAM_LOCALGEN_START_CMD` (default: the pm2
+start line from the qwen-image ops notes) so the operator can start it from the
+gpu topic; a 503 whose message says warming replies `warming up, try again in a
+few minutes`; any other HTTP status relays the server's `error.message`; a
+request past 30 minutes (a cold prefix bucket can take 15) times out with a
+message. `/model` prints status (route, `/healthz` state, harness) and says
+there is nothing to pick; `/usage` says there is no quota; `/relaunch` says
+there is no agent to relaunch.
+
 ## Key mechanics / gotchas (baked into the code)
 
 - **Probed CLIs leave MCP servers behind unless their process group is killed.** The 5-minute capacity
@@ -838,6 +885,10 @@ Qwen server, so a busy interactive session delays Telegram replies.
 - `proxy/application/opencode-topic-service.ts` + `opencode-ports.ts`: the same
   shape for localcode topics (session id instead of conversation id; no
   route/usage).
+- `proxy/application/localgen-topic-service.ts` + `localgen-ports.ts`,
+  `proxy/domain/localgen-topic.ts`, `proxy/adapters/qwen-image-client.ts`,
+  `proxy/adapters/json-localgen-topic-repository.ts`: the agentless localgen
+  harness (prompt in, PNG out).
 - `scripts/launch-topic.sh`: the one-harness launcher (invoked by the proxy;
   `TG_MUX` picks only the multiplexer). Every pane executes `claude`.
 - `scripts/launch-antigravity-topic.sh`: creates a separate Herdr workspace and
@@ -893,8 +944,10 @@ path to official `agy`, defaults to the Nix per-user profile and then PATH);
 OpenCode Go catalog and localcode topics), `TELEGRAM_OPENCODE_PROJECT_DIR`
 (default `~/Dropbox/workspace/macmini/gpu/qwen-opencode`), and
 `TELEGRAM_OPENCODE_MODEL` (default `qwen-local/Qwen3.8-27B`) for localcode
-topics. Antigravity and localcode topics always use Herdr so they remain visible
-and drop-in ready.
+topics; `LOCALGEN_PORT` (default `8012`, the qwen-image server on loopback) and
+`TELEGRAM_LOCALGEN_START_CMD` (the start line shown when that server is down)
+for localgen topics. Antigravity and localcode topics always use Herdr so they
+remain visible and drop-in ready.
 Loaded from the real env (wins), then plugin-dir `.env`, then
 `~/.claude/channels/telegram-topics/.env`.
 

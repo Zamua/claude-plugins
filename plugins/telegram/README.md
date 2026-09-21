@@ -10,8 +10,9 @@ bot token across MANY sessions, routed by Telegram forum **topics**. Ordinary
 topics keep the established foreground Claude Code harness in a detached tmux
 or herdr pane and may route that same Claude session to Anthropic, Codex, or
 OpenCode Go. A fresh topic can instead be explicitly and permanently locked to
-Google's official Antigravity CLI harness with `/antigravity`, or to OpenCode on
-a local Qwen server with `/localcode`.
+Google's official Antigravity CLI harness with `/antigravity`, to OpenCode on
+a local Qwen server with `/localcode`, or to a local image generator with no
+agent in between with `/localgen`.
 
 It is a drop-in for the single-session telegram channel: the plugin is named
 `telegram`, the MCP server is named `telegram`, and the four tools keep their
@@ -165,6 +166,8 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_OPENCODE_BIN` | no | Nix per-user `opencode`, then `PATH` | CLI used to read OpenCode model metadata and to run `/localcode` topics |
 | `TELEGRAM_OPENCODE_PROJECT_DIR` | no | `~/Dropbox/workspace/macmini/gpu/qwen-opencode` | project dir opened by `/localcode` topics (local provider config + `AGENTS.md`) |
 | `TELEGRAM_OPENCODE_MODEL` | no | `qwen-local/Qwen3.8-27B` | the single model `/localcode` topics run |
+| `LOCALGEN_PORT` | no | `8012` | loopback port of the qwen-image server `/localgen` topics post prompts to |
+| `TELEGRAM_LOCALGEN_START_CMD` | no | the pm2 start line for `qwen-image` | shown in a `/localgen` topic when that server is not listening |
 | `TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES` | no | `5` | Codex/OpenCode Go usage refresh interval |
 | `TELEGRAM_OPENCODE_AUTH_FILE` | no | OpenCode's standard auth file | source for OpenCode Go usage auth; the key is never copied into plugin state |
 | `TELEGRAM_ANTIGRAVITY_BIN` | no | Nix per-user `agy`, then `PATH` | official Antigravity CLI used by harness-locked topics |
@@ -259,6 +262,22 @@ latency is the model's own time. After the lock:
 - `/relaunch` replaces the Herdr process and resumes the same OpenCode session
   (`-s <id>`); queued until the pane has settled after the current turn.
 - Old or forged `tgroute:*` and `agroute:*` callbacks are rejected.
+
+### Image generator (localgen) topics
+
+`/localgen [name]` locks a **fresh** topic to the local qwen-image server with
+nothing in between: every text message is an image prompt, POSTed to
+`http://127.0.0.1:$LOCALGEN_PORT/v1/images/generations`, and the PNG comes
+back into the thread as a photo captioned
+`seed <n> · <size> · <steps> steps · <m>m<s>s`. No agent runs in the topic.
+Option words anywhere in the message are stripped from the prompt:
+`size:WxH` (1024x1024), `steps:N` (40), `seed:N` (random), `n:K` (1..4
+sequential images, seeds `seed..seed+K-1`) and `raw` (send as a document so
+Telegram keeps the PNG bytes). Prompts run one at a time per topic; a prompt
+sent while one is running is acknowledged with `queued (#k)`. A server that is
+not listening, still warming up, or refusing a request is reported in the
+thread; `/model` shows the server's health, `/usage` and `/relaunch` explain
+there is no quota and no agent.
 
 Requests share the local model server with any interactive `opencode` session
 the operator runs, so they queue behind it.

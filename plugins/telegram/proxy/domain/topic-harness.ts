@@ -1,8 +1,9 @@
-export type TopicHarness = 'claude' | 'antigravity' | 'opencode'
+export type TopicHarness = 'claude' | 'antigravity' | 'opencode' | 'localgen'
 
 export function topicHarness(record: { harness?: unknown }): TopicHarness {
   if (record.harness === 'antigravity') return 'antigravity'
   if (record.harness === 'opencode') return 'opencode'
+  if (record.harness === 'localgen') return 'localgen'
   return 'claude'
 }
 
