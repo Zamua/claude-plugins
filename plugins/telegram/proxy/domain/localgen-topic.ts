@@ -44,13 +44,15 @@ export type LocalgenOptions = {
   n: number
   // Deliver as a document so Telegram keeps the PNG bytes.
   raw: boolean
+  // First-block cache threshold, 0 = off (lossy speedup; the server clamps to [0, 1]).
+  cache: number
 }
 
 export function randomLocalgenSeed(): number {
   return Math.floor(Math.random() * (LOCALGEN_MAX_SEED - LOCALGEN_MAX_N + 1))
 }
 
-const OPTION_RE = /^(size|steps|seed|n):(\S+)$/i
+const OPTION_RE = /^(size|steps|seed|n|cache):(\S+)$/i
 
 function integer(value: string, lo: number, hi: number, key: string): number | string {
   if (!/^\d+$/.test(value)) return `${key} must be an integer`
@@ -72,6 +74,7 @@ export function parseLocalgenPrompt(
     seed: -1,
     n: 1,
     raw: false,
+    cache: 0,
   }
   const words: string[] = []
   for (const word of text.split(/\s+/)) {
@@ -84,6 +87,12 @@ export function parseLocalgenPrompt(
     if (key === 'size') {
       if (!/^\d+x\d+$/i.test(value)) return { error: 'size must be WxH, e.g. size:1024x1024' }
       options.size = value.toLowerCase()
+      continue
+    }
+    if (key === 'cache') {
+      const parsed = Number(value)
+      if (!/^\d*\.?\d+$/.test(value) || parsed > 1) return { error: 'cache must be a number in [0, 1], e.g. cache:0.1' }
+      options.cache = parsed
       continue
     }
     const hi = key === 'steps' ? LOCALGEN_MAX_STEPS : key === 'n' ? LOCALGEN_MAX_N : LOCALGEN_MAX_SEED
@@ -111,6 +120,7 @@ export type LocalgenRequestBody = {
   seed: number
   n: 1
   response_format: 'b64_json'
+  cache_threshold: number
 }
 
 // One image per request; `n:K` in the message is K sequential requests.
@@ -122,6 +132,7 @@ export function localgenRequestBody(options: LocalgenOptions, seed: number): Loc
     seed,
     n: 1,
     response_format: 'b64_json',
+    cache_threshold: options.cache,
   }
 }
 
