@@ -71,7 +71,7 @@ describe('localgen topic service', () => {
     const { generator, outbound, service } = harness()
     await service.submit('9422', 'a red fox steps:20')
     expect(generator.bodies).toEqual([
-      { prompt: 'a red fox', size: '1024x1024', steps: 20, seed: 100, n: 1, response_format: 'b64_json' },
+      { prompt: 'a red fox', size: '1024x1024', steps: 20, seed: 100, n: 1, response_format: 'b64_json', cache_threshold: 0 },
     ])
     expect(outbound.photos).toEqual([
       { topic: '9422', seed: 100, filename: 'localgen-100.png', caption: 'seed 100 · 1024x1024 · 20 steps · 0m30s', asDocument: false },

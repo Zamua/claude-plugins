@@ -35,13 +35,13 @@ describe('localgen topic', () => {
 describe('localgen prompt options', () => {
   test('defaults with a drawn seed', () => {
     expect(parseLocalgenPrompt('a red fox in snow', fixedSeed)).toEqual({
-      prompt: 'a red fox in snow', size: '1024x1024', steps: 40, seed: 7, n: 1, raw: false,
+      prompt: 'a red fox in snow', size: '1024x1024', steps: 40, seed: 7, n: 1, raw: false, cache: 0,
     })
   })
 
   test('strips options anywhere in the text and keeps the prompt words in order', () => {
     expect(parseLocalgenPrompt('size:768x1024 a red steps:20 fox seed:5 raw n:3 in snow', fixedSeed)).toEqual({
-      prompt: 'a red fox in snow', size: '768x1024', steps: 20, seed: 5, n: 3, raw: true,
+      prompt: 'a red fox in snow', size: '768x1024', steps: 20, seed: 5, n: 3, raw: true, cache: 0,
     })
     expect(parseLocalgenPrompt('SIZE:512X512 fox RAW', fixedSeed)).toMatchObject({ size: '512x512', raw: true, prompt: 'fox' })
   })
@@ -49,6 +49,8 @@ describe('localgen prompt options', () => {
   test('rejects an empty prompt and out-of-range options with a readable reason', () => {
     expect(parseLocalgenPrompt('steps:20', fixedSeed)).toEqual({ error: 'the prompt is empty' })
     expect(parseLocalgenPrompt('fox steps:0', fixedSeed)).toEqual({ error: 'steps must be in [1, 100]' })
+    expect(parseLocalgenPrompt('fox cache:0.1', fixedSeed)).toMatchObject({ prompt: 'fox', cache: 0.1 })
+    expect(parseLocalgenPrompt('fox cache:2', fixedSeed)).toEqual({ error: 'cache must be a number in [0, 1], e.g. cache:0.1' })
     expect(parseLocalgenPrompt('fox steps:101', fixedSeed)).toEqual({ error: 'steps must be in [1, 100]' })
     expect(parseLocalgenPrompt('fox n:5', fixedSeed)).toEqual({ error: 'n must be in [1, 4]' })
     expect(parseLocalgenPrompt('fox seed:-1', fixedSeed)).toEqual({ error: 'seed must be an integer' })
@@ -73,7 +75,7 @@ describe('localgen request and caption', () => {
     const options = parseLocalgenPrompt('fox n:2 seed:10 steps:30 size:512x512', fixedSeed)
     if ('error' in options) throw new Error(options.error)
     expect(localgenRequestBody(options, 11)).toEqual({
-      prompt: 'fox', size: '512x512', steps: 30, seed: 11, n: 1, response_format: 'b64_json',
+      prompt: 'fox', size: '512x512', steps: 30, seed: 11, n: 1, response_format: 'b64_json', cache_threshold: 0,
     })
   })
 
