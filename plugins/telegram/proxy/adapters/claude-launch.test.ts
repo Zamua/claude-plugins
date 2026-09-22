@@ -33,7 +33,7 @@ describe('Claude launch adapter', () => {
     expect(env.TG_PROVIDER_AUTH_TOKEN).toBe('')
     expect(env.TG_AUTO_COMPACT_WINDOW).toBe('')
     expect(env.TG_MODEL).toBe('fable')
-    expect(env.TG_AUX_MODEL).toBe('haiku')
+    expect(env.TG_AUX_MODEL).toBe('claude-haiku-4-5-20251001')   // the alias is sent verbatim by Claude Code, so the API id goes in
     expect(env.TG_EFFORT).toBe('xhigh')
     expect(env.TG_DISALLOWED_TOOLS).toBe('AskUserQuestion,Workflow')
     expect(env.TG_CLAUDE_SESSION_ID).toBe('abc-123')
