@@ -22,10 +22,14 @@ export type RouteChangePlan =
   | { kind: 'apply-now'; route: TopicRoute; reason: RouteChangeReason }
   | { kind: 'wait-for-turn-boundary'; pending: PendingRouteChange }
 
+// Pinned, not the `opus` alias: an alias silently follows the next release,
+// and this default is a deliberate choice of model.
+export const DEFAULT_MODEL = 'claude-opus-5-5'
+
 export const DEFAULT_ROUTE: TopicRoute = {
   provider: 'anthropic',
-  model: 'fable',
-  effort: 'medium',
+  model: DEFAULT_MODEL,
+  effort: 'xhigh',
   ultracode: false,
 }
 
@@ -143,11 +147,18 @@ export function forgetExhaustedProvider(routes: TopicRoute[], provider: Provider
   return routes.filter(route => route.provider !== provider)
 }
 
-// Fable has its own plan limit ("You've reached your Fable 5 limit"), so Opus on
-// the same plan keeps working when it runs out.
+// Anthropic plan limits are per model ("You've reached your Fable 5 limit"), so
+// a limit on one model leaves the next one in this chain serving.
+const QUOTA_FALLBACK_CHAIN: Record<string, string> = {
+  [DEFAULT_MODEL]: 'fable',
+  fable: 'opus',
+}
+
 export function quotaFallbackRoute(route: TopicRoute): TopicRoute | undefined {
-  if (route.provider !== 'anthropic' || route.model !== 'fable') return undefined
-  return topicRoute({ provider: 'anthropic', model: 'opus', effort: 'xhigh', ultracode: route.ultracode })
+  if (route.provider !== 'anthropic') return undefined
+  const next = QUOTA_FALLBACK_CHAIN[route.model]
+  if (!next) return undefined
+  return topicRoute({ provider: 'anthropic', model: next, ultracode: route.ultracode })
 }
 
 // The route to offer back after a limit: the original route when the limit hit

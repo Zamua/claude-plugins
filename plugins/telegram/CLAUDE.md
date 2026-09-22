@@ -353,11 +353,10 @@ Quota recovery:
 
 1. `hooks/rate-limit-failover.py` reports a StopFailure `rate_limit` to
    `POST /rate-limit`.
-2. A Fable limit is model-scoped ("You've reached your Fable 5 limit"), so the
-   proxy resumes that topic on Opus at xhigh automatically
-   (`quotaFallbackRoute`), keeps the Fable route in `exhausted_routes`, and posts
-   a "switch back" button, re-offered at the reported reset time. Any other
-   limit, including Opus after that fallback, marks the provider exhausted, stops
+2. Anthropic limits are model-scoped ("You've reached your Fable 5 limit"), so the
+   proxy walks the chain Opus 5.5 -> Fable -> Opus automatically
+   (`quotaFallbackRoute`), keeps the limited route in `exhausted_routes`, and posts
+   a "switch back" button, re-offered at the reported reset time. A limit at the end of the chain marks the provider exhausted, stops
    the stalled process, and posts provider buttons in that topic. The proxy never
    consumes a reset credit. A report inside `ROUTE_DEBOUNCE_MS` of a route change
    is treated as coming from the replaced process and ignored.
@@ -936,7 +935,7 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 (required); `TELEGRAM_TOPICS_SPAWN_DIR` (default `$HOME`), `TELEGRAM_PROXY_PORT`
 (default `8790`), `TELEGRAM_TOPICS_MARKETPLACE` (default `plugin:telegram@zamua`),
 `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled),
-`TELEGRAM_TOPICS_MODEL` (default the `fable` alias, see below),
+`TELEGRAM_TOPICS_MODEL` (default the pinned `claude-opus-5-5`, see below),
 `TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
 backends" above; applies to Claude topics); `TELEGRAM_ANTIGRAVITY_BIN` (optional
 path to official `agy`, defaults to the Nix per-user profile and then PATH);
@@ -968,7 +967,7 @@ xhigh before this schema migrate once to medium + Ultracode off; all other
 legacy routes retain their prior effort with Ultracode off.
 
 **Topic model (the `--model` FLAG, NOT a settings key).** The proxy passes
-`TELEGRAM_TOPICS_MODEL` (default the `fable` alias; `default`/`inherit`/empty =
+`TELEGRAM_TOPICS_MODEL` (default the pinned `claude-opus-5-5`; `default`/`inherit`/empty =
 account default; else an alias like `opus` / `sonnet` or a pinned id like
 `claude-opus-5`. Prefer the ALIAS: it tracks the newest model in that family, so
 a release needs no config change) to the launcher as `TG_MODEL`, which adds

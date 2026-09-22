@@ -62,6 +62,7 @@ import { legacySwitchBackTarget, switchBackTarget } from './adapters/telegram-ro
 import { inboundModeForRoute, renderPaneTurn } from './domain/inbound-delivery'
 import type { InboundMessage } from './domain/inbound-delivery'
 import {
+  DEFAULT_MODEL,
   DEFAULT_ROUTE,
   auxiliaryModelForRoute,
   autoCompactWindow,
@@ -200,15 +201,13 @@ function log(m: string): void {
 // `--model` FLAG. NOT a settings `model` key: that is only a DEFAULT and is
 // IGNORED by a --resume'd interactive session (it restores its own baked-in
 // model), so an existing topic would keep its old model forever; the --model flag
-// overrides even on resume (verified end-to-end). Default the `fable` alias;
+// overrides even on resume (verified end-to-end). Defaults to DEFAULT_MODEL;
 // TELEGRAM_TOPICS_MODEL=<id> pins another model, and `default`/`inherit`/empty
 // leaves it unset so the account default applies. (The single-session bridge
 // chooses its own model separately - this is topic-Claudes only.)
 function resolveModel(): string {
   const raw = process.env.TELEGRAM_TOPICS_MODEL
-  // Prefer the ALIAS ('fable') over a pinned id: aliases track the newest
-  // model in that family, so a release does not require touching config.
-  if (raw === undefined) return 'fable'
+  if (raw === undefined) return DEFAULT_MODEL
   const s = raw.trim()
   if (s === '' || s.toLowerCase() === 'default' || s.toLowerCase() === 'inherit') return ''
   return s

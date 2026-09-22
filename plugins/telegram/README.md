@@ -173,7 +173,7 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_ANTIGRAVITY_BIN` | no | Nix per-user `agy`, then `PATH` | official Antigravity CLI used by harness-locked topics |
 | `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr` for Claude topics; Antigravity and localcode topics always use Herdr |
 | `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` | no | (disabled) | 0-23 local; once a day at this hour the proxy kills live topic sessions (each `--resume`s on its next message) |
-| `TELEGRAM_TOPICS_MODEL` | no | `fable` | initial model for topics without a persisted route; `/model` selections are persisted per topic |
+| `TELEGRAM_TOPICS_MODEL` | no | `claude-opus-5-5` | initial model for topics without a persisted route; `/model` selections are persisted per topic |
 | `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` | no | `5000` | MCP-side: how long the first inbound poll is held so the booting REPL is idle before the first message is delivered |
 
 ## Run the proxy
