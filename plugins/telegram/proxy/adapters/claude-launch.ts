@@ -83,10 +83,14 @@ function providerLaunchProfile(
 
   return {
     model: route.model,
-    auxiliaryModel,
+    // Claude Code resolves aliases for ANTHROPIC_MODEL but sends ANTHROPIC_DEFAULT_HAIKU_MODEL verbatim, so the
+    // auxiliary alias must be the API id or WebSearch/WebFetch fail with "selected model (haiku) may not exist".
+    auxiliaryModel: ANTHROPIC_MODEL_IDS[auxiliaryModel] ?? auxiliaryModel,
     autoCompactWindow: '',
   }
 }
+
+const ANTHROPIC_MODEL_IDS: Record<string, string> = { haiku: 'claude-haiku-4-5-20251001' }
 
 export function claudeSpawnEnv(spec: ClaudeSpawnSpec): Record<string, string> {
   const proxied = spec.route.provider !== 'anthropic'
