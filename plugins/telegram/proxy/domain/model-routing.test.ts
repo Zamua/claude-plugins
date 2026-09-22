@@ -40,8 +40,10 @@ describe('TopicRoute', () => {
     })
   })
 
-  test('defaults a Fable route to medium effort', () => {
-    expect(DEFAULT_ROUTE).toEqual({ provider: 'anthropic', model: 'fable', effort: 'medium', ultracode: false })
+  test('defaults topics to Opus 5.5 at xhigh, and Fable to medium', () => {
+    expect(DEFAULT_ROUTE).toEqual({
+      provider: 'anthropic', model: 'claude-opus-5-5', effort: 'xhigh', ultracode: false,
+    })
     expect(topicRoute({ provider: 'anthropic', model: 'fable' }).effort).toBe('medium')
     expect(topicRoute({ provider: 'anthropic', model: 'opus' }).effort).toBe('xhigh')
   })
@@ -119,16 +121,17 @@ describe('exhausted provider routes', () => {
 })
 
 describe('quota fallback', () => {
-  const fable = DEFAULT_ROUTE
+  const fable = topicRoute({ provider: 'anthropic', model: 'fable', effort: 'medium' })
   const opusXhigh = topicRoute({ provider: 'anthropic', model: 'opus', effort: 'xhigh' })
   const codex = topicRoute({ provider: 'codex', model: 'gpt-5.6-sol', effort: 'high' })
 
-  test('falls back from Fable to Opus at xhigh, keeping Ultracode', () => {
+  test('walks the chain Opus 5.5 -> Fable -> Opus, keeping Ultracode', () => {
+    expect(quotaFallbackRoute(DEFAULT_ROUTE)).toEqual(fable)
     expect(quotaFallbackRoute(fable)).toEqual(opusXhigh)
     expect(quotaFallbackRoute({ ...fable, ultracode: true, effort: 'xhigh' })?.ultracode).toBeTrue()
   })
 
-  test('has no automatic fallback for other routes', () => {
+  test('has no automatic fallback past the end of the chain', () => {
     expect(quotaFallbackRoute(opusXhigh)).toBeUndefined()
     expect(quotaFallbackRoute(codex)).toBeUndefined()
   })
