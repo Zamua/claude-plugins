@@ -65,7 +65,7 @@ eq "cleaned_at was recorded"        "yes"       "$([ -n "$(jq -r '.reviews["api-
 eq "the poller sees no active key"  ""          "$(jq -r '.reviews | to_entries[] | select(.value.status=="ACTIVE") | .key' "$PR_REVIEW_BOARD_STATE")"
 eq "review directory is gone"       "gone"      "$([ -d "$DIR" ] && echo present || echo gone)"
 eq "metadata directory is gone"     "gone"      "$([ -d "$META" ] && echo present || echo gone)"
-eq "report was archived"            "yes"       "$([ -f "$TD/reviews/.archive/api-10.md" ] && echo yes || echo no)"
+eq "nothing was archived"           "no"        "$([ -e "$TD/reviews/.archive" ] && echo yes || echo no)"
 eq "own workspace was left open"    "yes"       "$(printf '%s' "$out" | grep -q 'left open' && echo yes || echo no)"
 
 # The ordering invariant itself: the mark must land before the first destructive step,

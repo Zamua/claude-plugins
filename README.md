@@ -28,8 +28,8 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   and separates what is settled from what is broken from what nobody has decided.
 - **[pr-review-board](plugins/pr-review-board/)**: react to a pull request with
   an emoji and a background Claude reviews it. A local poller spawns one review
-  agent per changeset in its own herdr workspace, with a plain-English report
-  live in nvim beside the agent, linked to the code it calls out. It ends by
+  agent per changeset in its own herdr workspace, which writes a plain-English
+  report linked to the code it calls out. It ends by
   proposing a numbered list of comments and posts only the ones you pick. Never
   approves, never pushes.
 - **[briefme](plugins/briefme/)**: a very short brief on where the current work

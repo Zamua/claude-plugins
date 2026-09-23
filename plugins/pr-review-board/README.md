@@ -3,24 +3,23 @@
 React to a pull request with 👀 and a background Claude reviews it.
 
 A local poller watches GitHub for reactions **you** added in the last few minutes,
-then spawns one review agent per changeset in its own herdr workspace. The report
-lands in a pane beside the agent, live in nvim as it is written, linked to the pull
-request and to every line it calls out. The agent finishes by proposing a numbered
-list of comments and posts only the ones you pick.
+then spawns one review agent per changeset in its own herdr workspace. The agent
+writes a plain-English report linked to the pull request and to every line it calls
+out, and prints the headline in its pane. It finishes by proposing a numbered list of
+comments and posts only the ones you pick.
 
 ```
 you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
                                   │
                                   ├─ new herdr workspace, one review agent
                                   ├─ clones + worktrees the PR head
-                                  ├─ splits its pane: REVIEW.md live in nvim
                                   ├─ reviews it, proves bugs with failing tests
                                   ├─ writes REVIEW.md as it goes, linked to the PR
                                   └─ proposes numbered comments, then waits
 PR gets new commits       ─▶  the agent re-reads the diff and revises everything
 you ask it questions      ─▶  it answers in its pane
 you reply "post 1, 3"     ─▶  it posts those two, signed off, and nothing else
-you run /pr-review-board:cleanup  ─▶  archived report, everything else torn down
+you run /pr-review-board:cleanup  ─▶  everything torn down, no confirmation
 ```
 
 ## Why reactions
@@ -38,7 +37,7 @@ matters because bots react to pull requests constantly.
 
 Or develop locally: `claude --plugin-dir /path/to/pr-review-board`.
 
-Requires `gh` (authenticated), `herdr`, `nvim`, `jq`, `git`, and a Bash shell.
+Requires `gh` (authenticated), `herdr`, `jq`, `git`, and a Bash shell.
 macOS uses launchd; other platforms use cron.
 
 ## Configure
@@ -138,13 +137,13 @@ The agent states in its report which pull requests it grouped and why.
 
 ## Cleanup
 
-Manual only, via the skill. Removing the reaction does nothing. `CLEANEDUP` is
-terminal: the poller never resurrects a torn-down review. Re-reviewing the same pull
-request takes a genuinely new reaction, which opens a fresh review beside the kept
-record.
+Manual only, via the skill, and it runs as soon as you ask, with no confirmation.
+Removing the reaction does nothing. `CLEANEDUP` is terminal: the poller never
+resurrects a torn-down review. Re-reviewing the same pull request takes a genuinely
+new reaction, which opens a fresh review.
 
-`REVIEW.md` is archived to `<reviews_root>/.archive/<slug>.md` before the directory
-goes.
+Nothing is kept. `REVIEW.md`, `COMMENTS.md`, and any scratch tests go with the review
+directory, so the comments posted on GitHub are the lasting record.
 
 ## License
 
