@@ -61,9 +61,9 @@ push the checkout.
 
 ## Report shape
 
-The report is `REVIEW.md` in the review directory. The operator reads it in a pane
-beside the agent, so it is a document to be navigated, not a wall of text. Open it
-with a link line per pull request in scope, above the first section:
+The report is `REVIEW.md` in the review directory. It is a document to be navigated,
+not a wall of text. Open it with a link line per pull request in scope, above the
+first section:
 
 ```markdown
 # joinmason/cherry-pos#1234: hold refunds when the reserve is short
@@ -100,8 +100,8 @@ Then, in this order:
    unproven. Once a finding has a proposed comment, it carries that comment's number,
    and once posted, its url.
 
-   Link the location rather than naming it, so the operator lands on the code from
-   the pane:
+   Link the location rather than naming it, so the operator lands on the code in one
+   click:
    `[RefundLegFactory.kt:88](https://github.com/<owner>/<repo>/blob/<head-sha>/<path>#L88)`.
    Pin the sha the review is based on, not a branch name, or the link rots on the
    next push.
@@ -204,14 +204,14 @@ Mechanics that bite:
   concludes. If the operator wants either, tell them it is theirs to do.
 
 Report back with the posted comment urls, mapped to their numbers, and write each
-url onto its finding in the report. Cleanup keeps `REVIEW.md` and nothing else, so
-that is the only place the record survives locally.
+url onto its finding in the report. Cleanup deletes the report and the ledger with
+the review directory, so the posted comments on GitHub are the lasting record.
 
 ### The ledger
 
-The list lives in `<dir>/COMMENTS.md`, next to the report, updated in step with it,
-and open as the second tab of the operator's review pane. They read it there, so write
-it in whole states rather than leaving it half-rewritten. Each entry carries its number, target, confidence, status, and current body.
+The list lives in `<dir>/COMMENTS.md`, next to the report, updated in step with it.
+Write it in whole states rather than leaving it half-rewritten. Each entry carries its
+number, target, confidence, status, and current body.
 Status is one of `proposed`, `approved`, `posted <url>`, or `dropped`.
 
 This is what keeps the numbers stable across a context loss and what stops a second

@@ -33,33 +33,12 @@ watermark. `baseRefName` arrives in the same query, so stack detection is free.
 Filtering on the viewer is essential: bots react to pull requests constantly, and a
 bot 👀 is indistinguishable from a human one by count alone.
 
-**nvim 0.12.4.** The review pane is `nvim -R -M -n -p` on `REVIEW.md` and
-`COMMENTS.md`, one tab each, and nvim does not notice the agent rewriting either. A
-`vim.uv` timer calling `checktime` every two seconds is what makes the pane live, and
-without it the operator reads a stale report with nothing to indicate it. `-M` does not
-interfere: a nomodifiable buffer still reloads, because a reload is not an edit.
-checktime does defer a reload for a buffer with no window, so the inactive tab is also
-re-checked on `TabEnter`.
-
-The lockdown is deliberate. Both buffers are views of the agent's output, so an edit
-could only collide with the next rewrite. The cursor stays visible: nvim re-asserts
-DECTCEM show on every redraw, `guicursor` has no hidden shape, and highlight `blend` is
-inert in the TUI, so hiding it is not available at any price worth paying.
-`vim.diagnostic.enable(false)` is global rather than per-buffer, so it also covers
-language servers that attach after startup.
-
 **herdr 0.7.5.** `agent start` attaches to an existing pane already at a shell
 prompt and derives the executable from `--kind`, so a launch is three calls:
 `workspace create`, `agent start`, `agent prompt`. A fresh pane answers
 `agent_pane_busy` until its shell is up, so that one error is retried and no other is.
 Inside a pane the injected socket already points at the right server, so `--session`
 is passed only from outside one.
-
-`pane split` takes no command, so the report pane is a split followed by a `pane run`.
-That `run` reports success as soon as the API accepts the keystrokes, including when
-the shell had not reached its prompt and dropped them, so the only proof nvim launched
-is `pane wait-output --match NORMAL`. Checking before each retry rather than after is
-deliberate: a blind second `run` gets typed into an nvim that did start.
 
 **Claude Code permissions.** A read outside the agent's cwd raises a prompt that a
 background worker has nobody to answer, so the cwd is the reviews **root** and
@@ -80,11 +59,10 @@ retry logic.
 
 **Poller.** Deliberately thin. It decides which pull requests the operator asked for,
 groups them into reviews, writes the assignment, and brings an agent up. It never
-clones, never diffs, never builds layout. `poll.sh once` is the whole scheduled unit.
+clones, never diffs. `poll.sh once` is the whole scheduled unit.
 
 **Review agent.** One per review. Owns everything object-level: clones, worktrees,
-the report pane, tests, the report, the proposed comment list, and the
-monitor loop. It reads GitHub freely, writes nothing there until the operator names
+tests, the report, the proposed comment list, and the monitor loop. It reads GitHub freely, writes nothing there until the operator names
 comment numbers, and cannot tear itself down.
 
 **Operator.** Reacts to pull requests, reads reports, asks questions, approves the
@@ -130,12 +108,11 @@ the live agent and leave the review permanently `stopped`.
 
 ## Layout
 
-One herdr workspace per review, labelled with the slug. Tab 1 holds the review agent,
-and the agent splits its own pane to the right for the review documents. That is the
-whole layout: the agent on the left, `REVIEW.md` and `COMMENTS.md` as two nvim tabs on
-the right, and nothing per pull request,
-because the report already covers every pull request in scope and the set can grow
-while the review is live.
+One herdr workspace per review, labelled with the slug, holding one pane: the review
+agent. Nothing is opened per pull request, because the report already covers every
+pull request in scope and the set can grow while the review is live. `REVIEW.md` and
+`COMMENTS.md` sit in the review directory for the operator to open however they like,
+and the agent prints the headline and the numbered comment list in its own pane.
 
 The report carries the navigation instead. Each pull request in scope is linked at the
 top, and each finding location links to the file at the reviewed head sha, so reading
@@ -162,7 +139,7 @@ review, and a `pr_index` so a pull request belongs to at most one live review. E
 mutation goes through a temp file, so a crash mid-write cannot truncate the store.
 
 Per-review harness data lives in `<reviews_root>/.pr-review-board/<key>/`: the
-assignment, the cached diffs, and the report pane id. That location is
+assignment and the cached diffs. That location is
 deliberately **outside** the review directory, because for a single-pull-request
 review the review directory *is* a git worktree, and `git worktree add` accepts an
 existing empty directory but refuses a non-empty one. Keeping metadata out means the
@@ -188,9 +165,10 @@ same decision as a first launch and goes through the same loop.
 
 - A review never writes to GitHub. That is stated in the persona, in the shared review
   rules, and in the kickoff prompt.
-- Teardown refuses without `--yes`, refuses to delete outside the reviews root, reads
-  a worktree's owning clone from git rather than guessing, and archives the report
-  before removing anything.
+- Teardown runs when the operator asks, with no second confirmation, and keeps
+  nothing: the report and scratch tests go with the review directory. The script
+  itself refuses without `--yes`, refuses to delete outside the reviews root, and reads
+  a worktree's owning clone from git rather than guessing.
 - Canonical clones are only ever fetched from and worktree'd; their branches and
   working trees are left alone.
 - Only reactions by the configured viewer count, so nobody else can dispatch an agent

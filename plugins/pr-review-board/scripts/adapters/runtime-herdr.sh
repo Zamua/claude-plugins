@@ -2,10 +2,8 @@
 # pr-review-board runtime adapter: herdr (https://herdr.dev), verified on 0.7.5.
 #
 # Every review runs inside ONE shared herdr session (config `herdr_session`).
-# Each review gets its OWN workspace, labelled with the review slug, whose first
-# tab holds the review agent. The worker adds one further tab per pull request and
-# splits its own pane for the report there; the harness does not build that layout, because
-# the pull request set can grow while the review is live.
+# Each review gets its OWN workspace, labelled with the review slug, holding one
+# pane: the review agent.
 #
 # Review identity for status and reap is the herdr AGENT NAME, derived
 # deterministically from the slug, so a pass is re-entrant and cannot produce
@@ -194,7 +192,7 @@ rt_resume() {  # <key> ; 2 = no saved session
     return 1
   fi
   prb_review_set_field "$key" herdr_workspace "$ws"
-  _rt_prompt "$name" "Resumed. Re-open your report pane, re-check every pull request and thread for activity since your last pass, and continue. Do not redo finished work."
+  _rt_prompt "$name" "Resumed. Re-check every pull request and thread for activity since your last pass, and continue. Do not redo finished work."
   prb_log "resumed $key (workspace=$ws claude=$sid)"
 }
 
@@ -215,7 +213,7 @@ rt_relabel() {  # <key> <label>
 }
 
 # Teardown, for the cleanup skill only. Closing the workspace takes the agent pane
-# and the report pane with it.
+# with it.
 rt_close_workspace() {  # <key>
   local ws s; ws="$(prb_review_field "$1" herdr_workspace)"; s="$(_rt_session)"
   [ -n "$ws" ] || { prb_log "close $1: no recorded workspace"; return 0; }

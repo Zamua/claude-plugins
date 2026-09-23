@@ -39,53 +39,23 @@ always theirs. See the GitHub boundary in the review rules.
    into the target first. Never disturb an existing clone's branches or working tree
    beyond fetching.
 
-3. **Open the report pane.** Only when running inside a herdr pane; otherwise skip
-   to step 4 and let the user open `REVIEW.md` however they like.
-
-   The layout helper is keyed by a review the poller created, so a manual review
-   drives it directly. Seed both files first, since nvim cannot reload into one that
-   does not exist yet:
-
-   ```bash
-   D=~/workspace/reviews/<repo>-<number>
-   printf '# Review in progress\n' > "$D/REVIEW.md"
-   printf '# Proposed comments\n\nNone yet.\n' > "$D/COMMENTS.md"
-   herdr pane split --pane "$HERDR_PANE_ID" --direction right --ratio 0.5 --cwd "$D"
-   # then, in the pane id that came back:
-   herdr pane run <pane> "nvim -R -M -n -p \
-     -c 'luafile ${CLAUDE_PLUGIN_ROOT}/scripts/report-view.lua' \
-     $D/REVIEW.md $D/COMMENTS.md"
-   ```
-
-   `-p` gives one tab per file. `-R -M -n` makes both buffers unmodifiable and
-   unwritable, and `report-view.lua` turns diagnostics off and polls both files, so the
-   user watches them fill in as you write.
-
-   `herdr pane run` reports success even when the shell was not ready and dropped the
-   command, so confirm with
-   `herdr pane wait-output <pane> --match NORMAL --source visible --timeout 3000`
-   before assuming nvim is up, and never fire the command twice blind. The second copy
-   gets typed into a live nvim.
-
-4. **Review per the review rules.** Prove every behavioral finding with a test in
+3. **Review per the review rules.** Prove every behavioral finding with a test in
    the checkout that fails against this code. Drop anything you cannot reproduce.
 
-5. **Produce the outputs.** `REVIEW.md` in the review directory, every pull request
+4. **Produce the outputs.** `REVIEW.md` in the review directory, every pull request
    and finding location linked, a summary in the conversation, and `COMMENTS.md`
-   holding the proposed comment list. Write both in whole states, since the user is
-   reading them live in the pane.
+   holding the proposed comment list.
 
-6. **Propose the comments.** Print the numbered list in the conversation and stop.
+5. **Propose the comments.** Print the numbered list in the conversation and stop.
    Walk the user through the findings, answer questions, and reword entries as they
    ask, keeping each number fixed. Do not start changing the reviewed code unless
    they ask.
 
-7. **Post the numbers they pick.** Re-check the head SHA first, then one batched
+6. **Post the numbers they pick.** Re-check the head SHA first, then one batched
    review per pull request, then report the urls against their numbers. The proposed
    comments section of the review rules carries the call and the failure modes.
 
 ## If the pull request moves while you are working
 
-Re-run `gh pr diff` and re-read it. The pane picks up your rewritten `REVIEW.md` on
-its own. Re-derive the finding links, since they pin a head sha and a force-push
-leaves them pointing at code that is no longer there.
+Re-run `gh pr diff` and re-read it. Re-derive the finding links, since they pin a head
+sha and a force-push leaves them pointing at code that is no longer there.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # pr-review-board poller + management CLI. A thin harness: it decides which pull
 # requests you asked to have reviewed, groups them into reviews, and brings a
-# review agent up. Everything object-level (clones, worktrees, diffs, the report pane,
-# tests, the report) is the worker's job.
+# review agent up. Everything object-level (clones, worktrees, diffs, tests, the
+# report) is the worker's job.
 #
 # The trigger is a reaction you added to a pull request recently. There is no
 # un-react trigger: reaping is manual, via the pr-review-board:cleanup skill.

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# pr-review-board teardown. Split into `plan` and `apply` so the operator always
-# sees exactly what is about to be destroyed before anything is.
+# pr-review-board teardown. `plan` is a dry run; `apply` does it, and refuses
+# without `--yes` so a stray invocation destroys nothing.
 #
 #   cleanup.sh list
 #   cleanup.sh plan  <key|slug|owner/repo#N|pr-url>
 #   cleanup.sh apply <key|slug|owner/repo#N|pr-url> --yes
 #
-# apply, in order: archive the report, mark the review CLEANEDUP, remove each
-# worktree, delete the review directory and its metadata, close the herdr workspace.
+# apply, in order: mark the review CLEANEDUP, remove each worktree, delete the review
+# directory and its metadata, close the herdr workspace. Nothing is kept: the report
+# goes with the directory.
 #
 # The mark comes before the destruction and the workspace close comes last, both for
 # the same reason: closing a workspace kills every pane in it, so a cleanup run from
@@ -89,19 +90,14 @@ cmd_plan() {
   printf 'Pull requests:\n'
   while IFS= read -r p; do [ -n "$p" ] && printf '  %s\n' "$p"; done < <(prb_review_prs "$key")
   printf '\nWould do:\n'
-  if [ -f "$dir/REVIEW.md" ]; then
-    printf '  archive   %s/REVIEW.md -> %s/.archive/%s.md\n' "$dir" "$(prb_reviews_root)" "$(prb_review_field "$key" slug)"
-  else
-    printf '  archive   (no REVIEW.md found; nothing to keep)\n'
-  fi
   printf '  state     mark %s CLEANEDUP (terminal, before anything destructive)\n' "$key"
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
     owner="$(_c_owner_repo "$wt" || true)"
     printf '  worktree  remove %s   (from %s)\n' "$wt" "${owner:-unknown}"
   done < <(_c_worktrees "$key")
-  printf '  delete    %s\n' "$dir"
-  printf '  delete    %s   (cached diffs, assignment, pane ids)\n' "$(prb_meta_dir "$key")"
+  printf '  delete    %s   (report, comment list, scratch tests)\n' "$dir"
+  printf '  delete    %s   (cached diffs, assignment)\n' "$(prb_meta_dir "$key")"
   local ws; ws="$(prb_review_field "$key" herdr_workspace)"
   if [ -n "$ws" ] && [ "$ws" = "${HERDR_WORKSPACE_ID:-}" ]; then
     printf '  close     herdr workspace %s   SKIPPED: it is the one you are running in\n' "$ws"
@@ -115,21 +111,15 @@ cmd_apply() {
   local key="" yes=0 a
   for a in "$@"; do case "$a" in --yes) yes=1;; *) [ -z "$key" ] && key="$a";; esac; done
   key="$(_c_resolve "$key")" || { prb_log "no review matches"; return 1; }
-  [ "$yes" = 1 ] || { prb_log "refusing to tear down without --yes; run 'plan' first"; return 1; }
+  [ "$yes" = 1 ] || { prb_log "refusing to tear down without --yes; 'plan' shows what it would do"; return 1; }
   prb_lock || return 1
   trap 'prb_unlock' EXIT
 
-  local dir slug arch wt owner
-  dir="$(prb_review_field "$key" dir)"; slug="$(prb_review_field "$key" slug)"
+  local dir wt owner
+  dir="$(prb_review_field "$key" dir)"
   [ -n "$dir" ] || { prb_log "review '$key' has no directory recorded"; return 1; }
 
-  # 1. The report is the deliverable, so it outlives the directory holding it.
-  if [ -f "$dir/REVIEW.md" ]; then
-    arch="$(prb_reviews_root)/.archive"; mkdir -p "$arch"
-    cp "$dir/REVIEW.md" "$arch/$slug.md" && prb_log "archived report to $arch/$slug.md"
-  fi
-
-  # 2. Terminal state, BEFORE anything destructive. The pull request bindings stay,
+  # 1. Terminal state, BEFORE anything destructive. The pull request bindings stay,
   # so status still explains where a pull request went, but the poller will not
   # resurrect it. Order matters: a teardown that dies partway used to leave the
   # review ACTIVE with its workspace already gone, which the next pass read as an
@@ -138,7 +128,7 @@ cmd_apply() {
   prb_review_set_field "$key" cleaned_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   prb_log "review '$key' is CLEANEDUP"
 
-  # 3. Worktrees, then their administrative entries.
+  # 2. Worktrees, then their administrative entries.
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
     owner="$(_c_owner_repo "$wt" || true)"
@@ -152,7 +142,7 @@ cmd_apply() {
     fi
   done < <(_c_worktrees "$key")
 
-  # 4. Whatever is left of the review directory.
+  # 3. Whatever is left of the review directory.
   if [ -d "$dir" ]; then
     case "$dir" in
       "$(prb_reviews_root)"/?*) rm -rf "$dir" && prb_log "deleted $dir" ;;
@@ -160,13 +150,13 @@ cmd_apply() {
     esac
   fi
 
-  # 5. Harness metadata for this review, which lives outside the checkout.
+  # 4. Harness metadata for this review, which lives outside the checkout.
   local meta; meta="$(prb_meta_dir "$key")"
   case "$meta" in
     "$(prb_reviews_root)"/.pr-review-board/?*) [ -d "$meta" ] && rm -rf "$meta" && prb_log "deleted $meta" ;;
   esac
 
-  # 6. The workspace, last, because closing it takes every pane inside it. When the
+  # 5. The workspace, last, because closing it takes every pane inside it. When the
   # caller is one of those panes, closing it kills this process, so that case is
   # refused rather than obeyed: everything above is already done, and one leftover
   # workspace the operator closes by hand beats a teardown that cannot finish.
