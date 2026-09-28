@@ -63,12 +63,12 @@ push the checkout.
 
 The report is `REVIEW.md` in the review directory. It is a document to be navigated,
 not a wall of text. Open it with a link line per pull request in scope, above the
-first section:
+first section (illustrative):
 
 ```markdown
-# joinmason/cherry-pos#1234: hold refunds when the reserve is short
+# example-org/inventory-service#1234: reject stock adjustments below zero
 
-[github.com/joinmason/cherry-pos/pull/1234](https://github.com/joinmason/cherry-pos/pull/1234)
+[github.com/example-org/inventory-service/pull/1234](https://github.com/example-org/inventory-service/pull/1234)
 ```
 
 Then, in this order:
@@ -102,7 +102,7 @@ Then, in this order:
 
    Link the location rather than naming it, so the operator lands on the code in one
    click:
-   `[RefundLegFactory.kt:88](https://github.com/<owner>/<repo>/blob/<head-sha>/<path>#L88)`.
+   `[StockLedger.kt:88](https://github.com/<owner>/<repo>/blob/<head-sha>/<path>#L88)`.
    Pin the sha the review is based on, not a branch name, or the link rots on the
    next push.
 5. **Grouping note**, when the review covers more than one pull request: which
@@ -132,14 +132,16 @@ One entry per comment, worst first, mirroring the findings order. Each entry sho
   approving. Leave the sign-off off the list and append it at post time, since it is
   the same on every comment.
 
-```
-1. joinmason/cherry-pos#1234  RefundLegFactory.kt:88  proven
-   The batch id is built per leg, so two legs in one refund get different ids and the
-   reconciliation join drops both. A test asserting one id per refund fails here.
+Illustrative entries (the shape is fixed; the content is not):
 
-2. joinmason/cherry-pos#1234  review body  unproven
-   Is the retry meant to run before the hold is released? Reading it in order, a
-   release between the two calls would let the second one charge again.
+```
+1. example-org/inventory-service#1234  StockLedger.kt:88  proven
+   The zero check runs before the pending reservations are subtracted, so an adjustment
+   can still take available stock negative. A test reserving then adjusting fails here.
+
+2. example-org/inventory-service#1234  review body  unproven
+   Is the cache meant to be invalidated before the ledger write commits? Reading it in
+   order, a read between the two could serve the old count.
 ```
 
 Not every finding needs to become a comment. Propose the ones worth the author's
