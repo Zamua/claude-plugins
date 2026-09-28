@@ -16,7 +16,7 @@ const CLAUDE_MODELS: ProviderModel[] = [
   { id: 'claude-opus-5-5', label: 'Opus 5.5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'xhigh', supportsUltracode: true },
   { id: 'fable', label: 'Fable', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium', supportsUltracode: true },
   { id: 'opus', label: 'Opus', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'xhigh', supportsUltracode: true },
-  { id: 'sonnet', label: 'Sonnet', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsUltracode: false },
+  { id: 'sonnet', label: 'Sonnet', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high', supportsUltracode: false },
   { id: 'haiku', label: 'Haiku', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium', supportsUltracode: false },
 ]
 
