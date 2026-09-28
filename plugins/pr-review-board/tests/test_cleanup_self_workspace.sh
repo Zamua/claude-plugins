@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Scratch evidence for pr-review-board review cherry-pos-5010.
+# Scratch evidence for pr-review-board review inventory-service-5010.
 #
 # Claim under test: `cleanup.sh apply` run from inside the review's own herdr
 # workspace tears the review down halfway and lets the poller resurrect it.
 #
-# Observed on cherry-pos-5010: the report was archived at 14:21:16, workspace w3 was
+# Observed on inventory-service-5010: the report was archived at 14:21:16, workspace w3 was
 # closed, and then nothing else happened. The worktree, the review directory and the
 # metadata directory were all untouched, and the review was still ACTIVE. 90 seconds
 # later the next pass read that as an agent that had died and resumed it into w7,
