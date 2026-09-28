@@ -44,6 +44,6 @@ instructions back to them.
 
 ## Length
 
-Aim for under 150 words total. If the state genuinely cannot be said that
-briefly, say the one thing that matters and offer to expand on the rest.
-Length is the failure mode this skill exists to prevent.
+The brief is read in one glance by someone who has lost the thread, so it holds
+only the shape above. If the state cannot fit that shape, say the one thing that
+matters and offer to expand on the rest.
