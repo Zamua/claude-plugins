@@ -123,7 +123,7 @@ core:
   - **Subagent poller guard** (`server.ts`): a background agent spawned by a
     topic-Claude (Agent tool / claude daemon) inherits the pane env -
     `TELEGRAM_TOPIC_ID` included - and loads this plugin, which would make it
-    a SECOND poller round-robining the topic's queue (observed 2026-07-18).
+    a SECOND poller round-robining the topic's queue.
     Bg sessions are identified by `CLAUDE_CODE_SESSION_KIND=bg`; they keep the
     outbound tools but never start the inbound/permission polls.
   - The claude invocation (`PANE_CMD`) is byte-identical for both backends.
@@ -145,14 +145,11 @@ with their labels intact while the claude process inside them is DEAD. herdr
 reports such an empty shell as `agent_status: "unknown"`; a real agent is
 `idle`/`working`/`done`/`blocked`. Both the proxy's `HerdrMux.liveSessions()` and
 the launcher's `spawn_herdr` dedup guard therefore require a NON-`unknown` status,
-not merely a label. With the old label-only checks, exactly the topics that were
-RUNNING at logout could never come back: the proxy "re-adopted" the corpse on boot
-and never respawned, and even if it had tried, the launcher refused to spawn over
-the existing label - messages queued for a session that did not exist. (Diagnosed
-2026-07-23: `claude-general` + `claude-macos-944` were labeled panes with
-`agent_status: "unknown"` and zero claude processes.) A stale labeled pane is now
-CLOSED by the launcher before spawning, so no duplicate label is stranded.
-Caveat baked in: `unknown` is also reported for the first ~2s of a healthy pane's
+not merely a label: a label-only check re-adopts the dead pane, never respawns,
+and the launcher refuses to spawn over the label, so messages queue for a session
+that does not exist. The launcher CLOSES a stale labeled pane before spawning, so
+no duplicate label is stranded.
+`unknown` is also reported for the first ~2s of a healthy pane's
 life, so `ensureSession` honors `SPAWN_GRACE_MS` (30s) after a spawn - otherwise a
 message arriving during boot would spawn a second agent on top of the first.
 
@@ -234,7 +231,7 @@ event loop serving /poll; temp wav + oga are deleted after. Config:
 `_WHISPER_BIN` / `_WHISPER_MODEL` path overrides (defaults are homebrew paths -
 launchd's minimal PATH never resolves bare names). Model choice matters:
 tiny/base/small all garbled a true WHISPER (low-energy speech); large-v3-turbo
-transcribed it correctly (verified 2026-08-08). Telegram caps bot downloads at
+transcribed it correctly. Telegram caps bot downloads at
 20MB (~20 min of voice).
 
 ## Secret drop (`/secret <name>`)
@@ -649,8 +646,8 @@ there is no agent to relaunch.
 
 - **Probed CLIs leave MCP servers behind unless their process group is killed.** The 5-minute capacity
   refresh runs `antigravity -p /usage`; that CLI loads its MCP config, which includes our channel
-  `server.ts`, and exits without stopping it. Each leftover spun at ~50% CPU (13 of them after one
-  night). `nodeProcessRunner` therefore spawns probes `detached` and kills `-pid` on exit and on
+  `server.ts`, and exits without stopping it. Each leftover spins at ~50% CPU and they accumulate
+  across refreshes. `nodeProcessRunner` therefore spawns probes `detached` and kills `-pid` on exit and on
   timeout, and `server.ts` shuts down when `process.ppid` changes from the spawner's pid. Any new
   probe that shells out to a CLI must go through that runner.
 - **Foreground only.** Channel injection (the `<channel>` turn from a
@@ -671,19 +668,15 @@ there is no agent to relaunch.
   claude rejects the untagged `--dangerously-load-development-channels=` and dies
   instantly. Passing them via `-e` makes the pane shell expand the `$`-refs and
   makes claude + its MCP child inherit them regardless. (Requires tmux >= 3.2.)
-- **Dev-channel confirm dialog auto-dismiss (still needed; window now 2 min).**
+- **Dev-channel confirm dialog auto-dismiss.**
   `--dangerously-load-development-channels` can show a one-key "local
   development" confirmation dialog; the launcher's short-lived DETACHED watcher
-  polls the pane for the dialog text and sends `1`+Enter. The dialog does NOT
-  appear on every boot on claude >= 2.1.214 (many boots go straight to a
-  channels banner) but it STILL APPEARS on some (observed on a 2.1.214
-  big-transcript resume, 2026-07-18) - do not assume it is gone. The trap it
-  causes when unanswered: on a BIG-transcript `--resume` the dialog renders
-  AFTER the transcript loads - the original 15s watcher window lost that race
-  twice (2026-07-17/18), leaving sessions REPL-alive but plugin-less with
-  messages queueing undrained at the proxy. The window is now WATCHER_TRIES=480
-  (2 minutes); most watchers see no dialog and just exit quietly. Manual
-  unstick if it ever recurs: send `1`+Enter to the pane (tmux send-keys /
+  polls the pane for the dialog text and sends `1`+Enter. The dialog appears on
+  some boots and not others, so the watcher always runs. On a big-transcript
+  `--resume` it renders only AFTER the transcript loads; left unanswered, the
+  session is REPL-alive but plugin-less and messages queue undrained at the
+  proxy. Hence the long window, `WATCHER_TRIES=480` (2 minutes); most watchers
+  see no dialog and exit quietly. Manual unstick: send `1`+Enter to the pane (tmux send-keys /
   herdr pane send-keys). NB: pane-target tmux commands
   (`capture-pane` / `send-keys`) do NOT accept the `=name` exact-match prefix that
   `has-session` does; an exact session name already resolves exactly, so the
@@ -698,20 +691,16 @@ there is no agent to relaunch.
   cleanly. Only the first poll waits; warm messages are unaffected.
 - **`MCP_TIMEOUT` bump: a HUGE-transcript resume can drop the channel MCP.** The
   launcher forwards `MCP_TIMEOUT` (ms, claude's MCP-startup ceiling) into every
-  pane with a generous default (`180000`). WHY (real incident 2026-07-29): a topic
-  with a very large transcript (shale) resumed so slowly that the Telegram channel
-  MCP's startup exceeded claude's DEFAULT timeout, so claude dropped it - the
-  session ran normally (REPL up, no dialog, no visible error) but with NO channel,
-  so nothing polled the proxy and every message to that topic silently queued
-  undrained at the proxy. Smaller-transcript topics (hostthis, general) resumed in
-  time and were fine, which is the tell: it's transcript-size-dependent, not a
-  systematic resume bug. A generous ceiling is harmless for fast loaders (the MCP
-  connects the moment it's ready; the ceiling only bites a slow resume). Diagnosis
+  pane with a generous default (`180000`). A very large transcript can resume so
+  slowly that the channel MCP's startup exceeds claude's default timeout; claude
+  then drops it and the session runs normally (REPL up, no dialog, no visible
+  error) with NO channel, so every message to that topic queues undrained at the
+  proxy. It depends on transcript size, not on resume in general. A generous
+  ceiling costs fast loaders nothing (the MCP connects the moment it is ready). Diagnosis
   signal: the MCP is `bun server.ts` / `bun run --cwd .../telegram start` in the
   pane's process tree - a topic missing it has a dead channel (compare a working
-  topic's `herdr pane process-info` against the broken one). Measured: `180000`
-  recovered shale end-to-end (MCP up, queued messages delivered). If a transcript
-  ever grows past that, raise the default.
+  topic's `herdr pane process-info` against the broken one). If a transcript
+  outgrows `180000`, raise the default.
 - **Session continuity (one topic = one continuous conversation).** The proxy
   mints a claude session id per topic on the FIRST spawn, passed via
   `--session-id` + the kickoff. Every LATER spawn (kill / crash / proxy restart)
@@ -839,10 +828,7 @@ there is no agent to relaunch.
   sets `TG_HOOK` to the absolute script path (`STOP_HOOK`, a `PLUGIN_ROOT`-derived
   const) in the spawn env and the launcher forwards it to the pane via
   `new-session -e TG_HOOK=...` - so that COMMITTED file needs no hardcoded path
-  (hook `command`s are shell-run, so `$TG_HOOK` expands). The single-session
-  bridge wires the SAME script via its own LOCAL `--settings` override
-  (`~/.claude/channels/telegram/claude-settings-override.json`, absolute path -
-  fine there, that file is not committed). Verified live: a channel-marked turn
+  (hook `command`s are shell-run, so `$TG_HOOK` expands). Verified live: a channel-marked turn
   with no reply blocked the stop and made Claude call the reply tool; the loop
   guard fired exactly once. Complements (does not replace) the CLAUDE.md
   channel-discipline instruction - the instruction nudges the first reply, the
@@ -952,8 +938,10 @@ Loaded from the real env (wins), then plugin-dir `.env`, then
 
 **Topic effort / ultracode.** Both values live on the persisted route and are
 configured through `/model`; no global environment toggle is used. A new
-topic's route defaults to Fable at medium effort; other models default to
-xhigh (OpenCode Go to `auto`). Ultracode defaults off. If enabled, the domain model pins effort to xhigh because Claude
+topic's route is `DEFAULT_ROUTE`: `claude-opus-5-5` at xhigh. Each picker model
+carries its own default effort in `provider-catalog.ts` (`fable` medium,
+OpenCode Go `auto`). Ultracode defaults off. If enabled, the domain model pins
+effort to xhigh because Claude
 Code's Ultracode mode requires xhigh and enables standing dynamic workflows.
 Models with no explicit effort variants persist `auto`, which omits `--effort`
 and `CLAUDE_CODE_EFFORT_LEVEL` so the provider owns the choice. Otherwise the
@@ -968,24 +956,17 @@ legacy routes retain their prior effort with Ultracode off.
 
 **Topic model (the `--model` FLAG, NOT a settings key).** The proxy passes
 `TELEGRAM_TOPICS_MODEL` (default the pinned `claude-opus-5-5`; `default`/`inherit`/empty =
-account default; else an alias like `opus` / `sonnet` or a pinned id like
-`claude-opus-5`. Prefer the ALIAS: it tracks the newest model in that family, so
-a release needs no config change) to the launcher as `TG_MODEL`, which adds
+account default; else an alias like `opus` / `sonnet` or a pinned id. The
+default is pinned rather than an alias so a release never changes it
+silently) to the launcher as `TG_MODEL`, which adds
 `--model <id>` to the claude
 command. Once a topic has a persisted `route`, that selection wins over the
-environment default. **Why a flag, not a settings `model` key** (learned 2026-07-04 from a
-topic coming up on the wrong model): a settings `model` is only a DEFAULT and is
-IGNORED by a `--resume`d INTERACTIVE session, which restores its OWN baked-in
-model - so a pre-existing topic (created on an older default) would keep that old
-model forever, and baking `model` into effective-settings.json did NOT fix it
-(measured: hostthis resumed to opus despite `model: claude-fable-5` in the
-settings). The `--model` FLAG overrides even on resume (measured: an opus session
-resumed with `--model claude-fable-5` came up fable-5). Effect is per-respawn (the
-flag applies on every spawn). The launcher builds args with `set --` so a
-bracketed id like `claude-fable-5[1m]` is one properly-quoted arg. The bridge
-chooses its own model separately (the global `~/.claude/settings.json` `model` is
-`claude-fable-5[1m]`, but the bridge session was created on opus and keeps it on
-`--continue` - same resume-keeps-its-model behavior).
+environment default. **Why a flag, not a settings `model` key:** a settings
+`model` is only a default; a `--resume`d interactive session ignores it (also
+in effective-settings.json) and restores its own model, so an existing topic
+would keep its old model forever. The `--model` flag overrides even on resume
+and applies on every spawn. The launcher builds args with `set --` so a
+bracketed id like `claude-opus-5-5[1m]` is one properly-quoted arg.
 
 **Passive nightly restart.** If `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` is set
 (0-23, LOCAL), the proxy checks once a minute and, once a day at that hour, kills
@@ -993,8 +974,8 @@ every LIVE topic session (deduped by local date). Each one re-spawns with
 `--resume` on its next inbound message (fresh claude + latest launcher config,
 full conversation kept). Passive by design: idle sessions are NOT kept running -
 the proxy polls Telegram, the topic-Claudes don't, so they only need to be up
-when in use. Mirrors the single-session bridge's nightly restart (pick up claude
-updates + clear accumulated process state) without the idle cost.
+when in use. The restart picks up claude updates and clears accumulated process
+state without the idle cost.
 
 The MCP client also reads `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` (default `5000`)
 for the cold-start first-poll delay above.
@@ -1012,18 +993,13 @@ default (override via env) and the `enabledPlugins` key in the committed
 `override-settings.json` (edit to `telegram@<your-marketplace>`). Change both
 and everything else ports as-is.
 
-## Removed alternate harness
+## OpenCode: two unrelated forms
 
-The short-lived delta-copy OpenCode CHANNEL PLUGIN experiment was removed: there
-is no `/handoff`, no OpenCode channel plugin, and no delta-copy protocol that
-mirrors a Claude topic into a second session identity. OpenCode appears in two
-unrelated forms today: OpenCode Go is a provider route beneath Claude Code
-through the local compatibility bridge, and `/localcode` is a harness-locked
-topic on the Antigravity pattern (its own aggregate, its own pane, never a copy
-of a Claude conversation). The one pilot topic of the removed experiment was
-migrated by exporting its OpenCode dialogue into a one-time resume notice for
-its original Claude UUID before cutover; no legacy harness fields remain in the
-runtime registry contract.
+OpenCode Go is a provider route beneath Claude Code through the local
+compatibility bridge; `/localcode` is a harness-locked topic on the Antigravity
+pattern (its own aggregate, its own pane, never a copy of a Claude
+conversation). There is no `/handoff` and no OpenCode channel plugin: nothing
+mirrors a Claude topic into a second session identity.
 
 ## Not in v1
 
