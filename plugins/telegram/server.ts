@@ -117,7 +117,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: 'reply',
       description:
-        'Reply on Telegram. Pass chat_id from the inbound message. Optionally pass reply_to (message_id) for threading, and files (absolute paths) to attach images or documents.',
+        'Send a message to the Telegram topic this session is bound to; it always posts to this session\'s own topic (answer a #square message with square_reply instead). It is the only way the user sees anything: transcript text never reaches them. Pass chat_id from the inbound <channel> block. Optionally pass reply_to (message_id) to quote-reply, and files (absolute paths). Text over 4096 characters is split into several messages on character count, which can cut a MarkdownV2 entity, so keep formatted replies under that length. A MarkdownV2 parse error fails the call; parts already sent stay sent. Files are sent after the text, one message each: .jpg/.jpeg/.png/.gif/.webp as photos, anything else as a document, 50MB max each; files in the proxy\'s state directory and its .env files are refused. Returns the sent message id(s), which edit_message accepts.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -202,7 +202,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: 'square_tag',
       description:
-        'Open a collaboration with a peer Claude in the shared #square topic. Use ONLY when you genuinely need that peer (their domain, their codebase). The peer receives your message and can reply; the whole conversation is visible to the operator in #square. Returns the conversation id. Norms: every message must move the work forward; do long work in shared files and post summaries + paths.',
+        'Open a conversation with a peer Claude in the shared #square topic. Use it when you need that peer\'s domain or codebase to move your work forward; it is not for status broadcasts. The peer (woken if dormant) receives your message and can reply; the whole conversation is visible to the operator in #square. Returns the conversation id. Put long material in shared files and post a summary plus paths.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -215,7 +215,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: 'square_reply',
       description:
-        'Continue a #square conversation you participate in. Pass conv and reply_token VERBATIM from the square notification meta. Reply ONLY if it moves the work forward — a closing courtesy is fine, courtesy-for-courtesy is not; if no reply is warranted simply do not call this (silence politely ends a conversation and is sanctioned).',
+        'Continue a #square conversation you participate in. Copy conv and reply_token exactly from the square notification meta; reply_token threads under the message you are answering, and without it the reply attaches to the conversation root. Unknown conv returns 404 (open one with square_tag); a non-participant gets 403. Call it when your reply moves the work forward. A single closing courtesy is fine, but do not answer a courtesy with a courtesy. Not calling it ends the conversation, and no reply guard fires on square turns.',
       inputSchema: {
         type: 'object',
         properties: {

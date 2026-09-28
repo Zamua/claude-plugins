@@ -27,13 +27,13 @@ export type ClaudeSpawnSpec = {
 function kickoff(spec: ClaudeSpawnSpec): string {
   return (
     `SYSTEM STARTUP NOTICE (not a user message): you are the Claude for the ${spec.label} topic. ` +
-    `Do NOT greet or send anything yet. Wait for the first real user message - it will arrive as a ` +
-    `<channel> turn - and respond to THAT via the telegram MCP (it targets this topic). Your working ` +
-    `dir is ${spec.spawnDir}. IMPORTANT: other Claudes may be running concurrently on this same machine, ` +
+    `This notice needs no reply. The first real user message arrives as a <channel> turn; ` +
+    `respond to it via the telegram MCP (it targets this topic). Your working ` +
+    `dir is ${spec.spawnDir}. Other Claudes may be running concurrently on this same machine, ` +
     `un-sandboxed and possibly in overlapping dirs, so be careful with destructive or global actions ` +
-    `and with shared state, and do not assume you are alone. ` +
-    `WRITING STYLE: never use em dashes in anything you write - not in messages to the user, ` +
-    `not in code comments, commit messages, or docs. Use a colon, parentheses, or two sentences.` +
+    `and with shared state. ` +
+    `WRITING STYLE: the operator dislikes em dashes; in messages, code comments, commit messages, ` +
+    `and docs use a colon, parentheses, or two sentences instead.` +
     ` APPROVALS: auto mode may deny a tool action. The Telegram bridge will offer that exact action ` +
     `to the operator. Do not suggest SSH, /permissions, or a classifier workaround. If a later user ` +
     `turn explicitly approves an exact action once, retry only that exact action and let the normal ` +
