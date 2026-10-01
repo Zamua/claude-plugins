@@ -712,6 +712,14 @@ there is no agent to relaunch.
   tracking existed recorded no id and cannot auto-resume; recover it manually by
   writing its claude session id into `registry.json` under that topic, then
   restarting the proxy.
+- **A missing conversation is reported, never replaced.** Before resuming, the
+  proxy checks that `<id>.jsonl` exists in some `~/.claude/projects/*/` directory
+  (`adapters/claude-transcript.ts`). If it is gone, it posts an error in the
+  topic (at most once a minute) and spawns nothing: starting a fresh session
+  would silently drop the topic's history. Claude Code deletes transcripts older
+  than `cleanupPeriodDays` (default 30) at startup, so `~/.claude/settings.json`
+  sets it to 36500. To deliberately restart such a topic, clear its
+  `claude_session_id` in `registry.json` while the proxy is stopped.
 - **Readable, stable session names.** A topic's tmux session is
   `claude-<slug>-<thread_id>` (e.g. `claude-hostthis-34`), with the numeric thread
   id as a short, collision-proof, stable suffix; the General topic is just
