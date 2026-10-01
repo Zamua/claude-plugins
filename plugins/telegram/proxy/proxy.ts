@@ -56,6 +56,7 @@ import { catalogFromBridge, parseOpenCodeModels } from './adapters/provider-cata
 import type { ProviderCatalog, ProviderModel } from './adapters/provider-catalog'
 import { readCodexSnapshot } from './adapters/codex-app-server'
 import { readOpenCodeGoCapacity } from './adapters/opencode-go-capacity'
+import { claudeConversationExists } from './adapters/claude-transcript'
 import { createMultiplexer } from './adapters/multiplexer'
 import type { MultiplexerPort } from './adapters/multiplexer'
 import { legacySwitchBackTarget, switchBackTarget } from './adapters/telegram-route-callback'
@@ -1486,6 +1487,22 @@ function handleSquareUserMessage(msg: any, text: string): void {
 // spawnSync blocks the event loop for the whole launch, so two inbound
 // messages for a brand-new topic cannot spawn two sessions; the spawning
 // flag + the live-session dedup are belt and suspenders.
+const MISSING_CONVERSATION_NOTICE_MS = 60_000
+const lastMissingConversationNotice = new Map<string, number>()
+
+function reportMissingConversation(topic: string, sessionId: string): void {
+  log(`topic ${topic}: claude conversation ${sessionId} not found on disk; not spawning`)
+  const last = lastMissingConversationNotice.get(topic) ?? 0
+  if (Date.now() - last < MISSING_CONVERSATION_NOTICE_MS) return
+  lastMissingConversationNotice.set(topic, Date.now())
+  bot.api.sendMessage(
+    String(GROUP_CHAT_ID),
+    `This topic's Claude conversation (${sessionId}) no longer exists on disk, so it cannot be resumed. ` +
+      `Nothing was started and your message was not delivered.`,
+    threadOf(topic),
+  ).catch(e => log(`missing-conversation notice failed for topic ${topic}: ${e}`))
+}
+
 function ensureSession(topic: string): void {
   // Harness lock: a locked topic must never fall through to the Claude
   // launcher, even if a stale queue/callback reaches this boundary.
@@ -1532,6 +1549,13 @@ function ensureSession(topic: string): void {
       log(`adopted legacy-named session ${legacy} for topic ${topic}; renames on next respawn`)
       return
     }
+  }
+  // A topic bound to a conversation must resume THAT conversation. If its file is
+  // gone, starting a fresh one would silently drop the topic's history, so report
+  // it in the topic and start nothing.
+  if (st.claudeSessionId && !claudeConversationExists(st.claudeSessionId)) {
+    reportMissingConversation(topic, st.claudeSessionId)
+    return
   }
   st.spawning = true
   try {
