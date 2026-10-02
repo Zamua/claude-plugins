@@ -49,6 +49,7 @@ import {
   parseSecretCommand, secretExists, storeSecret,
 } from './secret'
 import type { FlowResult, Pending } from './secret'
+import { permissionNotice } from './adapters/permission-notice'
 import { claudeSpawnEnv } from './adapters/claude-launch'
 import type { ClaudeSpawnSpec } from './adapters/claude-launch'
 import { effectiveClaudeSettings } from './adapters/claude-settings'
@@ -2785,7 +2786,7 @@ function modelPicker(
   keyboard.text('Back', `tgroute:providers:${reasonCode(reason)}:${topic}`)
   return {
     text: models.length
-      ? `${providerLabel(provider)} models${pages > 1 ? ` (${safePage + 1}/${pages})` : ''}:`
+      ? `${providerLabel(provider)} models${pages > 1 ? ` (${safePage + 1}/${pages})` : ''}:` + permissionNotice(provider)
       : `${providerLabel(provider)} model catalog is temporarily unavailable. Go back and try again.`,
     keyboard,
   }
@@ -2942,7 +2943,7 @@ async function applySwitchBackCallback(ctx: any, provider: ProviderId, topic: st
     : result === 'unchanged'
       ? `Already using ${routeSummary(route)}.`
       : `Now using ${routeSummary(route)} in the same Claude session.`
-  await ctx.editMessageText(text).catch((error: unknown) =>
+  await ctx.editMessageText(text + permissionNotice(route.provider)).catch((error: unknown) =>
     log(`could not update switch-back message for topic ${topic}: ${error}`))
   await ctx.answerCallbackQuery({ text: result === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
   log(`switch-back callback for topic ${topic}: ${provider}/${route.model} (${result})`)
@@ -3603,11 +3604,14 @@ bot.on('callback_query:data', async ctx => {
       const result = requestRouteChange(selection.topic, route, selection.reason)
       modelSelections.delete(ultracodePick[1])
       await ctx.editMessageText(
-        result === 'queued'
+        (result === 'queued'
           ? `Queued ${routeSummary(route)}. It will switch when the current Claude turn finishes.`
           : result === 'unchanged'
             ? `Already using ${routeSummary(route)}.`
-            : `Now using ${routeSummary(route)} in the same Claude session.`,
+            : `Now using ${routeSummary(route)} in the same Claude session.`) +
+        permissionNotice(route.provider) +
+        (result === 'unchanged' && route.provider === 'codex'
+          ? '\nRun /relaunch to apply the launch settings to this existing session.' : ''),
       ).catch(() => {})
       await ctx.answerCallbackQuery({ text: result === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
       return
