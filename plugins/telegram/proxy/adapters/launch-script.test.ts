@@ -1,9 +1,47 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { spawnSync } from 'child_process'
 import { join } from 'path'
 
 describe('Claude provider launch script', () => {
   const script = readFileSync(join(import.meta.dir, '..', '..', 'scripts', 'launch-topic.sh'), 'utf8')
+
+  test('bypasses approvals only for Codex on fresh launches and resumes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'telegram-launch-'))
+    try {
+      const capture = join(dir, 'capture-args')
+      writeFileSync(capture, '#!/bin/sh\nprintf "%s\\n" "$@"\n')
+      chmodSync(capture, 0o700)
+      const pane = script.match(/PANE_CMD='([\s\S]*?)'\n/)![1]
+      for (const provider of ['codex', 'anthropic', 'opencode-go', '']) {
+        for (const resume of ['', '1']) {
+          const result = spawnSync('/bin/bash', ['-c', pane], {
+            encoding: 'utf8',
+            env: {
+              PATH: process.env.PATH,
+              TG_PATH: process.env.PATH,
+              TG_PROVIDER: provider,
+              TG_CLAUDE_BIN: capture,
+              TG_CLAUDE_SESSION_ID: 'test-conversation',
+              TG_MODEL: provider === 'codex' ? 'gpt-6.1-sol' : 'test-model',
+              TG_RESUME: resume,
+              TG_KICKOFF: 'test kickoff',
+            },
+          })
+          expect(result.status).toBe(0)
+          const args = result.stdout.trim().split('\n')
+          expect(args.includes('--dangerously-skip-permissions')).toBe(provider === 'codex')
+          expect(args.includes('--permission-mode')).toBe(provider !== 'codex')
+          if (provider !== 'codex') expect(args[args.indexOf('--permission-mode') + 1]).toBe('auto')
+          expect(args).toContain(resume ? '--resume' : '--session-id')
+          expect(args).toContain('test-conversation')
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 
   test('pins main, subagent, auxiliary, and effort policy when resuming through another provider', () => {
     expect(script).toContain('ANTHROPIC_MODEL="$TG_MODEL"')

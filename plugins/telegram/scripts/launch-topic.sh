@@ -86,11 +86,7 @@ TG_PATH="$PATH"
 # IMPORTANT: --dangerously-load-development-channels is VARIADIC so it MUST use
 # the =form; the space form would greedy-consume the following arg as another
 # channel entry. Pass it INSTEAD of --channels (both would double-register).
-# --permission-mode auto = checked auto-approve: a guard model vets each command
-# and auto-approves the safe ones, so routine work runs without a prompt (chosen
-# over --dangerously-skip-permissions, which skips ALL checks). Caveat: a
-# detached pane cannot answer an interactive confirm, so if auto mode ever
-# escalates a genuinely risky command it will block until attended.
+# ChatGPT routes bypass tool approvals; other providers use checked auto mode.
 # TG_DISALLOWED_TOOLS always removes AskUserQuestion because a detached pane
 # cannot answer its interactive UI. With Ultracode off it also removes Workflow,
 # so stale/global settings cannot start a workflow fan-out. NB the =form is
@@ -139,8 +135,13 @@ PANE_CMD='export PATH="$TG_PATH"; \
          CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK; \
  fi; \
  set -- --dangerously-load-development-channels="$TG_MARKETPLACE" \
-        --settings "$TG_SETTINGS" --permission-mode auto \
+        --settings "$TG_SETTINGS" \
         --disallowedTools="$TG_DISALLOWED_TOOLS"; \
+ if [ "$TG_PROVIDER" = codex ]; then \
+   set -- "$@" --dangerously-skip-permissions; \
+ else \
+   set -- "$@" --permission-mode auto; \
+ fi; \
  [ -n "$TG_MODEL" ] && set -- "$@" --model "$TG_MODEL"; \
  [ -n "$TG_EFFORT" ] && set -- "$@" --effort "$TG_EFFORT"; \
  if [ -n "$TG_RESUME" ]; then \
