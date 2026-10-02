@@ -76,7 +76,9 @@ Code disables Channels under API billing).
   path described below instead.
 - **Launcher** (`scripts/launch-topic.sh`): spawns one detached multiplexer pane
   per topic running a foreground `claude` with the channel loaded, under
-  `--permission-mode auto`. That is checked auto-approve, not skip-all-checks: a
+  provider-specific permissions. ChatGPT models use `--dangerously-skip-permissions`: tool
+  actions run without approval prompts. The model picker and route confirmations
+  explain this. Native Anthropic and OpenCode Go use `--permission-mode auto`: a
   guard model vets each command and auto-approves the safe ones, so routine work
   runs with no prompt. If the guard denies an action, a hook posts a concise
   approval card in that same Telegram topic. The administrator can tap **Approve
@@ -374,7 +376,7 @@ long text is split into 4096-char chunks (each a message); `message_ids` lists
 all of them.
 
 The two permission endpoints (`/permission-request`, `/permission-poll`) are
-DORMANT in normal operation: topic-Claudes run under `--permission-mode auto`,
+DORMANT in normal operation: non-Codex topic-Claudes use `--permission-mode auto`,
 whose guard auto-approves routine commands, so the harness raises no permission
 request for them and the MCP never calls these. They are retained for
 re-activation (route an escalated risky-command confirm to Telegram instead of
@@ -395,8 +397,8 @@ workaround.
 
 No deletion / reaping / TTL of sessions, no per-topic directory config (every
 topic uses `TELEGRAM_TOPICS_SPAWN_DIR`), and no pairing / allowlist beyond the
-single group-chat-id gate. Runs under `--permission-mode auto` (guard-checked
-auto-approve). Auto-mode denials are routed through the active Telegram
+single group-chat-id gate. ChatGPT routes bypass permission checks; other Claude Code
+routes use `--permission-mode auto` (guard-checked auto-approve). Auto-mode denials are routed through the active Telegram
 exact-action approval flow; the separate Claude Channels permission relay remains
 dormant. A proxy restart re-adopts still-live tmux sessions
 and, for topics whose session has died, keeps the recorded claude session id so
@@ -410,7 +412,11 @@ the next message resumes the same conversation (registry reconcile against
   agent. Start with a handful of topics.
 - The proxy binds loopback only and drops every update whose chat id is not the
   configured group.
-- Topic-Claudes run under `--permission-mode auto`: guard-verified auto-approve,
+- ChatGPT topics bypass permission checks, including for file changes and shell
+  commands. Existing sessions need `/relaunch` to adopt changed launch settings;
+  the conversation is preserved. The picker and route confirmations explain the
+  bypass before and after selection.
+- Native Anthropic and OpenCode Go use `--permission-mode auto`: guard-verified auto-approve,
   not skip-all-checks. A guard model vets each command and auto-approves the safe
   ones, so routine Bash/WebFetch/etc. runs with no tap. Denials become Telegram
   approval requests instead of terminal gates. The default auto-mode policy is

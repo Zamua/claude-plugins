@@ -63,7 +63,7 @@ scripts/launch-topic.sh ── spawn in the selected multiplexer (TG_MUX: tmux n
    with vars via -e, or herdr agent start with vars via /usr/bin/env; see
    "Multiplexer backends") ── session claude-<slug>-<tid> ──
    exec claude --dangerously-load-development-channels=plugin:telegram@zamua
-               --settings override-settings.json --permission-mode auto
+               --settings override-settings.json <provider permission flags>
                first spawn: --session-id <id> "<kickoff>"   (mints the session)
                re-spawn:    --resume <id>                    (no kickoff, keeps history)
    + a short-lived detached watcher answers the "local development" confirm dialog
@@ -763,8 +763,13 @@ there is no agent to relaunch.
   topic == `String(message_thread_id)`, thread id == `Number(topic)`.
 - **Topic names.** Learned from `forum_topic_created` service messages (cached
   in `topicNames`) for the kickoff prompt; falls back to the thread id.
+- **ChatGPT permission bypass.** Codex routes use `--dangerously-skip-permissions`
+  instead of auto mode, on both fresh launches and resumes. Other providers keep
+  auto mode. The model picker and route confirmations explain that tools can run
+  without approval prompts. Existing sessions need `/relaunch` to pick up a launcher
+  change; the same conversation UUID is preserved.
 - **`--permission-mode auto`: checked auto-approve, Telegram for denials.**
-  The launcher runs every topic-Claude with `--permission-mode auto`. This is NOT
+  Native Anthropic and OpenCode Go topics use `--permission-mode auto`. This is NOT
   skip-all-checks: a guard model vets each command and auto-approves the SAFE ones,
   so routine work (edits, builds, tests, normal bash) runs with NO prompt. Verified
   live: a test topic-Claude ran a bash command with no prompt and the status bar
@@ -913,7 +918,7 @@ there is no agent to relaunch.
   route's `ultracode` value) and passes THAT as `TG_SETTINGS`. Per-topic files
   prevent concurrent spawns from racing through shared settings. (Its four-tool
   pre-allow is redundant under `--permission-mode auto`, which the launcher
-  passes: the guard already approves the channel tools.)
+  passes for non-Codex providers: the guard already approves the channel tools.)
 - `.env.example`: the config contract (deny-list of known keys).
 - `scripts/install-launchd.sh` + `launchd/com.telegram-topics.proxy.plist`: the
   DURABILITY path. Installs the proxy as a native launchd agent (RunAtLoad =
@@ -1012,8 +1017,8 @@ mirrors a Claude topic into a second session identity.
 ## Not in v1
 
 No session reaping/TTL, no per-topic cwd, no pairing/allowlist beyond the
-group-chat-id gate. Runs under `--permission-mode auto` (guard-checked
-auto-approve). Auto-mode action denials have a durable Telegram authorization
+group-chat-id gate. ChatGPT routes bypass permission checks; other Claude Code
+routes use `--permission-mode auto` (guard-checked auto-approve). Auto-mode action denials have a durable Telegram authorization
 path; the older Claude Channels harness-prompt relay is coded but dormant.
 
 The inbound + legacy permission queues are IN-MEMORY per topic: if the proxy crashes
