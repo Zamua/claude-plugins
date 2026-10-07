@@ -8,6 +8,6 @@
     "start": "bun install --no-summary 1>&2 && bun server.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.32.1"
   }
 }
