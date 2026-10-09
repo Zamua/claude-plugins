@@ -98,6 +98,7 @@ import { AntigravityTopicService } from './application/antigravity-topic-service
 import { routeLabel as antigravityRouteLabel } from './adapters/antigravity-cli'
 import { HerdrAntigravityRuntime } from './adapters/herdr-antigravity-runtime'
 import { syncAntigravityTelegramMcp } from './adapters/antigravity-mcp-config'
+import { ANTIGRAVITY_DISABLED_MESSAGE, DisabledAntigravityRuntime } from './adapters/disabled-antigravity-runtime'
 import { JsonAntigravityTopicRepository } from './adapters/json-antigravity-topic-repository'
 import {
   claudePluginSkillRoots,
@@ -254,6 +255,8 @@ const LOCALGEN_URL = `http://127.0.0.1:${process.env.LOCALGEN_PORT || '8012'}`
 const LOCALGEN_START_CMD = process.env.TELEGRAM_LOCALGEN_START_CMD ||
   'start the qwen-image server (set TELEGRAM_LOCALGEN_START_CMD to show the exact command here)'
 const NIX_ANTIGRAVITY_BIN = join(NIX_PROFILE_BIN, 'agy')
+// Off: nothing runs agy. Locked topics answer with the disabled message instead.
+const ANTIGRAVITY_ENABLED = process.env.TELEGRAM_ANTIGRAVITY !== 'off'
 const ANTIGRAVITY_BIN = process.env.TELEGRAM_ANTIGRAVITY_BIN ??
   (existsSync(NIX_ANTIGRAVITY_BIN) ? NIX_ANTIGRAVITY_BIN : 'agy')
 const CAPACITY_POLL_MS = Number(process.env.TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES ?? '5') * 60_000
@@ -1747,12 +1750,9 @@ const bot = new Bot(TOKEN)
 // Telegram Bot API adapter with Claude topics; its session identity, model
 // catalog, route, and persistence are deliberately separate.
 const antigravityRepository = new JsonAntigravityTopicRepository(ANTIGRAVITY_TOPICS_FILE)
-const antigravityRuntime = new HerdrAntigravityRuntime(
-  ANTIGRAVITY_BIN,
-  SPAWN_DIR,
-  ANTIGRAVITY_LAUNCH_SCRIPT,
-  PROXY_URL,
-)
+const antigravityRuntime = ANTIGRAVITY_ENABLED
+  ? new HerdrAntigravityRuntime(ANTIGRAVITY_BIN, SPAWN_DIR, ANTIGRAVITY_LAUNCH_SCRIPT, PROXY_URL)
+  : new DisabledAntigravityRuntime()
 const antigravityService = new AntigravityTopicService(
   antigravityRepository,
   antigravityRuntime,
@@ -1909,12 +1909,12 @@ function syncAntigravityInterop(): void {
   }
 }
 
-syncAntigravityInterop()
+if (ANTIGRAVITY_ENABLED) syncAntigravityInterop()
 
 // One-time migration from the original headless pilot: those records have no
 // Herdr session name. Start them now so an already-enabled topic becomes
 // visible without requiring the operator to send a throwaway Telegram turn.
-for (const topic of antigravityService.list()) {
+for (const topic of ANTIGRAVITY_ENABLED ? antigravityService.list() : []) {
   if (topic.sessionName) continue
   void antigravityService.start(topic.topic)
     .then(running => log(
@@ -2269,7 +2269,7 @@ function antigravityUsageText(windows: Awaited<ReturnType<AntigravityTopicServic
 }
 
 async function refreshAntigravityUsage(notifyResets: boolean): Promise<AntigravityUsageWindow[]> {
-  if (!antigravityService.list().length) return []
+  if (!ANTIGRAVITY_ENABLED || !antigravityService.list().length) return []
   try {
     const current = await antigravityService.usage()
     const resets = notifyResets ? antigravityResetPools(antigravityUsageSnapshot, current) : []
@@ -2302,6 +2302,10 @@ async function activateAntigravityTopic(
 ): Promise<void> {
   if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
     await sayIn(chatId, topic, 'Only the operator can lock a topic to Antigravity.')
+    return
+  }
+  if (!ANTIGRAVITY_ENABLED) {
+    await sayIn(chatId, topic, ANTIGRAVITY_DISABLED_MESSAGE)
     return
   }
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
