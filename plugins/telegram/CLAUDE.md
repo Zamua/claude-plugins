@@ -436,6 +436,10 @@ in private, atomic `antigravity-topics.json` state. There is no unlock/conversio
 path: keeping the harness identity explicit prevents a model name from silently
 changing which runtime owns the conversation.
 
+`TELEGRAM_ANTIGRAVITY=off` swaps the runtime for `DisabledAntigravityRuntime`
+and skips the boot interop sync and usage polling, so nothing runs `agy`. That
+matters because an unauthenticated `agy` opens a browser sign-in on every call.
+
 The runtime is Google's official authenticated `agy` CLI, not the unofficial
 Claude provider bridge. `launch-antigravity-topic.sh` creates one visible Herdr
 workspace per topic (`agy-<slug>-<threadid>`) and runs a persistent interactive
