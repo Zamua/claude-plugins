@@ -936,7 +936,9 @@ there is no agent to relaunch.
   DURABILITY path. Installs the proxy as a native launchd agent (RunAtLoad =
   auto-start on login, KeepAlive = auto-restart on crash) - NO external service
   manager, so the plugin stays self-contained. Run `scripts/install-launchd.sh`
-  once. Verified: kill the proxy and launchd respawns it. Logs go to
+  once. Restart it with `launchctl kickstart -k gui/$(id -u)/com.telegram-topics.proxy`:
+  a plain `kill` makes the proxy shut down cleanly (exit 0), and launchd has then
+  been seen to leave it down for minutes instead of respawning it. Logs go to
   `~/Library/Logs/telegram-topics-proxy.log`. Uninstall = `launchctl unload` the
   plist + remove it.
 
