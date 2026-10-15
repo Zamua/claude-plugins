@@ -214,6 +214,14 @@ never broadcast; behavioral discipline, no caps).
   and taggable immediately; its claude spawns on first message or tag. Only
   topics created OUTSIDE the proxy still need a first human message.
 
+## Location messages
+
+A shared location or venue arrives as text built by `proxy/domain/location.ts`:
+`(location: <lat>, <lon>, ±<m> m) <maps link>`, or `(venue: <title>, <address>, at
+<lat>, <lon>) <maps link>`. A live location is relayed once, when shared, with its
+duration; its later position updates arrive as `edited_message` updates, which the
+proxy does not subscribe to, so a topic never gets a stream of them.
+
 ## Voice-note auto-transcription
 
 Inbound voice messages (attachment_kind `voice`) are transcribed by the PROXY

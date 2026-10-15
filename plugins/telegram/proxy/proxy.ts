@@ -123,6 +123,7 @@ import { QwenImageClient } from './adapters/qwen-image-client'
 import { JsonLocalgenTopicRepository } from './adapters/json-localgen-topic-repository'
 import { localgenTopic } from './domain/localgen-topic'
 import { antigravityResetPools } from './domain/antigravity-capacity'
+import { describeLocation, describeVenue } from './domain/location'
 import type { AntigravityUsageWindow } from './application/antigravity-ports'
 import type {
   ActionAuthorization,
@@ -475,6 +476,9 @@ function describeMessage(msg: any): Described | null {
     const emoji = s.emoji ? ` ${s.emoji}` : ''
     return { content: `(sticker${emoji})`, attachment: { kind: 'sticker', file_id: s.file_id, size: s.file_size } }
   }
+  // A venue also carries a location, so it is checked first.
+  if (msg.venue) return { content: describeVenue(msg.venue) }
+  if (msg.location) return { content: describeLocation(msg.location) }
   return null
 }
 
@@ -3045,7 +3049,7 @@ bot.on('message', async ctx => {
 
   const topic = msg.message_thread_id != null ? String(msg.message_thread_id) : 'general'
   // One line per inbound message so a topic that never answers can be traced to arrival or to routing.
-  if (localgenService.isLocked(topic)) log(`inbound topic ${topic} message ${msg.message_id ?? '(no id)'} text=${typeof msg.text === 'string'} kind=${Object.keys(msg).filter(k => ['text','photo','document','voice','sticker','forum_topic_created','forum_topic_edited'].includes(k)).join(',') || 'other'}`)
+  if (localgenService.isLocked(topic)) log(`inbound topic ${topic} message ${msg.message_id ?? '(no id)'} text=${typeof msg.text === 'string'} kind=${Object.keys(msg).filter(k => ['text','photo','document','voice','sticker','location','venue','forum_topic_created','forum_topic_edited'].includes(k)).join(',') || 'other'}`)
 
   // Secret drop runs before every relay path, the square included, so the
   // value can reach neither a topic-Claude nor a peer. See handleSecretDrop.
