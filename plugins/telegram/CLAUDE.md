@@ -297,8 +297,8 @@ not end-to-end) and the client's own message cache until the delete lands.
 
 A topic session is one long-lived agent process, and MCP servers and settings
 load only at spawn, so a change to either needs a respawn. `/relaunch` in a
-topic does exactly what the nightly restart and a provider-route change do,
-on demand: `killSession` (which also drains the dying MCP's long-polls, so the
+topic does what an update restart and a provider-route change do, on
+demand: `killSession` (which also drains the dying MCP's long-polls, so the
 nudge cannot be handed to it and lost), a proxy ack in the thread, a `SYSTEM
 NOTICE` enqueued with meta `relaunch=1`, then `ensureSession` respawns with
 `--resume`. The notice asks for ONE line back naming the MCP servers the
@@ -947,7 +947,7 @@ there is no agent to relaunch.
 Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 (required); `TELEGRAM_TOPICS_SPAWN_DIR` (default `$HOME`), `TELEGRAM_PROXY_PORT`
 (default `8790`), `TELEGRAM_TOPICS_MARKETPLACE` (default `plugin:telegram@zamua`),
-`TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` (0-23 local, unset = disabled),
+`TELEGRAM_TOPICS_UPDATE_RESTART` (`on`|`off`, default `on`),
 `TELEGRAM_TOPICS_MODEL` (default the pinned `claude-opus-5-5`, see below),
 `TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
 backends" above; applies to Claude topics); `TELEGRAM_ANTIGRAVITY_BIN` (optional
@@ -995,14 +995,23 @@ would keep its old model forever. The `--model` flag overrides even on resume
 and applies on every spawn. The launcher builds args with `set --` so a
 bracketed id like `claude-opus-5-5[1m]` is one properly-quoted arg.
 
-**Passive nightly restart.** If `TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR` is set
-(0-23, LOCAL), the proxy checks once a minute and, once a day at that hour, kills
-every LIVE topic session (deduped by local date). Each one re-spawns with
-`--resume` on its next inbound message (fresh claude + latest launcher config,
-full conversation kept). Passive by design: idle sessions are NOT kept running -
-the proxy polls Telegram, the topic-Claudes don't, so they only need to be up
-when in use. The restart picks up claude updates and clears accumulated process
-state without the idle cost.
+**Update restarts.** Claude Code updates itself, but a running session keeps
+the binary it started with. Once a minute the proxy compares each live topic's
+version (Claude Code's own `~/.claude/sessions/<pid>.json`, matched on the
+topic's `claude_session_id`) with the version `~/.local/bin/claude` resolves to.
+An older session that is idle is stopped and `--resume`s on its next message. One
+that is busy (mid-turn), `shell` (idle with background tasks running), or
+`waiting` (on the operator), or for which the proxy still holds a queued message,
+in-flight pane turn, or permission prompt, is left alone until it goes idle; it
+is then restarted and resumed at once, and the topic gets a one-line notice.
+A session that has been `shell` for over an hour (`LINGERING_SHELL_MS`, measured
+from the record's `statusUpdatedAt`) counts as idle: that is a leftover dev
+server, not work in progress, and stopping the session stops it too.
+Each topic is restarted at most once per installed version, so a launcher that
+resolves a different `claude` cannot loop. The waiting state is in memory: after
+a proxy restart a topic still waiting is treated as idle-stale and only stopped.
+Policy is pure in `proxy/domain/claude-update.ts`; the session records and the
+installed version are read by `proxy/adapters/claude-sessions.ts`.
 
 The MCP client also reads `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` (default `5000`)
 for the cold-start first-poll delay above.
