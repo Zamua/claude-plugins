@@ -58,6 +58,8 @@ import type { ProviderCatalog, ProviderModel } from './adapters/provider-catalog
 import { readCodexSnapshot } from './adapters/codex-app-server'
 import { readOpenCodeGoCapacity } from './adapters/opencode-go-capacity'
 import { claudeConversationExists } from './adapters/claude-transcript'
+import { installedClaudeVersion, liveClaudeSessions } from './adapters/claude-sessions'
+import { updateRestartAction } from './domain/claude-update'
 import { createMultiplexer } from './adapters/multiplexer'
 import type { MultiplexerPort } from './adapters/multiplexer'
 import { legacySwitchBackTarget, switchBackTarget } from './adapters/telegram-route-callback'
@@ -301,7 +303,7 @@ const EFFECTIVE_SETTINGS_DIR = join(STATE_DIR, 'effective-settings')
 const TOPIC_LAUNCH_PROFILE_VERSION = 4
 // Called PER SPAWN (not once at module load) so each (re)spawn reflects the
 // CURRENT committed override-settings.json - a base-settings edit (e.g. a git
-// pull) then reaches topics on their next respawn (the nightly restart, a kill),
+// pull) then reaches topics on their next respawn (an update restart, a kill),
 // matching the pre-generation behavior where spawns read the base file live. Also
 // self-heals if the generated file is removed. On any read/write error it falls
 // back to the committed base un-generated (topics still spawn, just without the
@@ -4117,49 +4119,74 @@ void registerCommands()
 setInterval(() => void antigravityService.reconcilePending(), 2_000).unref()
 setInterval(() => void opencodeService.reconcilePending(), 2_000).unref()
 
-// ---- nightly restart (passive) ---------------------------------------------
+// ---- Claude Code update restarts --------------------------------------------
 //
-// If TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR is set (0-23, LOCAL time), once a day
-// at that hour kill every live topic session. Each one then re-spawns with
-// --resume on its NEXT inbound message (fresh claude + latest launcher config,
-// full conversation kept). Passive by design: we do NOT keep idle sessions
-// running - the proxy polls Telegram, the topic-Claudes don't, so they only
-// need to be up when actually in use. Mirrors the single-session bridge's
-// nightly restart (pick up claude updates + clear accumulated process state)
-// without paying to keep refreshed-but-idle sessions alive overnight.
-function nightlyRestart(): void {
-  const live = mux.liveSessions()
-  let killed = 0
-  for (const [topic, st] of topics) {
-    if (!st.session || !live.has(st.session)) continue
-    if (killSession(st, topic)) {
-      killed++
-      log(`nightly restart: killed topic ${topic} "${st.name}"; will --resume on next message`)
-    } else {
-      log(`nightly restart: failed to kill topic ${topic} "${st.name}"`)
-    }
-  }
-  saveRegistry()
-  log(`nightly restart complete: ${killed} topic session(s) killed; provider routes preserved`)
+// Claude Code updates itself, but a running session keeps the binary it started
+// with. Once a minute, a topic whose live Claude is older than the installed
+// one moves over at a turn boundary (domain/claude-update.ts): an idle one is
+// stopped and resumes on its next message; one that is mid-turn, running
+// background tasks, or waiting on the operator is left alone until it goes
+// idle, then restarted and resumed at once with a one-line notice. Process
+// records come from Claude Code itself, so this needs no multiplexer query.
+const UPDATE_RESTART = environmentFlag(process.env.TELEGRAM_TOPICS_UPDATE_RESTART, true, value =>
+  log(`TELEGRAM_TOPICS_UPDATE_RESTART="${value}" is not on/off; using on`),
+)
+const updateDeferred = new Set<string>()
+const updateAttempted = new Map<string, string>()
+
+function proxyHoldsWork(topic: string, st: TopicState): boolean {
+  if (st.queue.length > 0 || panePumps.get(topic)?.inFlight) return true
+  for (const pending of pendingPerms.values()) if (pending.topic === topic) return true
+  return false
 }
 
-const NIGHTLY_HOUR_RAW = process.env.TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR ?? ''
-if (NIGHTLY_HOUR_RAW !== '') {
-  const nightlyHour = Number(NIGHTLY_HOUR_RAW)
-  if (Number.isInteger(nightlyHour) && nightlyHour >= 0 && nightlyHour <= 23) {
-    let lastRestartDay = ''
-    // Check once a minute; fire once when the local hour first matches, deduped
-    // by local date so a clock nudge cannot double-fire within the same hour.
-    setInterval(() => {
-      const now = new Date()
-      const day = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`
-      if (now.getHours() === nightlyHour && lastRestartDay !== day) {
-        lastRestartDay = day
-        nightlyRestart()
+function claudeUpdateSweep(): void {
+  const installed = installedClaudeVersion()
+  if (!installed) return
+  const sessions = liveClaudeSessions()
+  for (const [topic, st] of topics) {
+    if (SQUARE_TOPIC && topic === SQUARE_TOPIC) continue
+    if (harnessLocked(topic) || st.spawning || !st.session || !st.claudeSessionId) continue
+    const claude = sessions.get(st.claudeSessionId)
+    const action = updateRestartAction({
+      running: claude?.version,
+      installed,
+      activity: claude?.activity,
+      proxyBusy: proxyHoldsWork(topic, st),
+      deferred: updateDeferred.has(topic),
+      attempted: updateAttempted.get(topic) === installed,
+    })
+    if (action === 'none') {
+      updateDeferred.delete(topic)
+      continue
+    }
+    if (action === 'wait') {
+      if (!updateDeferred.has(topic)) {
+        log(`update: topic ${topic} "${st.name}" runs claude ${claude?.version} (${claude?.activity}); restarting onto ${installed} once idle`)
       }
-    }, 60_000)
-    log(`nightly restart enabled: ${String(nightlyHour).padStart(2, '0')}:00 local`)
-  } else {
-    log(`TELEGRAM_TOPICS_NIGHTLY_RESTART_HOUR="${NIGHTLY_HOUR_RAW}" is not an integer 0-23; nightly restart disabled`)
+      updateDeferred.add(topic)
+      continue
+    }
+    updateDeferred.delete(topic)
+    updateAttempted.set(topic, installed)
+    killSession(st, topic)
+    if (action === 'restart') {
+      ensureSession(topic)
+      void sayIn(
+        String(GROUP_CHAT_ID),
+        topic,
+        `♻️ updated to Claude Code ${installed}: same conversation, resumed on the new version.`,
+      )
+    }
+    saveRegistry()
+    log(
+      `update: topic ${topic} "${st.name}" ${action === 'restart' ? 'restarted and resumed' : 'stopped; resumes on its next message'} ` +
+      `(claude ${claude?.version} -> ${installed})`,
+    )
   }
+}
+
+if (UPDATE_RESTART) {
+  setInterval(claudeUpdateSweep, 60_000).unref()
+  log('update restarts enabled: live topics move to a newly installed Claude Code at their next idle turn boundary')
 }
