@@ -8,6 +8,7 @@ export type LiveClaudeSession = {
   pid: number
   version?: string
   activity?: string
+  activitySince?: number
   startedAt: number
 }
 
@@ -48,6 +49,7 @@ export function liveClaudeSessions(
       pid,
       version: typeof record.version === 'string' ? record.version : undefined,
       activity: typeof record.status === 'string' ? record.status : undefined,
+      activitySince: Number.isFinite(record.statusUpdatedAt) ? record.statusUpdatedAt : undefined,
       startedAt: Number(record.startedAt) || 0,
     }
     const existing = sessions.get(id)

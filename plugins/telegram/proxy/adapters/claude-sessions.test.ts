@@ -16,13 +16,13 @@ const record = (pid: number, fields: Record<string, unknown>) =>
 describe('liveClaudeSessions', () => {
   test('keys live records by conversation and skips dead pids and junk', () => {
     dir = mkdtempSync(join(tmpdir(), 'claude-sessions-'))
-    record(101, { sessionId: 'a', version: '2.1.283', status: 'busy', startedAt: 1 })
+    record(101, { sessionId: 'a', version: '2.1.283', status: 'busy', statusUpdatedAt: 5, startedAt: 1 })
     record(102, { sessionId: 'b', version: '2.1.299', status: 'idle', startedAt: 1 })
     writeFileSync(join(dir, '103.json'), '{not json')
     writeFileSync(join(dir, '104.abc.key'), 'x')
     const sessions = liveClaudeSessions(dir, pid => pid !== 102)
     expect([...sessions.keys()]).toEqual(['a'])
-    expect(sessions.get('a')).toEqual({ pid: 101, version: '2.1.283', activity: 'busy', startedAt: 1 })
+    expect(sessions.get('a')).toEqual({ pid: 101, version: '2.1.283', activity: 'busy', activitySince: 5, startedAt: 1 })
   })
 
   test('the newest live process wins for a resumed conversation', () => {

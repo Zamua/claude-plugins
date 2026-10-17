@@ -1004,6 +1004,9 @@ that is busy (mid-turn), `shell` (idle with background tasks running), or
 `waiting` (on the operator), or for which the proxy still holds a queued message,
 in-flight pane turn, or permission prompt, is left alone until it goes idle; it
 is then restarted and resumed at once, and the topic gets a one-line notice.
+A session that has been `shell` for over an hour (`LINGERING_SHELL_MS`, measured
+from the record's `statusUpdatedAt`) counts as idle: that is a leftover dev
+server, not work in progress, and stopping the session stops it too.
 Each topic is restarted at most once per installed version, so a launcher that
 resolves a different `claude` cannot loop. The waiting state is in memory: after
 a proxy restart a topic still waiting is treated as idle-stale and only stopped.

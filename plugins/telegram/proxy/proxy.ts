@@ -4126,7 +4126,8 @@ setInterval(() => void opencodeService.reconcilePending(), 2_000).unref()
 // one moves over at a turn boundary (domain/claude-update.ts): an idle one is
 // stopped and resumes on its next message; one that is mid-turn, running
 // background tasks, or waiting on the operator is left alone until it goes
-// idle, then restarted and resumed at once with a one-line notice. Process
+// idle, then restarted and resumed at once with a one-line notice. Background
+// processes left running for over an hour do not hold a topic back. Process
 // records come from Claude Code itself, so this needs no multiplexer query.
 const UPDATE_RESTART = environmentFlag(process.env.TELEGRAM_TOPICS_UPDATE_RESTART, true, value =>
   log(`TELEGRAM_TOPICS_UPDATE_RESTART="${value}" is not on/off; using on`),
@@ -4152,6 +4153,8 @@ function claudeUpdateSweep(): void {
       running: claude?.version,
       installed,
       activity: claude?.activity,
+      activitySince: claude?.activitySince,
+      now: Date.now(),
       proxyBusy: proxyHoldsWork(topic, st),
       deferred: updateDeferred.has(topic),
       attempted: updateAttempted.get(topic) === installed,

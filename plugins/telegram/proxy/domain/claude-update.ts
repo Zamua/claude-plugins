@@ -9,6 +9,9 @@ export type UpdateRestartInput = {
   // Claude Code's own status for the session: busy (mid-turn), shell (idle
   // but background tasks still running), waiting (on the user), or idle.
   activity?: string
+  // When that status was last set, and the current time (epoch ms).
+  activitySince?: number
+  now: number
   // The proxy still holds work for the topic: a queued message, an in-flight
   // pane turn, or an unanswered permission prompt.
   proxyBusy: boolean
@@ -17,6 +20,10 @@ export type UpdateRestartInput = {
   // The topic was already restarted for this installed version.
   attempted: boolean
 }
+
+// A session idle for this long with only background processes left (a dev
+// server it never stopped) counts as idle, or it would never move over.
+export const LINGERING_SHELL_MS = 60 * 60_000
 
 // stop: end the session; it resumes on its next message.
 // restart: end it and resume it straight away.
@@ -43,6 +50,10 @@ export function compareVersions(a: string, b: string): number {
 export function updateRestartAction(input: UpdateRestartInput): UpdateRestartAction {
   if (!input.running || !input.installed || input.attempted) return 'none'
   if (compareVersions(input.running, input.installed) >= 0) return 'none'
-  if (input.activity !== 'idle' || input.proxyBusy) return 'wait'
+  const lingering =
+    input.activity === 'shell' &&
+    input.activitySince !== undefined &&
+    input.now - input.activitySince >= LINGERING_SHELL_MS
+  if ((input.activity !== 'idle' && !lingering) || input.proxyBusy) return 'wait'
   return input.deferred ? 'restart' : 'stop'
 }
