@@ -4,11 +4,12 @@ import type { CapacityWindow, ProviderCapacity } from '../domain/provider-capaci
 
 export const OPENCODE_GO_USAGE_URL = 'https://opencode.ai/zen/go/v1/usage'
 
-export function readOpenCodeGoKey(authFile: string): string {
-  const parsed = JSON.parse(readFileSync(authFile, 'utf8'))
-  const key = parsed?.['opencode-go']?.key
-  if (typeof key !== 'string' || !key.trim()) throw new Error('OpenCode Go API key not found')
-  return key.trim()
+// A plain-text OpenCode Go API key. OpenCode's own login is a short-lived
+// OAuth token it refreshes internally, so long-running consumers use a key.
+export function readOpenCodeGoKey(keyFile: string): string {
+  const key = readFileSync(keyFile, 'utf8').trim()
+  if (!key) throw new Error('OpenCode Go API key not found')
+  return key
 }
 
 export function parseOpenCodeGoCapacity(payload: any, now: number): ProviderCapacity {
@@ -32,8 +33,8 @@ export function parseOpenCodeGoCapacity(payload: any, now: number): ProviderCapa
   return providerCapacity('opencode-go', windows, now)
 }
 
-export async function readOpenCodeGoCapacity(authFile: string): Promise<ProviderCapacity> {
-  const key = readOpenCodeGoKey(authFile)
+export async function readOpenCodeGoCapacity(keyFile: string): Promise<ProviderCapacity> {
+  const key = readOpenCodeGoKey(keyFile)
   const response = await fetch(OPENCODE_GO_USAGE_URL, {
     headers: { authorization: `Bearer ${key}` },
   })

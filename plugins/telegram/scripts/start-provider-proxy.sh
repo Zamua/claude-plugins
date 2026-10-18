@@ -26,9 +26,9 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/etc/profiles/per-user/$USE
 # operator value (including 0) still wins.
 export CCP_CODEX_PREVIOUS_RESPONSE_ID="${CCP_CODEX_PREVIOUS_RESPONSE_ID:-1}"
 
-auth_file="${TELEGRAM_OPENCODE_AUTH_FILE:-$HOME/.local/share/opencode/auth.json}"
-if [ -f "$auth_file" ]; then
-  opencode_key=$(jq -r '."opencode-go".key // empty' "$auth_file")
+key_file="${TELEGRAM_OPENCODE_GO_KEY_FILE:-$HOME/keys/opencode-go-key}"
+if [ -f "$key_file" ]; then
+  opencode_key=$(tr -d '[:space:]' < "$key_file")
   if [ -n "$opencode_key" ]; then
     export CCP_OPENCODE_API_KEY="$opencode_key"
   fi

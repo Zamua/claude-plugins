@@ -94,7 +94,7 @@ This is one continuous OpenCode session on the local Qwen model, driven by a
 Telegram forum topic and hosted in a persistent Herdr workspace. The operator
 can monitor and interact with this terminal directly. For every
 <channel source="telegram"> turn, the user-facing answer MUST be sent with the
-Telegram MCP tool telegram-topics_reply using chat_id from the channel
+reply tool of the telegram-topics MCP server, using chat_id from the channel
 metadata. Terminal output alone never reaches Telegram. A prompt typed directly
 into the terminal is answered only in the terminal; do not send it to Telegram
 unless explicitly asked.
@@ -120,6 +120,6 @@ export function renderOpencodeTurn(message: InboundMessage): string {
     .map(([key, value]) => ` ${key}="${attribute(String(value))}"`)
     .join('')
   return `<channel source="telegram"${meta}>\n${message.content}\n</channel>\n\n` +
-    'Reply to this Telegram turn with the Telegram MCP tool telegram-topics_reply using the chat_id above. ' +
+    'Reply to this Telegram turn with the reply tool of the telegram-topics MCP server, using the chat_id above. ' +
     'Do not leave the user-facing answer only in the terminal.'
 }
