@@ -22,39 +22,37 @@ const CLAUDE_MODELS: ProviderModel[] = [
 
 const CLAUDE_EFFORTS = new Set<Effort>(['low', 'medium', 'high', 'xhigh', 'max'])
 
+// Reads `opencode api model.list`: {data: [{providerID, id, name, limit, variants: [{id}]}]}.
 export function parseOpenCodeModels(output: string): Map<string, ProviderModel> {
   const models = new Map<string, ProviderModel>()
-  const chunks = output.split(/(?=^opencode-go\/[^\s]+\s*$)/m)
-  for (const chunk of chunks) {
-    const lines = chunk.trim().split('\n')
-    const header = /^opencode-go\/([^\s]+)$/.exec(lines[0]?.trim() ?? '')
-    if (!header) continue
-    const jsonStart = lines.findIndex(line => line.trim().startsWith('{'))
-    if (jsonStart < 0) continue
-    try {
-      const raw = JSON.parse(lines.slice(jsonStart).join('\n'))
-      const id = `opencode-go/${String(raw?.id ?? header[1])}`
-      const efforts = Object.entries(raw?.variants ?? {}).flatMap(([name, value]: [string, any]) => {
-        const declared = String(value?.reasoningEffort ?? value?.effort ?? name)
-        return CLAUDE_EFFORTS.has(declared as Effort) ? [declared as Effort] : []
-      })
-      const uniqueEfforts = [...new Set(efforts)]
-      const selectableEfforts: Effort[] = uniqueEfforts.length ? uniqueEfforts : ['auto']
-      const defaultEffort: Effort = selectableEfforts.includes('medium')
-        ? 'medium'
-        : selectableEfforts.includes('high') ? 'high' : selectableEfforts[0]
-      const context = Number(raw?.limit?.context)
-      const bridgeSupportsXhigh = /^opencode-go\/deepseek-v4/.test(id) ||
-        /^opencode-go\/glm-5\.[23]/.test(id) || id === 'opencode-go/kimi-k3'
-      models.set(id, {
-        id,
-        label: String(raw?.name ?? header[1]),
-        efforts: selectableEfforts,
-        defaultEffort,
-        ...(Number.isFinite(context) && context > 0 ? { contextWindow: context } : {}),
-        supportsUltracode: selectableEfforts.includes('xhigh') || bridgeSupportsXhigh,
-      })
-    } catch {}
+  let entries: any[] = []
+  try {
+    entries = JSON.parse(output)?.data ?? []
+  } catch {
+    return models
+  }
+  for (const raw of entries) {
+    if (raw?.providerID !== 'opencode-go' || !raw?.id) continue
+    const id = `opencode-go/${String(raw.id)}`
+    const efforts = (Array.isArray(raw.variants) ? raw.variants : [])
+      .map((variant: any) => String(variant?.id ?? ''))
+      .filter((name: string): name is Effort => CLAUDE_EFFORTS.has(name as Effort))
+    const uniqueEfforts = [...new Set<Effort>(efforts)]
+    const selectableEfforts: Effort[] = uniqueEfforts.length ? uniqueEfforts : ['auto']
+    const defaultEffort: Effort = selectableEfforts.includes('medium')
+      ? 'medium'
+      : selectableEfforts.includes('high') ? 'high' : selectableEfforts[0]
+    const context = Number(raw.limit?.context)
+    const bridgeSupportsXhigh = /^opencode-go\/deepseek-v4/.test(id) ||
+      /^opencode-go\/glm-5\.[23]/.test(id) || id === 'opencode-go/kimi-k3'
+    models.set(id, {
+      id,
+      label: String(raw.name ?? raw.id),
+      efforts: selectableEfforts,
+      defaultEffort,
+      ...(Number.isFinite(context) && context > 0 ? { contextWindow: context } : {}),
+      supportsUltracode: selectableEfforts.includes('xhigh') || bridgeSupportsXhigh,
+    })
   }
   return models
 }

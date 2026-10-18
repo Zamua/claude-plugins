@@ -399,7 +399,7 @@ Details that matter:
   bridge's `[1m]` model suffix and a
   deliberate 272k auto-compact window (the long-context pricing boundary).
   OpenCode Go reads each installed model's actual context window from
-  `opencode models opencode-go --verbose`, clamps it to Claude Code's 100k-1m
+  `opencode api model.list`, clamps it to Claude Code's 100k-1m
   accepted range, and falls back to 200k only when metadata is unavailable.
   This variable is the capacity used for compaction calculations, not the exact
   trigger; Claude Code still applies its normal near-capacity percentage.
@@ -416,8 +416,10 @@ Details that matter:
   in-memory transport cache; Claude's UUID/transcript remains the source of
   truth, so the next request rebuilds context without forking the session.
 - `claude-code-proxy` is an unofficial local compatibility bridge. It binds to
-  loopback, owns no Telegram state, and receives the OpenCode credential at
-  process start from OpenCode's existing auth file; the key is not copied into
+  loopback, owns no Telegram state, and receives the OpenCode Go API key at
+  process start from `TELEGRAM_OPENCODE_GO_KEY_FILE` (default
+  `~/keys/opencode-go-key`; OpenCode's own login is a short-lived OAuth token it
+  refreshes internally, unusable by a process that reads it once); the key is not copied into
   the plugin `.env`, PM2 config, or registry. The installed Nix derivation is
   source-pinned; review its new revision before upgrades. Normal request logging
   records metadata rather than prompt bodies, opt-in traffic capture stays off,
@@ -514,7 +516,7 @@ spawn/queue/notice path skips a locked topic, and a square delivery aimed at
 one is dropped with a log line (no Claude pane would drain that queue).
 
 The runtime is one visible Herdr workspace per topic, `oc-<slug>-<threadid>`,
-running `opencode <project dir> -m <model> --pure` with cwd = the project dir
+running `opencode <project dir> --standalone` (OpenCode 2.x) with cwd = the project dir
 (`TELEGRAM_OPENCODE_PROJECT_DIR`, whose `opencode.jsonc` defines the local
 provider and whose `AGENTS.md` is the project instruction file). Session
 identity is captured only from a launch the adapter itself started: a fresh
@@ -560,28 +562,30 @@ Reply backstop: OpenCode has no Stop hook, so a turn can end with nothing sent
 mid-reasoning with `finish: length`). `/send` records the last outbound time per
 locked topic; when the pane settles with no send since the latest injection,
 the service runs
-`opencode export <session id>` (cwd = project dir), and posts the last assistant
-message's text parts as a proxy notice prefixed `↩︎ ` (capped at 3500 chars).
+`opencode session export <session id>` (cwd = project dir), and posts the last
+assistant message's text content as a proxy notice prefixed `↩︎ ` (capped at 3500 chars).
 No text and `finish: length` yields an output-limit notice; no export at all
 yields a generic "finished without sending a reply". The backstop never fails
 the turn; a failed notice goes through the error path.
 
-`--pure` is load-bearing. The operator's global `tui.json` loads
-`@leohenon/opencode-vim-plugin`, which puts the input box in vim normal mode, so
-typed text is eaten as vim commands (a leading `R` enters replace mode and the
-prompt stalls). `--pure` skips external TUI plugins;
-config-level MCP servers still load, so the Telegram MCP is unaffected.
+`--standalone` is load-bearing. OpenCode 2.x runs a shared background server by
+default, and that server never sees the pane's environment, so the injected
+config and `TELEGRAM_TOPIC_ID` would be lost. A private server inherits both.
+The TUI has no model flag, so the topic's model rides in the injected config.
+OpenCode 2.x does not load 1.x plugins, including 1.x TUI plugins such as a
+vim-mode plugin that would eat injected text.
 
 The Telegram MCP is injected through the environment, never through a config
-file: `launch-opencode-topic.sh` exports `OPENCODE_CONFIG_CONTENT` (a JSON
-`mcp.telegram-topics` local entry pointing at `bun server.ts`, merged last by
-OpenCode) plus `TELEGRAM_TOPIC_ID`, `TELEGRAM_PROXY_URL`, `TG_INBOUND_MODE=pane`,
+file: `launch-opencode-topic.sh` exports `OPENCODE_CONFIG_CONTENT` (the topic's
+`model` plus an `mcp.servers.telegram-topics` local entry pointing at
+`bun server.ts`, merged last by OpenCode) plus `TELEGRAM_TOPIC_ID`, `TELEGRAM_PROXY_URL`, `TG_INBOUND_MODE=pane`,
 and `TELEGRAM_HARNESS=opencode` (a label for operators and scripts inspecting
 the pane; `server.ts` does not read it). The stdio MCP child inherits that pane env, so
 it is topic-bound and outbound-only (no second Bot API poller); a manual
 `opencode` run sees no `OPENCODE_CONFIG_CONTENT` and gets no Telegram tools.
-OpenCode names MCP tools `<server>_<tool>`, so the reply tool is
-`telegram-topics_reply`; the kickoff and every turn envelope say so. Non-photo
+The kickoff and every turn envelope point at "the reply tool of the
+telegram-topics MCP server" rather than a qualified name, so they hold however
+OpenCode prefixes MCP tools. Non-photo
 attachments are downloaded eagerly by the proxy and passed as `attachment_path`,
 as for Antigravity.
 
@@ -880,7 +884,7 @@ there is no agent to relaunch.
   launches/resumes the persistent interactive `agy` process with topic-bound,
   outbound-only Telegram MCP environment.
 - `scripts/launch-opencode-topic.sh`: creates the `oc-<slug>-<tid>` Herdr
-  workspace and launches/resumes `opencode --pure` with the env-injected,
+  workspace and launches/resumes `opencode --standalone` with the env-injected,
   topic-bound, outbound-only Telegram MCP.
 - `scripts/start-provider-proxy.sh`: starts the loopback compatibility bridge,
   enables safe Codex response continuation, and injects the existing OpenCode
@@ -927,8 +931,9 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 `TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
 backends" above; applies to Claude topics); `TELEGRAM_ANTIGRAVITY_BIN` (optional
 path to official `agy`, defaults to the Nix per-user profile and then PATH);
-`TELEGRAM_OPENCODE_BIN` (the `opencode` CLI, same fallback order; shared by the
-OpenCode Go catalog and localcode topics), `TELEGRAM_OPENCODE_PROJECT_DIR`
+`TELEGRAM_OPENCODE_BIN` (the `opencode` 2.x CLI, default
+`/opt/homebrew/bin/opencode` then PATH; the OpenCode Go catalog reads
+`opencode api model.list` and localcode topics run it), `TELEGRAM_OPENCODE_PROJECT_DIR`
 (default `~/Dropbox/workspace/macmini/gpu/qwen-opencode`), and
 `TELEGRAM_OPENCODE_MODEL` (default `qwen-local/Qwen3.8-27B`) for localcode
 topics; `LOCALGEN_PORT` (default `8012`, the qwen-image server on loopback) and

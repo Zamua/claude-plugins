@@ -20,25 +20,28 @@ export const DEFAULT_OPENCODE_MODEL = 'qwen-local/Qwen3.8-27B'
 
 export function opencodeInteractiveArgs(input: {
   projectDir: string
-  model: string
   opencodeSessionId?: string
   kickoff: string
 }): string[] {
   return [
     input.projectDir,
-    '-m', input.model,
-    // External TUI plugins (a vim-mode plugin in particular) swallow injected text as commands.
-    '--pure',
+    // The shared background server never sees this pane's environment, so the
+    // topic-bound MCP config and TELEGRAM_TOPIC_ID need a private server.
+    '--standalone',
     ...(input.opencodeSessionId
       ? ['-s', input.opencodeSessionId]
       : ['--prompt', input.kickoff]),
   ]
 }
 
-export function opencodeMcpConfigContent(bunPath: string, serverFile: string): string {
+// The TUI takes no model flag, so the topic's model rides in the injected config.
+export function opencodeConfigContent(bunPath: string, serverFile: string, model: string): string {
   return JSON.stringify({
+    model,
     mcp: {
-      'telegram-topics': { type: 'local', command: [bunPath, serverFile], enabled: true },
+      servers: {
+        'telegram-topics': { type: 'local', command: [bunPath, serverFile] },
+      },
     },
   })
 }
@@ -118,15 +121,15 @@ export function parseOpencodeExport(output: string): OpencodeAssistantText | und
   try {
     const messages = JSON.parse(output)?.messages
     if (!Array.isArray(messages)) return undefined
-    const last = [...messages].reverse().find((message: any) => message?.info?.role === 'assistant')
+    const last = [...messages].reverse().find((message: any) => message?.type === 'assistant')
     if (!last) return undefined
-    const parts = Array.isArray(last.parts) ? last.parts : []
-    const text = parts
+    const content = Array.isArray(last.content) ? last.content : []
+    const text = content
       .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
       .map((part: any) => part.text as string)
       .join('\n')
       .trim()
-    const finish = typeof last.info.finish === 'string' ? last.info.finish : undefined
+    const finish = typeof last.finish === 'string' ? last.finish : undefined
     return finish === undefined ? { text } : { text, finish }
   } catch {
     return undefined
@@ -160,7 +163,7 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
   async lastAssistantText(opencodeSessionId: string): Promise<OpencodeAssistantText | undefined> {
     const result = await this.run(
       this.opencodeBinary,
-      ['export', opencodeSessionId],
+      ['session', 'export', opencodeSessionId],
       { cwd: this.projectDir, timeout: 30_000 },
     ).catch(() => undefined)
     return result ? parseOpencodeExport(result.stdout) : undefined
@@ -196,7 +199,6 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
 
     const args = opencodeInteractiveArgs({
       projectDir: this.projectDir,
-      model: this.model,
       opencodeSessionId: input.opencodeSessionId,
       kickoff: input.kickoff,
     })
@@ -210,7 +212,7 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
         OC_SPAWN_DIR: this.projectDir,
         OC_BIN: this.opencodeBinary,
         OC_ARGS_JSON: JSON.stringify(args),
-        OC_CONFIG_CONTENT: opencodeMcpConfigContent(this.bunPath, this.serverFile),
+        OC_CONFIG_CONTENT: opencodeConfigContent(this.bunPath, this.serverFile, this.model),
         TELEGRAM_TOPIC_ID: input.topic,
         TELEGRAM_PROXY_URL: this.proxyUrl,
       },

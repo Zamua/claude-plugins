@@ -29,27 +29,20 @@ describe('provider catalog adapter', () => {
   })
 
   test('adds OpenCode effort and context metadata from the installed catalog', () => {
-    const verbose = [
-      'opencode-go/deepseek-v4-flash',
-      JSON.stringify({
-        id: 'deepseek-v4-flash',
-        name: 'DeepSeek V4 Flash',
-        limit: { context: 1_000_000 },
-        variants: {
-          low: { reasoningEffort: 'low' },
-          high: { reasoningEffort: 'high' },
-          max: { reasoningEffort: 'max' },
+    const modelList = JSON.stringify({
+      data: [
+        {
+          providerID: 'opencode-go',
+          id: 'deepseek-v4-flash',
+          name: 'DeepSeek V4 Flash',
+          limit: { context: 1_000_000 },
+          variants: [{ id: 'low' }, { id: 'high' }, { id: 'max' }],
         },
-      }, null, 2),
-      'opencode-go/kimi-k2.6',
-      JSON.stringify({
-        id: 'kimi-k2.6',
-        name: 'Kimi K2.6',
-        limit: { context: 262_144 },
-        variants: {},
-      }, null, 2),
-    ].join('\n')
-    const metadata = parseOpenCodeModels(verbose)
+        { providerID: 'opencode-go', id: 'kimi-k2.6', name: 'Kimi K2.6', limit: { context: 262_144 }, variants: [] },
+        { providerID: 'opencode', id: 'big-pickle', name: 'Big Pickle', limit: { context: 200_000 }, variants: [] },
+      ],
+    })
+    const metadata = parseOpenCodeModels(modelList)
     const bridge = 'opencode: opencode-go/deepseek-v4-flash, opencode-go/kimi-k2.6'
     const models = catalogFromBridge(bridge, undefined, metadata)['opencode-go']
 
@@ -73,14 +66,17 @@ describe('provider catalog adapter', () => {
     ])
   })
 
+  test('unreadable model list output yields no metadata', () => {
+    expect(parseOpenCodeModels('opencode-go/glm-5.3').size).toBe(0)
+  })
+
   test('shows newly installed models even before the bridge learns them', () => {
-    const metadata = parseOpenCodeModels([
-      'opencode-go/glm-5.3-flash',
-      JSON.stringify({
-        id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', limit: { context: 1_000_000 },
-        variants: { high: { reasoningEffort: 'high' } },
-      }),
-    ].join('\n'))
+    const metadata = parseOpenCodeModels(JSON.stringify({
+      data: [{
+        providerID: 'opencode-go', id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', limit: { context: 1_000_000 },
+        variants: [{ id: 'none' }, { id: 'high' }],
+      }],
+    }))
     expect(catalogFromBridge('opencode: opencode-go/glm-5.2', undefined, metadata)['opencode-go']).toEqual([
       {
         id: 'opencode-go/glm-5.3-flash',

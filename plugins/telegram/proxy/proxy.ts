@@ -233,12 +233,12 @@ const NIX_PROVIDER_PROXY_BIN = join(NIX_PROFILE_BIN, 'claude-code-proxy')
 const PROVIDER_PROXY_BIN = process.env.TELEGRAM_PROVIDER_PROXY_BIN ||
   (existsSync(NIX_PROVIDER_PROXY_BIN) ? NIX_PROVIDER_PROXY_BIN : 'claude-code-proxy')
 // Shared by the OpenCode Go model catalog and the harness-locked localcode topics.
-const NIX_OPENCODE_BIN = join(NIX_PROFILE_BIN, 'opencode')
+const BREW_OPENCODE_BIN = '/opt/homebrew/bin/opencode'
 // `||`, not `??`: a copied .env.example leaves these as empty strings.
 const OPENCODE_BIN = process.env.TELEGRAM_OPENCODE_BIN ||
-  (existsSync(NIX_OPENCODE_BIN) ? NIX_OPENCODE_BIN : 'opencode')
-const OPENCODE_AUTH_FILE = process.env.TELEGRAM_OPENCODE_AUTH_FILE ??
-  join(homedir(), '.local', 'share', 'opencode', 'auth.json')
+  (existsSync(BREW_OPENCODE_BIN) ? BREW_OPENCODE_BIN : 'opencode')
+const OPENCODE_GO_KEY_FILE = process.env.TELEGRAM_OPENCODE_GO_KEY_FILE ||
+  join(homedir(), 'keys', 'opencode-go-key')
 const OPENCODE_PROJECT_DIR = process.env.TELEGRAM_OPENCODE_PROJECT_DIR ||
   join(homedir(), 'Dropbox', 'workspace', 'macmini', 'gpu', 'qwen-opencode')
 const OPENCODE_MODEL = process.env.TELEGRAM_OPENCODE_MODEL || 'qwen-local/Qwen3.8-27B'
@@ -2583,7 +2583,7 @@ function modelCatalog(): ProviderCatalog {
     log(`provider bridge model catalog failed: ${e}`)
   }
   try {
-    const output = execFileSync(OPENCODE_BIN, ['models', 'opencode-go', '--verbose'], {
+    const output = execFileSync(OPENCODE_BIN, ['api', 'model.list'], {
       encoding: 'utf8', timeout: 20_000,
     })
     openCodeModels = parseOpenCodeModels(output)
@@ -2897,7 +2897,7 @@ function observeCapacity(capacity: ProviderCapacity): void {
 async function refreshProviderCapacity(): Promise<void> {
   const [codex, opencode] = await Promise.allSettled([
     readCodexSnapshot(),
-    readOpenCodeGoCapacity(OPENCODE_AUTH_FILE),
+    readOpenCodeGoCapacity(OPENCODE_GO_KEY_FILE),
   ])
   if (codex.status === 'fulfilled') {
     codexAccountModels = codex.value.models

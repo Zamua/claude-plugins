@@ -37,10 +37,10 @@ describe('OpenCode launch script', () => {
     ].join('\n') + '\n')
     chmodSync(fakeBinary, 0o700)
     const paneScript = join(dir, 'pane.sh')
-    const args = ['/tmp/project dir', '-m', 'qwen-local/Qwen3.8-27B', '--prompt', 'kick $off; "quoted"']
-    const config = JSON.stringify({ mcp: { 'telegram-topics': {
-      type: 'local', command: ['/tmp/bun', '/tmp/plugin/server.ts'], enabled: true,
-    } } })
+    const args = ['/tmp/project dir', '--standalone', '--prompt', 'kick $off; "quoted"']
+    const config = JSON.stringify({ model: 'qwen-local/Qwen3.8-27B', mcp: { servers: { 'telegram-topics': {
+      type: 'local', command: ['/tmp/bun', '/tmp/plugin/server.ts'],
+    } } } })
 
     const generated = spawnSync('python3', [
       '-', paneScript, fakeBinary, JSON.stringify(args), '/usr/bin:/bin', '42',
