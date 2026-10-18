@@ -26,12 +26,24 @@ export PATH="$HOME/.local/bin:$HOME/.nix-profile/bin:/etc/profiles/per-user/$USE
 # operator value (including 0) still wins.
 export CCP_CODEX_PREVIOUS_RESPONSE_ID="${CCP_CODEX_PREVIOUS_RESPONSE_ID:-1}"
 
+# OpenCode Go credential: an API key file, else the OpenCode Console login. The
+# login is a short-lived OAuth token that OpenCode refreshes, so the pm2 entry
+# restarts the bridge daily to pick up the current one.
 key_file="${TELEGRAM_OPENCODE_GO_KEY_FILE:-$HOME/keys/opencode-go-key}"
 if [ -f "$key_file" ]; then
   opencode_key=$(tr -d '[:space:]' < "$key_file")
-  if [ -n "$opencode_key" ]; then
-    export CCP_OPENCODE_API_KEY="$opencode_key"
+else
+  opencode_bin="${TELEGRAM_OPENCODE_BIN:-/opt/homebrew/bin/opencode}"
+  opencode_key=""
+  if [ -x "$opencode_bin" ]; then
+    # A server call first gives OpenCode the chance to refresh an expiring login.
+    "$opencode_bin" api model.list >/dev/null 2>&1 || true
+    opencode_key=$("$opencode_bin" auth export 2>/dev/null |
+      jq -r '[.[] | select(.integrationID == "opencode" and .active)][0].value.access // empty')
   fi
+fi
+if [ -n "$opencode_key" ]; then
+  export CCP_OPENCODE_API_KEY="$opencode_key"
 fi
 
 # nix-darwin installs the patched bridge into the per-user system profile. The

@@ -416,10 +416,13 @@ Details that matter:
   in-memory transport cache; Claude's UUID/transcript remains the source of
   truth, so the next request rebuilds context without forking the session.
 - `claude-code-proxy` is an unofficial local compatibility bridge. It binds to
-  loopback, owns no Telegram state, and receives the OpenCode Go API key at
-  process start from `TELEGRAM_OPENCODE_GO_KEY_FILE` (default
-  `~/keys/opencode-go-key`; OpenCode's own login is a short-lived OAuth token it
-  refreshes internally, unusable by a process that reads it once); the key is not copied into
+  loopback, owns no Telegram state, and receives the OpenCode Go credential at
+  process start: the API key in `TELEGRAM_OPENCODE_GO_KEY_FILE` (default
+  `~/keys/opencode-go-key`) when present, else the access token of the OpenCode
+  Console login from `opencode auth export`. That token is short-lived and
+  OpenCode refreshes it, so the pm2 entry restarts the bridge daily
+  (`cron_restart`) to pick up the current one; the capacity probe re-reads it
+  on every poll. The credential is not copied into
   the plugin `.env`, PM2 config, or registry. The installed Nix derivation is
   source-pinned; review its new revision before upgrades. Normal request logging
   records metadata rather than prompt bodies, opt-in traffic capture stays off,
