@@ -44,7 +44,6 @@ proxy/proxy.ts ── grammy inbound ── group-chat gate ── topic = messa
    ├── GET  /permission-poll?topic=T  long-poll ~25s, 200 {request_id,behavior}
    ├── POST /send /react /edit /download   (keyed by topic -> message_thread_id)
    ├── POST /permission-request       {topic,request_id,tool,input} -> prompt in topic
-   ├── POST /permission-denied        auto-mode hook -> durable exact-action approval
    └── GET  /health                   {ok, topics, port, polling, polling_since}
 
 fresh `/antigravity` topic ── separate aggregate/repository ── persistent Herdr `agy`
@@ -67,10 +66,6 @@ scripts/launch-topic.sh ── spawn in the selected multiplexer (TG_MUX: tmux n
                first spawn: --session-id <id> "<kickoff>"   (mints the session)
                re-spawn:    --resume <id>                    (no kickoff, keeps history)
    + a short-lived detached watcher answers the "local development" confirm dialog
-
-hooks/permission-denied.py
-   ├── PermissionDenied -> POST /permission-denied (never executes or retries a tool)
-   └── SessionStart -> injects the exact-action approval/retry protocol as context
 
 server.ts (the MCP, one per multiplexer session)
    ├── inbound     Anthropic only: long-poll GET /poll -> notifications/claude/channel
@@ -515,9 +510,8 @@ operator's `localcode` alias runs by hand). It is a separate bounded context
 Antigravity beyond the Telegram Bot API adapter. Same rules: admin only, a fresh
 topic with no Claude UUID/live pane, never the square, no unlock or conversion
 path. A topic locked to one harness refuses the other command, every Claude
-spawn/queue/notice path skips a locked topic, and a square or action
-authorization delivery aimed at one is dropped with a log line (no Claude pane
-would drain that queue).
+spawn/queue/notice path skips a locked topic, and a square delivery aimed at
+one is dropped with a log line (no Claude pane would drain that queue).
 
 The runtime is one visible Herdr workspace per topic, `oc-<slug>-<threadid>`,
 running `opencode <project dir> -m <model> --pure` with cwd = the project dir
@@ -626,8 +620,7 @@ in must be fresh (no Claude UUID, no live pane), never the square, no unlock
 path. The optional argument sets the topic record's name (default: the learned
 Telegram name, then `localgen`). `POST /topic/create` accepts
 `harness: "localgen"`. Every Claude spawn/queue/notice path, the square
-directory, square delivery, action-authorization delivery, and the callback
-boundary treat a localgen topic exactly like the other locked harnesses
+directory, square delivery, and the callback boundary treat a localgen topic exactly like the other locked harnesses
 (`harnessLocked(topic)` in proxy.ts is the shared guard). A topic created
 through the proxy as a plain Claude topic and never messaged (registry entry
 with no `claude_session_id`) is lockable in place by posting `/localgen` in it;
@@ -793,24 +786,6 @@ there is no agent to relaunch.
   that intent. `override-settings.json` still ENABLES the plugin for the session
   (its four-tool pre-allow is redundant under auto mode - the guard already
   approves the channel tools).
-- **Action authorization: active, exact, durable, and no bypass.**
-  `hooks/permission-denied.py` forwards a denied action to
-  `POST /permission-denied`. The domain aggregate in
-  `proxy/domain/action-authorization.ts` creates a redacted summary and security
-  fingerprint; the application service deduplicates it and the JSON repository
-  atomically persists it in `action-authorizations.json` with mode `0600`. Raw
-  tool input is never persisted. The proxy posts **Approve once** / **Deny**
-  buttons; the configured admin may also reply naturally with `yes`, `approve`,
-  `do it`, `no`, or `cancel`. A bare answer resolves only the sole pending request
-  in that topic; replying to a prompt binds directly to that request. Every
-  decision is checked against the Telegram admin, original topic, active Claude
-  UUID, and 15-minute TTL. Approval does NOT return `allow`, call a tool, or skip
-  the reviewer: it enqueues one exact-action user turn into the SAME Claude
-  session. Claude retries that action once and the guard re-reviews the action
-  together with explicit consent. A second denial transitions to
-  `reviewer-denied`; no loop, SSH workaround, or alternate execution path is
-  suggested. Boot recovery re-prompts unresolved records and replays an approved
-  but not-yet-delivered exact turn after a crash.
 - **Legacy harness permission relay: PRESENT but DORMANT.** The separate
   permission round-trip
   (the `claude/channel/permission` capability, the MCP's `permission_request`
@@ -832,8 +807,8 @@ there is no agent to relaunch.
   chat) routes `{request_id, behavior}` to the ORIGIN topic's `GET /permission-poll`,
   which fires `notifications/claude/channel/permission` to unblock the call.
   `pendingPerms` entries are pruned after 1h so the map cannot grow unbounded.
-  Do not confuse this dormant harness-prompt relay with the active
-  `PermissionDenied` action-authorization path above.
+  An auto-mode denial has no Telegram path: it returns to the Claude, which
+  explains it in the topic.
 - **Stop hook: replies can't get stranded in the transcript.**
   `hooks/stop-reply-guard.py` runs on every Stop. If a turn was triggered by an
   inbound Telegram `<channel>` message but never called the `reply` tool, the
@@ -1041,15 +1016,14 @@ mirrors a Claude topic into a second session identity.
 
 No session reaping/TTL, no per-topic cwd, no pairing/allowlist beyond the
 group-chat-id gate. ChatGPT routes bypass permission checks; other Claude Code
-routes use `--permission-mode auto` (guard-checked auto-approve). Auto-mode action denials have a durable Telegram authorization
-path; the older Claude Channels harness-prompt relay is coded but dormant.
+routes use `--permission-mode auto` (guard-checked auto-approve). The Claude
+Channels harness-prompt relay is coded but dormant.
 
 The inbound + legacy permission queues are IN-MEMORY per topic: if the proxy crashes
 between enqueue and the MCP's first drain, those undelivered messages/answers
 are lost. `registry.json` persists session identity (topic -> tmux session +
 `claude_session_id`) but NOT the queues, so a crashed-and-restarted topic
 `--resume`s the SAME conversation but loses any message caught mid-flight.
-Action authorizations are the exception: their lifecycle and delivery marker are
-persisted in `action-authorizations.json` for crash recovery. Acceptable for v1
+Acceptable for v1
 (the ordinary inbound drain window is ~1-2s); durable inbound queues are a future
 step.

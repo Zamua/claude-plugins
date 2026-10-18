@@ -19,7 +19,6 @@ export type ClaudeSpawnSpec = {
   stopHook: string
   failoverHook: string
   capacityHook: string
-  authorizationHook: string
   providerProxyUrl: string
   modelContextWindow?: number
 }
@@ -34,11 +33,6 @@ function kickoff(spec: ClaudeSpawnSpec): string {
     `and with shared state. ` +
     `WRITING STYLE: the operator dislikes em dashes; in messages, code comments, commit messages, ` +
     `and docs use a colon, parentheses, or two sentences instead.` +
-    ` APPROVALS: auto mode may deny a tool action. The Telegram bridge will offer that exact action ` +
-    `to the operator. Do not suggest SSH, /permissions, or a classifier workaround. If a later user ` +
-    `turn explicitly approves an exact action once, retry only that exact action and let the normal ` +
-    `auto-mode reviewer evaluate it again. If crash recovery repeats the same authorization request ` +
-    `ID, do not retry it twice. Never broaden, split, encode, or otherwise disguise it.` +
     (spec.squareTopic
       ? ` THE SQUARE: a shared #square topic hosts agent-to-agent conversations. To ask a peer Claude ` +
         `for help, use the square_tag tool (see list_topics for peers); continue conversations with ` +
@@ -106,7 +100,6 @@ export function claudeSpawnEnv(spec: ClaudeSpawnSpec): Record<string, string> {
     TG_HOOK: spec.stopHook,
     TG_FAILOVER_HOOK: spec.failoverHook,
     TG_CAPACITY_HOOK: spec.capacityHook,
-    TG_AUTHORIZATION_HOOK: spec.authorizationHook,
     TG_PROVIDER: spec.route.provider,
     TG_INBOUND_MODE: inboundModeForRoute(spec.route),
     TG_PROVIDER_BASE_URL: proxied ? spec.providerProxyUrl : '',

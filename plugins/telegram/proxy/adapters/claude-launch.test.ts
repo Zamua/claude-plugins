@@ -19,7 +19,6 @@ const spec = (over: Partial<ClaudeSpawnSpec> = {}): ClaudeSpawnSpec => ({
   stopHook: '/hooks/stop-reply-guard.py',
   failoverHook: '/hooks/rate-limit-failover.py',
   capacityHook: '/hooks/provider-capacity-status.py',
-  authorizationHook: '/hooks/permission-denied.py',
   providerProxyUrl: 'http://127.0.0.1:18765',
   ...over,
 })
@@ -38,8 +37,7 @@ describe('Claude launch adapter', () => {
     expect(env.TG_DISALLOWED_TOOLS).toBe('AskUserQuestion,Workflow')
     expect(env.TG_CLAUDE_SESSION_ID).toBe('abc-123')
     expect(env.TG_CAPACITY_HOOK).toBe('/hooks/provider-capacity-status.py')
-    expect(env.TG_AUTHORIZATION_HOOK).toBe('/hooks/permission-denied.py')
-    expect(env.TG_KICKOFF).toContain('retry only that exact action')
+    expect(env.TG_KICKOFF).not.toContain('APPROVALS')
     expect(env.TG_RESUME).toBe('')
   })
 
