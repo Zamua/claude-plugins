@@ -2897,7 +2897,8 @@ function observeCapacity(capacity: ProviderCapacity): void {
 async function refreshProviderCapacity(): Promise<void> {
   const [codex, opencode] = await Promise.allSettled([
     readCodexSnapshot(),
-    readOpenCodeGoCapacity(OPENCODE_GO_KEY_FILE),
+    readOpenCodeGoCapacity(OPENCODE_GO_KEY_FILE, () =>
+      execFileSync(OPENCODE_BIN, ['auth', 'export'], { encoding: 'utf8', timeout: 20_000 })),
   ])
   if (codex.status === 'fulfilled') {
     codexAccountModels = codex.value.models
