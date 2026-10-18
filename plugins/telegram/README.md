@@ -115,7 +115,7 @@ Code disables Channels under API billing).
   project dir whose `opencode.jsonc` defines the local provider, the local model
   server running, and a running Herdr server.
 - Optional provider routing: `claude-code-proxy` on PATH. Codex must already be
-  authenticated; OpenCode Go must already exist in OpenCode's local auth file.
+  authenticated; OpenCode Go needs an API key in `TELEGRAM_OPENCODE_GO_KEY_FILE`.
 - A Telegram bot token (BotFather).
 - A Telegram **group with Topics enabled** (group settings -> Topics -> on).
 - BotFather -> `/setprivacy` -> **Disable**, so the bot receives every topic
@@ -161,13 +161,13 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_TOPICS_ADMIN_USER_ID` | for routing | secrets user id | Telegram user allowed to change routes and lock harnesses |
 | `TELEGRAM_PROVIDER_PROXY_URL` | no | `http://127.0.0.1:18765` | loopback compatibility bridge |
 | `TELEGRAM_PROVIDER_PROXY_BIN` | no | `claude-code-proxy` | bridge CLI used to enumerate models |
-| `TELEGRAM_OPENCODE_BIN` | no | Nix per-user `opencode`, then `PATH` | CLI used to read OpenCode model metadata and to run `/localcode` topics |
+| `TELEGRAM_OPENCODE_BIN` | no | `/opt/homebrew/bin/opencode`, then `PATH` | CLI used to read OpenCode model metadata and to run `/localcode` topics |
 | `TELEGRAM_OPENCODE_PROJECT_DIR` | no | `~/Dropbox/workspace/macmini/gpu/qwen-opencode` | project dir opened by `/localcode` topics (local provider config + `AGENTS.md`) |
 | `TELEGRAM_OPENCODE_MODEL` | no | `qwen-local/Qwen3.8-27B` | the single model `/localcode` topics run |
 | `LOCALGEN_PORT` | no | `8012` | loopback port of the qwen-image server `/localgen` topics post prompts to |
 | `TELEGRAM_LOCALGEN_START_CMD` | no | the pm2 start line for `qwen-image` | shown in a `/localgen` topic when that server is not listening |
 | `TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES` | no | `5` | Codex/OpenCode Go usage refresh interval |
-| `TELEGRAM_OPENCODE_AUTH_FILE` | no | OpenCode's standard auth file | source for OpenCode Go usage auth; the key is never copied into plugin state |
+| `TELEGRAM_OPENCODE_GO_KEY_FILE` | no | `~/keys/opencode-go-key` | plain-text OpenCode Go API key for usage probes and the bridge; never copied into plugin state |
 | `TELEGRAM_ANTIGRAVITY_BIN` | no | Nix per-user `agy`, then `PATH` | official Antigravity CLI used by harness-locked topics |
 | `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr` for Claude topics; Antigravity and localcode topics always use Herdr |
 | `TELEGRAM_TOPICS_UPDATE_RESTART` | no | `on` | moves live topic sessions onto a newly installed Claude Code at their next idle turn boundary (an idle one resumes on its next message; a busy one is restarted once it goes idle) |
@@ -245,9 +245,9 @@ topic, and model changes made during a running turn apply to the next one.
 
 `/localcode` locks a **fresh** topic the same way, to the OpenCode TUI running
 a local Qwen model in an `oc-<slug>-<threadid>` Herdr workspace. The pane runs
-`opencode <project dir> -m <model> --pure` (`--pure` keeps external TUI plugins
-such as a vim-mode plugin from eating injected prompts); the Telegram MCP is
-injected through `OPENCODE_CONFIG_CONTENT` in the pane environment and is
+`opencode <project dir> --standalone` (OpenCode 2.x; a private server so the
+pane's environment reaches it); the model and the Telegram MCP are injected
+through `OPENCODE_CONFIG_CONTENT` in the pane environment, and the MCP is
 outbound-only. OpenCode loads `AGENTS.md` and `~/.claude/CLAUDE.md` natively,
 so the first reply takes a few minutes while those instructions run; later
 turns are faster. Each Telegram turn is typed into the pane immediately as one

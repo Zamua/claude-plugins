@@ -5,7 +5,7 @@ import {
   opencodeHerdrStatus,
   opencodeInteractiveArgs,
   isOpencodeProcessName,
-  opencodeMcpConfigContent,
+  opencodeConfigContent,
   OPENCODE_SETTLE_MS,
   parseOpencodeExport,
   parseOpencodeSessionArgument,
@@ -57,27 +57,26 @@ describe('persistent Herdr OpenCode adapter', () => {
   test('starts a fresh session with the kickoff as the first prompt', () => {
     expect(opencodeInteractiveArgs({
       projectDir: '/tmp/project',
-      model: 'qwen-local/Qwen3.8-27B',
       kickoff: 'setup; do not shell-parse this',
     })).toEqual([
-      '/tmp/project', '-m', 'qwen-local/Qwen3.8-27B', '--pure', '--prompt', 'setup; do not shell-parse this',
+      '/tmp/project', '--standalone', '--prompt', 'setup; do not shell-parse this',
     ])
   })
 
   test('resumes the exact session without replaying the kickoff', () => {
     expect(opencodeInteractiveArgs({
       projectDir: '/tmp/project',
-      model: 'qwen-local/Qwen3.8-27B',
       opencodeSessionId: 'ses_1',
       kickoff: 'must not be sent again',
-    })).toEqual(['/tmp/project', '-m', 'qwen-local/Qwen3.8-27B', '--pure', '-s', 'ses_1'])
+    })).toEqual(['/tmp/project', '--standalone', '-s', 'ses_1'])
   })
 
-  test('builds the outbound-only Telegram MCP config layer', () => {
-    expect(JSON.parse(opencodeMcpConfigContent('/tmp/bun', '/tmp/plugin/server.ts'))).toEqual({
-      mcp: { 'telegram-topics': {
-        type: 'local', command: ['/tmp/bun', '/tmp/plugin/server.ts'], enabled: true,
-      } },
+  test('builds the config layer: the topic model and the outbound-only Telegram MCP', () => {
+    expect(JSON.parse(opencodeConfigContent('/tmp/bun', '/tmp/plugin/server.ts', 'qwen-local/Qwen3.8-27B'))).toEqual({
+      model: 'qwen-local/Qwen3.8-27B',
+      mcp: { servers: { 'telegram-topics': {
+        type: 'local', command: ['/tmp/bun', '/tmp/plugin/server.ts'],
+      } } },
     })
   })
 
@@ -162,9 +161,9 @@ describe('persistent Herdr OpenCode adapter', () => {
     expect(launchEnv?.OC_SPAWN_DIR).toBe('/tmp/project')
     expect(launchEnv?.OC_BIN).toBe('opencode')
     expect(JSON.parse(launchEnv?.OC_ARGS_JSON ?? '[]')).toEqual([
-      '/tmp/project', '-m', 'qwen-local/Qwen3.8-27B', '--pure', '--prompt', 'kickoff',
+      '/tmp/project', '--standalone', '--prompt', 'kickoff',
     ])
-    expect(JSON.parse(launchEnv?.OC_CONFIG_CONTENT ?? '{}').mcp['telegram-topics'].command)
+    expect(JSON.parse(launchEnv?.OC_CONFIG_CONTENT ?? '{}').mcp.servers['telegram-topics'].command)
       .toEqual(['/tmp/bun', '/tmp/plugin/server.ts'])
     expect(launchEnv?.TELEGRAM_TOPIC_ID).toBe('42')
     expect(launchEnv?.TELEGRAM_PROXY_URL).toBe('http://127.0.0.1:8790')
@@ -419,22 +418,21 @@ describe('persistent Herdr OpenCode adapter', () => {
   test('parses the last assistant message out of an opencode export', () => {
     const exported = (messages: unknown[]) => JSON.stringify({ info: {}, messages })
     expect(parseOpencodeExport(exported([
-      { info: { role: 'user' }, parts: [{ type: 'text', text: 'hi' }] },
-      { info: { role: 'assistant', finish: 'stop' }, parts: [{ type: 'text', text: 'old' }] },
-      { info: { role: 'user' }, parts: [{ type: 'text', text: 'again' }] },
-      { info: { role: 'assistant', finish: 'stop' }, parts: [
-        { type: 'step-start' },
+      { type: 'user', content: [{ type: 'text', text: 'hi' }] },
+      { type: 'assistant', finish: 'stop', content: [{ type: 'text', text: 'old' }] },
+      { type: 'user', content: [{ type: 'text', text: 'again' }] },
+      { type: 'assistant', finish: 'stop', content: [
+        { type: 'reasoning', text: 'ignored' },
         { type: 'text', text: ' first ' },
         { type: 'tool', text: 'ignored' },
         { type: 'text', text: 'second' },
       ] },
+      { type: 'idle', outcome: 'succeeded' },
     ]))).toEqual({ text: 'first \nsecond', finish: 'stop' })
     expect(parseOpencodeExport(exported([
-      { info: { role: 'assistant', finish: 'length' }, parts: [
-        { type: 'reasoning', text: 'thinking...' },
-      ] },
+      { type: 'assistant', finish: 'length', content: [{ type: 'reasoning', text: 'thinking...' }] },
     ]))).toEqual({ text: '', finish: 'length' })
-    expect(parseOpencodeExport(exported([{ info: { role: 'user' }, parts: [] }]))).toBeUndefined()
+    expect(parseOpencodeExport(exported([{ type: 'user', content: [] }]))).toBeUndefined()
     expect(parseOpencodeExport('not json')).toBeUndefined()
     expect(parseOpencodeExport('{}')).toBeUndefined()
   })
@@ -442,10 +440,11 @@ describe('persistent Herdr OpenCode adapter', () => {
   test('lastAssistantText exports the session from the project dir', async () => {
     const run: ProcessRunner = async (command, args, options) => {
       expect(command).toBe('opencode')
-      expect(args).toEqual(['export', 'ses_1'])
+      expect(args).toEqual(['session', 'export', 'ses_1'])
       expect(options.cwd).toBe('/tmp/project')
       return { stdout: JSON.stringify({ messages: [
-        { info: { role: 'assistant', finish: 'stop' }, parts: [{ type: 'text', text: 'done' }] },
+        { type: 'assistant', finish: 'stop', content: [{ type: 'text', text: 'done' }] },
+        { type: 'idle', outcome: 'succeeded' },
       ] }), stderr: '' }
     }
     expect(await runtime(run).lastAssistantText('ses_1')).toEqual({ text: 'done', finish: 'stop' })

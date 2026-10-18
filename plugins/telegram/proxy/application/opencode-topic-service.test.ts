@@ -106,7 +106,7 @@ describe('OpencodeTopicService', () => {
     expect(runtime.prompts).toHaveLength(2)
     expect(runtime.prompts[0].sessionName).toBe('oc-pilot-42')
     expect(runtime.prompts[0].prompt).toContain('<channel source="telegram"')
-    expect(runtime.prompts[0].prompt).toContain('telegram-topics_reply')
+    expect(runtime.prompts[0].prompt).toContain('reply tool of the telegram-topics MCP server')
     expect(repository.get('42')?.opencodeSessionId).toBe('ses_1')
     expect(repository.get('42')?.sessionName).toBe('oc-pilot-42')
   })
