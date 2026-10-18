@@ -72,19 +72,15 @@ Code disables Channels under API billing).
   pane. The four tools POST to the proxy (`/send`, `/react`, `/edit`,
   `/download`), each carrying its topic.
   It also retains Claude Channels' permission-relay path, but that older harness
-  prompt path is dormant under auto mode. Auto-mode action denials use the hook
-  path described below instead.
+  prompt path is dormant under auto mode.
 - **Launcher** (`scripts/launch-topic.sh`): spawns one detached multiplexer pane
   per topic running a foreground `claude` with the channel loaded, under
   provider-specific permissions. ChatGPT models use `--dangerously-skip-permissions`: tool
   actions run without approval prompts. The model picker and route confirmations
   explain this. Native Anthropic and OpenCode Go use `--permission-mode auto`: a
   guard model vets each command and auto-approves the safe ones, so routine work
-  runs with no prompt. If the guard denies an action, a hook posts a concise
-  approval card in that same Telegram topic. The administrator can tap **Approve
-  once** or **Deny**, or reply naturally with `yes`/`approve` or `no`/`cancel`.
-  Approval sends one exact-action retry into the same Claude session; it never
-  bypasses the guard or executes a tool from the proxy. It also handles session
+  runs with no prompt. If the guard denies an action, the denial goes back to
+  that Claude, which explains it in the topic. It also handles session
   continuity: it mints a claude session
   id on the first spawn and `--resume`s that same id on every later spawn, so a
   topic is one continuous conversation across kills, route changes, crashes,
@@ -162,7 +158,7 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_TOPICS_SPAWN_DIR` | no | `$HOME` | cwd for every spawned topic-Claude |
 | `TELEGRAM_PROXY_PORT` | no | `8790` | HTTP port for the MCP clients |
 | `TELEGRAM_TOPICS_MARKETPLACE` | no | `plugin:telegram@zamua` | channel ref for the launcher |
-| `TELEGRAM_TOPICS_ADMIN_USER_ID` | for routing/approvals | secrets user id | Telegram user allowed to change routes and approve denied actions |
+| `TELEGRAM_TOPICS_ADMIN_USER_ID` | for routing | secrets user id | Telegram user allowed to change routes and lock harnesses |
 | `TELEGRAM_PROVIDER_PROXY_URL` | no | `http://127.0.0.1:18765` | loopback compatibility bridge |
 | `TELEGRAM_PROVIDER_PROXY_BIN` | no | `claude-code-proxy` | bridge CLI used to enumerate models |
 | `TELEGRAM_OPENCODE_BIN` | no | Nix per-user `opencode`, then `PATH` | CLI used to read OpenCode model metadata and to run `/localcode` topics |
@@ -365,7 +361,6 @@ Loopback only (`127.0.0.1:8790`).
 | `POST /edit` | `{topic, chat_id, message_id, text, format?}` | `{message_id}` |
 | `POST /download` | `{topic, file_id}` | `{path}` |
 | `POST /permission-request` | `{topic, request_id, tool, input}` | `{ok: true}` |
-| `POST /permission-denied` | Claude `PermissionDenied` hook payload | creates or deduplicates a Telegram approval request |
 | `POST /rate-limit` | `{topic, error, details, reset_at?}` | pauses the exhausted route and opens the Telegram picker |
 | `POST /capacity` | Anthropic capacity windows | `{ok: true}` |
 | `POST /topic/create` | `{name, harness?: "claude" | "antigravity" | "opencode"}` | creates and registers a topic after validating the selected harness |
@@ -384,14 +379,6 @@ blocking the pane). When active, `POST /permission-request` posts an approve/den
 prompt into the topic and the user's answer is routed back over
 `GET /permission-poll` as `{request_id, behavior}` (`behavior` is `"allow"` or
 `"deny"`).
-
-`POST /permission-denied` is the active auto-mode authorization path. It stores
-only a redacted action summary, reason, fingerprint, topic, and Claude session id
-in `action-authorizations.json` (mode `0600`). Pending approvals expire after 15
-minutes. The raw tool input is not persisted. An approval is valid only for its
-original topic and active Claude UUID and triggers a single exact-action retry;
-a second reviewer denial ends the request instead of looping or suggesting a
-workaround.
 
 ## Scope (v1)
 

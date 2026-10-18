@@ -43,28 +43,6 @@
           }
         ]
       }
-    ],
-    "PermissionDenied": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$TG_AUTHORIZATION_HOOK\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$TG_AUTHORIZATION_HOOK\"",
-            "timeout": 10
-          }
-        ]
-      }
     ]
   },
   "statusLine": {
