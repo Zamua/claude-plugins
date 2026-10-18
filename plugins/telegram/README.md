@@ -115,7 +115,8 @@ Code disables Channels under API billing).
   project dir whose `opencode.jsonc` defines the local provider, the local model
   server running, and a running Herdr server.
 - Optional provider routing: `claude-code-proxy` on PATH. Codex must already be
-  authenticated; OpenCode Go needs an API key in `TELEGRAM_OPENCODE_GO_KEY_FILE`.
+  authenticated; OpenCode Go needs an API key in `TELEGRAM_OPENCODE_GO_KEY_FILE`
+  or an OpenCode Console login (`opencode auth login`).
 - A Telegram bot token (BotFather).
 - A Telegram **group with Topics enabled** (group settings -> Topics -> on).
 - BotFather -> `/setprivacy` -> **Disable**, so the bot receives every topic
@@ -167,7 +168,7 @@ always wins over a `.env` file. Keys:
 | `LOCALGEN_PORT` | no | `8012` | loopback port of the qwen-image server `/localgen` topics post prompts to |
 | `TELEGRAM_LOCALGEN_START_CMD` | no | the pm2 start line for `qwen-image` | shown in a `/localgen` topic when that server is not listening |
 | `TELEGRAM_PROVIDER_CAPACITY_POLL_MINUTES` | no | `5` | Codex/OpenCode Go usage refresh interval |
-| `TELEGRAM_OPENCODE_GO_KEY_FILE` | no | `~/keys/opencode-go-key` | plain-text OpenCode Go API key for usage probes and the bridge; never copied into plugin state |
+| `TELEGRAM_OPENCODE_GO_KEY_FILE` | no | `~/keys/opencode-go-key` | plain-text OpenCode Go API key for usage probes and the bridge; without it they use the OpenCode Console login. Never copied into plugin state |
 | `TELEGRAM_ANTIGRAVITY_BIN` | no | Nix per-user `agy`, then `PATH` | official Antigravity CLI used by harness-locked topics |
 | `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr` for Claude topics; Antigravity and localcode topics always use Herdr |
 | `TELEGRAM_TOPICS_UPDATE_RESTART` | no | `on` | moves live topic sessions onto a newly installed Claude Code at their next idle turn boundary (an idle one resumes on its next message; a busy one is restarted once it goes idle) |
