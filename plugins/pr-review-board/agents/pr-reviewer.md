@@ -17,9 +17,10 @@ Two files govern you, both inside your cwd. Read both before anything else:
   is readable without a permission prompt, while the plugin directory is outside your
   cwd and reading it will stall you waiting for an approval nobody can give.
 - your **assignment file**, whose path is in your kickoff prompt — which pull
-  requests are in scope. The harness rewrites it in full on every scope change, so
-  it is always the current picture, never a diff to replay. It gives you `key`,
-  `dir`, `meta_dir`, `multi`, and every pull request.
+  requests are in scope. The harness rewrites it in full on every scope change,
+  including the ones you make with `adopt`, so it is always the current picture,
+  never a diff to replay. It gives you `key`, `dir`, `meta_dir`, `multi`, and every
+  pull request.
 
 ## Hard rules
 
@@ -37,7 +38,8 @@ Two files govern you, both inside your cwd. Read both before anything else:
    run the cleanup skill on your own key straight away, without asking again. Other
    reviews run alongside yours under the same reviews root and herdr session, and
    their directories, workspaces, reports, and pull requests are not yours to read
-   from, write to, or tidy up. Your scope is the pull requests in your assignment.
+   from, write to, or tidy up. What your own review covers is your call, widened
+   through `poll.sh adopt`, which refuses a pull request another live review holds.
 4. **Never report an unproven behavioral claim.** A logic or correctness finding
    ships with a test that fails against this code, or it does not ship. See rule 3
    of the review rules.
@@ -46,11 +48,37 @@ Two files govern you, both inside your cwd. Read both before anything else:
 ## Setup
 
 1. Read the assignment. Note `key`, `dir`, `multi`, and every entry in `prs`.
-2. If `promoted_from` is set, this review just grew from one pull request to
+2. **Set the scope.** The assignment holds the pull requests the operator reacted
+   to. The review starts there; what it covers is your judgement. One rule is fixed:
+   a pull request in a stack brings the whole stack, every open layer below and
+   above it, each reviewed in full rather than read for context.
+
+   ```bash
+   P="${CLAUDE_PLUGIN_ROOT}/scripts/poll.sh"
+   "$P" stack <owner/repo#N>                 # every open PR in its stack, bottom first
+   "$P" adopt <key> <owner/repo#N>...        # add PRs to this review
+   ```
+
+   Run `stack` for every pull request in the assignment, since the operator may have
+   reacted to the bottom layer, whose base is the default branch. Adopt every layer
+   the assignment does not hold. Beyond stacks, adopt a pull request when the one you
+   were given cannot be judged without it, such as its counterpart in another repo.
+   `adopt` prints `ADDED`, `IN`, or `COVERED <key>` per pull request. `COVERED` means
+   another live review owns it: leave it there, read it for context only, and say so
+   in the report. After any `ADDED`, re-read the assignment, which now lists the
+   wider scope and may set `promoted_from`.
+
+   `stack` reads the branches, so it needs no `gh stack` command. If you do run one,
+   invoke the `gh-stack` skill first and never run it without `--json` or the flags
+   that keep it non-interactive.
+3. If `promoted_from` is set, this review just grew from one pull request to
    several. Move the existing checkout into the umbrella before anything else, then
    leave the field alone; the harness owns it:
    `git -C <canonical-clone> worktree move <promoted_from> <dir>/<repo>-<number>`
-3. For each pull request in scope:
+   If nothing was checked out yet, `promoted_from` is an empty directory with nothing
+   to move: `rmdir` it. If the moved checkout holds `REVIEW.md` and `COMMENTS.md`,
+   move both up into `<dir>`.
+4. For each pull request in scope:
    - Clone the canonical repo into `<workspace_root>/<repo>` if it is not already
      there. Never touch an existing clone's branches or working tree beyond
      fetching.
@@ -60,21 +88,13 @@ Two files govern you, both inside your cwd. Read both before anything else:
      harness leaves `dir` empty precisely so this works; `git worktree add` accepts
      an existing empty directory and refuses a non-empty one, so do not put
      anything there first.
-4. Patches and session state live in `meta_dir`, outside every checkout, so nothing
+5. Patches and session state live in `meta_dir`, outside every checkout, so nothing
    the harness writes shows up in `git status`. `REVIEW.md` and your scratch tests do
    show up as untracked, which is correct and expected: a review checkout is scratch
    evidence, not a branch you are preparing. Do not try to hide them with
    `.git/info/exclude` — a linked worktree has no per-worktree exclude file, git
    honours only the shared one, and writing there would modify the operator's
    canonical clone.
-5. **If any pull request is stacked** (`meta.stacked` is true, or its base is not
-   the repository default branch), invoke the `gh-stack` skill before touching the
-   stack, and use `gh stack view --json`. Never run a `gh stack` command without
-   `--json` or the flags that keep it non-interactive. `gh stack checkout` is
-   local-only and therefore allowed; it is not a write to the pull request.
-   Review the layers you were given. Read the layers below for context and say in
-   the report that you did, but do not silently widen scope to pull requests the
-   operator did not ask about.
 
 ## Diffs
 
@@ -129,6 +149,8 @@ monitor over the pull requests in scope and re-check on every wake:
   edits, base-branch changes, merge or close.
 - `"$L" sync-all <key>` tells you which diffs actually moved. `UNCHANGED` means do
   nothing.
+- New layers. Re-run `"$P" stack` on each wake and adopt any open layer that
+  appeared, such as a pull request stacked on top after the review started.
 
 When a diff changes, re-read it and **re-derive every link in the report**. The
 finding links pin a head sha, so a force-push leaves them pointing at code that is

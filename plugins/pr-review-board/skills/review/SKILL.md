@@ -22,11 +22,13 @@ always theirs. See the GitHub boundary in the review rules.
 
 ## Steps
 
-1. **Work out the scope.** One pull request, or several. A stack counts as several.
-   Check the base branch: a base that is not the repository default branch means the
-   pull request sits on another one. When there is a stack, invoke the `gh-stack`
-   skill and use `gh stack view --json`. Review the layers you were given and read
-   the ones below for context.
+1. **Work out the scope.** Start from the pull requests you were given; what the
+   review covers is your judgement, per the scope section of the review rules. A
+   pull request in a stack brings the whole stack, every open layer reviewed in
+   full. List it from the branches for each pull request you were given:
+   `${CLAUDE_PLUGIN_ROOT}/scripts/poll.sh stack <owner/repo#N>` prints every open
+   layer, bottom first. It needs no `gh stack` command; if you run one anyway,
+   invoke the `gh-stack` skill first.
 
 2. **Check out under the reviews root.**
    - Single pull request: `~/workspace/reviews/<repo>-<number>/`

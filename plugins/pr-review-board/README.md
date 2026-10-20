@@ -131,9 +131,17 @@ One reaction is one review. Two pull requests join the same review when either h
 - **Tracker id.** Their branches carry the same id, e.g. `feature/abc-123` in two
   repos.
 
+That only decides which reactions share a review. What a review covers is the
+agent's call. A pull request in a stack always brings the whole stack: the agent
+lists every open layer with `poll.sh stack` and adds the ones you did not react to
+with `poll.sh adopt`, so reacting to any one layer reviews them all. It may adopt
+other pull requests the change cannot be judged without. A pull request another live
+review covers stays there.
+
 A review that grows past one pull request is promoted to an umbrella directory named
 after the pull request that opened it, so the name never depends on arrival order.
-The agent states in its report which pull requests it grouped and why.
+The agent states in its report which pull requests it grouped, which it added, and
+why.
 
 ## Cleanup
 

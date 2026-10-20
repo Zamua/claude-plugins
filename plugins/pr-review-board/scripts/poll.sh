@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
-# pr-review-board poller + management CLI. A thin harness: it decides which pull
-# requests you asked to have reviewed, groups them into reviews, and brings a
-# review agent up. Everything object-level (clones, worktrees, diffs, tests, the
-# report) is the worker's job.
+# pr-review-board poller + management CLI. A thin harness: it turns the pull
+# requests you reacted to into reviews and brings a review agent up. What a review
+# covers beyond those is the worker's call, made with `stack` and `adopt`.
+# Everything object-level (clones, worktrees, diffs, tests, the report) is the
+# worker's job.
 #
 # The trigger is a reaction you added to a pull request recently. There is no
 # un-react trigger: reaping is manual, via the pr-review-board:cleanup skill.
 #
-#   poll.sh once            one pass (spawn / append / recover)
-#   poll.sh status          the board: active reviews and their agents
-#   poll.sh fresh           what the trigger sees right now, without acting
-#   poll.sh spawn <pr>      force one pull request into a review now
-#   poll.sh assignment <k>  print a review's assignment file path
-#   poll.sh install         arm the scheduler (launchd on macOS, else a cron line)
-#   poll.sh uninstall       disarm the scheduler
-#   poll.sh config-init     write a starter config
+#   poll.sh once               one pass (spawn / append / recover)
+#   poll.sh status             the board: active reviews and their agents
+#   poll.sh fresh              what the trigger sees right now, without acting
+#   poll.sh spawn <pr>         force one pull request into a review now
+#   poll.sh stack <pr>         every open pull request in <pr>'s stack, bottom first
+#   poll.sh adopt <k> <pr>...  add pull requests to live review <k>
+#   poll.sh assignment <k>     print a review's assignment file path
+#   poll.sh install            arm the scheduler (launchd on macOS, else a cron line)
+#   poll.sh uninstall          disarm the scheduler
+#   poll.sh config-init        write a starter config
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
@@ -35,7 +38,7 @@ prb_validate_adapter() {  # <name> <required-fn>...
   for fn in "$@"; do declare -F "$fn" >/dev/null || missing="$missing $fn"; done
   [ -z "$missing" ] || { prb_log "adapter $name is missing required functions:$missing"; exit 1; }
 }
-prb_validate_adapter "source-$PRB_SOURCE" src_deps src_fresh src_pr_meta src_kickoff_context src_cutoff_iso
+prb_validate_adapter "source-$PRB_SOURCE" src_deps src_fresh src_pr_meta src_stack src_kickoff_context src_cutoff_iso
 prb_validate_adapter "runtime-$PRB_RUNTIME" rt_deps rt_status rt_running_count rt_spawn rt_resume rt_notify rt_relabel rt_close_workspace rt_list
 
 # ---- grouping ----
@@ -151,6 +154,39 @@ _write_assignment() {  # <key>
   printf '%s' "$f"
 }
 
+# An adopted pull request was never reacted to, so it has no reaction time.
+_record_meta() {  # <key> <pr> <reactedAt|""> <title> <url> <isDraft> <defaultBranch> <stacked> <adopted>
+  prb_state_edit '.reviews[$k].meta[$p] = {reacted_at:(if $at == "" then null else $at end),title:$t,url:$u,is_draft:($d=="true"),default_branch:$db,stacked:($s=="true"),adopted:($ad=="true")}' \
+    --arg k "$1" --arg p "$2" --arg at "$3" --arg t "$4" --arg u "$5" --arg d "$6" --arg db "$7" --arg s "$8" --arg ad "$9"
+}
+
+# Add a pull request to a live review. A single-pull-request review is promoted to
+# an umbrella so each member gets its own checkout; the worker moves the existing
+# worktree in. The assignment is rewritten either way.
+_join_review() {  # <key> <pr> <reactedAt|""> <head> <base> <defaultBranch> <isDraft> <title> <url> <adopted>
+  local key="$1" pr="$2" at="$3" head="$4" base="$5" defbr="$6" draft="$7" title="$8" url="$9" adopted="${10}"
+  local stacked=false was_multi old_dir new_dir anchor anchor_title
+  [ "$base" = "$defbr" ] || stacked=true
+  was_multi="$(prb_review_field "$key" multi)"
+  old_dir="$(prb_review_field "$key" dir)"
+  prb_pr_bind "$pr" "$key" "$head" "$base"
+  _record_meta "$key" "$pr" "$at" "$title" "$url" "$draft" "$defbr" "$stacked" "$adopted"
+  if [ "$was_multi" != "true" ] && [ "$(prb_review_field "$key" multi)" = "true" ]; then
+    # Name the umbrella after the pull request that OPENED the review, not
+    # whichever one joined, so the directory does not depend on arrival order.
+    anchor="$(prb_state_read --arg k "$key" '.reviews[$k].prs[0] // empty')"
+    anchor_title="$(prb_state_read --arg k "$key" --arg p "$anchor" '.reviews[$k].meta[$p].title // empty')"
+    new_dir="$(prb_reviews_root)/$(_slug_umbrella "${anchor:-$pr}" "${anchor_title:-$title}")"
+    mkdir -p "$new_dir"
+    prb_review_set_field "$key" dir "$new_dir"
+    prb_review_set_field "$key" slug "$(basename "$new_dir")"
+    prb_review_set_field "$key" promoted_from "$old_dir"
+    rt_relabel "$key" "$(basename "$new_dir")" 2>/dev/null || true
+    prb_log "promoted review '$key' to umbrella $new_dir (was $old_dir)"
+  fi
+  _write_assignment "$key" >/dev/null
+}
+
 # ---- the pass ----
 _handle_fresh() {  # <pr> <reactedAt> <head> <base> <defaultBranch> <isDraft> <title> <url>
   local pr="$1" at="$2" head="$3" base="$4" defbr="$5" draft="$6" title="$7" url="$8"
@@ -171,29 +207,7 @@ _handle_fresh() {  # <pr> <reactedAt> <head> <base> <defaultBranch> <isDraft> <t
 
   key="$(_match_review "$pr" "$head" "$base" "$defbr")" || key=""
   if [ -n "$key" ]; then
-    # Joining a live review. Promote a single-pull-request review to an umbrella so
-    # each member gets its own checkout; the worker moves the existing worktree in.
-    local was_multi old_dir new_dir
-    was_multi="$(prb_review_field "$key" multi)"
-    old_dir="$(prb_review_field "$key" dir)"
-    prb_pr_bind "$pr" "$key" "$head" "$base"
-    prb_state_edit '.reviews[$k].meta[$p] = {reacted_at:$at,title:$t,url:$u,is_draft:($d=="true"),default_branch:$db,stacked:($s=="true")}' \
-      --arg k "$key" --arg p "$pr" --arg at "$at" --arg t "$title" --arg u "$url" --arg d "$draft" --arg db "$defbr" --arg s "$stacked"
-    if [ "$was_multi" != "true" ]; then
-      # Name the umbrella after the pull request that OPENED the review, not
-      # whichever one joined, so the directory does not depend on arrival order.
-      local anchor anchor_title
-      anchor="$(prb_state_read --arg k "$key" '.reviews[$k].prs[0] // empty')"
-      anchor_title="$(prb_state_read --arg k "$key" --arg p "$anchor" '.reviews[$k].meta[$p].title // empty')"
-      new_dir="$(prb_reviews_root)/$(_slug_umbrella "${anchor:-$pr}" "${anchor_title:-$title}")"
-      mkdir -p "$new_dir"
-      prb_review_set_field "$key" dir "$new_dir"
-      prb_review_set_field "$key" slug "$(basename "$new_dir")"
-      prb_review_set_field "$key" promoted_from "$old_dir"
-      rt_relabel "$key" "$(basename "$new_dir")" 2>/dev/null || true
-      prb_log "promoted review '$key' to umbrella $new_dir (was $old_dir)"
-    fi
-    _write_assignment "$key" >/dev/null
+    _join_review "$key" "$pr" "$at" "$head" "$base" "$defbr" "$draft" "$title" "$url" false
     rt_notify "$key" "Scope change: $pr ($title) was added to this review. Re-read $(prb_meta_dir "$key")/assignment.json, which is now authoritative. If promoted_from is set, move the existing checkout into the umbrella dir before continuing. Review it and fold it into the report." \
       || prb_log "review '$key' is not live; the next pass will recover it"
     prb_log "appended $pr to review '$key'"
@@ -212,8 +226,7 @@ _handle_fresh() {  # <pr> <reactedAt> <head> <base> <defaultBranch> <isDraft> <t
   prb_review_put "$key" "$(jq -nc --arg s "$key" --arg d "$dir" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{status:"ACTIVE",slug:$s,dir:$d,multi:false,created_at:$now,prs:[],heads:{},meta:{}}')"
   prb_pr_bind "$pr" "$key" "$head" "$base"
-  prb_state_edit '.reviews[$k].meta[$p] = {reacted_at:$at,title:$t,url:$u,is_draft:($d=="true"),default_branch:$db,stacked:($s=="true")}' \
-    --arg k "$key" --arg p "$pr" --arg at "$at" --arg t "$title" --arg u "$url" --arg d "$draft" --arg db "$defbr" --arg s "$stacked"
+  _record_meta "$key" "$pr" "$at" "$title" "$url" "$draft" "$defbr" "$stacked" false
   _write_assignment "$key" >/dev/null
   prb_log "new review '$key' for $pr (stacked=$stacked draft=$draft)"
   printf '%s\n' "$key"
@@ -327,6 +340,53 @@ EOF2
   esac
 }
 
+cmd_stack() {  # <owner/repo#N>
+  prb_need $(src_deps) || return 1
+  [ -n "${1:-}" ] || { prb_log "usage: poll.sh stack <owner/repo#N>"; return 2; }
+  src_stack "$1"
+}
+
+# A worker cannot come back on the next tick the way the scheduler does, so it
+# waits out a pass in progress instead of skipping.
+_lock_waiting() {
+  local i=0
+  until prb_lock 2>/dev/null; do
+    i=$(( i + 1 ))
+    [ "$i" -lt 30 ] || { prb_log "the poll lock is still held after 60s"; return 1; }
+    sleep 2
+  done
+}
+
+# The worker widens its own review. The harness knows only which pull requests were
+# reacted to; whether the change can be judged from those alone is the worker's call.
+# A pull request another live review covers stays there, so two workers never share a
+# checkout or a comment list. One line per pull request: ADDED, IN, COVERED <key>, or
+# ERROR, then the assignment path, which is rewritten whenever anything is added.
+cmd_adopt() {  # <key> <owner/repo#N>...
+  prb_need $(src_deps) jq || return 1
+  local key="${1:-}"; shift 2>/dev/null || true
+  { [ -n "$key" ] && [ "$#" -gt 0 ]; } || { prb_log "usage: poll.sh adopt <key> <owner/repo#N>..."; return 2; }
+  [ "$(prb_review_status "$key")" = "ACTIVE" ] || { prb_log "review '$key' is not ACTIVE"; return 1; }
+  _lock_waiting || return 1
+  trap 'prb_unlock' EXIT
+  local pr owner row _pr _at head base defbr draft title url added=0 rc=0
+  for pr in "$@"; do
+    owner="$(prb_pr_review "$pr")"
+    if [ "$owner" = "$key" ]; then printf 'IN\t%s\n' "$pr"; continue; fi
+    if [ -n "$owner" ] && [ "$(prb_review_status "$owner")" = "ACTIVE" ]; then printf 'COVERED\t%s\t%s\n' "$pr" "$owner"; continue; fi
+    row="$(src_pr_meta "$pr")"
+    if [ -z "$row" ]; then prb_log "cannot read $pr"; printf 'ERROR\t%s\n' "$pr"; rc=1; continue; fi
+    IFS=$'\t' read -r _pr _at head base defbr draft title url <<EOF2
+$row
+EOF2
+    _join_review "$key" "$pr" "" "$head" "$base" "$defbr" "$draft" "$title" "$url" true
+    printf 'ADDED\t%s\n' "$pr"; added=$(( added + 1 ))
+  done
+  [ "$added" = 0 ] || prb_log "review '$key' adopted $added pull request(s)"
+  printf 'ASSIGNMENT\t%s/assignment.json\n' "$(prb_meta_dir "$key")"
+  return $rc
+}
+
 cmd_assignment() { printf '%s/assignment.json\n' "$(prb_meta_dir "$1")"; }
 
 # An installed plugin lives under a VERSION-scoped directory, and superseded versions
@@ -401,6 +461,8 @@ main() {
     fresh)       cmd_fresh "$@" ;;
     status)      cmd_status "$@" ;;
     spawn)       cmd_spawn "$@" ;;
+    stack)       cmd_stack "$@" ;;
+    adopt)       cmd_adopt "$@" ;;
     assignment)  cmd_assignment "$@" ;;
     install)     cmd_install "$@" ;;
     uninstall)   cmd_uninstall "$@" ;;

@@ -8,6 +8,7 @@
 #   src_cutoff_iso             -> only reactions at or after this instant count
 #   src_fresh                  -> TSV of freshly-reacted PRs (see FIELDS below)
 #   src_pr_meta <pr>           -> TSV row for one PR, for reconcile paths
+#   src_stack <pr>             -> every open PR in <pr>'s stack, bottom first
 #   src_kickoff_context <key>  -> the worker's opening brief
 #
 # Why a freshness window rather than a stored watermark: the reaction carries its
@@ -173,6 +174,47 @@ src_pr_meta() {  # <owner/repo#N>
             ($r.defaultBranchRef.name // "main"), (.isDraft|tostring),
             ((.title // "untitled") | gsub("[\t\n\r]"; " ")),
             .url ] | @tsv'
+}
+
+# One owner/repo#N per line, <pr> included. A stack is a chain of branches in one
+# repo: down follows each base to the open pull request whose head it is, until the
+# default branch; up follows each head to every open pull request based on it, so a
+# stack that forks is covered whole. Branches are read rather than `gh stack view`,
+# which needs the stack tracked in a local clone and misses chains other tools built.
+# A head that is the default branch links to nothing, or a release pull request
+# (main -> production) would pull in every pull request based on main.
+src_stack() {  # <owner/repo#N>
+  local pr="$1" repo row _p _at head base defbr _rest cur n b h hh queue seen down="" up="" hops=0
+  repo="${pr%%#*}"
+  row="$(src_pr_meta "$pr")"
+  [ -n "$row" ] || { prb_log "cannot read $pr"; return 1; }
+  IFS=$'\t' read -r _p _at head base defbr _rest <<EOF
+$row
+EOF
+  seen=" ${pr##*#} "
+  cur="$base"
+  while [ "$cur" != "$defbr" ] && [ "$hops" -lt 50 ]; do
+    hops=$(( hops + 1 ))
+    read -r n b <<EOF
+$(gh pr list --repo "$repo" --head "$cur" --state open --json number,baseRefName --jq '.[0] // empty | "\(.number) \(.baseRefName)"' 2>/dev/null)
+EOF
+    [ -n "$n" ] || break
+    case "$seen" in *" $n "*) break ;; esac
+    seen="$seen$n "; down="$repo#$n"$'\n'"$down"; cur="$b"
+  done
+  queue=""; [ "$head" = "$defbr" ] || queue="$head"
+  while [ -n "$queue" ] && [ "$hops" -lt 100 ]; do
+    hops=$(( hops + 1 ))
+    h="${queue%%$'\n'*}"
+    case "$queue" in *$'\n'*) queue="${queue#*$'\n'}" ;; *) queue="" ;; esac
+    while read -r n hh; do
+      [ -n "$n" ] || continue
+      case "$seen" in *" $n "*) continue ;; esac
+      seen="$seen$n "; up="$up$repo#$n"$'\n'
+      [ "$hh" = "$defbr" ] || queue="$queue${queue:+$'\n'}$hh"
+    done < <(gh pr list --repo "$repo" --base "$h" --state open --json number,headRefName --jq '.[] | "\(.number) \(.headRefName)"' 2>/dev/null)
+  done
+  printf '%s%s\n%s' "$down" "$pr" "$up"
 }
 
 # The worker's opening brief. Deliberately short: the assignment file in the review
