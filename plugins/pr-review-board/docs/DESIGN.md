@@ -106,6 +106,25 @@ directory, and workspace label do. The herdr agent name is therefore assigned on
 read back from state forever after — recomputing it from a promoted slug would orphan
 the live agent and leave the review permanently `stopped`.
 
+### Scope is the agent's
+
+Grouping only decides which reactions share a review. The harness does not decide
+what a review covers, because whether a change can be judged from the pull requests
+reacted to is a reading of the code, not of branch names. The agent owns it, through
+two commands:
+
+- `poll.sh stack <pr>` lists every open pull request in the pull request's stack,
+  bottom first, by walking base and head branches down to the default branch and up
+  through every child. It reads branches rather than `gh stack view`, which needs the
+  stack tracked in a local clone and misses chains other tools built.
+- `poll.sh adopt <key> <pr>...` adds pull requests to the agent's own live review,
+  through the same join path a reaction takes, so promotion to an umbrella and the
+  assignment rewrite behave identically. It refuses a pull request another live
+  review covers, so two agents never share a checkout or a comment list.
+
+The agent always adopts the whole stack. Anything beyond that is its judgement, and
+the report's grouping note says what it added and why.
+
 ## Layout
 
 One herdr workspace per review, labelled with the slug, holding one pane: the review
