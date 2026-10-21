@@ -2,8 +2,9 @@
 # Claim under test: a worker can review a whole stack. `stack` finds every open
 # layer from any one of them, a fork and the bottom layer included, without following
 # a release pull request off the default branch. `adopt` brings those layers into the
-# worker's own review, promotes it to an umbrella, and leaves a layer another live
-# review covers where it is.
+# worker's own review, promotes it to an umbrella named for the pull request that
+# opened the review rather than the lowest-numbered layer, and leaves a layer another
+# live review covers where it is.
 #
 # Fixture, one repo, default branch main:
 #
@@ -112,6 +113,7 @@ eq "the review now holds three PRs"           "acme/api#1 acme/api#2 acme/api#4"
 eq "the other review keeps its PR"            "other-9"                           "$(st '.pr_index["acme/api#3"]')"
 eq "the review is promoted to an umbrella"    "true"                              "$(st '.reviews["api-2"].multi')"
 eq "the worker is told where its checkout was" "$TD/reviews/api-2"                "$(st '.reviews["api-2"].promoted_from')"
+eq "the umbrella is named for the PR that opened the review" "$TD/reviews/layer-b-2" "$(st '.reviews["api-2"].dir')"
 eq "an adopted PR is marked as adopted"       "true"                              "$(st '.reviews["api-2"].meta["acme/api#1"].adopted')"
 eq "an adopted PR has no reaction time"       "null"                              "$(st '.reviews["api-2"].meta["acme/api#1"].reacted_at')"
 eq "the assignment lists the wider scope"     "3" \

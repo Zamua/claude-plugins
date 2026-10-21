@@ -169,13 +169,15 @@ _join_review() {  # <key> <pr> <reactedAt|""> <head> <base> <defaultBranch> <isD
   [ "$base" = "$defbr" ] || stacked=true
   was_multi="$(prb_review_field "$key" multi)"
   old_dir="$(prb_review_field "$key" dir)"
+  # Name the umbrella after the pull request that OPENED the review, not whichever
+  # one joined, so the directory does not depend on arrival order. Read it before
+  # binding: the member list is kept sorted, so afterwards prs[0] is the lowest
+  # number, which for a stack adopted from the top is the bottom layer.
+  anchor="$(prb_state_read --arg k "$key" '.reviews[$k].prs[0] // empty')"
+  anchor_title="$(prb_state_read --arg k "$key" --arg p "$anchor" '.reviews[$k].meta[$p].title // empty')"
   prb_pr_bind "$pr" "$key" "$head" "$base"
   _record_meta "$key" "$pr" "$at" "$title" "$url" "$draft" "$defbr" "$stacked" "$adopted"
   if [ "$was_multi" != "true" ] && [ "$(prb_review_field "$key" multi)" = "true" ]; then
-    # Name the umbrella after the pull request that OPENED the review, not
-    # whichever one joined, so the directory does not depend on arrival order.
-    anchor="$(prb_state_read --arg k "$key" '.reviews[$k].prs[0] // empty')"
-    anchor_title="$(prb_state_read --arg k "$key" --arg p "$anchor" '.reviews[$k].meta[$p].title // empty')"
     new_dir="$(prb_reviews_root)/$(_slug_umbrella "${anchor:-$pr}" "${anchor_title:-$title}")"
     mkdir -p "$new_dir"
     prb_review_set_field "$key" dir "$new_dir"
