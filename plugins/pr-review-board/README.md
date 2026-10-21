@@ -4,9 +4,9 @@ React to a pull request with 👀 and a background Claude reviews it.
 
 A local poller watches GitHub for reactions **you** added in the last few minutes,
 then spawns one review agent per changeset in its own herdr workspace. The agent
-writes a plain-English report linked to the pull request and to every line it calls
-out, and prints the headline in its pane. It finishes by proposing a numbered list of
-comments and posts only the ones you pick.
+writes the whole review to a board, drawn in a `/reviewboard` pane beside it: a
+plain-English report linked to every pull request and every line it calls out, and
+the numbered comments it proposes. It posts only the ones you pick.
 
 ```
 you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
@@ -14,11 +14,11 @@ you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
                                   ├─ new herdr workspace, one review agent
                                   ├─ clones + worktrees the PR head
                                   ├─ reviews it, proves bugs with failing tests
-                                  ├─ writes REVIEW.md as it goes, linked to the PR
+                                  ├─ writes its board as it goes, shown in /reviewboard
                                   └─ proposes numbered comments, then waits
 PR gets new commits       ─▶  the agent re-reads the diff and revises everything
 you ask it questions      ─▶  it answers in its pane
-you reply "post 1, 3"     ─▶  it posts those two, signed off, and nothing else
+you tick 1 and 3, send    ─▶  it posts those two, signed off, and nothing else
 you run /pr-review-board:cleanup  ─▶  everything torn down, no confirmation
 ```
 
@@ -84,7 +84,7 @@ set:
 ```
 poll.sh fresh         what the trigger sees right now, without acting
 poll.sh once          one pass
-poll.sh status        the board
+poll.sh status        every review and its state
 poll.sh spawn <pr>    force one pull request in, ignoring the freshness window
 poll.sh install       arm the scheduler
 poll.sh uninstall     disarm it
@@ -104,6 +104,26 @@ Every case proves a defect that once shipped, so each one failed before its fix.
 build their own config, state and reviews root under `mktemp` and use the stub runtime,
 so nothing touches real state and no agent is launched. Some cases call the GitHub API,
 so an authenticated `gh` is required.
+
+## The board
+
+Everything a review produces lives in one file, `board.json` in the review's
+metadata directory, and the plugin draws it in a pane, `/reviewboard`, that opens by
+itself in the review's session:
+
+- the verdict, the risk and the blast radius, one sentence each
+- the stack of pull requests, each linked, with its own risk
+- the proposed comments by severity, each marked `new`, `carried over` or `not a
+  bug`, linked to its code and the scratch test that proves it, and opening in place
+  to the exact text it would post and the finding behind it
+- the report, one closed section per heading
+- the comments already posted, out of the way at the bottom
+
+Tick comments and press Draft to put `post 1, 3` in the prompt box. Sending it is
+yours. The agent posts from the board itself, through `scripts/board.sh`, so what
+goes to GitHub is the wording you read, and a comment already posted is refused.
+A review run by hand through the skill keys its board by the session's id, so the
+pane finds it the same way. Its tests run with `claude plugin test .`.
 
 ## Skills
 
@@ -150,8 +170,8 @@ Removing the reaction does nothing. `CLEANEDUP` is terminal: the poller never
 resurrects a torn-down review. Re-reviewing the same pull request takes a genuinely
 new reaction, which opens a fresh review.
 
-Nothing is kept. `REVIEW.md`, `COMMENTS.md`, and any scratch tests go with the review
-directory, so the comments posted on GitHub are the lasting record.
+Nothing is kept. The board and any scratch tests go with the review, so the comments
+posted on GitHub are the lasting record.
 
 ## License
 
