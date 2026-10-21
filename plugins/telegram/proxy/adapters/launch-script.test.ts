@@ -52,6 +52,11 @@ describe('Claude provider launch script', () => {
     expect(script).toContain('--disallowedTools="$TG_DISALLOWED_TOOLS"')
   })
 
+  test('labels the herdr workspace without the claude- marker but keeps it on the pane', () => {
+    expect(script).toContain('workspace create --cwd "$TG_SPAWN_DIR" --label "${TG_SESSION#claude-}" --no-focus')
+    expect(script).toContain('pane rename "$pane_id" "$TG_SESSION"')
+  })
+
   test('removes every proxy override on the native Anthropic route', () => {
     expect(script).toContain('unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL')
     expect(script).toContain('CLAUDE_CODE_AUTO_COMPACT_WINDOW')
