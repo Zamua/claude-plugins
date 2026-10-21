@@ -10,8 +10,8 @@ Change the process here, not in two places.
 A review reads from GitHub and writes nothing to it until the operator approves
 specific comments by number. Before that approval: no comments, no review
 submissions, no pushes, no branch, label, or title edits, and nothing posted to
-Slack. The only writes are local: the review checkouts, the report, the comment
-list, and scratch tests.
+Slack. The only writes are local: the review checkouts, the board, and scratch
+tests.
 
 After approval, the one permitted write is posting the comments the operator
 picked, worded as they approved them, and nothing else. These stay forbidden
@@ -41,7 +41,7 @@ base is the default branch and looks like no stack at all.
 Beyond a stack, bring in a pull request when the one you were given cannot be judged
 without it, such as its counterpart in another repo. A pull request another live
 review already covers stays with that review: read it for context and say so. The
-report's grouping note says what was added and why.
+board's grouping note says what was added and why.
 
 ## Process
 
@@ -63,8 +63,8 @@ report's grouping note says what was added and why.
    trigger, are written down as observations with no test.
 5. **Report in simple terms.** Assume the reader is not an expert in the
    subsystem. Say what breaks and why it matters before any code detail.
-6. **Stop and propose.** The review ends with the report and a numbered list of
-   comments it would post, not with changes. Iterate on the findings and the
+6. **Stop and propose.** The review ends with the board: the report and the
+   numbered comments it would post, not with changes. Iterate on the findings and the
    wording with the operator until they agree. Do not start editing the reviewed
    code unless they ask.
 7. **Post only the numbers the operator picks.** See the proposed comments section
@@ -74,26 +74,78 @@ Tests written during a review are scratch evidence. They stay in the review
 checkout, untracked, unless the operator asks for them. Never commit them, and never
 push the checkout.
 
-## Report shape
+## The board
 
-The report is `REVIEW.md` in the review directory. It is a document to be navigated,
-not a wall of text. Open it with a link line per pull request in scope, above the
-first section (illustrative):
+The review lives in one file, the board: `board.json`, which the `/reviewboard` pane
+draws beside the session. It holds the report, every proposed comment in the exact
+wording it would post, and the ledger of what was posted. There is no other report
+and no other comment list. The operator reads the board, so the conversation names
+comments by number and never pastes their text.
 
-```markdown
-# example-org/inventory-service#1234: reject stock adjustments below zero
+Where it lives: `board.sh path <key>` for a review the poller spawned, and
+`<reviews_root>/.pr-review-board/manual-<session-id>/board.json` for a review run
+through the skill. `board.sh` is in the plugin's `scripts/`.
 
-[github.com/example-org/inventory-service/pull/1234](https://github.com/example-org/inventory-service/pull/1234)
+Write it whole: build the new content and replace the file, never edit it in
+place, since the pane re-reads it every few seconds. Run `board.sh check <file>`
+after every write and fix whatever it names. The pane cannot draw a board that
+fails the check, and posting refuses one.
+
+```json
+{
+  "schema": 2,
+  "updated_at": "2026-10-21T13:50:00Z",
+  "title": "Stock ledger rejects negative adjustments",
+  "verdict": "medium",
+  "risk": "One sentence: what could go wrong, and how bad.",
+  "blast_radius": "One sentence: who is affected, from when.",
+  "prs": [
+    { "pr": "example-org/inventory-service#1234", "number": 1234, "title": "Reject negative stock",
+      "url": "https://github.com/example-org/inventory-service/pull/1234", "risk": "medium", "head": "<sha>" }
+  ],
+  "report": [
+    { "id": "about", "title": "What this change is about", "markdown": "..." }
+  ],
+  "comments": [
+    { "n": 1, "pr": "example-org/inventory-service#1234",
+      "severity": "medium", "confidence": "proven", "origin": "new", "status": "proposed",
+      "summary": "One sentence, shown on the row.",
+      "path": "src/main/kotlin/StockLedger.kt", "line": 88, "side": "RIGHT",
+      "body": "The comment exactly as it would post, without the sign-off.",
+      "detail": "Markdown: the finding in full, for the operator.",
+      "origin_note": "Why it is new or carried over.",
+      "target": "StockLedger.kt:88",
+      "location_url": "https://github.com/<owner>/<repo>/blob/<head-sha>/<path>#L88",
+      "files": [ { "label": "StockLedger.kt:80-95", "url": "..." },
+                 { "label": "NegativeStockScratchTest", "url": "<link to the test>", "kind": "test" } ],
+      "posted_url": null }
+  ]
+}
 ```
 
-Then, in this order:
+### The top of the board
 
-1. **What this change is about.** The problem being solved, in plain English, with
-   enough background that someone unfamiliar with the subsystem follows it. Name
-   the concepts before using them.
-2. **How it tries to fix it.** The approach, briefly.
-3. **Risk and blast radius.** Its own section, leading with a one-line verdict of
-   low, medium, or high, then the reasoning. Cover:
+`title` names the change in a few words. `verdict` is `low`, `medium`, or `high`.
+`risk` and `blast_radius` are one sentence each: the pane shows them first, so they
+must stand alone. Unknown is not low.
+
+`prs` lists every pull request in scope, bottom of a stack first, each with a short
+title of two or three words and its own risk.
+
+### The report
+
+`report` is a list of sections, each markdown, shown closed until the operator
+opens one. Write it as a document to be navigated, not a wall of text, in this
+order:
+
+1. **What this change is about** (`about`). The problem being solved, in plain
+   English, with enough background that someone unfamiliar with the subsystem
+   follows it. Name the concepts before using them. Link each pull request in
+   scope.
+2. **How it tries to fix it** (`approach`). The approach, briefly. For a stack, one
+   line per layer.
+3. **Risk and blast radius** (`risk`). Lead with the verdict, then the reasoning.
+   Cover:
    - Existing paths versus net-new code. Which live code paths change behavior,
      and which additions are unreachable until something else calls them. Name the
      callers and entry points you actually traced. If a shared helper or interface
@@ -110,59 +162,59 @@ Then, in this order:
    - Reversibility. Flag flip, revert and redeploy, or manual data repair.
    - Cross-repo coupling. Other repos or services that must deploy in a specific
      order.
-4. **Findings**, worst first. Each one says what breaks, why it matters, where it
-   is, and either the failing test that proves it or an explicit note that it is
-   unproven. Once a finding has a proposed comment, it carries that comment's number,
-   and once posted, its url.
+4. **Observations** (`observations`). What cannot be proven with a test, such as
+   naming, structure, missing docs, convention drift, or a risk you cannot
+   trigger, and the findings you left off the comment list.
+5. **Checked and fine** (`checked`), when it helps: what you traced and found
+   sound, so the operator knows it was looked at.
+6. **Grouping note** (`grouping`), when the review covers more than one pull
+   request: which pull requests are in scope, which the reviewer added beyond the
+   ones it was given, and why. Name any related pull request left to another
+   review.
 
-   Link the location rather than naming it, so the operator lands on the code in one
-   click:
-   `[StockLedger.kt:88](https://github.com/<owner>/<repo>/blob/<head-sha>/<path>#L88)`.
-   Pin the sha the review is based on, not a branch name, or the link rots on the
-   next push.
-5. **Grouping note**, when the review covers more than one pull request: which
-   pull requests are in scope, which the reviewer added beyond the ones it was
-   given, and why. Name any related pull request left to another review.
+Link a location rather than naming it, so the operator lands on the code in one
+click: `[StockLedger.kt:88](https://github.com/<owner>/<repo>/blob/<head-sha>/<path>#L88)`.
+Pin the sha the review is based on, not a branch name, or the link rots on the next
+push.
 
 Do not guess at risk. Base every claim on code you read or a caller search you
-ran, and say plainly when you cannot tell. Unknown is not low.
+ran, and say plainly when you cannot tell.
+
+### Findings and comments
+
+Each finding worth the author's attention is one entry in `comments`. Its `detail`
+says what breaks, why it matters, where it is, and either the failing test that
+proves it or an explicit note that it is unproven. Its `files` link the code it
+cites and the scratch test, and `location_url` links its anchor.
+
+- **`n`**, the number. Assigned once and never reused or shifted. Rewording an
+  entry, dropping one, or adding one after a new commit does not renumber the rest.
+  The operator refers to comments by these numbers for the life of the review.
+- **The target.** `path`, `line`, and `side` (`RIGHT` for an added or unchanged
+  line, `LEFT` for a removed one), with `start_line` for a range. `reply_to` with
+  the review comment id for a reply to an existing thread. `target: "review body"`
+  for something that belongs on the review as a whole.
+- **`severity`**: `live` for a defect that bites on merge, then `high`, `medium`,
+  `low-medium`, `low`, and `question` for an unproven entry.
+- **`confidence`**: `proven` when a failing test in the checkout reproduces it,
+  `unproven` otherwise. An unproven comment is worded as a question, never as an
+  assertion.
+- **`origin`**, when the change replaces an existing code path: `new` for a bug
+  the change introduces, `carried` for one the old path already has, `none` for an
+  entry that is not a bug. `origin_note` says why. A carried-over comment says so
+  in its body, so the author does not read it as a regression.
+- **`body`**, exactly as it would post, so the operator reads what they are
+  approving. Leave the sign-off off; it is added at post time.
+- **`status`**, from the ledger below.
 
 ## Proposed comments
 
-The review ends by offering the operator a numbered list of the comments it would
-post. They pick by number.
-
-### The list
-
-One entry per comment, worst first, mirroring the findings order. Each entry shows:
-
-- **The number.** Assigned once and never reused or shifted. Rewording an entry,
-  dropping one, or adding one after a new commit does not renumber the rest. The
-  operator refers to comments by these numbers for the life of the review.
-- **The target.** `owner/repo#N path:line`, or `owner/repo#N review body` for
-  something that belongs on the review as a whole rather than on a line of code.
-- **The confidence.** `proven` when a failing test in the checkout reproduces it,
-  `unproven` otherwise. An unproven comment is worded as a question, never as an
-  assertion.
-- **The body**, exactly as it would post, so the operator reads what they are
-  approving. Leave the sign-off off the list and append it at post time, since it is
-  the same on every comment.
-
-Illustrative entries (the shape is fixed; the content is not):
-
-```
-1. example-org/inventory-service#1234  StockLedger.kt:88  proven
-   The zero check runs before the pending reservations are subtracted, so an adjustment
-   can still take available stock negative. A test reserving then adjusting fails here.
-
-2. example-org/inventory-service#1234  review body  unproven
-   Is the cache meant to be invalidated before the ledger write commits? Reading it in
-   order, a read between the two could serve the old count.
-```
+The review ends by offering the operator the numbered comments on the board. They
+pick by number. In the pane, name the numbers that are ready and what each is about
+in a few words. Do not paste the bodies: the board shows them in full.
 
 Not every finding needs to become a comment. Propose the ones worth the author's
-attention and say which findings you left in the report only. The report is the
-record, the list is what goes on the pull request.
+attention and put the rest under the report's observations.
 
 ### Writing a comment body
 
@@ -179,63 +231,57 @@ comment and one line for a reply to an existing review thread.
 
 ### Iterating
 
-The operator will reword, split, merge, and drop entries. Show the revised body and
-keep the number. Never post an entry the operator has not seen in its final wording.
+The operator will reword, split, merge, and drop entries. Change the body on the
+board, keep the number, and say in the pane which numbers changed. Never post an
+entry whose final wording has not been on the board for the operator to read.
 
 ### Posting
 
 Only the approved numbers, and only once they have named them. One batched review
-per pull request, so the author gets one notification:
+per pull request, so the author gets one notification. `board.sh` builds each call
+from the board, so the wording posted is the wording approved:
 
 ```bash
-# comments.json holds the approved entries: [{path, line, side, body}, ...]
-jq -n --arg sha "$SHA" --arg body "$SUMMARY" --slurpfile c comments.json \
-  '{event: "COMMENT", commit_id: $sha, body: $body, comments: $c[0]}' \
+B="${CLAUDE_PLUGIN_ROOT}/scripts/board.sh"
+"$B" payload "$BOARD" <owner/repo#N> "$SHA" <n>... --summary "<one line>" --sign-off "<sign-off>" \
   | gh api --method POST /repos/<owner>/<repo>/pulls/<N>/reviews --input -
+"$B" reply "$BOARD" <n> --sign-off "<sign-off>" \
+  | gh api --method POST /repos/<owner>/<repo>/pulls/<N>/comments --input -
+"$B" mark "$BOARD" <n> posted <comment url>
 ```
 
-Build the payload with `jq` and pipe it in. Do not try to express nested comment
-objects as repeated `gh api -f` flags. Write `comments.json` outside every checkout,
-alongside the patches, so it never shows up in `git status`.
-
-Append the sign-off to each comment body and to the review body as you build the
-payload, per the operator's GitHub rules.
+`--summary` is the review's one-line body, saying what the review covers. A
+`review body` entry joins it. `--sign-off` is whatever the operator's GitHub rules
+ask comments to end with; leave it out if they ask for none.
 
 Mechanics that bite:
 
 - **Re-fetch the head SHA immediately before posting** and compare it to the SHA the
   review was based on. If the pull request moved, the anchors are stale. Re-anchor,
-  show the operator what changed, and ask for the numbers again rather than posting
-  against a diff you did not review.
-- `event: "COMMENT"` requires a top-level `body`. Use one line saying what the
-  review covers, then the sign-off. Omitting `event` leaves the review pending and
-  invisible to the author, which looks like a successful post and is not one.
+  tell the operator which numbers changed, and ask for the numbers again rather than
+  posting against a diff you did not review.
 - `line` is a line number in the file, not a diff offset, and it must fall inside
-  the diff or the call fails with 422. Add `"side": "LEFT"` for a removed line, and
-  `start_line` alongside `line` for a range.
+  the diff or the call fails with 422.
 - The call is all or nothing. One bad anchor rejects the whole batch, so fix the
   anchor and repost rather than dropping the entry.
-- A reply to an existing review thread cannot ride in a batched review. Post it on
-  its own against `/pulls/<N>/comments` with `in_reply_to` set to the comment id
-  being answered, and keep it to one line.
+- A reply to an existing review thread cannot ride in a batched review. `payload`
+  refuses one; post it with `reply`, and keep it to one line.
 - Never `event: "APPROVE"` or `event: "REQUEST_CHANGES"`, whatever the conversation
   concludes. If the operator wants either, tell them it is theirs to do.
 
-Report back with the posted comment urls, mapped to their numbers, and write each
-url onto its finding in the report. Cleanup deletes the report and the ledger with
-the review directory, so the posted comments on GitHub are the lasting record.
+After each post, read the comment urls back from GitHub and `mark` every number
+posted with its url. The pane moves it to the Posted section. Tell the operator which
+numbers went up. Cleanup deletes the board with the review, so the posted comments on
+GitHub are the lasting record.
 
 ### The ledger
 
-The list lives in `<dir>/COMMENTS.md`, next to the report, updated in step with it.
-Write it in whole states rather than leaving it half-rewritten. Each entry carries its
-number, target, confidence, status, and current body.
-Status is one of `proposed`, `approved`, `posted <url>`, or `dropped`.
-
-This is what keeps the numbers stable across a context loss and what stops a second
-round from posting an entry twice. Read it before posting. An entry already marked
-`posted` is never posted again even if the operator names its number again. Say it
-is already up and give them the link.
+`status` is the ledger: `proposed`, `approved`, `posted` with its `posted_url`, or
+`dropped` with the reason in `status_note`. This is what keeps the numbers stable
+across a context loss and what stops a second round from posting an entry twice.
+Read the board before posting. `payload` and `reply` refuse an entry already
+`posted`; if the operator names its number again, say it is already up and give them
+the link.
 
 ## Writing style
 

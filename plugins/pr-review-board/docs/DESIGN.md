@@ -129,13 +129,21 @@ the report's grouping note says what it added and why.
 
 One herdr workspace per review, labelled with the slug, holding one pane: the review
 agent. Nothing is opened per pull request, because the report already covers every
-pull request in scope and the set can grow while the review is live. `REVIEW.md` and
-`COMMENTS.md` sit in the review directory for the operator to open however they like,
-and the agent prints the headline and the numbered comment list in its own pane.
+pull request in scope and the set can grow while the review is live. The review
+itself is one file, `board.json` in the review's metadata directory, and the plugin's
+`/reviewboard` pane draws it beside the agent. The agent prints the headline and the
+comment numbers in its own pane, never the comment text.
 
-The report carries the navigation instead. Each pull request in scope is linked at the
-top, and each finding location links to the file at the reviewed head sha, so reading
-the report is how the operator reaches the code.
+The board carries the navigation instead. Each pull request in scope is linked at the
+top, and each finding links to the file at the reviewed head sha and to the scratch
+test that proves it, so reading the board is how the operator reaches the code.
+
+One file rather than a report and a comment list keeps the wording the operator reads
+and the wording that posts the same: `board.sh payload` builds each review from the
+board, and `board.sh mark` records the post on it, so the pane and the ledger cannot
+disagree. The pane finds the board through `state.json`, by the session the poller
+recorded for the review, or for a review run by hand by a path keyed with the
+session's id.
 
 ## Directories
 

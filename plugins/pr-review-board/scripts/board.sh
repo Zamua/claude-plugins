@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# pr-review-board board. The review agent runs this; the poller does not. The board
+# is one JSON file holding the whole review: the report, every proposed comment's
+# exact wording, and the ledger of what was posted. The /reviewboard pane draws it,
+# and posting reads from it, so what the operator approved is what goes out.
+#
+#   board.sh path    <key>                                  board.json of a review the poller spawned
+#   board.sh check   <board.json>                           OK, or one problem per line and exit 1
+#   board.sh payload <board.json> <owner/repo#N> <head-sha> <n>... --summary TEXT [--sign-off TEXT]
+#                                                           one batched review, ready for `gh api --input -`
+#   board.sh reply   <board.json> <n> [--sign-off TEXT]     {body, in_reply_to} for a thread reply
+#   board.sh mark    <board.json> <n> <status> [url|note]   set a comment's status; posted takes its url
+#
+# `payload` and `reply` refuse a comment that is already posted or dropped, so a
+# number named twice is never posted twice. Every write replaces the file whole.
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/lib.sh"
+
+_b_die() { printf 'board: %s\n' "$*" >&2; exit 1; }
+_b_now() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+
+_B_CHECK='
+  def pr_ok: type == "string" and test("^[^/#]+/[^/#]+#[0-9]+$");
+  [ (if .schema != 2 then "schema is not 2" else empty end),
+    (if (.title | type) != "string" then "title is missing" else empty end),
+    (if ((.verdict // "") | IN("low", "medium", "high")) | not then "verdict is not low, medium or high" else empty end),
+    ((.prs // []) | to_entries[] | select((.value.pr | pr_ok) | not) | "prs[\(.key)].pr is not owner/repo#N"),
+    ((.report // []) | to_entries[] | select((.value.title | type) != "string" or (.value.markdown | type) != "string")
+       | "report[\(.key)] needs a title and markdown"),
+    ((.comments // []) | group_by(.n)[] | select(length > 1) | "comment \(.[0].n) appears \(length) times"),
+    ((.comments // [])[] | . as $c | "comment \($c.n // "?")" as $id |
+      (if ($c.n | type) != "number" then "\($id): n is not a number" else empty end),
+      (if (($c.status // "") | IN("proposed", "approved", "posted", "dropped")) | not
+         then "\($id): status is not proposed, approved, posted or dropped" else empty end),
+      (if (($c.confidence // "") | IN("proven", "unproven")) | not then "\($id): confidence is not proven or unproven" else empty end),
+      (if (($c.severity // "") | IN("live", "high", "medium", "low-medium", "low", "question")) | not
+         then "\($id): severity is not live, high, medium, low-medium, low or question" else empty end),
+      (if ($c.pr | pr_ok) | not then "\($id): pr is not owner/repo#N" else empty end),
+      (if (($c.body // "") | length) == 0 then "\($id): body is empty" else empty end),
+      (if (($c.summary // "") | length) == 0 then "\($id): summary is empty" else empty end),
+      (if $c.confidence == "unproven" and ((($c.body // "") | test("[?]")) | not)
+         then "\($id): unproven but not worded as a question" else empty end),
+      (if $c.status == "posted" and (($c.posted_url // "") | length) == 0 then "\($id): posted with no posted_url" else empty end),
+      (if $c.reply_to == null and $c.path == null and $c.target != "review body"
+         then "\($id): needs path and line, reply_to, or target \"review body\"" else empty end),
+      (if $c.path != null and (($c.line | type) != "number" or ((($c.side // "RIGHT") | IN("LEFT", "RIGHT")) | not))
+         then "\($id): path needs a numeric line and a LEFT or RIGHT side" else empty end),
+      (if ($c.origin != null) and ((($c.origin) | IN("new", "carried", "none")) | not)
+         then "\($id): origin is not new, carried or none" else empty end)
+    )
+  ] | .[]'
+
+cmd_path() {  # <key>
+  [ $# -eq 1 ] || _b_die "usage: board.sh path <key>"
+  printf '%s/board.json\n' "$(prb_meta_dir "$1")"
+}
+
+cmd_check() {  # <board.json>
+  [ $# -eq 1 ] || _b_die "usage: board.sh check <board.json>"
+  [ -f "$1" ] || _b_die "no board at $1"
+  local problems
+  problems="$(jq -r "$_B_CHECK" "$1" 2>&1)" || _b_die "not valid JSON: $problems"
+  if [ -n "$problems" ]; then printf '%s\n' "$problems"; return 1; fi
+  printf 'OK\n'
+}
+
+# Picks the comments by number and fails, naming each, on one that is missing, on
+# another pull request, already posted or dropped, or of the wrong kind.
+_b_pick() {  # <board.json> <kind: inline|reply> <pr|""> <numbers-json>
+  jq -r --arg kind "$2" --arg pr "$3" --argjson ns "$4" '
+    . as $b | $ns[] | . as $n | ($b.comments // [] | map(select(.n == $n)) | first) as $c |
+    if $c == null then "comment \($n) is not on the board"
+    elif ($c.status == "posted") then "comment \($n) is already posted: \($c.posted_url)"
+    elif ($c.status == "dropped") then "comment \($n) is dropped"
+    elif ($pr != "" and $c.pr != $pr) then "comment \($n) is on \($c.pr), not \($pr)"
+    elif ($kind == "reply" and $c.reply_to == null) then "comment \($n) is not a thread reply"
+    elif ($kind == "inline" and $c.reply_to != null) then "comment \($n) is a thread reply; post it with board.sh reply"
+    else empty end' "$1"
+}
+
+_b_numbers() {  # <n>... as a JSON array
+  local out="[" sep="" n
+  for n in "$@"; do
+    case "$n" in ''|*[!0-9]*) _b_die "not a comment number: $n" ;; esac
+    out="$out$sep$n"; sep=","
+  done
+  printf '%s]' "$out"
+}
+
+cmd_payload() {  # <board.json> <owner/repo#N> <head-sha> <n>... --summary TEXT [--sign-off TEXT]
+  [ $# -ge 4 ] || _b_die "usage: board.sh payload <board.json> <owner/repo#N> <head-sha> <n>... --summary TEXT [--sign-off TEXT]"
+  local file="$1" pr="$2" sha="$3" summary="" sign="" nums="" problems
+  shift 3
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --summary) summary="${2-}"; shift 2 ;;
+      --sign-off) sign="${2-}"; shift 2 ;;
+      *) nums="$nums $1"; shift ;;
+    esac
+  done
+  [ -n "$summary" ] || _b_die "--summary is required: event COMMENT needs a review body"
+  [ -n "$nums" ] || _b_die "name at least one comment"
+  # shellcheck disable=SC2086
+  local ns; ns="$(_b_numbers $nums)" || exit 1
+  problems="$(_b_pick "$file" inline "$pr" "$ns")"
+  [ -z "$problems" ] || _b_die "$problems"
+  jq --arg sha "$sha" --arg summary "$summary" --arg sign "$sign" --argjson ns "$ns" '
+    def signed: if $sign == "" then . else . + "\n\n" + $sign end;
+    . as $b | [$ns[] | . as $n | $b.comments[] | select(.n == $n)] as $picked |
+    ($picked | map(select(.path != null))) as $inline |
+    ($picked | map(select(.path == null) | .body)) as $whole |
+    { event: "COMMENT", commit_id: $sha,
+      body: ([$summary] + $whole | join("\n\n") | signed),
+      comments: [$inline[] | {path, line, side: (.side // "RIGHT"), body: (.body | signed)}
+                 + (if .start_line != null then {start_line} else {} end)] }' "$file"
+}
+
+cmd_reply() {  # <board.json> <n> [--sign-off TEXT]
+  [ $# -ge 2 ] || _b_die "usage: board.sh reply <board.json> <n> [--sign-off TEXT]"
+  local file="$1" n="$2" sign="" problems ns
+  shift 2
+  [ "${1-}" = "--sign-off" ] && sign="${2-}"
+  ns="$(_b_numbers "$n")" || exit 1
+  problems="$(_b_pick "$file" reply "" "$ns")"
+  [ -z "$problems" ] || _b_die "$problems"
+  jq --argjson n "$n" --arg sign "$sign" '
+    .comments[] | select(.n == $n) |
+    {body: (if $sign == "" then .body else .body + "\n\n" + $sign end), in_reply_to: .reply_to}' "$file"
+}
+
+cmd_mark() {  # <board.json> <n> <status> [url|note]
+  [ $# -ge 3 ] || _b_die "usage: board.sh mark <board.json> <n> <proposed|approved|posted|dropped> [url|note]"
+  local file="$1" n="$2" status="$3" extra="${4-}" tmp
+  _b_numbers "$n" >/dev/null || exit 1
+  case "$status" in
+    posted) [ -n "$extra" ] || _b_die "posted needs the comment's url" ;;
+    proposed|approved|dropped) ;;
+    *) _b_die "status is not proposed, approved, posted or dropped: $status" ;;
+  esac
+  jq -e --argjson n "$n" 'any(.comments[]?; .n == $n)' "$file" >/dev/null || _b_die "comment $n is not on the board"
+  tmp="$(mktemp "$(dirname "$file")/.board.XXXXXX")"
+  if jq --argjson n "$n" --arg s "$status" --arg x "$extra" --arg now "$(_b_now)" '
+      .updated_at = $now |
+      .comments |= map(if .n != $n then . else
+        .status = $s |
+        if $s == "posted" then .posted_url = $x
+        elif $x != "" then .status_note = $x
+        else . end end)' "$file" >"$tmp"; then
+    mv "$tmp" "$file"
+  else
+    rm -f "$tmp"; _b_die "could not update $file"
+  fi
+  printf '%s %s\n' "$n" "$status"
+}
+
+case "${1-}" in
+  path) shift; cmd_path "$@" ;;
+  check) shift; cmd_check "$@" ;;
+  payload) shift; cmd_payload "$@" ;;
+  reply) shift; cmd_reply "$@" ;;
+  mark) shift; cmd_mark "$@" ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

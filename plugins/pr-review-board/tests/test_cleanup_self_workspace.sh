@@ -45,7 +45,7 @@ git init -q "$CANON" && git -C "$CANON" -c user.email=t@t -c user.name=t commit 
 DIR="$TD/reviews/api-10"
 git -C "$CANON" worktree add -q --detach "$DIR" HEAD
 META="$TD/reviews/.pr-review-board/api-10"; mkdir -p "$META"; printf '{}\n' > "$META/assignment.json"
-printf '# report\n' > "$DIR/REVIEW.md"
+printf '{}\n' > "$META/board.json"; printf 'class ReviewScratchTest\n' > "$DIR/ReviewScratchTest.kt"
 
 cat > "$PR_REVIEW_BOARD_STATE" <<ST
 { "last_poll": 0,
