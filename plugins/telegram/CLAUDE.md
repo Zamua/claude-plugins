@@ -97,8 +97,9 @@ core:
   the proxy), because spawning is where the backend-specific ceremony is:
   - tmux: `new-session -e VAR=...` for env (see the env-propagation gotcha
     below), `capture-pane`/`send-keys` for the dialog watcher.
-  - herdr: one WORKSPACE per topic-Claude (`workspace create --label <session>
-    --no-focus`), whose auto-created ROOT pane hosts the agent; the pane is
+  - herdr: one WORKSPACE per topic-Claude (`workspace create --label
+    <session minus claude-> --no-focus`; the workspace label is display-only),
+    whose auto-created ROOT pane hosts the agent; the pane is
     renamed to the session name (`pane rename`) because the pane LABEL is what
     the proxy and the dedup guard look sessions up by. The invocation is then
     written to a short-lived script under `$TMPDIR` and started with

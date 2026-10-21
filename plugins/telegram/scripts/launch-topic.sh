@@ -270,11 +270,12 @@ print("absent")
   esac
 
   # One WORKSPACE per topic-Claude (operator preference: agents as workspace
-  # tabs, not side-by-side splits in one shared workspace), labeled with the
-  # session name and never stealing UI focus. The workspace's auto-created ROOT
-  # pane hosts the agent directly.
+  # tabs, not side-by-side splits in one shared workspace), never stealing UI
+  # focus. The workspace's auto-created ROOT pane hosts the agent directly. Its
+  # label is display-only, so it drops the `claude-` marker; the pane label below
+  # keeps the full session name.
   local ws_out
-  ws_out=$("$herdr_bin" workspace create --cwd "$TG_SPAWN_DIR" --label "$TG_SESSION" --no-focus 2>/dev/null) || ws_out=''
+  ws_out=$("$herdr_bin" workspace create --cwd "$TG_SPAWN_DIR" --label "${TG_SESSION#claude-}" --no-focus 2>/dev/null) || ws_out=''
   ws_id=$(printf '%s' "$ws_out" | sed -n 's/.*"workspace_id":"\([^"]*\)".*/\1/p' | head -1)
   pane_id=$(printf '%s' "$ws_out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -1)
   if [ -z "$pane_id" ]; then
