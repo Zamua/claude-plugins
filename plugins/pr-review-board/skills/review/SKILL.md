@@ -1,5 +1,5 @@
 ---
-description: Review a GitHub pull request on request, with findings proven by failing tests and the whole review written to a board shown beside the session, then propose numbered comments and post the ones the user picks. Use when the user shares a pull request URL and asks for help reviewing it, or asks you to review a PR, a stack, or a set of related PRs. Never approves, requests changes, or pushes.
+description: Review a GitHub pull request on request, with findings proven by failing tests and the whole review written to a board shown beside the session, then propose numbered comments and post the ones the user picks. Use when the user shares a pull request URL and asks for help reviewing it, or asks you to review a PR, a stack, or a set of related PRs. Approves a pull request only when the user says to, and never requests changes or pushes.
 ---
 
 # Review a pull request
@@ -14,11 +14,12 @@ mechanics.
 
 ## The GitHub boundary
 
-Nothing reaches GitHub until the user approves comments by number. Local writes only
-until then: the checkout, the board, and scratch tests.
-Once they pick numbers you post those comments and nothing else. Approvals, change
-requests, pushes, branch and label edits, marking a draft ready, and merging are
-always theirs. See the GitHub boundary in the review rules.
+Nothing reaches GitHub until the user says so. Local writes only until then: the
+checkout, the board, and scratch tests.
+Once they pick numbers you post those comments. Once they tell you to approve a pull
+request you approve it. Change requests, pushes, branch and label edits, marking a
+draft ready, and merging are always theirs. See the GitHub boundary in the review
+rules.
 
 ## Steps
 
@@ -64,6 +65,9 @@ always theirs. See the GitHub boundary in the review rules.
    review per pull request built with `board.sh payload`, then `board.sh mark` each
    number posted with its url. The proposed comments section of the review rules
    carries the calls and the failure modes.
+
+7. **Approve only when told.** If the user tells you to approve a pull request,
+   follow approving in the review rules.
 
 ## If the pull request moves while you are working
 

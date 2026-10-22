@@ -222,6 +222,6 @@ EOF
 src_kickoff_context() {  # <review-key>
   local key="$1" slug
   slug="$(prb_review_field "$key" slug)"
-  printf 'Review request %s (key %s). Your assignment file is %s/assignment.json and it lists every pull request in scope. Read it first, then follow your review protocol end to end. Write nothing to GitHub until I approve comments by number in your pane, then post only those: no approvals, no change requests, no pushes, ever.' \
+  printf 'Review request %s (key %s). Your assignment file is %s/assignment.json and it lists every pull request in scope. Read it first, then follow your review protocol end to end. Write nothing to GitHub until I say so in your pane. Post only the comments I pick by number, and approve a pull request only when I tell you to. No change requests and no pushes, ever.' \
     "$slug" "$key" "$(prb_meta_dir "$key")"
 }
