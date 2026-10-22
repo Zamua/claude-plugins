@@ -2,8 +2,8 @@
 
 One persistent operator session plus N ephemeral review agents, each bound to one
 changeset. The trigger, the review, and the artifacts all live where the code does.
-Nothing runs in the cloud, and the only thing that reaches GitHub is a comment the
-operator picked by number.
+Nothing runs in the cloud, and the only things that reach GitHub are the comments the
+operator picked by number and the approvals the operator asked for.
 
 ## Goals
 
@@ -14,8 +14,8 @@ operator picked by number.
 - Findings that are true. A behavioral claim ships with a test that fails against the
   reviewed code, or it does not ship.
 - A one-way gate on GitHub. An agent reads freely and writes only the comments the
-  operator approved by number, so the blast radius of a runaway agent is its own
-  directory.
+  operator approved by number and the approvals the operator asked for, so the
+  blast radius of a runaway agent is its own directory.
 - Teardown that is always the operator's decision.
 
 ## Verified tool behaviour
@@ -63,11 +63,11 @@ clones, never diffs. `poll.sh once` is the whole scheduled unit.
 
 **Review agent.** One per review. Owns everything object-level: clones, worktrees,
 tests, the report, the proposed comment list, and the monitor loop. It reads GitHub freely, writes nothing there until the operator names
-comment numbers, and cannot tear itself down.
+comment numbers or says to approve, and cannot tear itself down.
 
 **Operator.** Reacts to pull requests, reads reports, asks questions, approves the
-comments that get posted, and is the only actor that tears a review down or otherwise
-acts on a finding.
+comments that get posted, decides which pull requests get approved, and is the only
+actor that tears a review down or otherwise acts on a finding.
 
 ## Trigger
 
