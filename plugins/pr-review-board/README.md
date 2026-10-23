@@ -6,7 +6,8 @@ A local poller watches GitHub for reactions **you** added in the last few minute
 then spawns one review agent per changeset in its own herdr workspace. The agent
 writes the whole review to a board, drawn in a `/reviewboard` pane beside it: a
 plain-English report linked to every pull request and every line it calls out, and
-the numbered comments it proposes. It posts only the ones you pick.
+the numbered comments it proposes. It posts only the ones you pick, and approves a
+pull request only when you tell it to.
 
 ```
 you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
@@ -19,6 +20,7 @@ you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
 PR gets new commits       ─▶  the agent re-reads the diff and revises everything
 you ask it questions      ─▶  it answers in its pane
 you tick 1 and 3, send    ─▶  it posts those two, signed off, and nothing else
+you say to approve        ─▶  it approves that pull request and no other
 you run /pr-review-board:cleanup  ─▶  everything torn down, no confirmation
 ```
 
@@ -60,7 +62,13 @@ set:
 | `reviews_root` | `~/workspace/reviews` | where review directories live |
 | `workspace_root` | `~/workspace` | where canonical clones live |
 | `herdr_session` | `reviews` | the shared herdr session reviews run in; created on demand |
+| `source` | `github-reactions` | the trigger adapter, `scripts/adapters/source-<name>.sh` |
 | `runtime` | `herdr` | `stub` records what would happen and launches nothing |
+| `agent_kind` | `claude` | the herdr agent kind, which also names the executable |
+| `agent_cmd` | `["claude"]` | the worker's argv; the first element is ignored in favour of `agent_kind`, the rest are passed through |
+| `worker_subagent` | `pr-reviewer` | passed as `--agent`; empty runs the worker without a persona |
+| `plugin_dir` | `""` | passed as `--plugin-dir` when set, to run workers against a local checkout |
+| `gh_login` | `""` | whose reactions count; empty means the login `gh` is authenticated as |
 | `issue_key_pattern` | `[a-z]{2,4}-[0-9]+` | tracker id in a branch, used to group cross-repo pull requests |
 | `permission_mode` | `""` | passed as `--permission-mode` when set; empty means inherit yours |
 | `dangerously_skip` | `false` | add `--dangerously-skip-permissions` |

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pr-review-board runtime adapter: herdr (https://herdr.dev), verified on 0.7.5.
+# pr-review-board runtime adapter: herdr (https://herdr.dev), verified on 0.9.5.
 #
 # Every review runs inside ONE shared herdr session (config `herdr_session`).
 # Each review gets its OWN workspace, labelled with the review slug, holding one
@@ -22,7 +22,7 @@
 #
 # Contract used by poll.sh and the cleanup skill: rt_deps, rt_status,
 # rt_running_count, rt_spawn, rt_resume (2 = no saved session), rt_notify,
-# rt_close_workspace, rt_list.
+# rt_relabel, rt_close_workspace, rt_list.
 
 rt_deps() { printf 'herdr jq uuidgen'; }
 
@@ -146,8 +146,8 @@ rt_running_count() {
   printf '%s' "$n"
 }
 
-# Bring a review up. The review dir must already exist; poll.sh creates it and
-# writes the assignment, so the agent's cwd is its own review dir from turn one.
+# Bring a review up. poll.sh has already created the review dir and written the
+# assignment, so both exist before the agent's first turn.
 rt_spawn() {  # <key> <context>
   local key="$1" context="$2" slug dir name sid ws pane pair
   rt_ensure_server || return 1

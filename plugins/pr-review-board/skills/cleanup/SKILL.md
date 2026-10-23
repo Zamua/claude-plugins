@@ -12,9 +12,9 @@ The operator asking for cleanup is the whole approval. Do not show a plan and wa
 and do not ask whether they are sure. Resolve the review, tear it down, and report
 what was removed.
 
-Nothing survives. The report, the comment list, and any scratch tests are deleted
-with the review directory. The comments that were posted on GitHub are the lasting
-record.
+Nothing survives. The board is deleted with the review's metadata, and any scratch
+tests with the review directory. The comments that were posted on GitHub are the
+lasting record.
 
 ## Scope: one review, and only the one you were pointed at
 
@@ -105,6 +105,24 @@ C="${CLAUDE_PLUGIN_ROOT}/scripts/cleanup.sh"
   forever. Re-reviewing a pull request needs a genuinely new reaction, and since
   step 3 already cleared the old one, adding the emoji back is the whole gesture. It
   arrives with a current timestamp and opens a fresh review.
+
+## A review run by hand
+
+A review run through `/pr-review-board:review` is not in the state store, so `list`
+does not show it and `apply` cannot resolve it. Tear it down from the session that
+ran it:
+
+1. Remove each checkout it made under the reviews root, with
+   `git -C <canonical-clone> worktree remove --force <path>` and then
+   `git -C <canonical-clone> worktree prune`. Delete the umbrella directory if there
+   is one.
+2. Delete the board's folder,
+   `<reviews_root>/.pr-review-board/manual-${CLAUDE_SESSION_ID}`, where
+   `<reviews_root>` is `reviews_root` in the config, `~/workspace/reviews` by
+   default.
+
+A `manual-<id>` folder with another session's id belongs to that session. Leave it
+unless the user names it.
 
 ## If a worktree will not go
 
