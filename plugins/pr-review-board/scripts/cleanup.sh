@@ -7,8 +7,8 @@
 #   cleanup.sh apply <key|slug|owner/repo#N|pr-url> --yes
 #
 # apply, in order: mark the review CLEANEDUP, remove each worktree, delete the review
-# directory and its metadata, close the herdr workspace. Nothing is kept: the report
-# goes with the directory.
+# directory and its metadata, close the herdr workspace. Nothing is kept: the board
+# goes with the metadata.
 #
 # The mark comes before the destruction and the workspace close comes last, both for
 # the same reason: closing a workspace kills every pane in it, so a cleanup run from
@@ -96,8 +96,8 @@ cmd_plan() {
     owner="$(_c_owner_repo "$wt" || true)"
     printf '  worktree  remove %s   (from %s)\n' "$wt" "${owner:-unknown}"
   done < <(_c_worktrees "$key")
-  printf '  delete    %s   (report, comment list, scratch tests)\n' "$dir"
-  printf '  delete    %s   (cached diffs, assignment)\n' "$(prb_meta_dir "$key")"
+  printf '  delete    %s   (scratch tests, anything left behind)\n' "$dir"
+  printf '  delete    %s   (board, assignment, cached diffs, rules copy)\n' "$(prb_meta_dir "$key")"
   local ws; ws="$(prb_review_field "$key" herdr_workspace)"
   if [ -n "$ws" ] && [ "$ws" = "${HERDR_WORKSPACE_ID:-}" ]; then
     printf '  close     herdr workspace %s   SKIPPED: it is the one you are running in\n' "$ws"

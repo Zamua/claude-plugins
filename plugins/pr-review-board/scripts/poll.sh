@@ -9,7 +9,7 @@
 # un-react trigger: reaping is manual, via the pr-review-board:cleanup skill.
 #
 #   poll.sh once               one pass (spawn / append / recover)
-#   poll.sh status             the board: active reviews and their agents
+#   poll.sh status             every review and its agent
 #   poll.sh fresh              what the trigger sees right now, without acting
 #   poll.sh spawn <pr>         force one pull request into a review now
 #   poll.sh stack <pr>         every open pull request in <pr>'s stack, bottom first

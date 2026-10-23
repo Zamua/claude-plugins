@@ -217,8 +217,8 @@ EOF
   printf '%s%s\n%s' "$down" "$pr" "$up"
 }
 
-# The worker's opening brief. Deliberately short: the assignment file in the review
-# dir is the contract, and the persona carries the process.
+# The worker's opening brief. Deliberately short: the assignment file in the review's
+# metadata dir is the contract, and the persona carries the process.
 src_kickoff_context() {  # <review-key>
   local key="$1" slug
   slug="$(prb_review_field "$key" slug)"

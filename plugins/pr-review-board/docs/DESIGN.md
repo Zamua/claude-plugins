@@ -9,8 +9,8 @@ operator picked by number and the approvals the operator asked for.
 
 - A one-gesture trigger on the object being reviewed: react to a pull request, get a
   review. No channel to scope, no token to mint, no issue to file.
-- A review that stays current. Pull requests move, so the diff, the annotations, and
-  the report are refreshed rather than regenerated.
+- A review that stays current. Pull requests move, so the diff and the board are
+  refreshed rather than regenerated.
 - Findings that are true. A behavioral claim ships with a test that fails against the
   reviewed code, or it does not ship.
 - A one-way gate on GitHub. An agent reads freely and writes only the comments the
@@ -33,7 +33,7 @@ watermark. `baseRefName` arrives in the same query, so stack detection is free.
 Filtering on the viewer is essential: bots react to pull requests constantly, and a
 bot 👀 is indistinguishable from a human one by count alone.
 
-**herdr 0.7.5.** `agent start` attaches to an existing pane already at a shell
+**herdr 0.9.5.** `agent start` attaches to an existing pane already at a shell
 prompt and derives the executable from `--kind`, so a launch is three calls:
 `workspace create`, `agent start`, `agent prompt`. A fresh pane answers
 `agent_pane_busy` until its shell is up, so that one error is retried and no other is.
@@ -62,8 +62,9 @@ groups them into reviews, writes the assignment, and brings an agent up. It neve
 clones, never diffs. `poll.sh once` is the whole scheduled unit.
 
 **Review agent.** One per review. Owns everything object-level: clones, worktrees,
-tests, the report, the proposed comment list, and the monitor loop. It reads GitHub freely, writes nothing there until the operator names
-comment numbers or says to approve, and cannot tear itself down.
+tests, the board, and the monitor loop. It reads GitHub freely, writes nothing there
+until the operator names comment numbers or says to approve, and cannot tear itself
+down.
 
 **Operator.** Reacts to pull requests, reads reports, asks questions, approves the
 comments that get posted, decides which pull requests get approved, and is the only
@@ -95,7 +96,9 @@ coalescing timer.
 
 A fresh pull request joins an **ACTIVE** review when either holds:
 
-- **chain** — its base is a member's head, or its head is a member's base
+- **chain** — its base is a member's head, or its head is a member's base, in the
+  same repo and never through the default branch, or a release pull request would
+  link every review whose members target it
 - **tracker id** — its branch carries the same id as a member's, matched only at the
   start of the branch or right after a `/`
 
@@ -142,22 +145,22 @@ One file rather than a report and a comment list keeps the wording the operator 
 and the wording that posts the same: `board.sh payload` builds each review from the
 board, and `board.sh mark` records the post on it, so the pane and the ledger cannot
 disagree. The pane finds the board through `state.json`, by the session the poller
-recorded for the review, or for a review run by hand by a path keyed with the
-session's id.
+recorded for the review or the herdr workspace it runs in, or for a review run by
+hand by a path keyed with the session's id.
 
 ## Directories
 
 - Single pull request: `<reviews_root>/<repo>-<number>/`, which is also the worktree.
 - Several: an umbrella `<reviews_root>/<slug>-<anchor>/` with one worktree per pull
-  request inside, and the report at the umbrella root.
+  request inside.
 
-The report and any scratch tests sit untracked inside a checkout, which is correct:
-a review checkout is evidence, not a branch being prepared. They are deliberately
-**not** hidden with an exclude file, because a linked worktree has no per-worktree
-`info/exclude` — git honours only the shared one, so hiding them would mean editing
-the operator's canonical clone. Everything the harness itself writes lives in the
-metadata directory instead, so `git status` in a checkout only ever shows the
-reviewer's own work.
+Scratch tests sit untracked inside a checkout, which is correct: a review checkout is
+evidence, not a branch being prepared. They are deliberately **not** hidden with an
+exclude file, because a linked worktree has no per-worktree `info/exclude` — git
+honours only the shared one, so hiding them would mean editing the operator's
+canonical clone. The board and everything the harness writes live in the metadata
+directory instead, so `git status` in a checkout only ever shows the reviewer's
+scratch tests.
 
 ## State
 
@@ -165,13 +168,13 @@ reviewer's own work.
 review, and a `pr_index` so a pull request belongs to at most one live review. Every
 mutation goes through a temp file, so a crash mid-write cannot truncate the store.
 
-Per-review harness data lives in `<reviews_root>/.pr-review-board/<key>/`: the
-assignment and the cached diffs. That location is
-deliberately **outside** the review directory, because for a single-pull-request
+Per-review data lives in `<reviews_root>/.pr-review-board/<key>/`: the assignment,
+the worker's copy of the review rules, the cached diffs, and the board. That location
+is deliberately **outside** the review directory, because for a single-pull-request
 review the review directory *is* a git worktree, and `git worktree add` accepts an
 existing empty directory but refuses a non-empty one. Keeping metadata out means the
-checkout starts empty, nothing pollutes `git status` but the report, and promotion to
-an umbrella is a plain `git worktree move`.
+checkout starts empty, nothing pollutes `git status` but scratch tests, and promotion
+to an umbrella is a plain `git worktree move`.
 
 The assignment is rewritten in full on every scope change, so the agent always reads
 the current picture rather than replaying a diff.
@@ -190,12 +193,16 @@ same decision as a first launch and goes through the same loop.
 
 ## Safety
 
-- A review never writes to GitHub. That is stated in the persona, in the shared review
-  rules, and in the kickoff prompt.
+- A review writes to GitHub only on the operator's word: the comments they picked by
+  number, and an approval of each pull request they named. Change requests, pushes,
+  and merges are never the agent's. That is stated in the persona, in the shared
+  review rules, and in the kickoff prompt. `board.sh` builds every post from the
+  board and refuses a comment already posted.
 - Teardown runs when the operator asks, with no second confirmation, and keeps
-  nothing: the report and scratch tests go with the review directory. The script
-  itself refuses without `--yes`, refuses to delete outside the reviews root, and reads
-  a worktree's owning clone from git rather than guessing.
+  nothing: the board goes with the metadata directory and scratch tests with the
+  review directory. The script itself refuses without `--yes`, refuses to delete
+  outside the reviews root, and reads a worktree's owning clone from git rather than
+  guessing.
 - Canonical clones are only ever fetched from and worktree'd; their branches and
   working trees are left alone.
 - Only reactions by the configured viewer count, so nobody else can dispatch an agent
