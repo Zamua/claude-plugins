@@ -365,6 +365,9 @@ Loopback only (`127.0.0.1:8790`).
 | `POST /rate-limit` | `{topic, error, details, reset_at?}` | pauses the exhausted route and opens the Telegram picker |
 | `POST /capacity` | Anthropic capacity windows | `{ok: true}` |
 | `POST /topic/create` | `{name, harness?: "claude" | "antigravity" | "opencode"}` | creates and registers a topic after validating the selected harness |
+| `POST /remind` | `{topic, at, text, prompt?}` (`at`: ISO 8601 with a zone offset) | `{id, at}` |
+| `GET /reminders?topic=<t>` | | `{reminders: [{id, at, text, prompt?}]}`, soonest first |
+| `POST /reminder/cancel` | `{topic, id}` | `{cancelled}`, or `404` if the topic has no such reminder |
 | `GET /health` | | `{ok, topics, port, polling, polling_since}` |
 
 `topic` is the `message_thread_id` as a string, or `"general"`. On `/send`,
