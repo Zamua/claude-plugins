@@ -304,6 +304,26 @@ refusal (no claude of its own). Registered in the group's "/" menu alongside
 the secret verbs (`registerCommands`); any group member may run it, since it
 is not destructive: the conversation resumes.
 
+## Reminders (`remind`, `list_reminders`, `cancel_reminder`)
+
+A topic agent's own scheduler (CronCreate) lives in its session and dies with
+it, so "remind me" could silently vanish on a relaunch, an update restart or a
+failover. Reminders are therefore proxy state: `reminders.json` in the state
+dir (`proxy/domain/reminder.ts` validates, `proxy/adapters/json-reminder-repository.ts`
+persists, both tested with `bun test`). The MCP tools post to `/remind`,
+`/reminders` and `/reminder/cancel`, always scoped to the caller's own topic.
+
+`at` must carry a zone offset: the proxy's clock says nothing about where the
+operator is, so a bare local time is refused rather than guessed. Every 15s,
+and once at boot, the proxy fires what is due. It posts `⏰ <text>` in the
+topic first, so the operator is reached even when the agent cannot start
+(quota, spawn failure). Only then does it wake the agent (`ensureSession` +
+`enqueue`) with a notice carrying the optional `prompt`, meta `reminder="act"`,
+or meta `reminder="notice"` when there is no prompt, which the reply guard
+accepts as silence. A failed post leaves the reminder for the next tick; a
+reminder overdue at boot fires then and the notice says how late. A reminder
+can only target a topic in the directory, because waking one spawns its agent.
+
 ## Provider/model routing and quota recovery
 
 For ordinary topics there is exactly one agent harness: foreground Claude Code.
@@ -867,7 +887,7 @@ there is no agent to relaunch.
 - `server.ts` + `package.json`: the thin MCP client (dep: `@modelcontextprotocol/sdk`).
 - `proxy/proxy.ts` + `proxy/package.json`: the daemon (dep: `grammy`).
 - `proxy/domain/`: pure provider-route, harness-lock, Antigravity-topic,
-  OpenCode-topic, inbound-delivery, and capacity types/transitions.
+  OpenCode-topic, inbound-delivery, reminder, and capacity types/transitions.
 - `proxy/adapters/`: Claude launch profiles, bridge model catalog, Codex
   app-server client, OpenCode Go capacity client, official Antigravity catalog,
   persistent Herdr runtimes (`herdr-antigravity-runtime.ts`,

@@ -226,6 +226,37 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
         required: ['conv', 'text'],
       },
     },
+    {
+      name: 'remind',
+      description:
+        'Schedule a reminder in this topic. Unlike a session cron, it survives this session ending and the proxy restarting. At the time, the proxy posts "⏰ <text>" here (a push notification to the operator), then wakes you with a notice; if you set prompt, the notice carries it as your instructions for that moment (e.g. check Gmail for changes before following up). Returns the reminder id.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          at: {
+            type: 'string',
+            description: "ISO 8601 time with the OPERATOR's zone offset, e.g. 2026-10-26T09:00:00-04:00. A time without an offset is refused.",
+          },
+          text: { type: 'string', description: 'What the operator sees, short. Max 1000 characters.' },
+          prompt: { type: 'string', description: 'Optional instructions for you at fire time; never shown to the operator.' },
+        },
+        required: ['at', 'text'],
+      },
+    },
+    {
+      name: 'list_reminders',
+      description: "List this topic's pending reminders (id, time, text, prompt), soonest first.",
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'cancel_reminder',
+      description: 'Cancel a pending reminder in this topic by id.',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+    },
     ],
   }
 })
@@ -342,6 +373,25 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           text: args.text,
         })
         return { content: [{ type: 'text', text: `replied in conversation ${args.conv} (id: ${data.message_id})` }] }
+      }
+      case 'remind': {
+        const data = await postJSON('/remind', {
+          topic: TOPIC,
+          at: args.at,
+          text: args.text,
+          ...(args.prompt != null ? { prompt: args.prompt } : {}),
+        })
+        return { content: [{ type: 'text', text: `reminder ${data.id} set for ${data.at}` }] }
+      }
+      case 'list_reminders': {
+        const res = await fetch(`${PROXY}/reminders?topic=${encodeURIComponent(TOPIC)}`)
+        const raw = await res.text()
+        if (!res.ok) throw new Error(raw || `HTTP ${res.status}`)
+        return { content: [{ type: 'text', text: raw }] }
+      }
+      case 'cancel_reminder': {
+        const data = await postJSON('/reminder/cancel', { topic: TOPIC, id: args.id })
+        return { content: [{ type: 'text', text: `cancelled reminder ${data.cancelled}` }] }
       }
       default:
         return {
