@@ -93,6 +93,10 @@ def main() -> None:
     if 'secret_drop="1"' in last_blob:
         return
 
+    # A reminder with no follow-up work: the proxy already posted it.
+    if 'reminder="notice"' in last_blob:
+        return
+
     # SQUARE turns (meta square="1"): silence is sanctioned - the norm is
     # "reply only if it moves the work forward; if no reply is warranted, do
     # nothing" - so we never nag for a missing reply. But the OPPOSITE failure
