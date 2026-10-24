@@ -121,5 +121,24 @@ eq "an unknown number is refused" "1 board: comment 9 is not on the board" "$rc 
 "$B" mark "$BOARD" 2 dropped "Fixed in abc1234." >/dev/null
 eq "dropping keeps the reason" "dropped Fixed in abc1234." "$(jq -r '.comments[] | select(.n == 2) | "\(.status) \(.status_note)"' "$BOARD")"
 
+echo "== addressed =="
+"$B" addressed "$BOARD" 5 yes "Fixed in def5678." >/dev/null
+eq "addressed marks a posted comment and keeps how" "true Fixed in def5678." "$(jq -r '.comments[] | select(.n == 5) | "\(.addressed) \(.addressed_note)"' "$BOARD")"
+eq "the addressed board still checks OK" "OK" "$("$B" check "$BOARD")"
+"$B" addressed "$BOARD" 5 no >/dev/null
+eq "addressed no reopens it and clears the note" "false null" "$(jq -r '.comments[] | select(.n == 5) | "\(.addressed) \(.addressed_note)"' "$BOARD")"
+out="$("$B" addressed "$BOARD" 3 yes 2>&1)"; rc=$?
+eq "only a posted comment can be addressed" "1 board: comment 3 is not posted, so it cannot be addressed" "$rc $out"
+out="$("$B" addressed "$BOARD" 5 maybe 2>&1)"; rc=$?
+eq "addressed takes yes or no" "1 board: addressed takes yes or no: maybe" "$rc $out"
+jq '(.comments[] | select(.n == 3)).addressed = true | (.comments[] | select(.n == 4)).addressed = "yes"
+    | .stacks = [{ id: "ledger", title: "Stock ledger", prs: ["acme/api#10", "acme/api#11"], verdict: "huge", risk: 3 }]' "$BOARD" > "$broken"
+problems="$("$B" check "$broken")"; rc=$?
+eq "a board with a bad addressed flag or stack summary fails the check" "1" "$rc"
+for want in "comment 3: addressed but not posted" "comment 4: addressed is not true or false" \
+            "stack ledger: verdict is not low, medium or high" "stack ledger: risk is not text"; do
+  printf '%s\n' "$problems" | grep -qxF "$want" && ok "check names: $want" || bad "check names: $want" "$want" "$problems"
+done
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES PRESENT"
 exit "$fail"

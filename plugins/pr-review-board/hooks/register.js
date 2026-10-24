@@ -2,6 +2,7 @@
 const STATE_PATH = '.config/pr-review-board/state.json'
 const CONFIG_PATH = '.config/pr-review-board/config.json'
 const PANE = 'review'
+const STACK_PANE_PREFIX = 'review-'
 const SEVERITIES = [
   { id: 'live', title: 'Live on merge', color: 'error' },
   { id: 'high', title: 'High', color: 'error' },
@@ -15,6 +16,11 @@ const STATUS_TAGS = {
   posted: { text: 'posted', color: 'success' },
   dropped: { text: 'dropped', color: 'inactive' },
 }
+// A posted comment waits on its author until the review marks it addressed
+const FOLLOW_UPS = [
+  { id: 'unaddressed', title: 'Unaddressed', color: 'warning', holds: (c) => !c.addressed },
+  { id: 'addressed', title: 'Addressed', color: 'success', holds: (c) => c.addressed === true },
+]
 const RISK_COLORS = { high: 'error', medium: 'warning', low: 'success' }
 // Where a finding comes from, measured against the code path the change replaces
 const ORIGIN_TAGS = {
@@ -33,8 +39,8 @@ let readError
 // Comment numbers ticked for the next post, and the comments and report sections shown in full; kept only for this module's life
 const picks = new Set()
 const expanded = new Set()
-const ALL_TABS = 'all'
-let tab = ALL_TABS
+// The stack panes last opened, so a board rewritten with the same stacks does not reopen one the person closed
+let stackPanesKey
 let notice
 
 export function register(on) {
@@ -49,14 +55,17 @@ export function register(on) {
     // `/review` is Claude Code's own code-review command, so the board takes a name of its own
     await $.command.register({ name: 'reviewboard', description: 'Show or hide the board for this session\'s PR review', immediate: true })
     // Only a session that runs a review gets the pane unasked; any session can still open it with the command
-    if (review) await $.ui.open({ id: PANE, title: paneTitle() })
+    if (review) {
+      await $.ui.open({ id: PANE, title: paneTitle() })
+      await syncStackPanes($, { force: true })
+    }
     return next(e)
   })
 
   on('command.run', { command: 'reviewboard' }, togglePane)
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
-    if (e.requestId !== PANE) return next(e)
+    if (e.requestId !== PANE && !e.requestId.startsWith(STACK_PANE_PREFIX)) return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text } = els
     const now = await $.clock.now()
@@ -70,7 +79,7 @@ export function register(on) {
         children: [
           Text({ bold: true, children: [review.slug] }),
           Text({ dimColor: true, wrap: 'wrap', children: [readError || 'No board yet for ' + review.key + '.'] }),
-          prList(els, review.prs),
+          prList(els, [{ id: 'all', title: 'Stack', prs: review.prs }], false),
         ],
       })
     }
@@ -78,21 +87,25 @@ export function register(on) {
     const prs = Array.isArray(board.prs) ? board.prs : review.prs
     const comments = Array.isArray(board.comments) ? board.comments : []
     const stacks = stacksOf(prs)
-    // A tab whose stack left the board falls back to All
-    if (!stacks.some((s) => s.id === tab)) tab = ALL_TABS
-    const shown = tab === ALL_TABS ? stacks : stacks.filter((s) => s.id === tab)
-    const inView = comments.filter((c) => tab === ALL_TABS || stackOf(c, prs, stacks) === tab)
-    const children = [summary(els, comments)]
-    if (stacks.length > 1) children.push(tabBar(els, stacks, comments, prs, $))
-    children.push(prList(els, shown, stacks.length > 1 && tab === ALL_TABS))
-    const open = inView.filter((c) => c.status !== 'posted')
+    const stacked = stacks.length > 1
+    const stack = e.requestId === PANE ? undefined : stacks.find((s) => stackPaneId(s) === e.requestId)
+    if (e.requestId !== PANE && !stack) {
+      return Text({ dimColor: true, wrap: 'wrap', children: ['This stack is no longer on the board.'] })
+    }
+    const inView = stack ? comments.filter((c) => stackOf(c, prs, stacks) === stack.id) : comments
+    const children = [header(els, stack, inView), prList(els, stack ? [stack] : stacks, stacked && !stack)]
+    const toDecide = inView.filter((c) => c.status !== 'posted')
     for (const severity of SEVERITIES) {
-      const inSection = open.filter((c) => severityOf(c) === severity)
+      const inSection = toDecide.filter((c) => severityOf(c) === severity)
       if (inSection.length) children.push(section(els, severity, inSection, prs, $))
     }
-    if (Array.isArray(board.report) && board.report.length) children.push(reportBox(els, board.report, $))
     const posted = inView.filter((c) => c.status === 'posted').sort((a, b) => a.n - b.n)
-    if (posted.length) children.push(postedSection(els, posted, prs))
+    for (const followUp of FOLLOW_UPS) {
+      const inSection = posted.filter(followUp.holds)
+      if (inSection.length) children.push(followUpSection(els, followUp, inSection, prs))
+    }
+    // The report covers the whole review, so a stack's pane leaves it to All
+    if (!stack && Array.isArray(board.report) && board.report.length) children.push(reportBox(els, board.report, $))
     const picking = pickBar(els, $)
     if (picking) children.push(picking)
     children.push(footer(Text, now))
@@ -105,15 +118,42 @@ async function togglePane($) {
   const pane = (await $.ui.panes()).find((p) => p.id === PANE)
   if (pane && pane.isPlaced) {
     await $.ui.close({ id: PANE })
+    for (const p of await $.ui.panes()) {
+      if (p.id.startsWith(STACK_PANE_PREFIX)) await $.ui.close({ id: p.id })
+    }
+    stackPanesKey = undefined
     return {}
   }
   await refresh($)
   await $.ui.open({ id: PANE, title: paneTitle(), focus: true })
+  await syncStackPanes($, { force: true })
   return {}
 }
 
 function paneTitle() {
-  return review ? 'Review · ' + (board && board.title ? board.title : review.slug) : 'Review'
+  if (!review) return 'Review'
+  if (board && stacksOf(Array.isArray(board.prs) ? board.prs : review.prs).length > 1) return 'All'
+  return 'Review · ' + (board && board.title ? board.title : review.slug)
+}
+
+/**
+ * One pane per stack beside the All pane, each a tab the surface draws with the stack's title. The set follows the
+ * board: a stack that appears gets a pane, one that leaves loses its pane, and a pane the person closed stays closed
+ * until the set of stacks changes.
+ */
+async function syncStackPanes($, { force = false } = {}) {
+  const stacks = board ? stacksOf(Array.isArray(board.prs) ? board.prs : review.prs) : []
+  const wanted = stacks.length > 1 ? stacks.map((s) => ({ id: stackPaneId(s), title: s.title })) : []
+  const key = JSON.stringify(wanted)
+  if (!force && key === stackPanesKey) return
+  const open = await $.ui.panes()
+  if (!force && !open.some((p) => p.id === PANE)) return
+  stackPanesKey = key
+  await $.ui.open({ id: PANE, title: paneTitle() })
+  for (const p of open) {
+    if (p.id.startsWith(STACK_PANE_PREFIX) && !wanted.some((w) => w.id === p.id)) await $.ui.close({ id: p.id })
+  }
+  for (const w of wanted) await $.ui.open({ id: w.id, title: w.title })
 }
 
 async function reviewsRoot($) {
@@ -183,6 +223,7 @@ async function refresh($) {
     for (const c of Array.isArray(board.comments) ? board.comments : []) {
       if (!isPickable(c)) picks.delete(c.n)
     }
+    await syncStackPanes($)
   } catch (err) {
     readError = 'Could not read the review board: ' + messageOf(err)
   }
@@ -236,26 +277,39 @@ function labelled(els, key, label, sentence) {
   })
 }
 
-function summary(els, comments) {
+/**
+ * The pane's head: the review's title, verdict, risk and blast radius in All, a stack's own in its pane. The count line
+ * says how many comments are still to decide, and how many posted ones are unaddressed and addressed.
+ */
+function header(els, stack, comments) {
   const { Box, Text } = els
-  const proven = comments.filter((c) => c.confidence === 'proven').length
-  const posted = comments.filter((c) => c.status === 'posted').length
-  const head = [Text({ key: 'title', bold: true, children: [board.title || review.slug] })]
-  if (board.verdict) {
-    head.push(Text({ key: 'verdict', color: RISK_COLORS[board.verdict] || 'warning', children: [board.verdict] }))
+  const source = stack || board
+  const title = stack ? stack.title : board.title || review.slug
+  const head = [Text({ key: 'title', bold: true, children: [title] })]
+  if (source.verdict) {
+    head.push(Text({ key: 'verdict', color: RISK_COLORS[source.verdict] || 'warning', children: [source.verdict] }))
   }
-  const counts = [comments.length + ' comments', proven + ' proven']
+  const posted = comments.filter((c) => c.status === 'posted')
+  const unaddressed = posted.filter((c) => !c.addressed).length
+  const toDecide = comments.filter((c) => isPickable(c)).length
+  if (posted.length || toDecide) {
+    const ready = !unaddressed && !toDecide
+    head.push(Text({ key: 'readiness', color: ready ? 'success' : 'warning', children: [ready ? 'all addressed' : 'open items'] }))
+  }
+  const counts = [toDecide + ' to decide', unaddressed + ' unaddressed', posted.length - unaddressed + ' addressed']
+  const proven = comments.filter((c) => c.confidence === 'proven').length
   const fresh = comments.filter((c) => c.origin === 'new').length
   const carried = comments.filter((c) => c.origin === 'carried').length
-  if (fresh || carried) counts.push(fresh + ' new', carried + ' carried over')
-  counts.push(posted + ' posted')
+  const findings = [comments.length + ' comments', proven + ' proven']
+  if (fresh || carried) findings.push(fresh + ' new', carried + ' carried over')
   const lines = [
     Box({ key: 'title-row', flexDirection: 'row', columnGap: 1, children: head }),
-    Text({ key: 'counts', dimColor: true, children: [counts.join(' · ')] }),
+    Text({ key: 'counts', dimColor: true, wrap: 'wrap', children: [counts.join(' · ')] }),
+    Text({ key: 'findings', dimColor: true, wrap: 'wrap', children: [findings.join(' · ')] }),
   ]
   const assessment = []
-  if (board.risk) assessment.push(labelled(els, 'risk', 'Risk', board.risk))
-  if (board.blast_radius) assessment.push(labelled(els, 'blast', 'Blast', board.blast_radius))
+  if (source.risk) assessment.push(labelled(els, 'risk', 'Risk', source.risk))
+  if (source.blast_radius) assessment.push(labelled(els, 'blast', 'Blast', source.blast_radius))
   if (assessment.length) lines.push(Box({ key: 'assessment', flexDirection: 'column', marginTop: 1, children: assessment }))
   return Box({ key: 'summary', flexDirection: 'column', paddingX: 1, children: lines })
 }
@@ -379,31 +433,37 @@ function reportBox(els, sections, $) {
   })
 }
 
-/** Comments already on GitHub, one quiet line each, kept below the ones still to decide. */
-function postedSection(els, comments, prs) {
+/** Comments already on GitHub, one line each: unaddressed ones wait on their author, addressed ones say how they were settled. */
+function followUpSection(els, followUp, comments, prs) {
   const { Box, Text } = els
   const rows = comments.map((c) => {
     const { number, url } = prOf(c, prs)
     const parts = [
-      Text({ key: 'posted-num-' + c.n, dimColor: true, children: [String(c.n).padStart(2)] }),
-      url ? link(els, 'posted-pr-' + c.n, url, '#' + number, { dimColor: true }) : Text({ key: 'posted-pr-' + c.n, dimColor: true, children: ['#' + number] }),
+      Text({ key: followUp.id + '-num-' + c.n, dimColor: true, children: [String(c.n).padStart(2)] }),
+      url ? link(els, followUp.id + '-pr-' + c.n, url, '#' + number, { dimColor: true }) : Text({ key: followUp.id + '-pr-' + c.n, dimColor: true, children: ['#' + number] }),
     ]
-    if (c.posted_url) parts.push(link(els, 'posted-link-' + c.n, c.posted_url, 'comment', { color: 'success' }))
-    parts.push(Text({ key: 'posted-summary-' + c.n, dimColor: true, wrap: 'truncate-end', children: [c.summary || c.target || ''] }))
-    return Box({ key: 'posted-' + c.n, flexDirection: 'row', columnGap: 1, children: parts })
+    if (c.posted_url) parts.push(link(els, followUp.id + '-link-' + c.n, c.posted_url, 'comment', { color: followUp.color }))
+    parts.push(Text({ key: followUp.id + '-summary-' + c.n, dimColor: true, wrap: 'truncate-end', children: [c.summary || c.target || ''] }))
+    const row = Box({ key: followUp.id + '-row-' + c.n, flexDirection: 'row', columnGap: 1, children: parts })
+    if (!c.addressed_note) return Box({ key: followUp.id + '-' + c.n, flexDirection: 'column', children: [row] })
+    return Box({
+      key: followUp.id + '-' + c.n,
+      flexDirection: 'column',
+      children: [row, Text({ key: followUp.id + '-note-' + c.n, dimColor: true, wrap: 'wrap', children: ['   ' + c.addressed_note] })],
+    })
   })
   return Box({
-    key: 'section-posted',
+    key: 'section-' + followUp.id,
     flexDirection: 'column',
     borderStyle: 'round',
-    borderColor: 'inactive',
+    borderColor: followUp.color,
     paddingX: 1,
     children: [
       Box({
-        key: 'heading-posted',
+        key: 'heading-' + followUp.id,
         flexDirection: 'row',
         columnGap: 1,
-        children: [Text({ bold: true, color: 'success', children: ['Posted'] }), Text({ dimColor: true, children: [String(comments.length)] })],
+        children: [Text({ bold: true, color: followUp.color, children: [followUp.title] }), Text({ dimColor: true, children: [String(comments.length)] })],
       }),
       ...rows,
     ],
@@ -448,22 +508,27 @@ function pickBar(els, $) {
 
 /**
  * The stacks the board names, each bottom layer first, then one stack per pull request the board puts in none. A board
- * that names no stacks is one stack holding every pull request, and draws no tabs.
+ * that names no stacks is one stack holding every pull request, and opens no stack panes.
  */
 function stacksOf(prs) {
   const named = Array.isArray(board.stacks) ? board.stacks.filter((s) => s && typeof s.id === 'string' && Array.isArray(s.prs)) : []
-  if (!named.length) return [{ id: ALL_TABS, title: 'Stack', prs }]
+  if (!named.length) return [{ id: 'all', title: 'Stack', prs }]
   const byKey = new Map(prs.map((p) => [p.pr, p]))
   const placed = new Set()
   const stacks = named.map((s) => {
     const members = s.prs.map((key) => byKey.get(key)).filter(Boolean)
     for (const p of members) placed.add(p.pr)
-    return { id: s.id, title: s.title || s.id, prs: members }
+    return { ...s, title: s.title || s.id, prs: members }
   })
   for (const p of prs) {
     if (!placed.has(p.pr)) stacks.push({ id: p.pr, title: '#' + p.number + (p.title ? ' ' + p.title : ''), prs: [p] })
   }
   return stacks
+}
+
+/** A pane id allows letters, digits, `_` and `-`, up to 64 of them. */
+function stackPaneId(stack) {
+  return (STACK_PANE_PREFIX + stack.id.replace(/[^A-Za-z0-9_-]/g, '-')).slice(0, 64)
 }
 
 /** The id of the stack holding a comment's pull request; a comment on a pull request off the board belongs to none. */
@@ -477,47 +542,25 @@ function authorsOf(prs) {
   return [...new Set(prs.map((p) => p.author).filter(Boolean))]
 }
 
-/** One tab per stack beside All, each counting the comments still to decide on it. */
-function tabBar(els, stacks, comments, prs, $) {
-  const { Box, Button } = els
-  const pending = comments.filter(isPickable).filter((c) => c.status !== 'dropped')
-  const tabs = [{ id: ALL_TABS, title: 'All', count: pending.length }, ...stacks.map((s) => ({ ...s, count: pending.filter((c) => stackOf(c, prs, stacks) === s.id).length }))]
-  return Box({
-    key: 'tabs',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    columnGap: 1,
-    paddingX: 1,
-    children: tabs.map((t) =>
-      Button({
-        key: 'tab-' + t.id,
-        label: t.title + ' ' + t.count,
-        variant: t.id === tab ? 'primary' : undefined,
-        dimColor: t.id === tab ? undefined : true,
-        onPress: async () => {
-          tab = t.id
-          $.ui.invalidate('ui.render')
-        },
-      }),
-    ),
-  })
-}
-
-/** A stack's name, how many pull requests it holds, and who wrote them. */
-function stackHeading(els, key, title, count, authors) {
+/** A stack's name, its verdict, how many pull requests it holds, and who wrote them. */
+function stackHeading(els, key, stack) {
   const { Box, Text } = els
-  const parts = [Text({ bold: true, children: [title] }), Text({ dimColor: true, children: [String(count)] })]
+  const parts = [Text({ bold: true, children: [stack.title] })]
+  if (stack.verdict) parts.push(Text({ color: RISK_COLORS[stack.verdict] || 'warning', children: [stack.verdict] }))
+  parts.push(Text({ dimColor: true, children: [String(stack.prs.length)] }))
+  const authors = authorsOf(stack.prs)
   if (authors.length) parts.push(Text({ dimColor: true, children: [authors.join(', ')] }))
   return Box({ key, flexDirection: 'row', columnGap: 1, children: parts })
 }
 
 /**
- * One quiet line per pull request: its number links it, a dot carries its risk, a short title says what it is. Its
- * author shows where a stack has more than one, and a layer based on something other than the row above names its base.
+ * One quiet line per pull request: its number links it, a dot carries its risk, a short title says what it is. A layer
+ * by someone other than the stack's first author names its author, and one based on something other than the row above
+ * names its base.
  */
 function prRows(els, stack) {
   const { Box, Text } = els
-  const several = authorsOf(stack.prs).length > 1
+  const lead = stack.prs.length ? stack.prs[0].author : undefined
   return stack.prs.map((p, i) => {
     const below = i > 0 ? stack.prs[i - 1].pr : undefined
     const branch = p.base && p.base !== below ? p.base.split('#')[1] : undefined
@@ -528,7 +571,7 @@ function prRows(els, stack) {
       children: [
         link(els, 'pr-open-' + p.number, p.url, '#' + p.number),
         Text({ color: RISK_COLORS[p.risk] || 'inactive', children: ['●'] }),
-        ...(several && p.author ? [Text({ dimColor: true, children: [p.author] })] : []),
+        ...(p.author && p.author !== lead ? [Text({ color: 'suggestion', children: [p.author] })] : []),
         ...(branch ? [Text({ dimColor: true, children: ['on #' + branch] })] : []),
         ...(p.title ? [Text({ dimColor: true, wrap: 'truncate-end', children: [p.title] })] : []),
       ],
@@ -536,7 +579,7 @@ function prRows(els, stack) {
   })
 }
 
-/** The pull requests in view: one stack under its own heading, or every stack under its own when All holds several. */
+/** The pull requests in view: one stack under its own heading, or, in All, every stack under its own. */
 function prList(els, stacks, several) {
   const { Box, Text } = els
   const body = several
@@ -547,9 +590,9 @@ function prList(els, stacks, several) {
           columnGap: 1,
           children: [Text({ bold: true, children: ['Stacks'] }), Text({ dimColor: true, children: [String(stacks.length)] })],
         }),
-        ...stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s.title, s.prs.length, authorsOf(s.prs)), ...prRows(els, s)]),
+        ...stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s), ...prRows(els, s)]),
       ]
-    : stacks.flatMap((s) => [stackHeading(els, 'prs-heading', s.title, s.prs.length, authorsOf(s.prs)), ...prRows(els, s)])
+    : stacks.flatMap((s) => [stackHeading(els, 'prs-heading', s), ...prRows(els, s)])
   return Box({ key: 'prs', flexDirection: 'column', borderStyle: 'round', borderColor: 'inactive', paddingX: 1, children: body })
 }
 

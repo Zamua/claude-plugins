@@ -120,12 +120,14 @@ metadata directory, and the plugin draws it in a pane, `/reviewboard`, that open
 itself in the review's session:
 
 - the verdict, the risk and the blast radius, one sentence each
-- the pull requests, one tab per stack, each linked with its author and its own risk
+- one tab per stack beside an All tab, each heading with its own verdict, risk and
+  blast radius and listing its pull requests, linked, with their authors and risk
 - the proposed comments by severity, each marked `new`, `carried over` or `not a
   bug`, linked to its code and the scratch test that proves it, and opening in place
   to the exact text it would post and the finding behind it
 - the report, one closed section per heading
-- the comments already posted, out of the way at the bottom
+- the comments already posted, split into Unaddressed and Addressed, so a stack
+  with no open threads is easy to spot
 
 Tick comments and press Draft to put `post 1, 3` in the prompt box. Sending it is
 yours. The agent posts from the board itself, through `scripts/board.sh`, so what

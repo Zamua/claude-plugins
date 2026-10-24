@@ -110,7 +110,8 @@ fails the check, and posting refuses one.
       "author": "octocat", "base": "example-org/inventory-service#1234" }
   ],
   "stacks": [
-    { "id": "ledger", "title": "Stock ledger",
+    { "id": "ledger", "title": "Stock ledger", "verdict": "medium",
+      "risk": "One sentence for this stack alone.", "blast_radius": "One sentence for this stack alone.",
       "prs": ["example-org/inventory-service#1234", "example-org/inventory-service#1240"] }
   ],
   "report": [
@@ -128,7 +129,8 @@ fails the check, and posting refuses one.
       "location_url": "https://github.com/<owner>/<repo>/blob/<head-sha>/<path>#L88",
       "files": [ { "label": "StockLedger.kt:80-95", "url": "..." },
                  { "label": "NegativeStockScratchTest", "url": "<link to the test>", "kind": "test" } ],
-      "posted_url": null }
+      "posted_url": null,
+      "addressed": false, "addressed_note": null }
   ]
 }
 ```
@@ -148,7 +150,12 @@ default branch.
 `prs` bottom first. A stack is what `poll.sh stack` returns, so a layer that branches
 off a lower one, beside another layer, sits in the same stack. A pull request that is
 in no stack, such as one reviewed beside a stack or a counterpart in another repo, is
-a stack of one with its own entry. The pane draws each stack as a tab beside All.
+a stack of one with its own entry. Each stack carries its own `verdict`, `risk` and
+`blast_radius`, written like the board's but for that stack alone; the board's own
+three cover the whole review. The pane opens one pane per stack, each a tab titled
+for the stack beside an All tab: a stack's tab heads with its own verdict, risk and
+blast radius and holds only its pull requests and comments, and All holds the board's
+summary, every stack, every comment and the report.
 
 ### The report
 
@@ -289,8 +296,8 @@ Mechanics that bite:
   conversation concludes. If the operator wants it, tell them it is theirs to do.
 
 After each post, read the comment urls back from GitHub and `mark` every number
-posted with its url. The pane moves it to the Posted section. Tell the operator which
-numbers went up. Cleanup deletes the board with the review, so the posted comments on
+posted with its url. The pane moves it to the Unaddressed section. Tell the operator
+which numbers went up. Cleanup deletes the board with the review, so the posted comments on
 GitHub are the lasting record.
 
 ### Approving
@@ -326,6 +333,20 @@ across a context loss and what stops a second round from posting an entry twice.
 Read the board before posting. `payload` and `reply` refuse an entry already
 `posted`; if the operator names its number again, say it is already up and give them
 the link.
+
+
+A posted comment then waits on its author. Once the author settles it, by a commit
+that fixes it or an answer that holds up, and you have verified that against the
+code, mark it addressed with how it was settled, so the operator sees at a glance
+which stacks still have open threads:
+
+```bash
+"$B" addressed "$BOARD" <n> yes "Fixed in <short-sha>; the scratch test passes."
+"$B" addressed "$BOARD" <n> no      # the fix was reverted or no longer holds
+```
+
+The pane splits posted comments into Unaddressed and Addressed. A thread the author
+resolved on GitHub is not addressed until you have checked the change behind it.
 
 ## Writing style
 

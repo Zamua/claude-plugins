@@ -155,7 +155,7 @@ test('the report\'s sections stay closed until opened, below the comments to dec
   expect(await ui.find({ key: 'report-md-risk' })).toBeUndefined()
   const order = (await ui.findAll({ type: 'Box' })).map((b) => b.key)
   expect(order.indexOf('report')).toBeGreaterThan(order.indexOf('section-question'))
-  expect(order.indexOf('report')).toBeLessThan(order.indexOf('section-posted'))
+  expect(order.indexOf('report')).toBeGreaterThan(order.indexOf('section-unaddressed'))
   await ui.unmount()
 })
 
@@ -203,19 +203,24 @@ test('each comment says whether it is a new bug, one carried over, or not a bug,
   expect(await ui.find({ key: 'head-6', text: /#6954\s*new/ })).toBeDefined()
   expect(await ui.find({ key: 'head-1', text: /#7472\s*carried over/ })).toBeDefined()
   expect(await ui.find({ key: 'head-5', text: /not a bug/ })).toBeDefined()
-  expect(await ui.find({ key: 'summary', text: /3 proven · 1 new · 1 carried over · 1 posted/ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /4 comments · 3 proven · 1 new · 1 carried over/ })).toBeDefined()
   await ui.unmount()
 })
 
-test('a posted comment moves out of its severity section into a Posted section below the rest', async ($, on) => {
+test('a posted comment leaves its severity section for Unaddressed, and moves to Addressed once marked', async ($, on) => {
   mock.clock(on, { now: NOW })
-  stubs(on)
+  const marked = { ...BOARD, comments: [...BOARD.comments, { n: 8, pr: 'acme/api#6954', severity: 'medium', confidence: 'proven', status: 'posted', addressed: true, addressed_note: 'Fixed in abc1234.', summary: 'The retry drops the lock.', body: 'x', posted_url: 'https://github.com/acme/api/pull/6954#discussion_r8' }] }
+  stubs(on, { board: marked })
   await start($)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ key: 'section-low' })).toBeUndefined()
-  expect(await ui.find({ key: 'section-posted', text: /Posted\s*1\s*3\s*#7472\s*comment\s*Loan asks payment to replace legacy funds/ })).toBeDefined()
-  expect(await ui.find({ key: 'section-posted', text: /payment outage/ })).toBeUndefined()
+  expect(await ui.find({ key: 'section-posted' })).toBeUndefined()
+  expect(await ui.find({ key: 'section-unaddressed', text: /Unaddressed\s*1\s*3\s*#7472\s*comment\s*Loan asks payment to replace legacy funds/ })).toBeDefined()
+  expect(await ui.find({ key: 'section-unaddressed', text: /retry drops the lock/ })).toBeUndefined()
+  expect(await ui.find({ key: 'section-addressed', text: /Addressed\s*1\s*8\s*#6954\s*comment\s*The retry drops the lock\.\s*Fixed in abc1234\./ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /3 to decide · 1 unaddressed · 1 addressed/ })).toBeDefined()
+  expect(await ui.find({ key: 'title-row', text: /Lead adapters stack\s*medium\s*open items/ })).toBeDefined()
   const links = (await ui.findAll({ type: 'Link' })).map((l) => l.props.href)
   expect(links).toContain('https://github.com/acme/api/pull/7472#discussion_r1')
   await ui.unmount()
@@ -255,72 +260,108 @@ const STACKED = {
     { pr: 'acme/api#7500', number: 7500, title: 'Side branch', url: 'https://github.com/acme/api/pull/7500', risk: 'low', author: 'bo', base: 'acme/api#6954' },
     { pr: 'acme/api#8000', number: 8000, title: 'Card target', url: 'https://github.com/acme/api/pull/8000', risk: 'low', author: 'bo' },
   ],
-  stacks: [{ id: 'lead', title: 'Lead adapters', prs: ['acme/api#6954', 'acme/api#7472', 'acme/api#7500'] }],
+  stacks: [
+    {
+      id: 'lead', title: 'Lead adapters', verdict: 'high', prs: ['acme/api#6954', 'acme/api#7472', 'acme/api#7500'],
+      risk: 'High: the adapters move money.', blast_radius: 'Every Lead loan from merge.',
+    },
+  ],
   comments: [
     ...BOARD.comments,
     { n: 7, pr: 'acme/api#8000', severity: 'low', confidence: 'proven', status: 'proposed', summary: 'The card target is untested on the wire.', body: 'Untested.' },
   ],
 }
 
-test('each stack is a tab beside All, and a pull request in no stack is a stack of one', async ($, on) => {
+test('each stack opens as its own pane, a tab titled for the stack beside All, and a pull request in no stack is a stack of one', async ($, on) => {
   mock.clock(on, { now: NOW })
-  stubs(on, { board: STACKED })
+  const opens: any[] = []
+  stubs(on, { board: STACKED, opens })
   await start($)
 
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ key: 'tabs', text: /All\s*4.*Lead adapters\s*3.*#8000 Card target\s*1/ })).toBeDefined()
-  const order = (await ui.findAll({ type: 'Box' })).map((b) => b.key)
-  expect(order.indexOf('tabs')).toBeGreaterThan(order.indexOf('summary'))
-  expect(order.indexOf('tabs')).toBeLessThan(order.indexOf('prs'))
-  expect(await ui.find({ key: 'prrow-8000' })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-6954' })).toBeDefined()
-  await ui.unmount()
+  const titles = Object.fromEntries(opens.map((o) => [o.id, o.title]))
+  expect(titles).toEqual({ review: 'All', 'review-lead': 'Lead adapters', 'review-acme-api-8000': '#8000 Card target' })
+  await ui_absent($)
 })
 
-test('a stack\'s tab shows only its pull requests and the comments on them, and All shows everything again', async ($, on) => {
+async function ui_absent($) {
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ key: 'tabs' })).toBeUndefined()
+  await ui.unmount()
+}
+
+test('a stack\'s pane heads with the stack\'s own title, verdict, risk and blast, and holds only its pull requests and comments', async ($, on) => {
   mock.clock(on, { now: NOW })
   stubs(on, { board: STACKED })
   await start($)
 
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'tab-acme/api#8000' })
-  expect(await ui.find({ key: 'prrow-8000' })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-6954' })).toBeUndefined()
-  expect(await ui.find({ key: 'comment-7' })).toBeDefined()
-  expect(await ui.find({ key: 'comment-6' })).toBeUndefined()
-  expect(await ui.find({ key: 'section-posted' })).toBeUndefined()
-  await ui.press({ key: 'tab-lead' })
-  expect(await ui.find({ key: 'prs', text: /Lead adapters\s*3/ })).toBeDefined()
+  const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
+  expect(await ui.find({ key: 'title-row', text: /Lead adapters\s*high/ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /Risk\s*High: the adapters move money\./ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /Blast\s*Every Lead loan from merge\./ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /Lead adapters stack/ })).toBeUndefined()
+  expect(await ui.find({ key: 'prs', text: /Lead adapters\s*high\s*3\s*ann, bo/ })).toBeDefined()
   expect(await ui.find({ key: 'prrow-8000' })).toBeUndefined()
   expect(await ui.find({ key: 'comment-6' })).toBeDefined()
   expect(await ui.find({ key: 'comment-7' })).toBeUndefined()
-  expect(await ui.find({ key: 'section-posted', text: /Loan asks payment/ })).toBeDefined()
-  await ui.press({ key: 'tab-all' })
-  expect(await ui.find({ key: 'comment-6' })).toBeDefined()
-  expect(await ui.find({ key: 'comment-7' })).toBeDefined()
+  expect(await ui.find({ key: 'section-unaddressed', text: /Loan asks payment/ })).toBeDefined()
+  expect(await ui.find({ key: 'report' })).toBeUndefined()
   await ui.unmount()
+
+  const lone = await $.ui.mount({ ...PANE, requestId: 'review-acme-api-8000', surface: 'terminal' })
+  expect(await lone.find({ key: 'title-row', text: /#8000 Card target/ })).toBeDefined()
+  expect(await lone.find({ key: 'comment-7' })).toBeDefined()
+  expect(await lone.find({ key: 'comment-6' })).toBeUndefined()
+  await lone.unmount()
 })
 
-test('a stack names its authors, and a layer that branches off a lower one says which', async ($, on) => {
+test('All keeps the review\'s own summary, every stack under its heading, every comment and the report', async ($, on) => {
   mock.clock(on, { now: NOW })
   stubs(on, { board: STACKED })
   await start($)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ key: 'stack-lead', text: /Lead adapters\s*3\s*ann, bo/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-7500', text: /#7500.*bo.*on #6954.*Side branch/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-7472', text: /on #/ })).toBeUndefined()
-  expect(await ui.find({ key: 'prrow-7472', text: /ann/ })).toBeDefined()
+  expect(await ui.find({ key: 'title-row', text: /Lead adapters stack\s*medium/ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /Risk\s*Medium: money movement behind a gate at 0%\./ })).toBeDefined()
+  expect(await ui.find({ key: 'stack-lead', text: /Lead adapters\s*high\s*3\s*ann, bo/ })).toBeDefined()
+  expect(await ui.find({ key: 'prrow-8000' })).toBeDefined()
+  expect(await ui.find({ key: 'comment-6' })).toBeDefined()
+  expect(await ui.find({ key: 'comment-7' })).toBeDefined()
+  expect(await ui.find({ key: 'report' })).toBeDefined()
   await ui.unmount()
 })
 
-test('a board that names no stacks draws one list and no tabs', async ($, on) => {
+test('a layer by another author names them, and a layer that branches off a lower one says which', async ($, on) => {
   mock.clock(on, { now: NOW })
-  stubs(on)
+  stubs(on, { board: STACKED })
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
+  expect(await ui.find({ key: 'prrow-7500', text: /#7500.*bo.*on #6954.*Side branch/ })).toBeDefined()
+  expect(await ui.find({ key: 'prrow-7472', text: /on #|ann/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a board that names no stacks draws one list and opens no stack panes', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const opens: any[] = []
+  stubs(on, { opens })
+  await start($)
+
+  expect(opens.map((o) => o.id)).toEqual(['review', 'review'])
+  expect(opens[0].title).toBe('Review · Lead adapters stack')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ key: 'prs', text: /Stack\s*2/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a review with no board yet lists its pull requests from the poller\'s state', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  stubs(on, { board: null })
   await start($)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ key: 'tabs' })).toBeUndefined()
-  expect(await ui.find({ key: 'prs', text: /Stack\s*2/ })).toBeDefined()
+  expect(await ui.find({ text: /No board yet for stack-7472/ })).toBeDefined()
+  expect(await ui.find({ key: 'prrow-6954' })).toBeDefined()
+  expect(await ui.find({ key: 'prrow-7472' })).toBeDefined()
   await ui.unmount()
 })

@@ -134,6 +134,7 @@ B="${CLAUDE_PLUGIN_ROOT}/scripts/board.sh"
 "$B" payload <board.json> <owner/repo#N> <head-sha> <n>... --summary TEXT --sign-off TEXT
 "$B" reply <board.json> <n> --sign-off TEXT
 "$B" mark <board.json> <n> <proposed|approved|posted|dropped> [url|reason]
+"$B" addressed <board.json> <n> yes|no [how]
 ```
 
 Write the board whole each time rather than editing it in place, since the pane
@@ -174,8 +175,9 @@ resolved: say so on the board rather than deleting it silently, so the operator 
 see the change was addressed. Update the board and your pane together.
 
 A resolved finding whose comment is still `proposed` gets marked `dropped` with the
-reason. One already `posted` stays posted; note the resolution in its `detail` and
-leave the comment alone unless the operator asks you to reply. New findings join the
+reason. One already `posted` stays posted: mark it addressed with how it was settled
+(`"$B" addressed <board.json> <n> yes "Fixed in <short-sha>."`), note the resolution in
+its `detail`, and leave the comment alone unless the operator asks you to reply. New findings join the
 list with new numbers at the end, so the operator's existing numbers keep pointing
 at the same comments.
 
