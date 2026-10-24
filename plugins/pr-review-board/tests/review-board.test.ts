@@ -56,7 +56,7 @@ const PANE = {
   props: { title: 'Review', isFocused: true, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
 } as const
 
-function stubs(on, { state = STATE as unknown, board = BOARD as unknown, manual = undefined as unknown, session = SESSION, fills = [] as unknown[], opens = [] as unknown[] } = {}) {
+function stubs(on, { state = STATE as unknown, board = BOARD as unknown, manual = undefined as unknown, session = SESSION, fills = [] as unknown[], opens = [] as unknown[], panes = [] as unknown[], closes = [] as unknown[] } = {}) {
   mock.env(on, { HOME, HERDR_WORKSPACE_ID: 'wZ' })
   const files: Record<string, string> = {}
   if (state) files[STATE_FILE] = JSON.stringify(state)
@@ -71,8 +71,11 @@ function stubs(on, { state = STATE as unknown, board = BOARD as unknown, manual 
     opens.push(e)
     return { value: { isPlaced: true } }
   })
-  on('ui.panes', () => ({ value: [] }))
-  on('ui.close', () => ({ value: undefined }))
+  on('ui.panes', () => ({ value: panes }))
+  on('ui.close', ($, e) => {
+    closes.push(e)
+    return { value: undefined }
+  })
   on('prompt.fill', ($, e) => {
     fills.push(e)
     return { isFilled: true, box: { text: e.text, cursor: e.text.length } }
@@ -365,3 +368,44 @@ test('a review with no board yet lists its pull requests from the poller\'s stat
   expect(await ui.find({ key: 'prrow-7472' })).toBeDefined()
   await ui.unmount()
 })
+
+test('/reviewboard shows stack tabs that wait for room, and closes the board only once every tab is showing', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const opens: any[] = []
+  const closes: any[] = []
+  const panes: any[] = [
+    { id: 'review', title: 'All', isShown: true, isFocused: false, isPlaced: true },
+    { id: 'review-lead', title: 'Lead adapters', isShown: false, isFocused: false, isPlaced: false },
+    { id: 'review-acme-api-8000', title: '#8000 Card target', isShown: false, isFocused: false, isPlaced: false },
+  ]
+  stubs(on, { board: STACKED, opens, closes, panes })
+  await start($)
+  opens.length = 0
+
+  await $.command.run({ command: 'reviewboard' })
+  expect(closes).toEqual([])
+  expect(opens.map((o) => o.id)).toEqual(expect.arrayContaining(['review-lead', 'review-acme-api-8000']))
+
+  for (const p of panes) p.isPlaced = true
+  await $.command.run({ command: 'reviewboard' })
+  expect(closes.map((c) => c.id).sort()).toEqual(['review', 'review-acme-api-8000', 'review-lead'])
+})
+
+for (const placed of [false, true]) {
+  test(placed ? 'All drops the hint once every stack tab is showing' : 'All says when its stack tabs are waiting for a wider terminal', async ($, on) => {
+    mock.clock(on, { now: NOW })
+    const panes = [
+      { id: 'review', title: 'All', isShown: true, isFocused: false, isPlaced: true },
+      { id: 'review-lead', title: 'Lead adapters', isShown: placed, isFocused: false, isPlaced: placed },
+      { id: 'review-acme-api-8000', title: '#8000 Card target', isShown: placed, isFocused: false, isPlaced: placed },
+    ]
+    stubs(on, { board: STACKED, panes })
+    await start($)
+
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const hint = await ui.find({ text: /Stack tabs are waiting for a wider terminal; run \/reviewboard to show them\./ })
+    if (placed) expect(hint).toBeUndefined()
+    else expect(hint).toBeDefined()
+    await ui.unmount()
+  })
+}

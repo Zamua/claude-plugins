@@ -93,7 +93,22 @@ export function register(on) {
       return Text({ dimColor: true, wrap: 'wrap', children: ['This stack is no longer on the board.'] })
     }
     const inView = stack ? comments.filter((c) => stackOf(c, prs, stacks) === stack.id) : comments
-    const children = [header(els, stack, inView), prList(els, stack ? [stack] : stacks, stacked && !stack)]
+    const children = [header(els, stack, inView)]
+    if (!stack && stacked) {
+      const open = await $.ui.panes()
+      const waiting = wantedStackPanes().some((w) => !open.some((p) => p.id === w.id && p.isPlaced))
+      if (waiting) {
+        children.push(
+          Text({
+            key: 'tabs-waiting',
+            color: 'warning',
+            wrap: 'wrap',
+            children: ['Stack tabs are waiting for a wider terminal; run /reviewboard to show them.'],
+          }),
+        )
+      }
+    }
+    children.push(prList(els, stack ? [stack] : stacks, stacked && !stack))
     const toDecide = inView.filter((c) => c.status !== 'posted')
     for (const severity of SEVERITIES) {
       const inSection = toDecide.filter((c) => severityOf(c) === severity)
@@ -113,12 +128,16 @@ export function register(on) {
   })
 }
 
-/** A pane opened unasked in a narrow terminal stays open but unplaced; the command shows it rather than closing it. */
+/**
+ * A pane opened unasked in a narrow terminal stays open but unplaced, and the stack panes are opened unasked when the
+ * board loads. The command shows whatever waits and closes the board only once every pane of it is showing.
+ */
 async function togglePane($) {
-  const pane = (await $.ui.panes()).find((p) => p.id === PANE)
-  if (pane && pane.isPlaced) {
+  const open = await $.ui.panes()
+  const showing = (id) => open.some((p) => p.id === id && p.isPlaced)
+  if (showing(PANE) && wantedStackPanes().every((w) => showing(w.id))) {
     await $.ui.close({ id: PANE })
-    for (const p of await $.ui.panes()) {
+    for (const p of open) {
       if (p.id.startsWith(STACK_PANE_PREFIX)) await $.ui.close({ id: p.id })
     }
     stackPanesKey = undefined
@@ -142,8 +161,7 @@ function paneTitle() {
  * until the set of stacks changes.
  */
 async function syncStackPanes($, { force = false } = {}) {
-  const stacks = board ? stacksOf(Array.isArray(board.prs) ? board.prs : review.prs) : []
-  const wanted = stacks.length > 1 ? stacks.map((s) => ({ id: stackPaneId(s), title: s.title })) : []
+  const wanted = wantedStackPanes()
   const key = JSON.stringify(wanted)
   if (!force && key === stackPanesKey) return
   const open = await $.ui.panes()
@@ -154,6 +172,11 @@ async function syncStackPanes($, { force = false } = {}) {
     if (p.id.startsWith(STACK_PANE_PREFIX) && !wanted.some((w) => w.id === p.id)) await $.ui.close({ id: p.id })
   }
   for (const w of wanted) await $.ui.open({ id: w.id, title: w.title })
+}
+
+function wantedStackPanes() {
+  const stacks = board && review ? stacksOf(Array.isArray(board.prs) ? board.prs : review.prs) : []
+  return stacks.length > 1 ? stacks.map((s) => ({ id: stackPaneId(s), title: s.title })) : []
 }
 
 async function reviewsRoot($) {
