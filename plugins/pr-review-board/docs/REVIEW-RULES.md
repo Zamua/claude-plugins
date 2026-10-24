@@ -103,7 +103,15 @@ fails the check, and posting refuses one.
   "blast_radius": "One sentence: who is affected, from when.",
   "prs": [
     { "pr": "example-org/inventory-service#1234", "number": 1234, "title": "Reject negative stock",
-      "url": "https://github.com/example-org/inventory-service/pull/1234", "risk": "medium", "head": "<sha>" }
+      "url": "https://github.com/example-org/inventory-service/pull/1234", "risk": "medium", "head": "<sha>",
+      "author": "octocat" },
+    { "pr": "example-org/inventory-service#1240", "number": 1240, "title": "Sweep the ledger",
+      "url": "https://github.com/example-org/inventory-service/pull/1240", "risk": "low", "head": "<sha>",
+      "author": "octocat", "base": "example-org/inventory-service#1234" }
+  ],
+  "stacks": [
+    { "id": "ledger", "title": "Stock ledger",
+      "prs": ["example-org/inventory-service#1234", "example-org/inventory-service#1240"] }
   ],
   "report": [
     { "id": "about", "title": "What this change is about", "markdown": "..." }
@@ -132,7 +140,15 @@ fails the check, and posting refuses one.
 must stand alone. Unknown is not low.
 
 `prs` lists every pull request in scope, bottom of a stack first, each with a short
-title of two or three words and its own risk.
+title of two or three words, its own risk, its `author`'s GitHub login, and `base`:
+the pull request it is stacked on, as `owner/repo#N`, left out for one based on the
+default branch.
+
+`stacks` groups them, one entry per stack: an `id`, a `title` of a few words, and its
+`prs` bottom first. A stack is what `poll.sh stack` returns, so a layer that branches
+off a lower one, beside another layer, sits in the same stack. A pull request that is
+in no stack, such as one reviewed beside a stack or a counterpart in another repo, is
+a stack of one with its own entry. The pane draws each stack as a tab beside All.
 
 ### The report
 

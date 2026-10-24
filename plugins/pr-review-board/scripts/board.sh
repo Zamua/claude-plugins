@@ -26,6 +26,19 @@ _B_CHECK='
     (if (.title | type) != "string" then "title is missing" else empty end),
     (if ((.verdict // "") | IN("low", "medium", "high")) | not then "verdict is not low, medium or high" else empty end),
     ((.prs // []) | to_entries[] | select((.value.pr | pr_ok) | not) | "prs[\(.key)].pr is not owner/repo#N"),
+    ((.prs // []) | to_entries[] | select(.value.author != null and (.value.author | type) != "string") | "prs[\(.key)].author is not a string"),
+    ([(.prs // [])[].pr] as $known | (.prs // []) | to_entries[] | select(.value.base != null)
+       | select(.value.base as $base | $known | index($base) | not) | "prs[\(.key)].base is not a pull request in prs"),
+    (if .stacks != null and (.stacks | type) != "array" then "stacks is not a list" else empty end),
+    (if (.stacks | type) == "array" then
+       (.stacks | to_entries[]
+          | select((.value | type) != "object" or (.value.id | type) != "string" or (.value.title | type) != "string" or (.value.prs | type) != "array")
+          | "stacks[\(.key)] needs an id, a title and a prs list"),
+       ([.stacks[] | objects | .id | strings] | group_by(.)[] | select(length > 1) | "stack \(.[0]) appears \(length) times"),
+       ([.stacks[] | objects | .prs | arrays | .[]] | group_by(.)[] | select(length > 1) | "\(.[0]) is in \(length) stacks"),
+       ([(.prs // [])[].pr] as $known | .stacks[] | objects | .prs | arrays | .[]
+          | select(. as $p | $known | index($p) | not) | "stack pr \(.) is not in prs")
+     else empty end),
     ((.report // []) | to_entries[] | select((.value.title | type) != "string" or (.value.markdown | type) != "string")
        | "report[\(.key)] needs a title and markdown"),
     ((.comments // []) | group_by(.n)[] | select(length > 1) | "comment \(.[0].n) appears \(length) times"),
