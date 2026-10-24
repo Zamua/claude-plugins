@@ -36,6 +36,11 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   stands. One paragraph on the state of things, then only the questions and
   decisions that need you, each saying who it is blocked on. For picking up a
   long session you have lost the thread of.
+- **[session-board](plugins/session-board/)**: a board pane beside the chat
+  that Claude keeps current as the session goes: the goal, where things stand,
+  next steps, open questions, decisions, links, ideas and topics. For the things
+  you would otherwise keep asking it to repeat. Each session has its own board,
+  restored on resume. `/board` opens it, `/board clear` empties it.
 
 ## License
 

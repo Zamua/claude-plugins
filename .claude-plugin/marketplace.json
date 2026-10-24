@@ -29,6 +29,11 @@
       "name": "briefme",
       "source": "./plugins/briefme",
       "description": "Write a very short brief on the state of the current work: one paragraph on what is going on, then only the questions and decisions that need the user. Use when the user has lost the thread of a long session, is returning after a break, or wants to know what needs them before doing anything else."
+    },
+    {
+      "name": "session-board",
+      "source": "./plugins/session-board",
+      "description": "A board pane beside the chat that Claude keeps current through the session, so nothing has to be asked for twice: the goal, where things stand, next steps, open questions, decisions, links, ideas and topics. Each session keeps its own board, restored on resume. /board opens it."
     }
   ]
 }
