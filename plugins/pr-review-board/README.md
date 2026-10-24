@@ -120,7 +120,7 @@ metadata directory, and the plugin draws it in a pane, `/reviewboard`, that open
 itself in the review's session:
 
 - the verdict, the risk and the blast radius, one sentence each
-- the stack of pull requests, each linked, with its own risk
+- the pull requests, one tab per stack, each linked with its author and its own risk
 - the proposed comments by severity, each marked `new`, `carried over` or `not a
   bug`, linked to its code and the scratch test that proves it, and opening in place
   to the exact text it would post and the finding behind it

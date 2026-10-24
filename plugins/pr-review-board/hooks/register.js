@@ -33,6 +33,8 @@ let readError
 // Comment numbers ticked for the next post, and the comments and report sections shown in full; kept only for this module's life
 const picks = new Set()
 const expanded = new Set()
+const ALL_TABS = 'all'
+let tab = ALL_TABS
 let notice
 
 export function register(on) {
@@ -75,14 +77,21 @@ export function register(on) {
 
     const prs = Array.isArray(board.prs) ? board.prs : review.prs
     const comments = Array.isArray(board.comments) ? board.comments : []
-    const children = [summary(els, comments), prList(els, prs)]
-    const open = comments.filter((c) => c.status !== 'posted')
+    const stacks = stacksOf(prs)
+    // A tab whose stack left the board falls back to All
+    if (!stacks.some((s) => s.id === tab)) tab = ALL_TABS
+    const shown = tab === ALL_TABS ? stacks : stacks.filter((s) => s.id === tab)
+    const inView = comments.filter((c) => tab === ALL_TABS || stackOf(c, prs, stacks) === tab)
+    const children = [summary(els, comments)]
+    if (stacks.length > 1) children.push(tabBar(els, stacks, comments, prs, $))
+    children.push(prList(els, shown, stacks.length > 1 && tab === ALL_TABS))
+    const open = inView.filter((c) => c.status !== 'posted')
     for (const severity of SEVERITIES) {
       const inSection = open.filter((c) => severityOf(c) === severity)
       if (inSection.length) children.push(section(els, severity, inSection, prs, $))
     }
     if (Array.isArray(board.report) && board.report.length) children.push(reportBox(els, board.report, $))
-    const posted = comments.filter((c) => c.status === 'posted').sort((a, b) => a.n - b.n)
+    const posted = inView.filter((c) => c.status === 'posted').sort((a, b) => a.n - b.n)
     if (posted.length) children.push(postedSection(els, posted, prs))
     const picking = pickBar(els, $)
     if (picking) children.push(picking)
@@ -437,37 +446,111 @@ function pickBar(els, $) {
   })
 }
 
-/** The stack, one quiet line per pull request: its number links it, a dot carries its risk, a short title says what it is. */
-function prList(els, prs) {
+/**
+ * The stacks the board names, each bottom layer first, then one stack per pull request the board puts in none. A board
+ * that names no stacks is one stack holding every pull request, and draws no tabs.
+ */
+function stacksOf(prs) {
+  const named = Array.isArray(board.stacks) ? board.stacks.filter((s) => s && typeof s.id === 'string' && Array.isArray(s.prs)) : []
+  if (!named.length) return [{ id: ALL_TABS, title: 'Stack', prs }]
+  const byKey = new Map(prs.map((p) => [p.pr, p]))
+  const placed = new Set()
+  const stacks = named.map((s) => {
+    const members = s.prs.map((key) => byKey.get(key)).filter(Boolean)
+    for (const p of members) placed.add(p.pr)
+    return { id: s.id, title: s.title || s.id, prs: members }
+  })
+  for (const p of prs) {
+    if (!placed.has(p.pr)) stacks.push({ id: p.pr, title: '#' + p.number + (p.title ? ' ' + p.title : ''), prs: [p] })
+  }
+  return stacks
+}
+
+/** The id of the stack holding a comment's pull request; a comment on a pull request off the board belongs to none. */
+function stackOf(c, prs, stacks) {
+  const found = prs.find((p) => (typeof c.pr === 'string' ? p.pr === c.pr : p.number === c.pr))
+  const stack = found && stacks.find((s) => s.prs.includes(found))
+  return stack ? stack.id : undefined
+}
+
+function authorsOf(prs) {
+  return [...new Set(prs.map((p) => p.author).filter(Boolean))]
+}
+
+/** One tab per stack beside All, each counting the comments still to decide on it. */
+function tabBar(els, stacks, comments, prs, $) {
+  const { Box, Button } = els
+  const pending = comments.filter(isPickable).filter((c) => c.status !== 'dropped')
+  const tabs = [{ id: ALL_TABS, title: 'All', count: pending.length }, ...stacks.map((s) => ({ ...s, count: pending.filter((c) => stackOf(c, prs, stacks) === s.id).length }))]
+  return Box({
+    key: 'tabs',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 1,
+    paddingX: 1,
+    children: tabs.map((t) =>
+      Button({
+        key: 'tab-' + t.id,
+        label: t.title + ' ' + t.count,
+        variant: t.id === tab ? 'primary' : undefined,
+        dimColor: t.id === tab ? undefined : true,
+        onPress: async () => {
+          tab = t.id
+          $.ui.invalidate('ui.render')
+        },
+      }),
+    ),
+  })
+}
+
+/** A stack's name, how many pull requests it holds, and who wrote them. */
+function stackHeading(els, key, title, count, authors) {
   const { Box, Text } = els
-  const rows = prs.map((p) =>
-    Box({
+  const parts = [Text({ bold: true, children: [title] }), Text({ dimColor: true, children: [String(count)] })]
+  if (authors.length) parts.push(Text({ dimColor: true, children: [authors.join(', ')] }))
+  return Box({ key, flexDirection: 'row', columnGap: 1, children: parts })
+}
+
+/**
+ * One quiet line per pull request: its number links it, a dot carries its risk, a short title says what it is. Its
+ * author shows where a stack has more than one, and a layer based on something other than the row above names its base.
+ */
+function prRows(els, stack) {
+  const { Box, Text } = els
+  const several = authorsOf(stack.prs).length > 1
+  return stack.prs.map((p, i) => {
+    const below = i > 0 ? stack.prs[i - 1].pr : undefined
+    const branch = p.base && p.base !== below ? p.base.split('#')[1] : undefined
+    return Box({
       key: 'prrow-' + p.number,
       flexDirection: 'row',
       columnGap: 1,
       children: [
         link(els, 'pr-open-' + p.number, p.url, '#' + p.number),
         Text({ color: RISK_COLORS[p.risk] || 'inactive', children: ['●'] }),
+        ...(several && p.author ? [Text({ dimColor: true, children: [p.author] })] : []),
+        ...(branch ? [Text({ dimColor: true, children: ['on #' + branch] })] : []),
         ...(p.title ? [Text({ dimColor: true, wrap: 'truncate-end', children: [p.title] })] : []),
       ],
-    }),
-  )
-  return Box({
-    key: 'prs',
-    flexDirection: 'column',
-    borderStyle: 'round',
-    borderColor: 'inactive',
-    paddingX: 1,
-    children: [
-      Box({
-        key: 'prs-heading',
-        flexDirection: 'row',
-        columnGap: 1,
-        children: [Text({ bold: true, children: ['Stack'] }), Text({ dimColor: true, children: [String(prs.length)] })],
-      }),
-      ...rows,
-    ],
+    })
   })
+}
+
+/** The pull requests in view: one stack under its own heading, or every stack under its own when All holds several. */
+function prList(els, stacks, several) {
+  const { Box, Text } = els
+  const body = several
+    ? [
+        Box({
+          key: 'prs-heading',
+          flexDirection: 'row',
+          columnGap: 1,
+          children: [Text({ bold: true, children: ['Stacks'] }), Text({ dimColor: true, children: [String(stacks.length)] })],
+        }),
+        ...stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s.title, s.prs.length, authorsOf(s.prs)), ...prRows(els, s)]),
+      ]
+    : stacks.flatMap((s) => [stackHeading(els, 'prs-heading', s.title, s.prs.length, authorsOf(s.prs)), ...prRows(els, s)])
+  return Box({ key: 'prs', flexDirection: 'column', borderStyle: 'round', borderColor: 'inactive', paddingX: 1, children: body })
 }
 
 function footer(Text, now) {

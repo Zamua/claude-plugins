@@ -62,6 +62,23 @@ for want in "comment 1 appears 2 times" "comment 1: unproven but not worded as a
   printf '%s\n' "$problems" | grep -qxF "$want" && ok "check names: $want" || bad "check names: $want" "$want" "$problems"
 done
 
+echo "== stacks =="
+stacked="$TD/stacked.json"
+jq '.prs[0].author = "ann" | .prs[1] += {author: "bo", base: "acme/api#10"}
+    | .stacks = [{ id: "ledger", title: "Stock ledger", prs: ["acme/api#10", "acme/api#11"] }]' "$BOARD" > "$stacked"
+eq "a board with stacks, authors and bases checks OK" "OK" "$("$B" check "$stacked")"
+jq '.prs[0].author = 7 | .prs[1].base = "acme/api#99"
+    | .stacks = [{ id: "ledger", title: "Stock ledger", prs: ["acme/api#10", "acme/api#99"] },
+                 { id: "ledger", title: "Again", prs: ["acme/api#10"] }, { title: "No id" }]' "$BOARD" > "$broken"
+problems="$("$B" check "$broken")"; rc=$?
+eq "a board with broken stacks fails the check" "1" "$rc"
+for want in "stacks[2] needs an id, a title and a prs list" "stack ledger appears 2 times" "acme/api#10 is in 2 stacks" \
+            "stack pr acme/api#99 is not in prs" "prs[0].author is not a string" "prs[1].base is not a pull request in prs"; do
+  printf '%s\n' "$problems" | grep -qxF "$want" && ok "check names: $want" || bad "check names: $want" "$want" "$problems"
+done
+jq '.stacks = "ledger"' "$BOARD" > "$broken"
+eq "stacks that are not a list are named" "stacks is not a list" "$("$B" check "$broken")"
+
 echo "== payload =="
 payload="$("$B" payload "$BOARD" acme/api#10 abc123 2 1 3 --summary 'Reviewed this layer.' --sign-off '--claude')"
 eq "the review is a COMMENT at the reviewed head" "COMMENT abc123" "$(jq -r '"\(.event) \(.commit_id)"' <<<"$payload")"
