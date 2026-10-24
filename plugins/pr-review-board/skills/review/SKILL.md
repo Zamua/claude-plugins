@@ -63,8 +63,9 @@ rules.
 
 6. **Post the numbers they pick.** Re-check the head SHA first, then one batched
    review per pull request built with `board.sh payload`, then `board.sh mark` each
-   number posted with its url. The proposed comments section of the review rules
-   carries the calls and the failure modes.
+   number posted with its url. Once the author settles a posted comment and you have
+   verified it, `board.sh addressed` it. The proposed comments section of the review
+   rules carries the calls and the failure modes.
 
 7. **Approve only when told.** If the user tells you to approve a pull request,
    follow approving in the review rules.

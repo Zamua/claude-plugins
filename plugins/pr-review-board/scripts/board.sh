@@ -10,6 +10,7 @@
 #                                                           one batched review, ready for `gh api --input -`
 #   board.sh reply   <board.json> <n> [--sign-off TEXT]     {body, in_reply_to} for a thread reply
 #   board.sh mark    <board.json> <n> <status> [url|note]   set a comment's status; posted takes its url
+#   board.sh addressed <board.json> <n> yes|no [note]       whether the author settled a posted comment, and how
 #
 # `payload` and `reply` refuse a comment that is already posted or dropped, so a
 # number named twice is never posted twice. Every write replaces the file whole.
@@ -34,6 +35,10 @@ _B_CHECK='
        (.stacks | to_entries[]
           | select((.value | type) != "object" or (.value.id | type) != "string" or (.value.title | type) != "string" or (.value.prs | type) != "array")
           | "stacks[\(.key)] needs an id, a title and a prs list"),
+       (.stacks[] | objects | select(.id | type == "string") | . as $s | "stack \($s.id)" as $id |
+          (if $s.verdict != null and (($s.verdict | IN("low", "medium", "high")) | not) then "\($id): verdict is not low, medium or high" else empty end),
+          (if $s.risk != null and ($s.risk | type) != "string" then "\($id): risk is not text" else empty end),
+          (if $s.blast_radius != null and ($s.blast_radius | type) != "string" then "\($id): blast_radius is not text" else empty end)),
        ([.stacks[] | objects | .id | strings] | group_by(.)[] | select(length > 1) | "stack \(.[0]) appears \(length) times"),
        ([.stacks[] | objects | .prs | arrays | .[]] | group_by(.)[] | select(length > 1) | "\(.[0]) is in \(length) stacks"),
        ([(.prs // [])[].pr] as $known | .stacks[] | objects | .prs | arrays | .[]
@@ -60,7 +65,9 @@ _B_CHECK='
       (if $c.path != null and (($c.line | type) != "number" or ((($c.side // "RIGHT") | IN("LEFT", "RIGHT")) | not))
          then "\($id): path needs a numeric line and a LEFT or RIGHT side" else empty end),
       (if ($c.origin != null) and ((($c.origin) | IN("new", "carried", "none")) | not)
-         then "\($id): origin is not new, carried or none" else empty end)
+         then "\($id): origin is not new, carried or none" else empty end),
+      (if $c.addressed != null and ($c.addressed | type) != "boolean" then "\($id): addressed is not true or false" else empty end),
+      (if $c.addressed == true and $c.status != "posted" then "\($id): addressed but not posted" else empty end)
     )
   ] | .[]'
 
@@ -167,11 +174,33 @@ cmd_mark() {  # <board.json> <n> <status> [url|note]
   printf '%s %s\n' "$n" "$status"
 }
 
+cmd_addressed() {  # <board.json> <n> yes|no [note]
+  [ $# -ge 3 ] || _b_die "usage: board.sh addressed <board.json> <n> yes|no [note]"
+  local file="$1" n="$2" answer="$3" note="${4-}" tmp
+  _b_numbers "$n" >/dev/null || exit 1
+  case "$answer" in yes|no) ;; *) _b_die "addressed takes yes or no: $answer" ;; esac
+  jq -e --argjson n "$n" 'any(.comments[]?; .n == $n)' "$file" >/dev/null || _b_die "comment $n is not on the board"
+  jq -e --argjson n "$n" 'any(.comments[]?; .n == $n and .status == "posted")' "$file" >/dev/null \
+    || _b_die "comment $n is not posted, so it cannot be addressed"
+  tmp="$(mktemp "$(dirname "$file")/.board.XXXXXX")"
+  if jq --argjson n "$n" --arg a "$answer" --arg note "$note" --arg now "$(_b_now)" '
+      .updated_at = $now |
+      .comments |= map(if .n != $n then . else
+        .addressed = ($a == "yes") |
+        if $a == "yes" and $note != "" then .addressed_note = $note else del(.addressed_note) end end)' "$file" >"$tmp"; then
+    mv "$tmp" "$file"
+  else
+    rm -f "$tmp"; _b_die "could not update $file"
+  fi
+  printf '%s addressed=%s\n' "$n" "$answer"
+}
+
 case "${1-}" in
   path) shift; cmd_path "$@" ;;
   check) shift; cmd_check "$@" ;;
   payload) shift; cmd_payload "$@" ;;
   reply) shift; cmd_reply "$@" ;;
   mark) shift; cmd_mark "$@" ;;
+  addressed) shift; cmd_addressed "$@" ;;
   *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
