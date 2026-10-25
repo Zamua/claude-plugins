@@ -577,7 +577,8 @@ function stackHeading(els, key, stack) {
 }
 
 /**
- * One quiet line per pull request: its number links it, a dot carries its risk, a short title says what it is. A layer
+ * One quiet line per pull request: a green check once the operator approved it, its number linking it, a dot for its
+ * risk, a short title. The check sits in a one-cell column that stays empty until then, so the numbers line up. A layer
  * by someone other than the stack's first author names its author, and one based on something other than the row above
  * names its base.
  */
@@ -592,6 +593,12 @@ function prRows(els, stack) {
       flexDirection: 'row',
       columnGap: 1,
       children: [
+        Box({
+          key: 'approval-' + p.number,
+          width: 1,
+          flexShrink: 0,
+          children: p.approved === true ? [Text({ color: 'success', children: ['✓'] })] : [],
+        }),
         link(els, 'pr-open-' + p.number, p.url, '#' + p.number),
         Text({ color: RISK_COLORS[p.risk] || 'inactive', children: ['●'] }),
         ...(p.author && p.author !== lead ? [Text({ color: 'suggestion', children: [p.author] })] : []),

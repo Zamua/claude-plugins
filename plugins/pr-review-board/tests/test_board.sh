@@ -76,6 +76,10 @@ for want in "stacks[2] needs an id, a title and a prs list" "stack ledger appear
             "stack pr acme/api#99 is not in prs" "prs[0].author is not a string" "prs[1].base is not a pull request in prs"; do
   printf '%s\n' "$problems" | grep -qxF "$want" && ok "check names: $want" || bad "check names: $want" "$want" "$problems"
 done
+jq '.prs[0].approved = true' "$BOARD" > "$stacked"
+eq "an approved pull request checks OK" "OK" "$("$B" check "$stacked")"
+jq '.prs[0].approved = "yes"' "$BOARD" > "$broken"
+eq "an approval that is not a boolean is named" "prs[0].approved is not a boolean" "$("$B" check "$broken")"
 jq '.stacks = "ledger"' "$BOARD" > "$broken"
 eq "stacks that are not a list are named" "stacks is not a list" "$("$B" check "$broken")"
 
