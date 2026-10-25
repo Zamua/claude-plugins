@@ -104,7 +104,7 @@ fails the check, and posting refuses one.
   "prs": [
     { "pr": "example-org/inventory-service#1234", "number": 1234, "title": "Reject negative stock",
       "url": "https://github.com/example-org/inventory-service/pull/1234", "risk": "medium", "head": "<sha>",
-      "author": "octocat" },
+      "author": "octocat", "approved": true },
     { "pr": "example-org/inventory-service#1240", "number": 1240, "title": "Sweep the ledger",
       "url": "https://github.com/example-org/inventory-service/pull/1240", "risk": "low", "head": "<sha>",
       "author": "octocat", "base": "example-org/inventory-service#1234" }
@@ -144,7 +144,12 @@ must stand alone. Unknown is not low.
 `prs` lists every pull request in scope, bottom of a stack first, each with a short
 title of two or three words, its own risk, its `author`'s GitHub login, and `base`:
 the pull request it is stacked on, as `owner/repo#N`, left out for one based on the
-default branch.
+default branch. `approved` is `true` once the operator's GitHub account has approved
+the pull request: its latest review that approves or requests changes is an approval.
+Leave it out otherwise. The operator approves on GitHub as often as through you, and
+an approval can be dismissed, so read it from the pull request's reviews on every
+wake rather than only when you approve. The pane draws a green check left of the
+number.
 
 `stacks` groups them, one entry per stack: an `id`, a `title` of a few words, and its
 `prs` bottom first. A stack is what `poll.sh stack` returns, so a layer that branches

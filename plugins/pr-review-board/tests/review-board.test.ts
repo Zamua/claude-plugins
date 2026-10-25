@@ -333,6 +333,20 @@ test('All keeps the review\'s own summary, every stack under its heading, every 
   await ui.unmount()
 })
 
+test('an approved pull request gets a green check left of its number, and one not yet approved keeps the column empty', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const board = { ...STACKED, prs: STACKED.prs.map((p) => (p.number === 6954 ? { ...p, approved: true } : p)) }
+  stubs(on, { board })
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
+  expect(await ui.find({ key: 'approval-6954', text: '✓' })).toMatchObject({ props: { width: 1 } })
+  expect(await ui.find({ key: 'prrow-6954', text: /✓.*#6954/ })).toBeDefined()
+  expect(await ui.find({ key: 'approval-7472' })).toMatchObject({ props: { width: 1 } })
+  expect(await ui.find({ key: 'prrow-7472', text: /✓/ })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('a layer by another author names them, and a layer that branches off a lower one says which', async ($, on) => {
   mock.clock(on, { now: NOW })
   stubs(on, { board: STACKED })

@@ -121,7 +121,8 @@ itself in the review's session:
 
 - the verdict, the risk and the blast radius, one sentence each
 - one tab per stack beside an All tab, each heading with its own verdict, risk and
-  blast radius and listing its pull requests, linked, with their authors and risk.
+  blast radius and listing its pull requests, linked, with their authors and risk,
+  and a green check beside each one you approved.
   Claude Code draws a tab it opens by itself only from 144 columns, so on a narrower
   terminal All says the tabs are waiting and `/reviewboard` shows them
 - the proposed comments by severity, each marked `new`, `carried over` or `not a

@@ -28,6 +28,7 @@ _B_CHECK='
     (if ((.verdict // "") | IN("low", "medium", "high")) | not then "verdict is not low, medium or high" else empty end),
     ((.prs // []) | to_entries[] | select((.value.pr | pr_ok) | not) | "prs[\(.key)].pr is not owner/repo#N"),
     ((.prs // []) | to_entries[] | select(.value.author != null and (.value.author | type) != "string") | "prs[\(.key)].author is not a string"),
+    ((.prs // []) | to_entries[] | select(.value.approved != null and (.value.approved | type) != "boolean") | "prs[\(.key)].approved is not a boolean"),
     ([(.prs // [])[].pr] as $known | (.prs // []) | to_entries[] | select(.value.base != null)
        | select(.value.base as $base | $known | index($base) | not) | "prs[\(.key)].base is not a pull request in prs"),
     (if .stacks != null and (.stacks | type) != "array" then "stacks is not a list" else empty end),
