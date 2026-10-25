@@ -197,7 +197,7 @@ test('the stack sits under the risk and blast lines, above the comments, and eac
   await ui.unmount()
 })
 
-test('each comment says whether it is a new bug, one carried over, or not a bug, and the summary counts them', async ($, on) => {
+test('each comment says whether it is a new bug, one carried over, or not a bug, and the summary does not count them', async ($, on) => {
   mock.clock(on, { now: NOW })
   stubs(on)
   await start($)
@@ -206,7 +206,7 @@ test('each comment says whether it is a new bug, one carried over, or not a bug,
   expect(await ui.find({ key: 'head-6', text: /#6954\s*new/ })).toBeDefined()
   expect(await ui.find({ key: 'head-1', text: /#7472\s*carried over/ })).toBeDefined()
   expect(await ui.find({ key: 'head-5', text: /not a bug/ })).toBeDefined()
-  expect(await ui.find({ key: 'summary', text: /4 comments · 3 proven · 1 new · 1 carried over/ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /comments ·|proven|carried over/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -222,8 +222,8 @@ test('a posted comment leaves its severity section for Unaddressed, and moves to
   expect(await ui.find({ key: 'section-unaddressed', text: /Unaddressed\s*1\s*3\s*#7472\s*comment\s*Loan asks payment to replace legacy funds/ })).toBeDefined()
   expect(await ui.find({ key: 'section-unaddressed', text: /retry drops the lock/ })).toBeUndefined()
   expect(await ui.find({ key: 'section-addressed', text: /Addressed\s*1\s*8\s*#6954\s*comment\s*The retry drops the lock\.\s*Fixed in abc1234\./ })).toBeDefined()
-  expect(await ui.find({ key: 'summary', text: /3 to decide · 1 unaddressed · 1 addressed/ })).toBeDefined()
-  expect(await ui.find({ key: 'title-row', text: /Lead adapters stack\s*medium\s*open items/ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /to decide|unaddressed/ })).toBeUndefined()
+  expect(await ui.find({ key: 'title-row', text: /^Lead adapters stack\s*medium$/ })).toBeDefined()
   const links = (await ui.findAll({ type: 'Link' })).map((l) => l.props.href)
   expect(links).toContain('https://github.com/acme/api/pull/7472#discussion_r1')
   await ui.unmount()
@@ -334,6 +334,17 @@ test('All hangs each stack\'s pull requests under its heading on a tree rule, an
   await tab.unmount()
 })
 
+test('All leaves one blank row above every stack but the first', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  stubs(on, { board: STACKED })
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ key: 'stack-lead' })).props.marginTop || 0).toBe(0)
+  expect(await ui.find({ key: 'stack-acme/api#8000' })).toMatchObject({ props: { marginTop: 1 } })
+  await ui.unmount()
+})
+
 test('pressing a stack\'s title in All asks for that stack\'s tab', async ($, on) => {
   mock.clock(on, { now: NOW })
   const opens: any[] = []
@@ -412,7 +423,17 @@ test('a pull request with open threads from the operator gets a warning mark bes
   expect(await ui.find({ key: 'open-7500', text: '!' })).toMatchObject({ props: { width: 1 } })
   expect(await ui.find({ key: 'open-6954' })).toMatchObject({ props: { width: 1 } })
   expect(await ui.find({ key: 'prrow-6954', text: /!/ })).toBeUndefined()
-  expect(await ui.find({ key: 'summary', text: /1 unaddressed · 0 addressed · 2 other open threads/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a stack whose posted comments are all addressed, with nothing else waiting, says so', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const settled = { ...STACKED, comments: [{ n: 8, pr: 'acme/api#6954', severity: 'low', confidence: 'proven', status: 'posted', addressed: true, summary: 'x', body: 'x', posted_url: 'https://github.com/acme/api/pull/6954#discussion_r8' }] }
+  stubs(on, { board: settled })
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
+  expect(await ui.find({ key: 'title-row', text: /Lead adapters\s*high\s*all addressed/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -423,8 +444,8 @@ test('open threads the board did not post keep a stack from reading as all addre
   await start($)
 
   const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
-  expect(await ui.find({ key: 'title-row', text: /Lead adapters.*open items/ })).toBeDefined()
-  expect(await ui.find({ key: 'summary', text: /0 to decide · 0 unaddressed · 0 addressed · 1 other open thread(?!s)/ })).toBeDefined()
+  expect(await ui.find({ key: 'title-row', text: /all addressed/ })).toBeUndefined()
+
   await ui.unmount()
 })
 
