@@ -347,6 +347,33 @@ test('an approved pull request gets a green check left of its number, and one no
   await ui.unmount()
 })
 
+test('a pull request with open threads from the operator gets a warning mark beside the approval column', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const board = { ...STACKED, prs: STACKED.prs.map((p) => (p.number === 7500 ? { ...p, other_open_threads: 2 } : p)) }
+  stubs(on, { board })
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
+  expect(await ui.find({ key: 'open-7472', text: '!' })).toMatchObject({ props: { width: 1 } })
+  expect(await ui.find({ key: 'open-7500', text: '!' })).toMatchObject({ props: { width: 1 } })
+  expect(await ui.find({ key: 'open-6954' })).toMatchObject({ props: { width: 1 } })
+  expect(await ui.find({ key: 'prrow-6954', text: /!/ })).toBeUndefined()
+  expect(await ui.find({ key: 'summary', text: /1 unaddressed · 0 addressed · 2 other open threads/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('open threads the board did not post keep a stack from reading as all addressed', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const board = { ...STACKED, comments: [], prs: STACKED.prs.map((p) => (p.number === 6954 ? { ...p, other_open_threads: 1 } : p)) }
+  stubs(on, { board })
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
+  expect(await ui.find({ key: 'title-row', text: /Lead adapters.*open items/ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /0 to decide · 0 unaddressed · 0 addressed · 1 other open thread(?!s)/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('a layer by another author names them, and a layer that branches off a lower one says which', async ($, on) => {
   mock.clock(on, { now: NOW })
   stubs(on, { board: STACKED })
