@@ -579,13 +579,9 @@ function authorWidthOf(stacks) {
   return Math.max(0, ...stacks.flatMap((s) => s.prs.map((p) => (p.author ? p.author.length : 0))))
 }
 
-function authorsOf(prs) {
-  return [...new Set(prs.map((p) => p.author).filter(Boolean))]
-}
-
 /**
- * A stack's name, its verdict, how many pull requests it holds, and who wrote them. A `pressable` name asks for the
- * stack's tab; the surface may keep the tab where it is while the person holds this pane.
+ * A stack's name and its verdict. A `pressable` name asks for the stack's tab; the surface may keep the tab where it is
+ * while the person holds this pane.
  */
 function stackHeading(els, key, stack, $, pressable = false) {
   const { Box, Text, Button } = els
@@ -601,9 +597,6 @@ function stackHeading(els, key, stack, $, pressable = false) {
       : name,
   ]
   if (stack.verdict) parts.push(Text({ color: RISK_COLORS[stack.verdict] || 'warning', children: [stack.verdict] }))
-  parts.push(Text({ dimColor: true, children: [String(stack.prs.length)] }))
-  const authors = authorsOf(stack.prs)
-  if (authors.length) parts.push(Text({ dimColor: true, children: [authors.join(', ')] }))
   return Box({ key, flexDirection: 'row', columnGap: 1, children: parts })
 }
 
@@ -658,17 +651,9 @@ function prRows(els, stack, tree = false, authorWidth = authorWidthOf([stack])) 
 
 /** The pull requests in view: one stack under its own heading, or, in All, every stack under its own. */
 function prList(els, stacks, several, $) {
-  const { Box, Text } = els
+  const { Box } = els
   const body = several
-    ? [
-        Box({
-          key: 'prs-heading',
-          flexDirection: 'row',
-          columnGap: 1,
-          children: [Text({ bold: true, children: ['Stacks'] }), Text({ dimColor: true, children: [String(stacks.length)] })],
-        }),
-        ...stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s, $, true), ...prRows(els, s, true, authorWidthOf(stacks))]),
-      ]
+    ? stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s, $, true), ...prRows(els, s, true, authorWidthOf(stacks))])
     : stacks.flatMap((s) => [stackHeading(els, 'prs-heading', s), ...prRows(els, s)])
   return Box({ key: 'prs', flexDirection: 'column', borderStyle: 'round', borderColor: 'inactive', paddingX: 1, children: body })
 }
