@@ -591,12 +591,13 @@ function stackHeading(els, key, stack) {
 }
 
 /**
- * One quiet line per pull request: a green check once the operator approved it, a warning mark while a thread from the
- * operator's account waits on the author, its number linking it, a dot for its risk, a short title. The check and the
- * mark each sit in a one-cell column that stays empty without them, so the numbers line up. A layer by someone other
- * than the stack's first author names its author, and one based on something other than the row above names its base.
+ * One quiet line per pull request, hung on a tree rule under its stack's heading when All lists several stacks: a
+ * green check once the operator approved it, a warning mark while a thread from the operator's account waits on the
+ * author, its number linking it, a dot for its risk, a short title. The check and the mark each sit in a one-cell
+ * column that stays empty without them, so the numbers line up. A layer by someone other than the stack's first author
+ * names its author, and one based on something other than the row above names its base.
  */
-function prRows(els, stack) {
+function prRows(els, stack, tree = false) {
   const { Box, Text } = els
   const lead = stack.prs.length ? stack.prs[0].author : undefined
   return stack.prs.map((p, i) => {
@@ -607,6 +608,7 @@ function prRows(els, stack) {
       flexDirection: 'row',
       columnGap: 1,
       children: [
+        ...(tree ? [Text({ dimColor: true, children: [i === stack.prs.length - 1 ? '└' : '├'] })] : []),
         Box({
           key: 'approval-' + p.number,
           width: 1,
@@ -640,7 +642,7 @@ function prList(els, stacks, several) {
           columnGap: 1,
           children: [Text({ bold: true, children: ['Stacks'] }), Text({ dimColor: true, children: [String(stacks.length)] })],
         }),
-        ...stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s), ...prRows(els, s)]),
+        ...stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s), ...prRows(els, s, true)]),
       ]
     : stacks.flatMap((s) => [stackHeading(els, 'prs-heading', s), ...prRows(els, s)])
   return Box({ key: 'prs', flexDirection: 'column', borderStyle: 'round', borderColor: 'inactive', paddingX: 1, children: body })
