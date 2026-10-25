@@ -347,6 +347,29 @@ test('pressing a stack\'s title in All asks for that stack\'s tab', async ($, on
   await ui.unmount()
 })
 
+for (const shown of [false, true]) {
+  test(shown ? 'a press whose tab comes up raises no toast' : 'a press Claude Code refuses to switch on says how to switch instead', async ($, on) => {
+    mock.clock(on, { now: NOW })
+    const toasts: string[] = []
+    const panes = [
+      { id: 'review', title: 'All', isShown: !shown, isFocused: false, isPlaced: true },
+      { id: 'review-lead', title: 'Lead adapters', isShown: shown, isFocused: false, isPlaced: true },
+    ]
+    stubs(on, { board: STACKED, panes })
+    on('ui.toast', ($, e) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    await start($)
+
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'goto-lead' })
+    if (shown) expect(toasts).toEqual([])
+    else expect(toasts).toEqual([expect.stringMatching(/between turns.*nothing typed.*tab at the top/)])
+    await ui.unmount()
+  })
+}
+
 test('All keeps the review\'s own summary, every stack under its heading, every comment and the report', async ($, on) => {
   mock.clock(on, { now: NOW })
   stubs(on, { board: STACKED })

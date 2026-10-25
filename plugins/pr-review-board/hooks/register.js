@@ -580,8 +580,8 @@ function authorWidthOf(stacks) {
 }
 
 /**
- * A stack's name and its verdict. A `pressable` name asks for the stack's tab; the surface may keep the tab where it is
- * while the person holds this pane.
+ * A stack's name and its verdict. A `pressable` name asks for the stack's tab. Claude Code raises a pane only through
+ * a focus request, which it refuses during a turn or over text in the prompt, so a refused press says so.
  */
 function stackHeading(els, key, stack, $, pressable = false) {
   const { Box, Text, Button } = els
@@ -591,7 +591,13 @@ function stackHeading(els, key, stack, $, pressable = false) {
       ? Button({
           key: 'goto-' + stack.id,
           plain: true,
-          onPress: () => $.ui.open({ id: stackPaneId(stack), title: stack.title, focus: true }),
+          onPress: async () => {
+            const id = stackPaneId(stack)
+            await $.ui.open({ id, title: stack.title, focus: true })
+            if (!(await $.ui.panes()).some((p) => p.id === id && p.isShown)) {
+              $.ui.toast('Claude Code switches tabs from a click only between turns, with nothing typed in the prompt. Click the tab at the top instead.')
+            }
+          },
           children: [name],
         })
       : name,
