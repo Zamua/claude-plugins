@@ -301,8 +301,8 @@ function labelled(els, key, label, sentence) {
 }
 
 /**
- * The pane's head: the review's title, verdict, risk and blast radius in All, a stack's own in its pane. The count line
- * says how many comments are still to decide, and how many posted ones are unaddressed and addressed.
+ * The pane's head: the review's title, verdict, risk and blast radius in All, a stack's own in its pane. Once something
+ * was posted and nothing waits, neither a comment to decide nor a thread on the author, it says all addressed.
  */
 function header(els, stack, comments) {
   const { Box, Text } = els
@@ -313,29 +313,14 @@ function header(els, stack, comments) {
     head.push(Text({ key: 'verdict', color: RISK_COLORS[source.verdict] || 'warning', children: [source.verdict] }))
   }
   const posted = comments.filter((c) => c.status === 'posted')
-  const unaddressed = posted.filter((c) => !c.addressed).length
-  const toDecide = comments.filter((c) => isPickable(c)).length
-  const other = otherOpen(stack ? stack.prs : Array.isArray(board.prs) ? board.prs : [])
-  if (posted.length || toDecide || other) {
-    const ready = !unaddressed && !toDecide && !other
-    head.push(Text({ key: 'readiness', color: ready ? 'success' : 'warning', children: [ready ? 'all addressed' : 'open items'] }))
-  }
-  const counts = [toDecide + ' to decide', unaddressed + ' unaddressed', posted.length - unaddressed + ' addressed']
-  if (other) counts.push(other + ' other open thread' + (other === 1 ? '' : 's'))
-  const proven = comments.filter((c) => c.confidence === 'proven').length
-  const fresh = comments.filter((c) => c.origin === 'new').length
-  const carried = comments.filter((c) => c.origin === 'carried').length
-  const findings = [comments.length + ' comments', proven + ' proven']
-  if (fresh || carried) findings.push(fresh + ' new', carried + ' carried over')
-  const lines = [
-    Box({ key: 'title-row', flexDirection: 'row', columnGap: 1, children: head }),
-    Text({ key: 'counts', dimColor: true, wrap: 'wrap', children: [counts.join(' · ')] }),
-    Text({ key: 'findings', dimColor: true, wrap: 'wrap', children: [findings.join(' · ')] }),
-  ]
-  const assessment = []
-  if (source.risk) assessment.push(labelled(els, 'risk', 'Risk', source.risk))
-  if (source.blast_radius) assessment.push(labelled(els, 'blast', 'Blast', source.blast_radius))
-  if (assessment.length) lines.push(Box({ key: 'assessment', flexDirection: 'column', marginTop: 1, children: assessment }))
+  const waiting =
+    posted.some((c) => !c.addressed) ||
+    comments.some((c) => isPickable(c)) ||
+    otherOpen(stack ? stack.prs : Array.isArray(board.prs) ? board.prs : []) > 0
+  if (posted.length && !waiting) head.push(Text({ key: 'readiness', color: 'success', children: ['all addressed'] }))
+  const lines = [Box({ key: 'title-row', flexDirection: 'row', columnGap: 1, children: head })]
+  if (source.risk) lines.push(labelled(els, 'risk', 'Risk', source.risk))
+  if (source.blast_radius) lines.push(labelled(els, 'blast', 'Blast', source.blast_radius))
   return Box({ key: 'summary', flexDirection: 'column', paddingX: 1, children: lines })
 }
 
@@ -583,7 +568,7 @@ function authorWidthOf(stacks) {
  * A stack's name and its verdict. A `pressable` name asks for the stack's tab. Claude Code raises a pane only through
  * a focus request, which it refuses during a turn or over text in the prompt, so a refused press says so.
  */
-function stackHeading(els, key, stack, $, pressable = false) {
+function stackHeading(els, key, stack, $, pressable = false, marginTop = 0) {
   const { Box, Text, Button } = els
   const name = Text({ bold: true, children: [stack.title] })
   const parts = [
@@ -603,7 +588,7 @@ function stackHeading(els, key, stack, $, pressable = false) {
       : name,
   ]
   if (stack.verdict) parts.push(Text({ color: RISK_COLORS[stack.verdict] || 'warning', children: [stack.verdict] }))
-  return Box({ key, flexDirection: 'row', columnGap: 1, children: parts })
+  return Box({ key, flexDirection: 'row', columnGap: 1, marginTop, children: parts })
 }
 
 /**
@@ -659,7 +644,10 @@ function prRows(els, stack, tree = false, authorWidth = authorWidthOf([stack])) 
 function prList(els, stacks, several, $) {
   const { Box } = els
   const body = several
-    ? stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s, $, true), ...prRows(els, s, true, authorWidthOf(stacks))])
+    ? stacks.flatMap((s, i) => [
+        stackHeading(els, 'stack-' + s.id, s, $, true, i > 0 ? 1 : 0),
+        ...prRows(els, s, true, authorWidthOf(stacks)),
+      ])
     : stacks.flatMap((s) => [stackHeading(els, 'prs-heading', s), ...prRows(els, s)])
   return Box({ key: 'prs', flexDirection: 'column', borderStyle: 'round', borderColor: 'inactive', paddingX: 1, children: body })
 }
