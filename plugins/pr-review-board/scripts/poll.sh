@@ -15,6 +15,7 @@
 #   poll.sh stack <pr>         every open pull request in <pr>'s stack, bottom first
 #   poll.sh adopt <k> <pr>...  add pull requests to live review <k>
 #   poll.sh assignment <k>     print a review's assignment file path
+#   poll.sh facts [<k>]        refresh github.json for review <k>, or every live review
 #   poll.sh install            arm the scheduler (launchd on macOS, else a cron line)
 #   poll.sh uninstall          disarm the scheduler
 #   poll.sh config-init        write a starter config
@@ -279,7 +280,49 @@ cmd_once() {
   # Only a clean pass advances the watermark. A failed scan leaves it alone, so the
   # widening window re-covers the gap instead of dropping a reaction.
   prb_set_last_poll "$started_at"
+
+  while IFS= read -r k; do
+    [ -n "$k" ] && { _refresh_facts "$k" || true; }
+  done < <(prb_active_keys)
   prb_log "pass done: running=$running"
+}
+
+# ---- facts ----
+# github.json beside a review's board holds what GitHub says about each of its pull
+# requests: head, author, base, the operator's approval and the threads they
+# started. The pane reads it beside the board, so those stay current between the
+# worker's wakes. A pull request GitHub does not answer for keeps the last file whole.
+_refresh_facts() {  # <key>
+  declare -F src_pr_facts >/dev/null || return 0
+  local key="$1" meta pr one all="" tmp
+  meta="$(prb_meta_dir "$key")"
+  [ -d "$meta" ] || return 0
+  while IFS= read -r pr; do
+    [ -n "$pr" ] || continue
+    one="$(src_pr_facts "$pr")" && [ -n "$one" ] || { prb_log "facts: no answer for $pr; '$key' keeps its last github.json"; return 1; }
+    all="$all$one"$'\n'
+  done < <(prb_review_prs "$key")
+  tmp="$(mktemp "$meta/.github.json.XXXXXX")" || return 1
+  if printf '%s' "$all" | jq -s --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+      . as $all
+      | { updated_at: $now,
+          prs: (map(. as $p
+                | { key: .pr,
+                    value: (del(.pr, .head_ref, .base_ref)
+                      + { base: ([$all[] | select((.pr | split("#")[0]) == ($p.pr | split("#")[0])
+                                                  and .pr != $p.pr and .head_ref == $p.base_ref) | .pr][0]) }) })
+                | from_entries) }' > "$tmp"; then
+    mv "$tmp" "$meta/github.json"
+  else
+    rm -f "$tmp"; prb_log "facts: could not assemble github.json for '$key'"; return 1
+  fi
+}
+
+cmd_facts() {  # [<key>]
+  prb_need $(src_deps) || return 1
+  if [ -n "${1:-}" ]; then _refresh_facts "$1"; return; fi
+  local k
+  while IFS= read -r k; do [ -n "$k" ] && { _refresh_facts "$k" || true; }; done < <(prb_active_keys)
 }
 
 cmd_fresh() {
@@ -466,6 +509,7 @@ main() {
     stack)       cmd_stack "$@" ;;
     adopt)       cmd_adopt "$@" ;;
     assignment)  cmd_assignment "$@" ;;
+    facts)       cmd_facts "$@" ;;
     install)     cmd_install "$@" ;;
     uninstall)   cmd_uninstall "$@" ;;
     config-init) cmd_config_init "$@" ;;

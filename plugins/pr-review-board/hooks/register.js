@@ -41,6 +41,10 @@ const picks = new Set()
 const expanded = new Set()
 // The stack panes last opened, so a board rewritten with the same stacks does not reopen one the person closed
 let stackPanesKey
+// The board as the worker wrote it, and github.json as the poller last wrote it; `board` is the two merged
+let rawBoard
+let facts
+let factsMtime
 let notice
 
 export function register(on) {
@@ -228,8 +232,13 @@ async function refresh($) {
       }
       return
     }
-    if (!review || review.key !== found.key) boardMtime = undefined
+    if (!review || review.key !== found.key) {
+      boardMtime = undefined
+      factsMtime = undefined
+      facts = undefined
+    }
     review = found
+    await readFacts($)
     if (!(await $.fs.exists(review.boardPath))) {
       board = undefined
       readError = undefined
@@ -237,10 +246,14 @@ async function refresh($) {
       return
     }
     const stat = await $.fs.stat(review.boardPath)
-    if (stat.mtimeMs === boardMtime) return
-    // The worker may be mid-write; a parse failure leaves boardMtime unset so the next poll retries
-    board = JSON.parse(await $.fs.read(review.boardPath))
-    boardMtime = stat.mtimeMs
+    if (stat.mtimeMs !== boardMtime) {
+      // The worker may be mid-write; a parse failure leaves boardMtime unset so the next poll retries
+      rawBoard = JSON.parse(await $.fs.read(review.boardPath))
+      boardMtime = stat.mtimeMs
+    }
+    const merged = withFacts(rawBoard, facts)
+    if (merged === board) return
+    board = merged
     readError = undefined
     // A comment that left `proposed` or `approved` cannot be posted again, so it stops counting as picked
     for (const c of Array.isArray(board.comments) ? board.comments : []) {
@@ -251,6 +264,52 @@ async function refresh($) {
     readError = 'Could not read the review board: ' + messageOf(err)
   }
   $.ui.invalidate('ui.render')
+}
+
+/** github.json sits beside the board; a missing or half-written one leaves the last facts in place. */
+async function readFacts($) {
+  const path = review.boardPath.replace(/board\.json$/, 'github.json')
+  try {
+    if (!(await $.fs.exists(path))) return
+    const stat = await $.fs.stat(path)
+    if (stat.mtimeMs === factsMtime) return
+    facts = JSON.parse(await $.fs.read(path))
+    factsMtime = stat.mtimeMs
+  } catch {
+    // The poller writes it whole with a rename, so a failed read is retried on the next poll
+  }
+}
+
+/**
+ * The board with GitHub's facts laid over its pull requests: author, head, base and approval as GitHub has them, and
+ * the threads the operator started that the board did not post, counted while unresolved and unanswered. The same
+ * inputs give back the same object, so an unchanged poll redraws nothing.
+ */
+function withFacts(raw, f) {
+  if (!raw) return raw
+  if (withFacts.raw === raw && withFacts.facts === f) return withFacts.value
+  let value = raw
+  if (f && f.prs && Array.isArray(raw.prs)) {
+    const posted = new Set((Array.isArray(raw.comments) ? raw.comments : []).map((c) => c.posted_url).filter(Boolean))
+    value = {
+      ...raw,
+      prs: raw.prs.map((p) => {
+        const g = f.prs[p.pr]
+        if (!g) return p
+        const threads = Array.isArray(g.threads) ? g.threads : []
+        return {
+          ...p,
+          author: g.author || p.author,
+          head: g.head || p.head,
+          base: 'base' in g ? g.base || undefined : p.base,
+          approved: g.approved === true,
+          other_open_threads: threads.filter((t) => !posted.has(t.url) && !t.resolved && !t.replied).length,
+        }
+      }),
+    }
+  }
+  Object.assign(withFacts, { raw, facts: f, value })
+  return value
 }
 
 function prsFromState(r) {
@@ -656,7 +715,9 @@ function footer(Text, now) {
   if (notice) return Text({ key: 'footer', color: 'yellow', wrap: 'wrap', children: [notice] })
   const at = Date.parse(board.updated_at)
   const updated = Number.isNaN(at) ? '' : 'Updated ' + span(now - at) + ' ago.'
-  return Text({ key: 'footer', dimColor: true, wrap: 'wrap', children: [updated] })
+  const checkedAt = facts ? Date.parse(facts.updated_at) : NaN
+  const checked = Number.isNaN(checkedAt) ? '' : ' GitHub checked ' + span(now - checkedAt) + ' ago.'
+  return Text({ key: 'footer', dimColor: true, wrap: 'wrap', children: [updated + checked] })
 }
 
 function messageOf(err) {
