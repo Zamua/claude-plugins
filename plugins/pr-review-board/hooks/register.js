@@ -128,7 +128,9 @@ export function register(on) {
     const picking = pickBar(els, $)
     if (picking) children.push(picking)
     children.push(footer(Text, now))
-    return Box({ flexDirection: 'column', children })
+    // The surface draws a tab row only while more than one pane is open, and the board would sit flush under it
+    const tabbed = (await $.ui.panes()).filter((p) => p.isPlaced).length > 1
+    return Box({ key: 'board', flexDirection: 'column', marginTop: tabbed ? 1 : 0, children })
   })
 }
 
