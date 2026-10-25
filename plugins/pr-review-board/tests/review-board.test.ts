@@ -317,6 +317,23 @@ test('a stack\'s pane heads with the stack\'s own title, verdict, risk and blast
   await lone.unmount()
 })
 
+test('All hangs each stack\'s pull requests under its heading on a tree rule, and a stack tab draws no rule', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  stubs(on, { board: STACKED })
+  await start($)
+
+  const all = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await all.find({ key: 'prrow-6954', text: /^├.*#6954/ })).toBeDefined()
+  expect(await all.find({ key: 'prrow-7472', text: /^├.*#7472/ })).toBeDefined()
+  expect(await all.find({ key: 'prrow-7500', text: /^└.*#7500/ })).toBeDefined()
+  expect(await all.find({ key: 'prrow-8000', text: /^└.*#8000/ })).toBeDefined()
+  await all.unmount()
+
+  const tab = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
+  expect(await tab.find({ key: 'prrow-6954', text: /[├└]/ })).toBeUndefined()
+  await tab.unmount()
+})
+
 test('All keeps the review\'s own summary, every stack under its heading, every comment and the report', async ($, on) => {
   mock.clock(on, { now: NOW })
   stubs(on, { board: STACKED })
