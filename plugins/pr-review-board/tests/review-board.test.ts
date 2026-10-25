@@ -347,6 +347,22 @@ test('All leaves one blank row above every stack but the first', async ($, on) =
   await ui.unmount()
 })
 
+for (const tabs of [1, 2]) {
+  test(tabs > 1 ? 'a pane drawn among tabs leaves one blank row under them' : 'a pane drawn alone starts on its first row', async ($, on) => {
+    mock.clock(on, { now: NOW })
+    const panes = [
+      { id: 'review', title: 'All', isShown: true, isFocused: false, isPlaced: true },
+      { id: 'review-lead', title: 'Lead adapters', isShown: false, isFocused: false, isPlaced: tabs > 1 },
+    ]
+    stubs(on, { board: STACKED, panes })
+    await start($)
+
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect((await ui.find({ key: 'board' })).props.marginTop || 0).toBe(tabs > 1 ? 1 : 0)
+    await ui.unmount()
+  })
+}
+
 test('pressing a stack\'s title in All asks for that stack\'s tab', async ($, on) => {
   mock.clock(on, { now: NOW })
   const opens: any[] = []
