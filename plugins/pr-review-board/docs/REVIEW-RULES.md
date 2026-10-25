@@ -104,7 +104,7 @@ fails the check, and posting refuses one.
   "prs": [
     { "pr": "example-org/inventory-service#1234", "number": 1234, "title": "Reject negative stock",
       "url": "https://github.com/example-org/inventory-service/pull/1234", "risk": "medium", "head": "<sha>",
-      "author": "octocat", "approved": true },
+      "author": "octocat", "approved": true, "other_open_threads": 0 },
     { "pr": "example-org/inventory-service#1240", "number": 1240, "title": "Sweep the ledger",
       "url": "https://github.com/example-org/inventory-service/pull/1240", "risk": "low", "head": "<sha>",
       "author": "octocat", "base": "example-org/inventory-service#1234" }
@@ -150,6 +150,16 @@ Leave it out otherwise. The operator approves on GitHub as often as through you,
 an approval can be dismissed, so read it from the pull request's reviews on every
 wake rather than only when you approve. The pane draws a green check left of the
 number.
+
+`other_open_threads` counts the review threads on that pull request that the
+operator's account started and the board did not post, such as ones from another
+session or another reviewer working under the operator's login, that still wait on
+the author. A thread waits until it is resolved or someone other than the operator
+replies, or until you judge a commit settled it, as you would for `addressed`. Leave
+it out or at 0 when none wait, and recount on every wake. The board's own posted
+comments count through `addressed`, never here. A pull request with either kind
+waiting gets a warning mark beside its approval column, and a stack with any waiting
+does not read as all addressed.
 
 `stacks` groups them, one entry per stack: an `id`, a `title` of a few words, and its
 `prs` bottom first. A stack is what `poll.sh stack` returns, so a layer that branches

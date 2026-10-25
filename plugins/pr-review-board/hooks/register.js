@@ -315,11 +315,13 @@ function header(els, stack, comments) {
   const posted = comments.filter((c) => c.status === 'posted')
   const unaddressed = posted.filter((c) => !c.addressed).length
   const toDecide = comments.filter((c) => isPickable(c)).length
-  if (posted.length || toDecide) {
-    const ready = !unaddressed && !toDecide
+  const other = otherOpen(stack ? stack.prs : Array.isArray(board.prs) ? board.prs : [])
+  if (posted.length || toDecide || other) {
+    const ready = !unaddressed && !toDecide && !other
     head.push(Text({ key: 'readiness', color: ready ? 'success' : 'warning', children: [ready ? 'all addressed' : 'open items'] }))
   }
   const counts = [toDecide + ' to decide', unaddressed + ' unaddressed', posted.length - unaddressed + ' addressed']
+  if (other) counts.push(other + ' other open thread' + (other === 1 ? '' : 's'))
   const proven = comments.filter((c) => c.confidence === 'proven').length
   const fresh = comments.filter((c) => c.origin === 'new').length
   const carried = comments.filter((c) => c.origin === 'carried').length
@@ -561,6 +563,18 @@ function stackOf(c, prs, stacks) {
   return stack ? stack.id : undefined
 }
 
+/** Threads the board posted count by its own `addressed`; `other_open_threads` counts the account's others. */
+function hasOpenThreads(p) {
+  const comments = board && Array.isArray(board.comments) ? board.comments : []
+  const prs = Array.isArray(board && board.prs) ? board.prs : []
+  const unaddressed = comments.some((c) => c.status === 'posted' && !c.addressed && prOf(c, prs).number === p.number)
+  return unaddressed || otherOpen([p]) > 0
+}
+
+function otherOpen(prs) {
+  return prs.reduce((sum, p) => sum + (Number.isInteger(p.other_open_threads) ? p.other_open_threads : 0), 0)
+}
+
 function authorsOf(prs) {
   return [...new Set(prs.map((p) => p.author).filter(Boolean))]
 }
@@ -577,10 +591,10 @@ function stackHeading(els, key, stack) {
 }
 
 /**
- * One quiet line per pull request: a green check once the operator approved it, its number linking it, a dot for its
- * risk, a short title. The check sits in a one-cell column that stays empty until then, so the numbers line up. A layer
- * by someone other than the stack's first author names its author, and one based on something other than the row above
- * names its base.
+ * One quiet line per pull request: a green check once the operator approved it, a warning mark while a thread from the
+ * operator's account waits on the author, its number linking it, a dot for its risk, a short title. The check and the
+ * mark each sit in a one-cell column that stays empty without them, so the numbers line up. A layer by someone other
+ * than the stack's first author names its author, and one based on something other than the row above names its base.
  */
 function prRows(els, stack) {
   const { Box, Text } = els
@@ -598,6 +612,12 @@ function prRows(els, stack) {
           width: 1,
           flexShrink: 0,
           children: p.approved === true ? [Text({ color: 'success', children: ['✓'] })] : [],
+        }),
+        Box({
+          key: 'open-' + p.number,
+          width: 1,
+          flexShrink: 0,
+          children: hasOpenThreads(p) ? [Text({ color: 'warning', bold: true, children: ['!'] })] : [],
         }),
         link(els, 'pr-open-' + p.number, p.url, '#' + p.number),
         Text({ color: RISK_COLORS[p.risk] || 'inactive', children: ['●'] }),
