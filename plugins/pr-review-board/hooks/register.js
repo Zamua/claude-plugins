@@ -575,6 +575,10 @@ function otherOpen(prs) {
   return prs.reduce((sum, p) => sum + (Number.isInteger(p.other_open_threads) ? p.other_open_threads : 0), 0)
 }
 
+function authorWidthOf(stacks) {
+  return Math.max(0, ...stacks.flatMap((s) => s.prs.map((p) => (p.author ? p.author.length : 0))))
+}
+
 function authorsOf(prs) {
   return [...new Set(prs.map((p) => p.author).filter(Boolean))]
 }
@@ -594,12 +598,11 @@ function stackHeading(els, key, stack) {
  * One quiet line per pull request, hung on a tree rule under its stack's heading when All lists several stacks: a
  * green check once the operator approved it, a warning mark while a thread from the operator's account waits on the
  * author, its number linking it, a dot for its risk, a short title. The check and the mark each sit in a one-cell
- * column that stays empty without them, so the numbers line up. A layer by someone other than the stack's first author
- * names its author, and one based on something other than the row above names its base.
+ * column that stays empty without them, so the numbers line up. The author follows in a column `authorWidth` wide, so
+ * the titles line up too, and a layer based on something other than the row above names its base.
  */
-function prRows(els, stack, tree = false) {
+function prRows(els, stack, tree = false, authorWidth = authorWidthOf([stack])) {
   const { Box, Text } = els
-  const lead = stack.prs.length ? stack.prs[0].author : undefined
   return stack.prs.map((p, i) => {
     const below = i > 0 ? stack.prs[i - 1].pr : undefined
     const branch = p.base && p.base !== below ? p.base.split('#')[1] : undefined
@@ -623,7 +626,16 @@ function prRows(els, stack, tree = false) {
         }),
         link(els, 'pr-open-' + p.number, p.url, '#' + p.number),
         Text({ color: RISK_COLORS[p.risk] || 'inactive', children: ['●'] }),
-        ...(p.author && p.author !== lead ? [Text({ color: 'suggestion', children: [p.author] })] : []),
+        ...(authorWidth
+          ? [
+              Box({
+                key: 'author-' + p.number,
+                width: authorWidth,
+                flexShrink: 0,
+                children: p.author ? [Text({ color: 'suggestion', children: [p.author] })] : [],
+              }),
+            ]
+          : []),
         ...(branch ? [Text({ dimColor: true, children: ['on #' + branch] })] : []),
         ...(p.title ? [Text({ dimColor: true, wrap: 'truncate-end', children: [p.title] })] : []),
       ],
@@ -642,7 +654,7 @@ function prList(els, stacks, several) {
           columnGap: 1,
           children: [Text({ bold: true, children: ['Stacks'] }), Text({ dimColor: true, children: [String(stacks.length)] })],
         }),
-        ...stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s), ...prRows(els, s, true)]),
+        ...stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s), ...prRows(els, s, true, authorWidthOf(stacks))]),
       ]
     : stacks.flatMap((s) => [stackHeading(els, 'prs-heading', s), ...prRows(els, s)])
   return Box({ key: 'prs', flexDirection: 'column', borderStyle: 'round', borderColor: 'inactive', paddingX: 1, children: body })

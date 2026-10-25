@@ -391,15 +391,24 @@ test('open threads the board did not post keep a stack from reading as all addre
   await ui.unmount()
 })
 
-test('a layer by another author names them, and a layer that branches off a lower one says which', async ($, on) => {
+test('every layer names its author in a column as wide as the longest, and a layer that branches off a lower one says which', async ($, on) => {
   mock.clock(on, { now: NOW })
   stubs(on, { board: STACKED })
   await start($)
 
   const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
+  expect(await ui.find({ key: 'prrow-6954', text: /#6954.*ann.*Servicing steps aside/ })).toBeDefined()
+  expect(await ui.find({ key: 'prrow-7472', text: /#7472.*ann.*Bank fix/ })).toBeDefined()
   expect(await ui.find({ key: 'prrow-7500', text: /#7500.*bo.*on #6954.*Side branch/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-7472', text: /on #|ann/ })).toBeUndefined()
+  expect(await ui.find({ key: 'prrow-7472', text: /on #/ })).toBeUndefined()
+  expect(await ui.find({ key: 'author-6954' })).toMatchObject({ props: { width: 3 } })
+  expect(await ui.find({ key: 'author-7500' })).toMatchObject({ props: { width: 3 } })
   await ui.unmount()
+
+  const all = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await all.find({ key: 'prrow-8000', text: /#8000.*bo.*Card target/ })).toBeDefined()
+  expect(await all.find({ key: 'author-8000' })).toMatchObject({ props: { width: 3 } })
+  await all.unmount()
 })
 
 test('a board that names no stacks draws one list and opens no stack panes', async ($, on) => {
