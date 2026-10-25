@@ -176,6 +176,40 @@ src_pr_meta() {  # <owner/repo#N>
             .url ] | @tsv'
 }
 
+# One JSON object for <pr>: its title, state, draft flag, head sha and branches,
+# author, whether the operator's latest approving or change-requesting review
+# approves it, and each review thread the operator started: its first comment's url,
+# whether it is resolved, and whether anyone else has replied.
+src_pr_facts() {  # <owner/repo#N>
+  local pr repo num owner name me
+  pr="$1"; repo="${pr%%#*}"; num="${pr##*#}"
+  owner="${repo%%/*}"; name="${repo##*/}"
+  me="$(src_me)"; [ -n "$me" ] || return 1
+  gh api graphql -f query='
+    query($owner:String!,$name:String!,$num:Int!){
+      repository(owner:$owner,name:$name){
+        pullRequest(number:$num){
+          title state isDraft headRefOid headRefName baseRefName author { login }
+          reviews(last:100){ nodes { author { login } state } }
+          reviewThreads(first:100){ nodes { isResolved comments(first:50){ nodes { author { login } url } } } }
+        }
+      }
+    }' -F owner="$owner" -F name="$name" -F num="$num" 2>/dev/null \
+    | jq -ce --arg pr "$pr" --arg me "$me" '
+        .data.repository.pullRequest
+        | select(. != null)
+        | { pr: $pr, title, state, draft: .isDraft, head: .headRefOid,
+            head_ref: .headRefName, base_ref: .baseRefName, author: .author.login,
+            approved: (([.reviews.nodes[]
+                         | select(.author.login == $me
+                                  and (.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))]
+                        | last | .state) == "APPROVED"),
+            threads: [.reviewThreads.nodes[]
+                      | select(.comments.nodes[0].author.login == $me)
+                      | { url: .comments.nodes[0].url, resolved: .isResolved,
+                          replied: ([.comments.nodes[] | select(.author.login != $me)] | length > 0) }] }'
+}
+
 # One owner/repo#N per line, <pr> included. A stack is a chain of branches in one
 # repo: down follows each base to the open pull request whose head it is, until the
 # default branch; up follows each head to every open pull request based on it, so a

@@ -5,6 +5,7 @@ const HOME = '/home/test'
 const SESSION = 'sess-mine'
 const STATE_FILE = HOME + '/.config/pr-review-board/state.json'
 const BOARD_FILE = HOME + '/workspace/reviews/.pr-review-board/stack-7472/board.json'
+const FACTS_FILE = HOME + '/workspace/reviews/.pr-review-board/stack-7472/github.json'
 const MANUAL_FILE = HOME + '/workspace/reviews/.pr-review-board/manual-sess-hand/board.json'
 
 const STATE = {
@@ -56,11 +57,12 @@ const PANE = {
   props: { title: 'Review', isFocused: true, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
 } as const
 
-function stubs(on, { state = STATE as unknown, board = BOARD as unknown, manual = undefined as unknown, session = SESSION, fills = [] as unknown[], opens = [] as unknown[], panes = [] as unknown[], closes = [] as unknown[] } = {}) {
+function stubs(on, { state = STATE as unknown, board = BOARD as unknown, facts = undefined as unknown, manual = undefined as unknown, session = SESSION, fills = [] as unknown[], opens = [] as unknown[], panes = [] as unknown[], closes = [] as unknown[] } = {}) {
   mock.env(on, { HOME, HERDR_WORKSPACE_ID: 'wZ' })
   const files: Record<string, string> = {}
   if (state) files[STATE_FILE] = JSON.stringify(state)
   if (board) files[BOARD_FILE] = JSON.stringify(board)
+  if (facts) files[FACTS_FILE] = JSON.stringify(facts)
   if (manual) files[MANUAL_FILE] = JSON.stringify(manual)
   on('session.id', () => ({ value: session }))
   on('fs.exists', ($, e) => ({ value: e.path in files }))
@@ -446,6 +448,35 @@ test('open threads the board did not post keep a stack from reading as all addre
   const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
   expect(await ui.find({ key: 'title-row', text: /all addressed/ })).toBeUndefined()
 
+  await ui.unmount()
+})
+
+test('github.json beside the board decides approvals, authors, bases and waiting threads', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const board = { ...STACKED, prs: STACKED.prs.map((p) => (p.number === 7472 ? { ...p, approved: true, author: 'stale' } : p)) }
+  const facts = {
+    updated_at: '2026-10-21T13:58:00Z',
+    prs: {
+      'acme/api#6954': { approved: true, author: 'ann', head: 'aaa', base: null, threads: [{ url: 'https://github.com/acme/api/pull/6954#discussion_r50', resolved: false, replied: false }] },
+      'acme/api#7472': { approved: false, author: 'dee', head: 'bbb', base: 'acme/api#6954', threads: [
+        { url: 'https://github.com/acme/api/pull/7472#discussion_r1', resolved: false, replied: false },
+        { url: 'https://github.com/acme/api/pull/7472#discussion_r2', resolved: true, replied: false },
+        { url: 'https://github.com/acme/api/pull/7472#discussion_r3', resolved: false, replied: true },
+      ] },
+      'acme/api#7500': { approved: false, author: 'bo', head: 'ccc', base: 'acme/api#7472', threads: [] },
+    },
+  }
+  stubs(on, { board: { ...board, comments: board.comments.map((c) => (c.n === 3 ? { ...c, addressed: true } : c)) }, facts })
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
+  expect(await ui.find({ key: 'approval-6954', text: '✓' })).toBeDefined()
+  expect(await ui.find({ key: 'approval-7472', text: '✓' })).toBeUndefined()
+  expect(await ui.find({ key: 'prrow-7472', text: /#7472.*dee/ })).toBeDefined()
+  expect(await ui.find({ key: 'open-6954', text: '!' })).toBeDefined()
+  expect(await ui.find({ key: 'open-7472', text: '!' })).toBeUndefined()
+  expect(await ui.find({ key: 'prrow-7500', text: /on #/ })).toBeUndefined()
+  expect(await ui.find({ text: /Updated .* ago\. GitHub checked 2m ago\./ })).toBeDefined()
   await ui.unmount()
 })
 
