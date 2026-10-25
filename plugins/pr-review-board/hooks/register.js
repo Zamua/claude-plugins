@@ -108,7 +108,7 @@ export function register(on) {
         )
       }
     }
-    children.push(prList(els, stack ? [stack] : stacks, stacked && !stack))
+    children.push(prList(els, stack ? [stack] : stacks, stacked && !stack, $))
     const toDecide = inView.filter((c) => c.status !== 'posted')
     for (const severity of SEVERITIES) {
       const inSection = toDecide.filter((c) => severityOf(c) === severity)
@@ -583,10 +583,23 @@ function authorsOf(prs) {
   return [...new Set(prs.map((p) => p.author).filter(Boolean))]
 }
 
-/** A stack's name, its verdict, how many pull requests it holds, and who wrote them. */
-function stackHeading(els, key, stack) {
-  const { Box, Text } = els
-  const parts = [Text({ bold: true, children: [stack.title] })]
+/**
+ * A stack's name, its verdict, how many pull requests it holds, and who wrote them. A `pressable` name asks for the
+ * stack's tab; the surface may keep the tab where it is while the person holds this pane.
+ */
+function stackHeading(els, key, stack, $, pressable = false) {
+  const { Box, Text, Button } = els
+  const name = Text({ bold: true, children: [stack.title] })
+  const parts = [
+    pressable
+      ? Button({
+          key: 'goto-' + stack.id,
+          plain: true,
+          onPress: () => $.ui.open({ id: stackPaneId(stack), title: stack.title, focus: true }),
+          children: [name],
+        })
+      : name,
+  ]
   if (stack.verdict) parts.push(Text({ color: RISK_COLORS[stack.verdict] || 'warning', children: [stack.verdict] }))
   parts.push(Text({ dimColor: true, children: [String(stack.prs.length)] }))
   const authors = authorsOf(stack.prs)
@@ -644,7 +657,7 @@ function prRows(els, stack, tree = false, authorWidth = authorWidthOf([stack])) 
 }
 
 /** The pull requests in view: one stack under its own heading, or, in All, every stack under its own. */
-function prList(els, stacks, several) {
+function prList(els, stacks, several, $) {
   const { Box, Text } = els
   const body = several
     ? [
@@ -654,7 +667,7 @@ function prList(els, stacks, several) {
           columnGap: 1,
           children: [Text({ bold: true, children: ['Stacks'] }), Text({ dimColor: true, children: [String(stacks.length)] })],
         }),
-        ...stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s), ...prRows(els, s, true, authorWidthOf(stacks))]),
+        ...stacks.flatMap((s) => [stackHeading(els, 'stack-' + s.id, s, $, true), ...prRows(els, s, true, authorWidthOf(stacks))]),
       ]
     : stacks.flatMap((s) => [stackHeading(els, 'prs-heading', s), ...prRows(els, s)])
   return Box({ key: 'prs', flexDirection: 'column', borderStyle: 'round', borderColor: 'inactive', paddingX: 1, children: body })

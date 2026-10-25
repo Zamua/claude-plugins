@@ -334,6 +334,19 @@ test('All hangs each stack\'s pull requests under its heading on a tree rule, an
   await tab.unmount()
 })
 
+test('pressing a stack\'s title in All asks for that stack\'s tab', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const opens: any[] = []
+  stubs(on, { board: STACKED, opens })
+  await start($)
+  opens.length = 0
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'goto-lead' })
+  expect(opens).toEqual([expect.objectContaining({ id: 'review-lead', title: 'Lead adapters', focus: true })])
+  await ui.unmount()
+})
+
 test('All keeps the review\'s own summary, every stack under its heading, every comment and the report', async ($, on) => {
   mock.clock(on, { now: NOW })
   stubs(on, { board: STACKED })
