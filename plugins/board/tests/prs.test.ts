@@ -76,12 +76,12 @@ function asGraphql(p: Pr) {
 }
 
 /** A world whose gh answers GitHub's GraphQL from `github`, keyed by pull request number. */
-function gh(github: Record<number, Pr>) {
+function gh(github: Record<number, Pr>, budget?: { remaining: number; resetAt: string }) {
   return world({
     run: argv => {
       if (argv[0] !== 'gh') return undefined
       const query = argv[argv.length - 1] ?? ''
-      const data: Record<string, unknown> = { viewer: { login: 'octo' } }
+      const data: Record<string, unknown> = { viewer: { login: 'octo' }, ...(budget && { rateLimit: budget }) }
       for (const [, alias, number] of query.matchAll(/(p\d+): repository\([^)]*\) \{ pullRequest\(number: (\d+)\)/g)) {
         const found = github[Number(number)]
         data[alias as string] = { pullRequest: found ? asGraphql(found) : null }
@@ -164,12 +164,13 @@ test('a pull request based on another tracked one sits above it in one stack', a
 test('a refresh says when a tracked pull request merged or its CI failed', async ($, on) => {
   const github = { 6047: pr({}), 6050: pr({ rollup: 'PENDING' }) }
   const w = gh(github)
-  engine(on, w, NOW)
+  const clock = engine(on, w, NOW)
   await start($)
   await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }, { pr: TOP }] })
 
   github[6047] = pr({ state: 'MERGED' })
   github[6050] = pr({ rollup: 'FAILURE', failing: ['unit-test'] })
+  await clock.advance(4 * 60_000)
   const read = await $.tool.call({ tool: TOOL })
 
   expect(String(read.result)).toMatch(/#6047.*\n\s+merged/)
@@ -252,13 +253,93 @@ test('a merged pull request is not asked about again', async ($, on) => {
     queries.push(argv[argv.length - 1] ?? '')
     return answer(argv)
   }
-  engine(on, w, NOW)
+  const clock = engine(on, w, NOW)
   await start($)
   await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }, { pr: TOP }] })
 
   queries.length = 0
+  await clock.advance(4 * 60_000)
   const read = String((await $.tool.call({ tool: TOOL })).result)
   expect(queries.join('\n')).not.toContain('number: 6047')
   expect(queries.join('\n')).toContain('number: 6050')
   expect(read).toMatch(/#6047.*\n\s+merged/)
+})
+
+/** Records every query gh is asked, answering from `github`. */
+function recording(github: Record<number, Pr>, budget?: { remaining: number; resetAt: string }) {
+  const w = gh(github, budget)
+  const answer = w.run
+  const queries: string[] = []
+  w.run = argv => {
+    if (argv[0] === 'gh') queries.push(argv[argv.length - 1] ?? '')
+    return answer(argv)
+  }
+
+  return { w, queries }
+}
+
+test('a pull request another session fetched moments ago is read from the shared cache, not asked again', async ($, on) => {
+  const { w, queries } = recording({ 6047: pr({ title: 'Fee lookup' }) })
+  engine(on, w, NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })
+  expect(queries.length).toBe(1)
+
+  w.session.id = 's2'
+  const read = String((await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })).result)
+  expect(queries.length).toBe(1)
+  expect(read).toContain('acme/api#6047 Fee lookup')
+})
+
+test('while the rate limit runs low no session asks GitHub, and the board says when it will again', async ($, on) => {
+  const resetAt = new Date(NOW + 20 * 60_000).toISOString()
+  const { w, queries } = recording({ 6047: pr({}) }, { remaining: 500, resetAt })
+  const clock = engine(on, w, NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })
+  expect(queries.length).toBe(1)
+
+  await clock.advance(4 * 60_000)
+  w.session.id = 's2'
+  const read = String((await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })).result)
+  expect(queries.length).toBe(1)
+  expect(read).toContain('GitHub check failed: rate limit low, retrying in 16m')
+})
+
+test('a rate limit error pauses every session for ten minutes', async ($, on) => {
+  const { w, queries } = recording({ 6047: pr({}) })
+  const answer = w.run
+  let limited = true
+  w.run = argv => {
+    if (limited && argv[0] === 'gh') {
+      queries.push('limited')
+      return { exitCode: 1, stdout: '', stderr: 'gh: API rate limit already exceeded for user ID 1.' }
+    }
+    return answer(argv)
+  }
+  const clock = engine(on, w, NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })
+  limited = false
+
+  await clock.advance(5 * 60_000)
+  expect(queries).toEqual(['limited'])
+  await clock.advance(6 * 60_000)
+  expect(queries.length).toBeGreaterThan(1)
+})
+
+test('a session nobody has used for half an hour stops asking GitHub until the next turn', async ($, on) => {
+  const { w, queries } = recording({ 6047: pr({}) })
+  const clock = engine(on, w, NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })
+
+  await clock.advance(31 * 60_000)
+  const asked = queries.length
+  await clock.advance(20 * 60_000)
+  expect(queries.length).toBe(asked)
+
+  await $.turn.start({ text: 'where do the pull requests stand?', turnId: 't1' })
+  await clock.advance(4 * 60_000)
+  expect(queries.length).toBeGreaterThan(asked)
 })

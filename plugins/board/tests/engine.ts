@@ -45,7 +45,7 @@ export const json = (value: unknown) => JSON.stringify(value)
 
 /** Nothing sits beneath the plugin in a test, so each hook here answers as the engine would. */
 export function engine(on: On, w: World, now: number) {
-  mock.clock(on, { now })
+  const clock = mock.clock(on, { now })
   mock.store(on, w.store)
   mock.env(on, { HOME, ...w.env })
   on('session.id', () => ({ value: w.session.id }))
@@ -66,6 +66,10 @@ export function engine(on: On, w: World, now: number) {
     value: { kind: 'file', size: (w.files[e.path] ?? '').length, mtimeMs: (w.files[e.path] ?? '').length, isLink: false },
   }))
   on('fs.read', (_, e) => ({ value: w.files[e.path] ?? '' }))
+  on('fs.write', (_, e) => {
+    w.files[e.path] = e.text
+    return { value: undefined }
+  })
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('tool.register', (_, e) => ({ value: { tool: e.name } }))
   on('ui.open', (_, e) => {
@@ -94,7 +98,10 @@ export function engine(on: On, w: World, now: number) {
     return { value: { ...ran, isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
+
+  return clock
 }
 
 export const start = ($: Engine) => $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })

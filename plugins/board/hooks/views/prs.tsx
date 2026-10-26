@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, On } from 'claude-code'
 
 import type { CiState, PrBoard, PrFacts, TrackedPr } from '../../types'
-import { ago, messageOf, prMark, prRow } from '../kit'
+import { ago, messageOf, prMark, prRow, span } from '../kit'
 import type { Els, View } from '../kit'
 import { showView } from '../pane'
 import { legacyValue, loadBoard, saveBoard } from '../store'
@@ -12,6 +12,15 @@ export const PRS_TOOL = 'mcp__board__prs'
 const REFRESH_MS = 60_000
 // GitHub times out with HTTP 504 on one query covering a few dozen pull requests
 const BATCH = 8
+// Every session reads and writes what it fetched here, so a pull request several sessions track is asked about once
+const CACHE_PATH = '.cache/board/github.json'
+const FRESH_MS = 3 * 60_000
+const KEEP_MS = 24 * 3600_000
+// A session nobody has used for this long stops asking GitHub until the person comes back to it
+const IDLE_MS = 30 * 60_000
+// GitHub allows 5000 GraphQL points an hour across everything signed in as the person, agents and pollers included
+const BUDGET_FLOOR = 1000
+const PAUSE_MS = 10 * 60_000
 
 const TOOL_DESCRIPTION = `Track the pull requests this session raised on the prs view of the board pane beside the chat. The view shows GitHub's live state for each: draft or ready, merged or closed, CI, conflicts, review, and review threads waiting on the person.
 - add: a pull request this session opened or owns, by URL or owner/repo#N. Ones opened here with gh pr create or gh stack submit join on their own.
@@ -462,13 +471,44 @@ async function change($: EngineInterface, fn: (current: PrBoard) => Applied): Pr
   return out.applied ?? { error: 'The board did not change.' }
 }
 
+type Cached = { facts?: PrFacts; at: number }
+type Cache = { prs: Record<string, Cached>; viewer?: string; pausedUntil?: number; pauseReason?: string }
+type Budget = { remaining: number; resetAt: string }
+
+const RATE_LIMITED = /rate limit/i
+
+async function cachePath($: EngineInterface) {
+  return `${await $.env.get('HOME')}/${CACHE_PATH}`
+}
+
+async function readCache($: EngineInterface, path: string): Promise<Cache> {
+  try {
+    if (!(await $.fs.exists(path))) return { prs: {} }
+    const cache = JSON.parse(await $.fs.read(path)) as Cache
+
+    return { ...cache, prs: cache.prs ?? {} }
+  } catch {
+    // Another session may be mid-write; what it wrote is fetched again rather than waited for
+    return { prs: {} }
+  }
+}
+
+/** Reads the file again just before writing, so what other sessions wrote meanwhile stays. */
+async function writeCache($: EngineInterface, path: string, change: (cache: Cache) => Cache) {
+  try {
+    await $.fs.write(path, JSON.stringify(change(await readCache($, path))))
+  } catch {
+    // An unwritten cache only means another session asks GitHub again
+  }
+}
+
 /** Facts for one batch of pull requests, keyed by pull request; undefined for one GitHub no longer has. */
 async function fetchBatch($: EngineInterface, prs: readonly TrackedPr[], viewer: string) {
   const parts = prs.map(
     (p, at) =>
       `p${at}: repository(owner: ${JSON.stringify(p.owner)}, name: ${JSON.stringify(p.repo)}) { pullRequest(number: ${p.number}) { ...F } }`,
   )
-  const query = `query { viewer { login } ${parts.join(' ')} } fragment F on PullRequest { ${PR_FIELDS} }`
+  const query = `query { rateLimit { remaining resetAt } viewer { login } ${parts.join(' ')} } fragment F on PullRequest { ${PR_FIELDS} }`
   const ran = await $.process.run(['gh', 'api', 'graphql', '-f', `query=${query}`], {
     timeoutMs: 30_000,
   })
@@ -491,44 +531,82 @@ async function fetchBatch($: EngineInterface, prs: readonly TrackedPr[], viewer:
     }),
   )
 
-  return { viewer: login, found }
+  return { viewer: login, found, budget: data.rateLimit as Budget | undefined }
 }
 
 /**
- * Every pull request's facts but the merged ones', which no longer change. A batch GitHub fails leaves its pull
- * requests with the facts they had and says so in `error`; only every batch failing throws.
+ * Every pull request's facts: from the shared cache while fresh, else from GitHub in batches. A merged pull request
+ * no longer changes, so it keeps the facts it has. A batch GitHub fails leaves its pull requests as they were and says
+ * so in `error`, and while the rate limit runs low no session asks at all.
  */
 async function fetchFacts($: EngineInterface, b: PrBoard) {
-  const due = b.prs.filter(p => p.facts?.state !== 'MERGED')
+  const path = await cachePath($)
+  const cache = await readCache($, path)
+  const now = await $.clock.now()
+  const found = new Map<string, PrFacts | undefined>()
+  let oldest = now
+  for (const p of b.prs) {
+    const cached = cache.prs[p.key]
+    if (!cached || (now - cached.at >= FRESH_MS && cached.facts?.state !== 'MERGED')) continue
+    found.set(p.key, cached.facts)
+    oldest = Math.min(oldest, cached.at)
+  }
+  const due = b.prs.filter(p => !found.has(p.key) && p.facts?.state !== 'MERGED')
+  const viewer = cache.viewer || b.viewer
+  if (due.length === 0) return { viewer, found, error: '', checkedAt: oldest }
+  if ((cache.pausedUntil ?? 0) > now) {
+    const error = `${cache.pauseReason ?? 'rate limit low'}, retrying in ${span(cache.pausedUntil as number - now)}`
+
+    return { viewer, found, error, checkedAt: oldest }
+  }
+
   const batches: TrackedPr[][] = []
   for (let at = 0; at < due.length; at += BATCH) batches.push(due.slice(at, at + BATCH))
-  const settled = await Promise.allSettled(batches.map(batch => fetchBatch($, batch, b.viewer)))
-  const found = new Map<string, PrFacts | undefined>()
-  let viewer = b.viewer
+  const settled = await Promise.allSettled(batches.map(batch => fetchBatch($, batch, viewer)))
+  const fetched = new Map<string, PrFacts | undefined>()
+  let login = viewer
   let missed = 0
   let why = ''
+  let budget: Budget | undefined
   settled.forEach((one, at) => {
     if (one.status === 'fulfilled') {
-      viewer = one.value.viewer
-      for (const [key, facts] of one.value.found) found.set(key, facts)
+      login = one.value.viewer
+      budget = one.value.budget ?? budget
+      for (const [key, facts] of one.value.found) fetched.set(key, facts)
       return
     }
     missed += batches[at]?.length ?? 0
     why ||= messageOf(one.reason)
   })
+  const resetAt = budget ? Date.parse(budget.resetAt) : NaN
+  const pause =
+    budget && budget.remaining < BUDGET_FLOOR && !Number.isNaN(resetAt)
+      ? { pausedUntil: resetAt, pauseReason: 'rate limit low' }
+      : RATE_LIMITED.test(why)
+        ? { pausedUntil: now + PAUSE_MS, pauseReason: 'rate limit reached' }
+        : undefined
+  await writeCache($, path, current => {
+    const prs: Record<string, Cached> = {}
+    for (const [key, entry] of Object.entries(current.prs)) if (now - entry.at < KEEP_MS) prs[key] = entry
+    for (const [key, facts] of fetched) prs[key] = facts ? { facts, at: now } : { at: now }
+    const { pausedUntil, pauseReason, ...rest } = current
+    const held = (pausedUntil ?? 0) > now ? { pausedUntil, pauseReason } : {}
+
+    return { ...rest, ...held, ...pause, prs, viewer: login }
+  })
+  for (const [key, facts] of fetched) found.set(key, facts)
   if (missed > 0 && missed === due.length) throw new Error(why)
   const error = missed > 0 ? `${why}, ${missed} of ${due.length} pull requests not refreshed` : ''
 
-  return { viewer, found, error }
+  return { viewer: login, found, error, checkedAt: fetched.size > 0 ? oldest : now }
 }
 
 async function refreshNow($: EngineInterface) {
   await syncBoard($)
   const b = await read($, board)
   if (b.prs.length === 0) return
-  const now = await $.clock.now()
   try {
-    const { viewer, found, error } = await fetchFacts($, b)
+    const { viewer, found, error, checkedAt } = await fetchFacts($, b)
     const toasts = b.prs.flatMap(p => {
       const facts = found.get(p.key)
       return facts ? transitions(p, facts) : []
@@ -542,7 +620,7 @@ async function refreshNow($: EngineInterface) {
         return facts ? { ...rest, facts } : { ...rest, error: 'Not found on GitHub.' }
       })
 
-      return { ...current, prs, viewer, checkedAt: now, error }
+      return { ...current, prs, viewer, checkedAt, error }
     })
     for (const text of toasts) $.ui.toast(text)
   } catch (err) {
@@ -553,6 +631,11 @@ async function refreshNow($: EngineInterface) {
 }
 
 let queue: Promise<void> = Promise.resolve()
+let lastActive = 0
+
+async function markActive($: EngineInterface) {
+  lastActive = await $.clock.now()
+}
 
 /** Refreshes run one at a time, each reading the board as it stands when it starts. */
 function refresh($: EngineInterface): Promise<void> {
@@ -679,13 +762,17 @@ export async function prsStart($: EngineInterface) {
   })
   await syncBoard($)
   if ((await read($, board)).prs.length > 0) void refresh($)
+  await markActive($)
   $.clock.every(REFRESH_MS, async () => {
+    if ((await $.clock.now()) - lastActive > IDLE_MS) return
     const b = await read($, board)
     if (b.prs.some(p => !p.facts || p.facts.state === 'OPEN')) await refresh($)
   })
 }
 
+/** Runs at every turn and command, so it also marks the session in use. */
 export async function prsSync($: EngineInterface) {
+  await markActive($)
   await syncBoard($)
 }
 
@@ -695,7 +782,10 @@ export function prsView($: EngineInterface): View {
     title: 'prs',
     scope: 'session',
     guide: { tool: PRS_TOOL, text: `track the pull requests this session raised on it with ${PRS_TOOL}` },
-    onShow: async () => void refresh($),
+    onShow: async () => {
+      await markActive($)
+      void refresh($)
+    },
     isAvailable: async () => (await read($, board)).prs.length > 0,
     needs: async () => (await read($, board)).prs.filter(needsYou).length,
     opensAtStart: async () => (await read($, board)).prs.length > 0,
