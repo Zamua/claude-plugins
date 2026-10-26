@@ -21,11 +21,7 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   harness-locked to Google's official Antigravity CLI, with a separate dynamic
   model/effort picker and a persistent, drop-in-ready Herdr session that keeps
   the same Antigravity conversation across relaunches.
-- **[reexplain](plugins/reexplain/)**: re-explain your last answer for a reader
-  who is not a domain expert. Rebuilds the explanation instead of compressing it:
-  diagnoses why the first attempt failed, defines each term on first use, keeps
-  the codebase's own vocabulary, runs one concrete example the whole way through,
-  and separates what is settled from what is broken from what nobody has decided.
+
 - **[pr-review-board](plugins/pr-review-board/)**: react to a pull request with
   an emoji and a background Claude reviews it. A local poller spawns one review
   agent per changeset in its own herdr workspace, which writes a plain-English
@@ -33,10 +29,7 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   proposing a numbered list of comments and posts only the ones you pick.
   Approves only when you say so, never pushes. Its board draws in the
   [board](plugins/board/) pane.
-- **[briefme](plugins/briefme/)**: a very short brief on where the current work
-  stands. One paragraph on the state of things, then only the questions and
-  decisions that need you, each saying who it is blocked on. For picking up a
-  long session you have lost the thread of.
+
 - **[board](plugins/board/)**: one pane beside the chat holding every board,
   with a row of buttons to switch between them, each showing how many items wait
   on you. The session board Claude keeps current, the pull requests this session
