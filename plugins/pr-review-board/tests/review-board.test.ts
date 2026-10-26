@@ -199,6 +199,23 @@ test('the stack sits under the risk and blast lines, above the comments, and eac
   await ui.unmount()
 })
 
+test('a dropped comment falls off the board, whatever its severity or origin', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const dropped = [
+    { n: 9, pr: 'acme/api#7472', severity: 'low', confidence: 'proven', status: 'dropped', origin: 'carried', status_note: 'Fixed in abc1234.', summary: 'A declined resend fails the fund.', body: 'x' },
+    { n: 10, pr: 'acme/api#7472', severity: 'low', confidence: 'proven', status: 'dropped', origin: 'none', summary: 'Reply to Bugbot.', body: 'x' },
+  ]
+  stubs(on, { board: { ...BOARD, comments: [...BOARD.comments, ...dropped] } })
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ key: 'head-9' })).toBeUndefined()
+  expect(await ui.find({ key: 'head-10' })).toBeUndefined()
+  expect(await ui.find({ text: /declined resend fails the fund|Reply to Bugbot|dropped/ })).toBeUndefined()
+  expect(await ui.find({ key: 'section-medium', text: /The sweep opens a fresh replacement/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('each comment says whether it is a new bug, one carried over, or not a bug, and the summary does not count them', async ($, on) => {
   mock.clock(on, { now: NOW })
   stubs(on)
