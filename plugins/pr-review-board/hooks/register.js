@@ -36,6 +36,8 @@ let review
 let board
 let boardMtime
 let readError
+// Where this session's hand-written board goes, so the empty pane can say where to write one
+let manualPath
 // Comment numbers ticked for the next post, and the comments and report sections shown in full; kept only for this module's life
 const picks = new Set()
 const expanded = new Set()
@@ -75,7 +77,8 @@ export function register(on) {
     const now = await $.clock.now()
 
     if (!review) {
-      return Text({ dimColor: true, wrap: 'wrap', children: [readError || 'This session runs no pr-review-board review.'] })
+      const empty = 'This session runs no pr-review-board review. Any session can still fill this pane by writing a board to ' + manualPath + '.'
+      return Text({ dimColor: true, wrap: 'wrap', children: [readError || empty] })
     }
     if (!board) {
       return Box({
@@ -213,18 +216,18 @@ async function spawnedReview($, root) {
   return { key, slug: r.slug || key, prs: prsFromState(r), boardPath: root + '/.pr-review-board/' + key + '/board.json' }
 }
 
-/** A review run by hand through the review skill, which keys its board by this session's id. */
-async function manualReview($, root) {
+/** A board written by hand, through the review skill or by any session tracking pull requests, keyed by this session's id. */
+async function manualReview($) {
+  if (!(await $.fs.exists(manualPath))) return undefined
   const key = 'manual-' + sessionId
-  const boardPath = root + '/.pr-review-board/' + key + '/board.json'
-  if (!(await $.fs.exists(boardPath))) return undefined
-  return { key, slug: key, prs: [], boardPath }
+  return { key, slug: key, prs: [], boardPath: manualPath }
 }
 
 async function refresh($) {
   try {
     const root = await reviewsRoot($)
-    const found = (await spawnedReview($, root)) || (await manualReview($, root))
+    manualPath = root + '/.pr-review-board/manual-' + sessionId + '/board.json'
+    const found = (await spawnedReview($, root)) || (await manualReview($))
     if (!found) {
       if (review || readError) {
         review = undefined

@@ -62,6 +62,16 @@ for want in "comment 1 appears 2 times" "comment 1: unproven but not worded as a
   printf '%s\n' "$problems" | grep -qxF "$want" && ok "check names: $want" || bad "check names: $want" "$want" "$problems"
 done
 
+record="$TD/record.json"
+jq '.comments += [{ "n": 9, "pr": "acme/api#10", "severity": "medium", "status": "posted", "summary": "Posted as a PR comment",
+                    "body": "A plain claim.", "posted_url": "https://github.com/acme/api/pull/10#issuecomment-9" }]' "$BOARD" > "$record"
+eq "a posted comment needs no confidence or anchor" "OK" "$("$B" check "$record")"
+jq '(.comments[] | select(.n == 9)) |= (.status = "proposed" | del(.posted_url))' "$record" > "$broken"
+problems="$("$B" check "$broken")"
+for want in "comment 9: confidence is not proven or unproven" "comment 9: needs path and line, reply_to, or target \"review body\""; do
+  printf '%s\n' "$problems" | grep -qxF "$want" && ok "check names, before posting: $want" || bad "check names, before posting: $want" "$want" "$problems"
+done
+
 echo "== stacks =="
 stacked="$TD/stacked.json"
 jq '.prs[0].author = "ann" | .prs[1] += {author: "bo", base: "acme/api#10"}

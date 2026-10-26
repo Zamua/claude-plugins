@@ -245,7 +245,7 @@ test('a comment links its anchor, the code it cites, and its scratch test, each 
   await ui.unmount()
 })
 
-test('a session that runs no review opens no pane unasked and says so when opened', async ($, on) => {
+test('a session that runs no review opens no pane unasked and, when opened, names where its board would go', async ($, on) => {
   mock.clock(on, { now: NOW })
   const opens: any[] = []
   stubs(on, { session: 'sess-nobody', opens })
@@ -254,6 +254,7 @@ test('a session that runs no review opens no pane unasked and says so when opene
   expect(opens).toEqual([])
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ text: /runs no pr-review-board review/ })).toBeDefined()
+  expect(await ui.find({ text: /\/home\/test\/workspace\/reviews\/\.pr-review-board\/manual-sess-nobody\/board\.json/ })).toBeDefined()
   await ui.unmount()
 })
 

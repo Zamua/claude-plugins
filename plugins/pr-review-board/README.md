@@ -139,7 +139,9 @@ Tick comments and press Draft to put `post 1, 3` in the prompt box. Sending it i
 yours. The agent posts from the board itself, through `scripts/board.sh`, so what
 goes to GitHub is the wording you read, and a comment already posted is refused.
 A review run by hand through the skill keys its board by the session's id, so the
-pane finds it the same way. Its tests run with `claude plugin test .`.
+pane finds it the same way. So does a board any session writes there to track pull
+requests it is not reviewing, such as the ones it commented on; the poller refreshes
+its GitHub facts every ten minutes. Its tests run with `claude plugin test .`.
 
 ## Skills
 

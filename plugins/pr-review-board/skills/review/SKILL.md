@@ -1,5 +1,5 @@
 ---
-description: Review a GitHub pull request on request, with findings proven by failing tests and the whole review written to a board shown beside the session, then propose numbered comments and post the ones the user picks. Use when the user shares a pull request URL and asks for help reviewing it, or asks you to review a PR, a stack, or a set of related PRs. Approves a pull request only when the user says to, and never requests changes or pushes.
+description: Review a GitHub pull request on request, with findings proven by failing tests and the whole review written to a board shown beside the session, then propose numbered comments and post the ones the user picks. Use when the user shares a pull request URL and asks for help reviewing it, or asks you to review a PR, a stack, or a set of related PRs. Approves a pull request only when the user says to, and never requests changes or pushes. Also use it to put the pull requests and comments a session already tracks on that board without a review.
 ---
 
 # Review a pull request
@@ -74,6 +74,13 @@ rules.
 
 Re-run `gh pr diff` and re-read it. Re-derive the links on the board, since they pin a
 head sha and a force-push leaves them pointing at code that is no longer there.
+
+## A board without a review
+
+A session that tracks pull requests without reviewing them can put them on the pane
+too. Skip steps 1 to 3 and 5 and write the board at the path in step 4, with the
+pull requests, their stacks and the comments the session posted, per the board
+section of the review rules. Run `board.sh check` after every write.
 
 ## When the user is done
 

@@ -21,6 +21,8 @@ source "$HERE/lib.sh"
 _b_die() { printf 'board: %s\n' "$*" >&2; exit 1; }
 _b_now() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 
+# A posted comment is a record of what went out, which may be any kind of comment, so it
+# needs neither a confidence nor an anchor; those exist to build a post.
 _B_CHECK='
   def pr_ok: type == "string" and test("^[^/#]+/[^/#]+#[0-9]+$");
   [ (if .schema != 2 then "schema is not 2" else empty end),
@@ -57,7 +59,8 @@ _B_CHECK='
       (if ($c.n | type) != "number" then "\($id): n is not a number" else empty end),
       (if (($c.status // "") | IN("proposed", "approved", "posted", "dropped")) | not
          then "\($id): status is not proposed, approved, posted or dropped" else empty end),
-      (if (($c.confidence // "") | IN("proven", "unproven")) | not then "\($id): confidence is not proven or unproven" else empty end),
+      (if ($c.status != "posted" or $c.confidence != null) and ((($c.confidence // "") | IN("proven", "unproven")) | not)
+         then "\($id): confidence is not proven or unproven" else empty end),
       (if (($c.severity // "") | IN("live", "high", "medium", "low-medium", "low", "question")) | not
          then "\($id): severity is not live, high, medium, low-medium, low or question" else empty end),
       (if ($c.pr | pr_ok) | not then "\($id): pr is not owner/repo#N" else empty end),
@@ -66,7 +69,7 @@ _B_CHECK='
       (if $c.confidence == "unproven" and ((($c.body // "") | test("[?]")) | not)
          then "\($id): unproven but not worded as a question" else empty end),
       (if $c.status == "posted" and (($c.posted_url // "") | length) == 0 then "\($id): posted with no posted_url" else empty end),
-      (if $c.reply_to == null and $c.path == null and $c.target != "review body"
+      (if $c.status != "posted" and $c.reply_to == null and $c.path == null and $c.target != "review body"
          then "\($id): needs path and line, reply_to, or target \"review body\"" else empty end),
       (if $c.path != null and (($c.line | type) != "number" or ((($c.side // "RIGHT") | IN("LEFT", "RIGHT")) | not))
          then "\($id): path needs a numeric line and a LEFT or RIGHT side" else empty end),

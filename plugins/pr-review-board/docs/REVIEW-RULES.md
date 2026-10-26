@@ -88,6 +88,14 @@ Where it lives: `board.sh path <key>` for a review the poller spawned, and
 `<reviews_root>/.pr-review-board/manual-<session-id>/board.json` for a review run
 through the skill. `board.sh` is in the plugin's `scripts/`.
 
+Any session can write a board at that manual path, review or not. A session that
+tracks pull requests it is not reviewing, such as one that owns an area and comments
+across many of them, writes the pull requests, their stacks, and the comments it
+posted, each `posted` with its url and `addressed` once its author settles it. It
+needs no report and no proposed comments, and a posted comment needs no
+`confidence` and no anchor. The poller refreshes `github.json` beside a hand-written
+board every ten minutes, and `poll.sh facts manual-<session-id>` refreshes it now.
+
 Write it whole: build the new content and replace the file, never edit it in
 place, since the pane re-reads it every few seconds. Run `board.sh check <file>`
 after every write and fix whatever it names. The pane cannot draw a board that
