@@ -175,6 +175,12 @@ test('a refresh says when a tracked pull request merged or its CI failed', async
   expect(String(read.result)).toMatch(/#6047.*\n\s+merged/)
   expect(String(read.result)).toContain('CI failing: unit-test')
   expect(w.toasts).toEqual(['#6047 merged', '#6050 CI failed: unit-test'])
+
+  const ui = await open($, 'prs')
+  expect((await ui.find({ key: 'mark-acme/api#6047', text: '◆' }))?.children[0]).toMatchObject({ props: { color: 'merged' } })
+  expect(await ui.find({ type: 'Text', text: 'merged' })).toMatchObject({ props: { color: 'merged' } })
+  expect(await ui.find({ key: 'mark-acme/api#6050' })).toMatchObject({ text: '' })
+  await ui.unmount()
 })
 
 test('a change naming a pull request the board does not track is refused whole', async ($, on) => {
@@ -211,4 +217,48 @@ test('/board prs clear empties the pull request board', async ($, on) => {
 
   expect((await board($, 'prs clear')).text).toBe('Pull request board cleared.')
   expect((await $.tool.call({ tool: TOOL })).result).toBe('No pull requests tracked.')
+})
+
+test('a refresh asks GitHub in batches, and a batch GitHub fails leaves the others refreshed', async ($, on) => {
+  const github: Record<number, Pr> = {}
+  for (let n = 1; n <= 10; n++) github[n] = pr({ title: `Change ${n}` })
+  const w = gh(github)
+  const answer = w.run
+  const queries: string[] = []
+  w.run = argv => {
+    const query = argv[argv.length - 1] ?? ''
+    queries.push(query)
+    return /pullRequest\(number: 9\)/.test(query) ? { exitCode: 1, stdout: '', stderr: 'gh: HTTP 504' } : answer(argv)
+  }
+  engine(on, w, NOW)
+  await start($)
+
+  const read = String(
+    (await $.tool.call({ tool: TOOL, add: Array.from({ length: 10 }, (_, at) => ({ pr: `acme/api#${at + 1}` })) })).result,
+  )
+  expect(queries.length).toBe(2)
+  expect(read).toContain('GitHub check failed: gh: HTTP 504, 2 of 10 pull requests not refreshed')
+  expect(read).toContain('acme/api#1 Change 1')
+  expect(read).toContain('acme/api#8 Change 8')
+  expect(read).not.toContain('Change 9')
+})
+
+test('a merged pull request is not asked about again', async ($, on) => {
+  const github = { 6047: pr({ state: 'MERGED' }), 6050: pr({}) }
+  const w = gh(github)
+  const answer = w.run
+  const queries: string[] = []
+  w.run = argv => {
+    queries.push(argv[argv.length - 1] ?? '')
+    return answer(argv)
+  }
+  engine(on, w, NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }, { pr: TOP }] })
+
+  queries.length = 0
+  const read = String((await $.tool.call({ tool: TOOL })).result)
+  expect(queries.join('\n')).not.toContain('number: 6047')
+  expect(queries.join('\n')).toContain('number: 6050')
+  expect(read).toMatch(/#6047.*\n\s+merged/)
 })

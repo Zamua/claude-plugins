@@ -221,6 +221,14 @@ export function section(els: Els, spec: SectionSpec, count: number, rows: Render
   )
 }
 
+/** Once a pull request leaves review its state outranks approval in the one column they share. */
+export function prMark(state: string | undefined, isApproved: boolean): { glyph: string; color: Color } | undefined {
+  if (state === 'MERGED') return { glyph: '◆', color: 'merged' }
+  if (state === 'CLOSED') return { glyph: '✕', color: 'error' }
+
+  return isApproved ? { glyph: '✓', color: 'success' } : undefined
+}
+
 export type PrRowSpec = {
   id: string
   number: number
