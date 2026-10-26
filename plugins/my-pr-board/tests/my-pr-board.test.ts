@@ -95,6 +95,7 @@ function engine(on: On, session: { id: string }, github: Record<number, Pr>, toa
   mock.store(on)
   on('session.id', () => ({ value: session.id }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }))
   on('command.register', () => ({ value: { command: 'myprs' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.toast', (_, e) => {
@@ -149,9 +150,10 @@ test('a pull request opened with gh pr create joins the board with its GitHub st
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ type: 'Text', text: /MM-819 nets the held reserve/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^conflicts$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^CI ✓ \(stale\)$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^1 waiting on you$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^1 needs you$/ })).toBeDefined()
+    const needs = await ui.find({ key: 'needs' })
+    expect(needs?.text).toContain('conflicts with its base, so its green CI is stale')
+    expect(needs?.text).toContain('1 review thread waiting on you')
     await ui.unmount()
   }
 })
@@ -174,6 +176,9 @@ test('a pull request based on another tracked one sits above it in one stack', a
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /^Stack$/ })).toBeDefined()
+  const rows = (await ui.find({ key: 'prs' }))?.text ?? ''
+  expect(rows.indexOf('#6047')).toBeLessThan(rows.indexOf('#6050'))
+  expect((await ui.find({ key: 'next' }))?.text).toContain('Rebase onto main')
   await ui.unmount()
 })
 
@@ -192,7 +197,7 @@ test('a refresh says when a tracked pull request merged or its CI failed', async
   const read = await $.tool.call({ tool: TOOL })
 
   expect(String(read.result)).toMatch(/#6047.*\n\s+merged/)
-  expect(String(read.result)).toContain('CI ✗ unit-test')
+  expect(String(read.result)).toContain('CI failing: unit-test')
   expect(toasts).toEqual(['#6047 merged', '#6050 CI failed: unit-test'])
 })
 
