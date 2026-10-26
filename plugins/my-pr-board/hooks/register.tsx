@@ -62,6 +62,7 @@ const INPUT_SCHEMA = {
 const OPENS_PR = /\bgh\s+(pr\s+create|stack\s+submit)\b/
 const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g
 const REF = /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/)?([\w.-]+)\/([\w.-]+)(?:\/pull\/|#)(\d+)/
+const CI_WORDS: Record<CiState, string> = { pass: 'passing', fail: 'failing', pending: 'running', none: 'not run' }
 const FAILED_RUNS = ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']
 
 const PR_FIELDS = `title state isDraft mergeable mergeStateStatus reviewDecision
@@ -76,7 +77,9 @@ type Entry = { pr: string; note?: string; stack?: string }
 type Input = { add?: Entry[]; update?: Entry[]; remove?: string[] }
 type Applied = { board: PrBoard; added: string[] } | { error: string }
 type Stack = { title: string; prs: TrackedPr[] }
-type Chip = { text: string; color?: Color; isDim?: boolean; href?: string }
+type Need = { text: string; href?: string }
+type Word = { text: string; color?: Color; isDim?: boolean }
+type Els = Elements[RenderSurface]
 
 type Login = { login: string } | null
 type GqlCheck = {
@@ -230,10 +233,6 @@ function factsOf(pr: GqlPr, viewer: string): PrFacts {
 
 const isConflicted = (f: PrFacts) => f.mergeable === 'CONFLICTING' || f.mergeState === 'DIRTY'
 
-const needsYou = (f: PrFacts) =>
-  f.state === 'OPEN' &&
-  (f.ci === 'fail' || isConflicted(f) || f.waiting > 0 || f.review === 'CHANGES_REQUESTED')
-
 function transitions(p: TrackedPr, now: PrFacts): string[] {
   const was = p.facts
   if (!was) return []
@@ -311,48 +310,69 @@ function stacksOf(prs: readonly TrackedPr[]): Stack[] {
   }))
 }
 
-function chipsOf(p: TrackedPr, prs: readonly TrackedPr[]): Chip[] {
-  if (p.error) return [{ text: p.error, color: 'error' }]
+/** What a pull request waits on the person for, one line each; none once it merged or closed. */
+function needsOf(p: TrackedPr): Need[] {
+  if (p.error) return [{ text: `could not be read: ${p.error}` }]
   const f = p.facts
-  if (!f) return [{ text: 'checking GitHub', isDim: true }]
-  if (f.state === 'MERGED') return [{ text: 'merged', color: 'success' }]
-  if (f.state === 'CLOSED') return [{ text: 'closed', isDim: true }]
-
-  const chips: Chip[] = [f.isDraft ? { text: 'draft', isDim: true } : { text: 'ready', color: 'suggestion' }]
-  const below = belowOf(p, prs)
-  if (below) chips.push({ text: `on #${below.number}`, isDim: true })
-  const stale = f.mergeState === 'DIRTY' ? ' (stale)' : ''
-  if (f.ci === 'pass') chips.push({ text: `CI ✓${stale}`, color: stale ? undefined : 'success', isDim: !!stale })
-  if (f.ci === 'pending') chips.push({ text: 'CI running', color: 'warning' })
+  if (!f || f.state !== 'OPEN') return []
+  const out: Need[] = []
   if (f.ci === 'fail') {
-    const more = f.failing.length > 1 ? ` +${f.failing.length - 1}` : ''
-    chips.push({ text: `CI ✗ ${f.failing[0] ?? ''}${more}`.trim(), color: 'error' })
+    const more = f.failing.length > 1 ? ` and ${f.failing.length - 1} more` : ''
+    out.push({ text: `CI failing: ${f.failing[0] ?? 'a check'}${more}` })
   }
-  if (isConflicted(f)) chips.push({ text: 'conflicts', color: 'error' })
-  else if (f.mergeState === 'BEHIND') chips.push({ text: 'behind base', color: 'warning' })
-  if (f.review === 'APPROVED') chips.push({ text: '✓ approved', color: 'success' })
-  if (f.review === 'CHANGES_REQUESTED') chips.push({ text: 'changes requested', color: 'error' })
-  if (f.review === 'REVIEW_REQUIRED' && !f.isDraft) chips.push({ text: 'needs review', isDim: true })
+  if (isConflicted(f)) {
+    out.push({
+      text: f.ci === 'pass' ? 'conflicts with its base, so its green CI is stale' : 'conflicts with its base',
+    })
+  } else if (f.mergeState === 'BEHIND') {
+    out.push({ text: 'is behind its base' })
+  }
+  if (f.review === 'CHANGES_REQUESTED') {
+    const by = f.changesRequestedBy.length > 0 ? ` by ${f.changesRequestedBy.join(', ')}` : ''
+    out.push({ text: `has changes requested${by}` })
+  }
   if (f.waiting > 0) {
-    chips.push({
-      text: `${f.waiting} waiting on you`,
-      color: 'warning',
+    out.push({
+      text: `${f.waiting} review thread${f.waiting === 1 ? '' : 's'} waiting on you`,
       ...(f.waitingUrl && { href: f.waitingUrl }),
     })
   }
 
-  return chips
+  return out
 }
 
-function markOf(p: TrackedPr): { text: string; color?: Color; isDim?: boolean } {
-  const f = p.facts
-  if (p.error) return { text: '!', color: 'error' }
-  if (!f) return { text: '·', isDim: true }
-  if (f.state === 'MERGED') return { text: '✓', color: 'success' }
-  if (f.state === 'CLOSED') return { text: '✕', isDim: true }
-  if (needsYou(f)) return { text: '!', color: 'warning' }
+const needsYou = (p: TrackedPr) => needsOf(p).length > 0
 
-  return f.isDraft ? { text: '○', isDim: true } : { text: '●', color: 'suggestion' }
+function stateOf(p: TrackedPr): Word {
+  const f = p.facts
+  if (!f) return { text: '', isDim: true }
+  if (f.state === 'MERGED') return { text: 'merged', color: 'success' }
+  if (f.state === 'CLOSED') return { text: 'closed', isDim: true }
+
+  return f.isDraft ? { text: 'draft', isDim: true } : { text: 'ready', color: 'suggestion' }
+}
+
+/** CI and mergeability as one dot: red when it cannot merge as it stands, yellow while CI runs. */
+function healthOf(p: TrackedPr): Color {
+  const f = p.facts
+  if (p.error) return 'error'
+  if (!f || f.state !== 'OPEN') return 'inactive'
+  if (f.ci === 'fail' || isConflicted(f)) return 'error'
+  if (f.ci === 'pending') return 'warning'
+
+  return f.ci === 'pass' ? 'success' : 'inactive'
+}
+
+/** Headed stacks first, then the pull requests in none, under "Other" once anything is headed. */
+function groupsOf(prs: readonly TrackedPr[]): Stack[] {
+  const stacks = stacksOf(prs)
+  const headed = stacks
+    .filter(stack => stack.title !== '' || stack.prs.length > 1)
+    .map(stack => ({ ...stack, title: stack.title || 'Stack' }))
+  const loose = stacks.filter(stack => stack.title === '' && stack.prs.length === 1).flatMap(stack => stack.prs)
+  if (loose.length === 0) return headed
+
+  return [...headed, { title: headed.length > 0 ? 'Other' : '', prs: loose }]
 }
 
 function span(ms: number): string {
@@ -373,15 +393,19 @@ const checkedLine = (b: PrBoard, now: number) => {
 function describe(b: PrBoard, now: number): string {
   if (b.prs.length === 0) return 'No pull requests tracked.'
   const lines = [checkedLine(b, now)]
-  for (const stack of stacksOf(b.prs)) {
-    const indent = stack.title || stack.prs.length > 1 ? '  ' : ''
-    if (indent) lines.push(`stack ${stack.title || '(unnamed)'}:`)
-    for (const p of stack.prs) {
-      const title = p.facts ? ` ${p.facts.title}` : ''
-      const status = chipsOf(p, b.prs)
-        .map(chip => (chip.href ? `${chip.text} <${chip.href}>` : chip.text))
-        .join(', ')
-      lines.push(`${indent}${nameOf(p)}${title}`, `${indent}  ${status}`)
+  for (const group of groupsOf(b.prs)) {
+    const indent = group.title ? '  ' : ''
+    if (indent) lines.push(`${group.title}:`)
+    for (const p of group.prs) {
+      const below = belowOf(p, b.prs)
+      const ci = p.facts?.state === 'OPEN' && p.facts.ci !== 'fail' ? `CI ${CI_WORDS[p.facts.ci]}` : ''
+      const status = [
+        stateOf(p).text || 'checking GitHub',
+        below ? `on #${below.number}` : '',
+        ci,
+        ...needsOf(p).map(need => (need.href ? `${need.text} <${need.href}>` : need.text)),
+      ].filter(Boolean)
+      lines.push(`${indent}${nameOf(p)}${p.facts ? ` ${p.facts.title}` : ''}`, `${indent}  ${status.join(', ')}`)
       if (p.note) lines.push(`${indent}  note: ${p.note}`)
     }
   }
@@ -517,39 +541,158 @@ async function track($: EngineInterface, urls: string[]): Promise<string[]> {
   return applied.added
 }
 
-function prRow(els: Elements[RenderSurface], p: TrackedPr, prs: readonly TrackedPr[]) {
-  const { Box, Text, Link, Markdown } = els
-  const mark = markOf(p)
+const countOf = (n: number, word: string) => (n > 0 ? `${n} ${word}` : '')
+
+/** The title, a warning tag while anything waits on the person, and the counts under it. */
+function header(els: Els, b: PrBoard) {
+  const { Box, Text } = els
+  const open = b.prs.filter(p => p.facts?.state === 'OPEN')
+  const waiting = b.prs.filter(needsYou).length
+  const counts = [
+    `${open.length} open`,
+    countOf(open.filter(p => p.facts?.isDraft).length, 'draft'),
+    countOf(b.prs.filter(p => p.facts?.state === 'MERGED').length, 'merged'),
+    countOf(b.prs.filter(p => p.facts?.state === 'CLOSED').length, 'closed'),
+  ].filter(Boolean)
 
   return (
-    <Box key={p.key} flexDirection="column">
+    <Box key="summary" flexDirection="column" paddingX={1}>
       <Box flexDirection="row" columnGap={1}>
+        <Text bold>{TITLE}</Text>
+        {waiting > 0 && <Text color="warning">{`${waiting} need${waiting === 1 ? 's' : ''} you`}</Text>}
+      </Box>
+      <Text dimColor>{counts.join(' · ')}</Text>
+    </Box>
+  )
+}
+
+/**
+ * One line per pull request: a check once approved, a mark while it needs the person, its number, a dot for CI and
+ * mergeability, its state and its title. The check, the mark and the state each hold a fixed column so the numbers
+ * and titles line up, and a layer based on something other than the row above names its base.
+ */
+function prRows(els: Els, group: Stack, tree: boolean) {
+  const { Box, Text, Link } = els
+
+  return group.prs.map((p, at) => {
+    const below = belowOf(p, group.prs)
+    const named = below && group.prs[at - 1] !== below ? below : undefined
+    const state = stateOf(p)
+
+    return (
+      <Box key={`row-${p.key}`} flexDirection="row" columnGap={1}>
+        {tree && <Text dimColor>{at === group.prs.length - 1 ? '└' : '├'}</Text>}
         <Box width={1} flexShrink={0}>
-          <Text color={mark.color} dimColor={mark.isDim} bold>
-            {mark.text}
+          {p.facts?.review === 'APPROVED' && <Text color="success">✓</Text>}
+        </Box>
+        <Box width={1} flexShrink={0}>
+          {needsYou(p) && (
+            <Text color="warning" bold>
+              !
+            </Text>
+          )}
+        </Box>
+        <Box flexShrink={0}>
+          <Text>
+            <Link href={p.url} label={`#${p.number}`} />
           </Text>
         </Box>
-        <Text>
-          <Link href={p.url} label={`#${p.number}`} />
-        </Text>
+        <Text color={healthOf(p)}>●</Text>
+        <Box width={6} flexShrink={0}>
+          <Text color={state.color} dimColor={state.isDim}>
+            {state.text}
+          </Text>
+        </Box>
+        {named && <Text dimColor>{`on #${named.number}`}</Text>}
         <Text dimColor wrap="truncate-end">
           {p.facts?.title ?? `${p.owner}/${p.repo}`}
         </Text>
       </Box>
-      <Box flexDirection="row" flexWrap="wrap" columnGap={1} paddingLeft={2}>
-        {chipsOf(p, prs).map(chip => (
-          <Text color={chip.color} dimColor={chip.isDim}>
-            {chip.href ? <Link href={chip.href} label={chip.text} /> : chip.text}
-          </Text>
-        ))}
-      </Box>
-      {p.note !== '' && (
-        <Box paddingLeft={2}>
-          <Markdown dimColor text={p.note} />
-        </Box>
-      )}
+    )
+  })
+}
+
+function prsBox(els: Els, groups: Stack[]) {
+  const { Box, Text } = els
+  const several = groups.length > 1
+
+  return (
+    <Box key="prs" flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
+      {groups.map((group, at) => {
+        const waiting = group.prs.some(needsYou)
+        const landed = group.prs.every(p => p.facts?.state === 'MERGED')
+
+        return (
+          <Box key={`group-${at}`} flexDirection="column" marginTop={at > 0 ? 1 : 0}>
+            {group.title !== '' && (
+              <Box flexDirection="row" columnGap={1}>
+                <Text bold>{group.title}</Text>
+                {waiting && <Text color="warning">needs you</Text>}
+                {landed && <Text color="success">merged</Text>}
+              </Box>
+            )}
+            {prRows(els, group, several)}
+          </Box>
+        )
+      })}
     </Box>
   )
+}
+
+/** A bordered section of one-line entries, each led by the number of the pull request it is about. */
+function section(
+  els: Els,
+  id: string,
+  title: string,
+  color: Color,
+  rows: { key: string; pr: TrackedPr; body: ReturnType<Els['Text']> }[],
+) {
+  const { Box, Text, Link } = els
+
+  return (
+    <Box key={id} flexDirection="column" borderStyle="round" borderColor={color} paddingX={1}>
+      <Box flexDirection="row" columnGap={1}>
+        <Text bold color={color}>
+          {title}
+        </Text>
+        <Text dimColor>{String(rows.length)}</Text>
+      </Box>
+      {rows.map(row => (
+        <Box key={row.key} flexDirection="row" columnGap={1}>
+          <Box flexShrink={0}>
+            <Text bold>
+              <Link href={row.pr.url} label={`#${row.pr.number}`} />
+            </Text>
+          </Box>
+          <Box flexGrow={1} flexShrink={1}>
+            {row.body}
+          </Box>
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+function needsBox(els: Els, prs: readonly TrackedPr[]) {
+  const { Text, Link } = els
+  const rows = prs.flatMap(p =>
+    needsOf(p).map((need, at) => ({
+      key: `need-${p.key}-${at}`,
+      pr: p,
+      body: <Text wrap="wrap">{need.href ? <Link href={need.href} label={need.text} /> : need.text}</Text>,
+    })),
+  )
+
+  return rows.length > 0 ? section(els, 'needs', 'Needs you', 'warning', rows) : undefined
+}
+
+function nextBox(els: Els, prs: readonly TrackedPr[]) {
+  const { Markdown } = els
+  const rows = prs
+    .filter(p => p.note !== '' && p.facts?.state !== 'MERGED' && p.facts?.state !== 'CLOSED')
+    .map(p => ({ key: `next-${p.key}`, pr: p, body: <Markdown text={p.note} /> }))
+
+  return rows.length > 0 ? section(els, 'next', 'Next', 'inactive', rows) : undefined
 }
 
 export const register: Register = on => {
@@ -671,22 +814,22 @@ export const register: Register = on => {
       )
     }
     const now = await $.clock.now()
+    const groups = groupsOf(b.prs)
+    const inOrder = groups.flatMap(group => group.prs)
+    // The surface draws a tab row only while more than one pane is open, and the board would sit flush under it
+    const tabbed = (await $.ui.panes()).filter(pane => pane.isPlaced).length > 1
 
     return (
-      <Box flexDirection="column" gap={1}>
-        {stacksOf(b.prs).map(stack => (
-          <Box flexDirection="column">
-            {(stack.title !== '' || stack.prs.length > 1) && (
-              <Text color="claude" bold>
-                {stack.title || 'Stack'}
-              </Text>
-            )}
-            {stack.prs.map(p => prRow(els, p, b.prs))}
-          </Box>
-        ))}
-        <Text color={b.error ? 'error' : undefined} dimColor={!b.error} wrap="wrap">
-          {checkedLine(b, now)}
-        </Text>
+      <Box key="board" flexDirection="column" gap={1} marginTop={tabbed ? 1 : 0}>
+        {header(els, b)}
+        {prsBox(els, groups)}
+        {needsBox(els, inOrder)}
+        {nextBox(els, inOrder)}
+        <Box paddingX={1}>
+          <Text color={b.error ? 'error' : undefined} dimColor={!b.error} wrap="wrap">
+            {checkedLine(b, now)}
+          </Text>
+        </Box>
       </Box>
     )
   })
