@@ -150,7 +150,7 @@ test('a pull request opened with gh pr create joins the board with its GitHub st
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ type: 'Text', text: /MM-819 nets the held reserve/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^1 needs you$/ })).toBeDefined()
+    expect(await ui.find({ key: 'checked', text: /^GitHub checked just now$/ })).toBeDefined()
     const needs = await ui.find({ key: 'needs' })
     expect(needs?.text).toContain('conflicts with its base, so its green CI is stale')
     expect(needs?.text).toContain('1 review thread waiting on you')

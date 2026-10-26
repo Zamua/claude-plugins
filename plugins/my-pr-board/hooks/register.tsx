@@ -387,7 +387,7 @@ function span(ms: number): string {
 const checkedLine = (b: PrBoard, now: number) => {
   if (b.error) return `GitHub check failed: ${b.error}`
 
-  return b.checkedAt ? `GitHub checked ${span(now - b.checkedAt)}.` : 'Checking GitHub.'
+  return b.checkedAt ? `GitHub checked ${span(now - b.checkedAt)}` : 'Checking GitHub'
 }
 
 function describe(b: PrBoard, now: number): string {
@@ -539,31 +539,6 @@ async function track($: EngineInterface, urls: string[]): Promise<string[]> {
   void refresh($)
 
   return applied.added
-}
-
-const countOf = (n: number, word: string) => (n > 0 ? `${n} ${word}` : '')
-
-/** The title, a warning tag while anything waits on the person, and the counts under it. */
-function header(els: Els, b: PrBoard) {
-  const { Box, Text } = els
-  const open = b.prs.filter(p => p.facts?.state === 'OPEN')
-  const waiting = b.prs.filter(needsYou).length
-  const counts = [
-    `${open.length} open`,
-    countOf(open.filter(p => p.facts?.isDraft).length, 'draft'),
-    countOf(b.prs.filter(p => p.facts?.state === 'MERGED').length, 'merged'),
-    countOf(b.prs.filter(p => p.facts?.state === 'CLOSED').length, 'closed'),
-  ].filter(Boolean)
-
-  return (
-    <Box key="summary" flexDirection="column" paddingX={1}>
-      <Box flexDirection="row" columnGap={1}>
-        <Text bold>{TITLE}</Text>
-        {waiting > 0 && <Text color="warning">{`${waiting} need${waiting === 1 ? 's' : ''} you`}</Text>}
-      </Box>
-      <Text dimColor>{counts.join(' · ')}</Text>
-    </Box>
-  )
 }
 
 /**
@@ -820,16 +795,15 @@ export const register: Register = on => {
     const tabbed = (await $.ui.panes()).filter(pane => pane.isPlaced).length > 1
 
     return (
-      <Box key="board" flexDirection="column" gap={1} marginTop={tabbed ? 1 : 0}>
-        {header(els, b)}
-        {prsBox(els, groups)}
-        {needsBox(els, inOrder)}
-        {nextBox(els, inOrder)}
-        <Box paddingX={1}>
+      <Box key="board" flexDirection="column" marginTop={tabbed ? 1 : 0}>
+        <Box key="checked" flexDirection="row" justifyContent="flex-end" paddingX={1}>
           <Text color={b.error ? 'error' : undefined} dimColor={!b.error} wrap="wrap">
             {checkedLine(b, now)}
           </Text>
         </Box>
+        {prsBox(els, groups)}
+        {needsBox(els, inOrder)}
+        {nextBox(els, inOrder)}
       </Box>
     )
   })
