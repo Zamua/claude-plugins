@@ -5,7 +5,7 @@ switches between them, and each button shows how many items on its board wait on
 you.
 
 ```
- session 1 · prs · review 3 · work 2 · oncall
+ session 1 · prs · review 3 │ work 2 · oncall
 ╭──────────────────────────────────────────╮
 │ the board you picked                     │
 ╰──────────────────────────────────────────╯
@@ -18,7 +18,8 @@ you.
 | `review` | the [pr-review-board](../pr-review-board/) review this session runs | the review agent's `board.json` |
 | any name | a board another process writes as JSON | the file named in the config below |
 
-A board shows in the row once it has something to show. Each session keeps its own
+This session's boards come first, and a thin `│` parts them from the boards every session shares. A board shows in
+the row once it has something to show. Each session keeps its own
 session and prs boards, restored on resume.
 
 ## Commands

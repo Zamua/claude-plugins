@@ -82,6 +82,7 @@ test('the switcher lists each view with something to show and how many of its it
   const ui = await open($, 'session')
   expect(await ui.find({ key: 'tab-session', text: 'session 1' })).toBeDefined()
   expect(await ui.find({ key: 'tab-work', text: 'work 2' })).toBeDefined()
+  expect(await ui.find({ key: 'switcher', text: /^session 1\s*│\s*work 2$/ })).toBeDefined()
   expect(await ui.find({ key: 'tab-prs' })).toBeUndefined()
   expect(await ui.find({ key: 'tab-review' })).toBeUndefined()
   expect(await ui.find({ type: 'Markdown', text: /Which bank\?/ })).toBeDefined()

@@ -4,7 +4,7 @@ import type { EngineInterface, On } from 'claude-code'
 import type { SessionBoard, SessionItem, SessionSection } from '../../types'
 import type { View } from '../kit'
 import { showView } from '../pane'
-import { loadBoard, saveBoard } from '../store'
+import { legacyValue, loadBoard, saveBoard } from '../store'
 
 export const SESSION_TOOL = 'mcp__board__session'
 
@@ -109,9 +109,55 @@ const PREFIX = 'session'
 // session.start fires once per process, not after /clear or /resume, so every entry point re-checks the session
 async function syncBoard($: EngineInterface) {
   const sessionId = await $.session.id()
-  if ((await read($, board)).sessionId === sessionId) return
-  const loaded = (await loadBoard<SessionBoard>($, PREFIX, SHAPE, sessionId)) ?? emptyBoard(sessionId)
-  await update($, board, () => loaded)
+  if ((await read($, board)).sessionId !== sessionId) {
+    const loaded = (await loadBoard<SessionBoard>($, PREFIX, SHAPE, sessionId)) ?? emptyBoard(sessionId)
+    await update($, board, () => loaded)
+  }
+  await importLegacy($)
+}
+
+/**
+ * The session-board plugin kept a board per session in its own store. The first sync of a session takes that board
+ * in: whole when this board is empty, else the items this board lacks, with fresh ids.
+ */
+async function importLegacy($: EngineInterface) {
+  const current = await read($, board)
+  if (current.legacyImported) return
+  let held: unknown
+  try {
+    held = await legacyValue($, 'session-board', `board:${current.sessionId}`)
+  } catch {
+    return
+  }
+  const old = (held as { shape?: string; value?: SessionBoard } | undefined)?.shape === 'board-1'
+    ? (held as { value: SessionBoard }).value
+    : undefined
+  await update($, board, now => (now.sessionId === current.sessionId ? withLegacy(now, old) : now))
+  if (old) await saveBoard($, PREFIX, SHAPE, await read($, board))
+}
+
+function withLegacy(current: SessionBoard, old: SessionBoard | undefined): SessionBoard {
+  if (!old) return { ...current, legacyImported: true }
+  if (!hasContent(current)) return { ...old, sessionId: current.sessionId, legacyImported: true }
+  const keyOf = (item: SessionItem) => `${item.section}\n${item.url ?? item.text.trim().toLowerCase()}`
+  const seen = new Set(current.items.map(keyOf))
+  const items = [...current.items]
+  let seq = current.seq
+  for (const item of old.items) {
+    if (seen.has(keyOf(item))) continue
+    seen.add(keyOf(item))
+    seq += 1
+    items.push({ ...item, id: `${prefixOf(item.section)}${seq}` })
+  }
+
+  return {
+    ...current,
+    goal: current.goal || old.goal,
+    summary: current.summary || old.summary,
+    items,
+    seq,
+    legacyImported: true,
+  }
 }
 
 const hasContent = (b: SessionBoard) => b.goal !== '' || b.summary !== '' || b.items.length > 0
@@ -252,6 +298,7 @@ export function sessionView($: EngineInterface): View {
   return {
     id: 'session',
     title: 'session',
+    scope: 'session',
     guide: { tool: SESSION_TOOL, text: `keep its session view current with ${SESSION_TOOL}` },
     isAvailable: async () => true,
     needs: async () => (await read($, board)).items.filter(item => item.section === 'questions' && !item.isDone).length,

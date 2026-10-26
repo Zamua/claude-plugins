@@ -10,6 +10,8 @@ export type Els = Elements[RenderSurface]
 export type View = {
   id: string
   title: string
+  /** Whose board it is: this session's alone, or one every session shares. */
+  scope: 'session' | 'shared'
   /** Whether the switcher row lists it while another view is shown. */
   isAvailable: () => Promise<boolean>
   /** How many of its items wait on the person, drawn beside its name in the switcher row. */

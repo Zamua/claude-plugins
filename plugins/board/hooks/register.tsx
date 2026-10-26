@@ -203,7 +203,7 @@ export const register: Register = on => {
             const count = counts[at] ?? 0
 
             return [
-              ...(at > 0 ? [<Text dimColor>·</Text>] : []),
+              ...(at > 0 ? [<Text dimColor>{list[at - 1]?.scope === v.scope ? '·' : '│'}</Text>] : []),
               <Button
                 key={`tab-${v.id}`}
                 plain

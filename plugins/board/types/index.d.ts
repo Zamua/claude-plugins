@@ -20,6 +20,8 @@ export type SessionBoard = {
   summary: string
   items: SessionItem[]
   seq: number
+  /** The session-board plugin's board for this session was taken in, or it had none. */
+  legacyImported?: boolean
 }
 
 export type CiState = 'pass' | 'fail' | 'pending' | 'none'
@@ -61,6 +63,8 @@ export type PrBoard = {
   viewer: string
   checkedAt: number
   error: string
+  /** The my-pr-board plugin's board for this session was taken in, or it had none. */
+  legacyImported?: boolean
 }
 
 declare module 'claude-code' {
