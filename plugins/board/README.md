@@ -18,6 +18,11 @@ you.
 | `review` | the [pr-review-board](../pr-review-board/) review this session runs | the review agent's `board.json` |
 | any name | a board another process writes as JSON | the file named in the config below |
 
+The prs board shares what it fetches from GitHub with every session through `~/.cache/board/github.json`, so a pull
+request is asked about at most once every three minutes however many sessions track it, and a merged one never again.
+A session asks only while someone has used it in the last half hour. Below 1000 GraphQL points left in the hour, or
+after a rate limit error, every session stops asking until the limit resets.
+
 This session's boards come first, and a thin `│` parts them from the boards every session shares. A board shows in
 the row once it has something to show. Each session keeps its own
 session and prs boards, restored on resume.
