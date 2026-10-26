@@ -263,6 +263,12 @@ in a few words. Do not paste the bodies: the board shows them in full.
 Not every finding needs to become a comment. Propose the ones worth the author's
 attention and put the rest under the report's observations.
 
+Do not propose a reply that only agrees with another reviewer's or a bot's comment,
+even one that adds a test confirming it. The thread already tells the author. A reply
+belongs on the list only when it gives the thread something it lacks: a correction, a
+narrower or wider scope, or a fix nobody named. Record the confirmation in the report
+instead.
+
 ### Writing a comment body
 
 Terse. One issue per comment. Lead with what breaks, then where it is, then the
