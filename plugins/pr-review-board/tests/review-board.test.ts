@@ -538,6 +538,24 @@ test('every layer names its author in a column as wide as the longest, and a lay
   await all.unmount()
 })
 
+test('a narrow pane keeps each pull request\'s number, risk and base whole and leaves the title to give way', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  stubs(on, { board: STACKED })
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 30 }, surface: 'terminal' })
+  for (const n of [6954, 7472, 8000]) {
+    expect(await ui.find({ key: 'prnum-' + n })).toMatchObject({ type: 'Box', props: { flexShrink: 0 }, text: '#' + n })
+    expect(await ui.find({ key: 'risk-' + n })).toMatchObject({ props: { flexShrink: 0 } })
+  }
+  expect(await ui.find({ key: 'base-7500' })).toMatchObject({ props: { flexShrink: 0 }, text: 'on #6954' })
+  const row = await ui.find({ key: 'prrow-6954' })
+  const title = row?.children.at(-1) as { props: Record<string, unknown> }
+  expect(title.props).toMatchObject({ wrap: 'truncate-end' })
+  expect(title.props.flexShrink).toBeUndefined()
+  await ui.unmount()
+})
+
 test('a board that names no stacks draws one list and opens no stack panes', async ($, on) => {
   mock.clock(on, { now: NOW })
   const opens: any[] = []
