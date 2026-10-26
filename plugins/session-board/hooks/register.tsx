@@ -378,11 +378,11 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap={1}>
-        {b.goal !== '' && <Text weight="bold">{b.goal}</Text>}
+        {b.goal !== '' && <Text bold>{b.goal}</Text>}
         {b.summary !== '' && <Markdown text={b.summary} />}
         {filled.map(section => (
           <Box flexDirection="column">
-            <Text color="claude" weight="bold">
+            <Text color="claude" bold>
               {section.title}
             </Text>
             {[

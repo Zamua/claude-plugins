@@ -1,7 +1,7 @@
 {
   "name": "session-board",
   "description": "A board pane beside the chat that Claude keeps current through the session, so nothing has to be asked for twice: the goal, where things stand, next steps, open questions, decisions, links, ideas and topics. Each session keeps its own board, restored on resume. /board opens it.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Zamua"
   },
