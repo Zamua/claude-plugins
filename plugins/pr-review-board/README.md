@@ -4,7 +4,8 @@ React to a pull request with 👀 and a background Claude reviews it.
 
 A local poller watches GitHub for reactions **you** added in the last few minutes,
 then spawns one review agent per changeset in its own herdr workspace. The agent
-writes the whole review to a board, drawn in a `/reviewboard` pane beside it: a
+writes the whole review to a board, drawn beside it in the review view of the
+[board](../board/) plugin's pane: a
 plain-English report linked to every pull request and every line it calls out, and
 the numbered comments it proposes. It posts only the ones you pick, and approves a
 pull request only when you tell it to.
@@ -15,7 +16,7 @@ you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
                                   ├─ new herdr workspace, one review agent
                                   ├─ clones + worktrees the PR head
                                   ├─ reviews it, proves bugs with failing tests
-                                  ├─ writes its board as it goes, shown in /reviewboard
+                                  ├─ writes its board as it goes, shown in /board review
                                   └─ proposes numbered comments, then waits
 PR gets new commits       ─▶  the agent re-reads the diff and revises everything
 you ask it questions      ─▶  it answers in its pane
@@ -116,18 +117,17 @@ so an authenticated `gh` is required.
 ## The board
 
 Everything a review produces lives in one file, `board.json` in the review's
-metadata directory, and the plugin draws it in a pane, `/reviewboard`, that opens by
-itself in the review's session:
+metadata directory. The [board](../board/) plugin draws it in its pane's review view,
+which opens by itself in the review's session and `/board review` opens anywhere:
 
 - the verdict, the risk and the blast radius, one sentence each
-- one tab per stack beside an All tab, each heading with its own verdict, risk and
+- one button per stack beside All, each stack heading with its own verdict, risk and
   blast radius and listing its pull requests, linked, with their authors and risk,
   a purple diamond beside each merged one, a green check beside each one you
   approved, and a warning mark beside each one
   with a thread from your account still waiting on its author. The poller reads
   those from GitHub every pass into `github.json` beside the board, so they follow
-  an approval or a reply within one pass, without the worker. Claude Code draws a tab it opens by itself only from 144 columns, so on a narrower
-  terminal All says the tabs are waiting and `/reviewboard` shows them
+  an approval or a reply within one pass, without the worker
 - the proposed comments by severity, each marked `new`, `carried over` or `not a
   bug`, linked to its code and the scratch test that proves it, and opening in place
   to the exact text it would post and the finding behind it
@@ -141,7 +141,7 @@ goes to GitHub is the wording you read, and a comment already posted is refused.
 A review run by hand through the skill keys its board by the session's id, so the
 pane finds it the same way. So does a board any session writes there to track pull
 requests it is not reviewing, such as the ones it commented on; the poller refreshes
-its GitHub facts every ten minutes. Its tests run with `claude plugin test .`.
+its GitHub facts every ten minutes.
 
 ## Skills
 

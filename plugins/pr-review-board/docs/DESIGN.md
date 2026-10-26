@@ -133,8 +133,8 @@ the report's grouping note says what it added and why.
 One herdr workspace per review, labelled with the slug, holding one pane: the review
 agent. Nothing is opened per pull request, because the report already covers every
 pull request in scope and the set can grow while the review is live. The review
-itself is one file, `board.json` in the review's metadata directory, and the plugin's
-`/reviewboard` pane draws it beside the agent. The agent prints the headline and the
+itself is one file, `board.json` in the review's metadata directory, and the board
+plugin's review view draws it beside the agent. The agent prints the headline and the
 comment numbers in its own pane, never the comment text.
 
 The board carries the navigation instead. Each pull request in scope is linked at the
