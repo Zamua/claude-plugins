@@ -154,10 +154,11 @@ eq "only a posted comment can be addressed" "1 board: comment 3 is not posted, s
 out="$("$B" addressed "$BOARD" 5 maybe 2>&1)"; rc=$?
 eq "addressed takes yes or no" "1 board: addressed takes yes or no: maybe" "$rc $out"
 jq '(.comments[] | select(.n == 3)).addressed = true | (.comments[] | select(.n == 4)).addressed = "yes"
+    | (.comments[] | select(.n == 5)) += {addressed: false, addressed_note: "Partly fixed"}
     | .stacks = [{ id: "ledger", title: "Stock ledger", prs: ["acme/api#10", "acme/api#11"], verdict: "huge", risk: 3 }]' "$BOARD" > "$broken"
 problems="$("$B" check "$broken")"; rc=$?
 eq "a board with a bad addressed flag or stack summary fails the check" "1" "$rc"
-for want in "comment 3: addressed but not posted" "comment 4: addressed is not true or false" \
+for want in "comment 3: addressed but not posted" "comment 4: addressed is not true or false" "comment 5: addressed_note on a comment not addressed" \
             "stack ledger: verdict is not low, medium or high" "stack ledger: risk is not text"; do
   printf '%s\n' "$problems" | grep -qxF "$want" && ok "check names: $want" || bad "check names: $want" "$want" "$problems"
 done

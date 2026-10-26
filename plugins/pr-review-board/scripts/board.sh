@@ -76,7 +76,8 @@ _B_CHECK='
       (if ($c.origin != null) and ((($c.origin) | IN("new", "carried", "none")) | not)
          then "\($id): origin is not new, carried or none" else empty end),
       (if $c.addressed != null and ($c.addressed | type) != "boolean" then "\($id): addressed is not true or false" else empty end),
-      (if $c.addressed == true and $c.status != "posted" then "\($id): addressed but not posted" else empty end)
+      (if $c.addressed == true and $c.status != "posted" then "\($id): addressed but not posted" else empty end),
+      (if $c.addressed != true and (($c.addressed_note // "") | length) > 0 then "\($id): addressed_note on a comment not addressed" else empty end)
     )
   ] | .[]'
 

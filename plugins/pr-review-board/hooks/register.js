@@ -513,7 +513,7 @@ function reportBox(els, sections, $) {
   })
 }
 
-/** Comments already on GitHub, one line each: unaddressed ones wait on their author, addressed ones say how they were settled. */
+/** Comments already on GitHub, one line each: unaddressed ones wait on their author, and only addressed ones say how they were settled. */
 function followUpSection(els, followUp, comments, prs) {
   const { Box, Text } = els
   const rows = comments.map((c) => {
@@ -529,7 +529,7 @@ function followUpSection(els, followUp, comments, prs) {
     if (c.posted_url) parts.push(fixed(els, followUp.id + '-link-' + c.n, link(els, followUp.id + '-link-text-' + c.n, c.posted_url, 'comment', { color: followUp.color })))
     parts.push(Text({ key: followUp.id + '-summary-' + c.n, dimColor: true, wrap: 'truncate-end', children: [c.summary || c.target || ''] }))
     const row = Box({ key: followUp.id + '-row-' + c.n, flexDirection: 'row', columnGap: 1, children: parts })
-    if (!c.addressed_note) return Box({ key: followUp.id + '-' + c.n, flexDirection: 'column', children: [row] })
+    if (!c.addressed || !c.addressed_note) return Box({ key: followUp.id + '-' + c.n, flexDirection: 'column', children: [row] })
     return Box({
       key: followUp.id + '-' + c.n,
       flexDirection: 'column',

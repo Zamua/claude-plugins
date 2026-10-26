@@ -212,9 +212,10 @@ test('each comment says whether it is a new bug, one carried over, or not a bug,
   await ui.unmount()
 })
 
-test('a posted comment leaves its severity section for Unaddressed, and moves to Addressed once marked', async ($, on) => {
+test('a posted comment leaves its severity section for Unaddressed, and moves to Addressed once marked, where alone its note shows', async ($, on) => {
   mock.clock(on, { now: NOW })
-  const marked = { ...BOARD, comments: [...BOARD.comments, { n: 8, pr: 'acme/api#6954', severity: 'medium', confidence: 'proven', status: 'posted', addressed: true, addressed_note: 'Fixed in abc1234.', summary: 'The retry drops the lock.', body: 'x', posted_url: 'https://github.com/acme/api/pull/6954#discussion_r8' }] }
+  const comments = BOARD.comments.map((c) => (c.status === 'posted' ? { ...c, addressed_note: 'Partly fixed' } : c))
+  const marked = { ...BOARD, comments: [...comments, { n: 8, pr: 'acme/api#6954', severity: 'medium', confidence: 'proven', status: 'posted', addressed: true, addressed_note: 'Fixed in abc1234.', summary: 'The retry drops the lock.', body: 'x', posted_url: 'https://github.com/acme/api/pull/6954#discussion_r8' }] }
   stubs(on, { board: marked })
   await start($)
 
@@ -222,7 +223,7 @@ test('a posted comment leaves its severity section for Unaddressed, and moves to
   expect(await ui.find({ key: 'section-low' })).toBeUndefined()
   expect(await ui.find({ key: 'section-posted' })).toBeUndefined()
   expect(await ui.find({ key: 'section-unaddressed', text: /Unaddressed\s*1\s*3\s*#7472\s*comment\s*Loan asks payment to replace legacy funds/ })).toBeDefined()
-  expect(await ui.find({ key: 'section-unaddressed', text: /retry drops the lock/ })).toBeUndefined()
+  expect(await ui.find({ key: 'section-unaddressed', text: /retry drops the lock|Partly fixed/ })).toBeUndefined()
   expect(await ui.find({ key: 'section-addressed', text: /Addressed\s*1\s*8\s*#6954\s*comment\s*The retry drops the lock\.\s*Fixed in abc1234\./ })).toBeDefined()
   expect(await ui.find({ key: 'summary', text: /to decide|unaddressed/ })).toBeUndefined()
   expect(await ui.find({ key: 'title-row', text: /^Lead adapters stack\s*medium$/ })).toBeDefined()
