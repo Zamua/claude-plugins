@@ -28,7 +28,7 @@ const ENTRY = {
     },
     note: {
       type: 'string',
-      description: 'One line on what is left or open on it. Markdown allowed.',
+      description: 'One line on what is left or open on it, given back whenever the board is read.',
     },
     stack: {
       type: 'string',
@@ -614,62 +614,6 @@ function prsBox(els: Els, groups: Stack[]) {
   )
 }
 
-/** A bordered section of one-line entries, each led by the number of the pull request it is about. */
-function section(
-  els: Els,
-  id: string,
-  title: string,
-  color: Color,
-  rows: { key: string; pr: TrackedPr; body: ReturnType<Els['Text']> }[],
-) {
-  const { Box, Text, Link } = els
-
-  return (
-    <Box key={id} flexDirection="column" borderStyle="round" borderColor={color} paddingX={1}>
-      <Box flexDirection="row" columnGap={1}>
-        <Text bold color={color}>
-          {title}
-        </Text>
-        <Text dimColor>{String(rows.length)}</Text>
-      </Box>
-      {rows.map(row => (
-        <Box key={row.key} flexDirection="row" columnGap={1}>
-          <Box flexShrink={0}>
-            <Text bold>
-              <Link href={row.pr.url} label={`#${row.pr.number}`} />
-            </Text>
-          </Box>
-          <Box flexGrow={1} flexShrink={1}>
-            {row.body}
-          </Box>
-        </Box>
-      ))}
-    </Box>
-  )
-}
-
-function needsBox(els: Els, prs: readonly TrackedPr[]) {
-  const { Text, Link } = els
-  const rows = prs.flatMap(p =>
-    needsOf(p).map((need, at) => ({
-      key: `need-${p.key}-${at}`,
-      pr: p,
-      body: <Text wrap="wrap">{need.href ? <Link href={need.href} label={need.text} /> : need.text}</Text>,
-    })),
-  )
-
-  return rows.length > 0 ? section(els, 'needs', 'Needs you', 'warning', rows) : undefined
-}
-
-function nextBox(els: Els, prs: readonly TrackedPr[]) {
-  const { Markdown } = els
-  const rows = prs
-    .filter(p => p.note !== '' && p.facts?.state !== 'MERGED' && p.facts?.state !== 'CLOSED')
-    .map(p => ({ key: `next-${p.key}`, pr: p, body: <Markdown text={p.note} /> }))
-
-  return rows.length > 0 ? section(els, 'next', 'Next', 'inactive', rows) : undefined
-}
-
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.tool.register({
@@ -790,7 +734,6 @@ export const register: Register = on => {
     }
     const now = await $.clock.now()
     const groups = groupsOf(b.prs)
-    const inOrder = groups.flatMap(group => group.prs)
     // The surface draws a tab row only while more than one pane is open, and the board would sit flush under it
     const tabbed = (await $.ui.panes()).filter(pane => pane.isPlaced).length > 1
 
@@ -802,8 +745,6 @@ export const register: Register = on => {
           </Text>
         </Box>
         {prsBox(els, groups)}
-        {needsBox(els, inOrder)}
-        {nextBox(els, inOrder)}
       </Box>
     )
   })

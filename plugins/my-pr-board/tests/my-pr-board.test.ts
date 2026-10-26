@@ -151,9 +151,7 @@ test('a pull request opened with gh pr create joins the board with its GitHub st
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ type: 'Text', text: /MM-819 nets the held reserve/ })).toBeDefined()
     expect(await ui.find({ key: 'checked', text: /^GitHub checked just now$/ })).toBeDefined()
-    const needs = await ui.find({ key: 'needs' })
-    expect(needs?.text).toContain('conflicts with its base, so its green CI is stale')
-    expect(needs?.text).toContain('1 review thread waiting on you')
+    expect(await ui.find({ key: 'row-joinmason/cherry-pos#6050', text: /^!\s*#6050/ })).toBeDefined()
     await ui.unmount()
   }
 })
@@ -178,7 +176,6 @@ test('a pull request based on another tracked one sits above it in one stack', a
   expect(await ui.find({ type: 'Text', text: /^Stack$/ })).toBeDefined()
   const rows = (await ui.find({ key: 'prs' }))?.text ?? ''
   expect(rows.indexOf('#6047')).toBeLessThan(rows.indexOf('#6050'))
-  expect((await ui.find({ key: 'next' }))?.text).toContain('Rebase onto main')
   await ui.unmount()
 })
 
