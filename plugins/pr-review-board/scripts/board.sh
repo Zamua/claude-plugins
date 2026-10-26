@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pr-review-board board. The review agent runs this; the poller does not. The board
 # is one JSON file holding the whole review: the report, every proposed comment's
-# exact wording, and the ledger of what was posted. The /reviewboard pane draws it,
+# exact wording, and the ledger of what was posted. The board plugin's review view draws it,
 # and posting reads from it, so what the operator approved is what goes out.
 #
 #   board.sh path    <key>                                  board.json of a review the poller spawned

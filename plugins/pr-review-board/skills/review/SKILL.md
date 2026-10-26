@@ -49,8 +49,8 @@ rules.
    the board section of the review rules, at
    `<reviews_root>/.pr-review-board/manual-${CLAUDE_SESSION_ID}/board.json`, where
    `<reviews_root>` is `reviews_root` in `~/.config/pr-review-board/config.json`,
-   `~/workspace/reviews` by default. The `/reviewboard` pane finds it by this
-   session's id and opens it beside the conversation. Run
+   `~/workspace/reviews` by default. The board plugin's review view finds it by
+   this session's id and opens it beside the conversation. Run
    `${CLAUDE_PLUGIN_ROOT}/scripts/board.sh check <board.json>` after every write.
    In the conversation, give the verdict, the blast radius in one line, and the
    comments by number with a few words each.

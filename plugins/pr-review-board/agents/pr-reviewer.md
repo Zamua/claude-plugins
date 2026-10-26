@@ -118,8 +118,8 @@ the checkout gives you the changed files whole. Read both.
 
 1. **The board**, at `"$B" path <key>`. One JSON file holding the report, every
    proposed comment in the exact wording it would post, and the ledger of what you
-   posted, structured per the board section of the review rules. The `/reviewboard`
-   pane draws it beside your session, so it is how the operator reads the review.
+   posted, structured per the board section of the review rules. The board plugin's
+   review view draws it beside your session, so it is how the operator reads the review.
    It is the deliverable and the only route by which anything reaches GitHub, so
    its numbers and statuses are the record of what you posted. Cleanup deletes it
    with the review.

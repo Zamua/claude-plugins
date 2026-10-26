@@ -78,8 +78,8 @@ push the checkout.
 
 ## The board
 
-The review lives in one file, the board: `board.json`, which the `/reviewboard` pane
-draws beside the session. It holds the report, every proposed comment in the exact
+The review lives in one file, the board: `board.json`, which the board plugin's
+review view draws beside the session. It holds the report, every proposed comment in the exact
 wording it would post, and the ledger of what was posted. There is no other report
 and no other comment list. The operator reads the board, so the conversation names
 comments by number and never pastes their text.
@@ -174,10 +174,10 @@ off a lower one, beside another layer, sits in the same stack. A pull request th
 in no stack, such as one reviewed beside a stack or a counterpart in another repo, is
 a stack of one with its own entry. Each stack carries its own `verdict`, `risk` and
 `blast_radius`, written like the board's but for that stack alone; the board's own
-three cover the whole review. The pane opens one pane per stack, each a tab titled
-for the stack beside an All tab: a stack's tab heads with its own verdict, risk and
-blast radius and holds only its pull requests and comments, and All holds the board's
-summary, every stack, every comment and the report.
+three cover the whole review. The pane offers one button per stack, titled for the
+stack, beside All: a stack's view heads with its own verdict, risk and blast radius
+and holds only its pull requests and comments, and All holds the board's summary,
+every stack, every comment and the report.
 
 ### The report
 
