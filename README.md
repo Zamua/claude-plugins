@@ -31,22 +31,19 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   agent per changeset in its own herdr workspace, which writes a plain-English
   report linked to the code it calls out. It ends by
   proposing a numbered list of comments and posts only the ones you pick.
-  Approves only when you say so, never pushes.
+  Approves only when you say so, never pushes. Its board draws in the
+  [board](plugins/board/) pane.
 - **[briefme](plugins/briefme/)**: a very short brief on where the current work
   stands. One paragraph on the state of things, then only the questions and
   decisions that need you, each saying who it is blocked on. For picking up a
   long session you have lost the thread of.
-- **[session-board](plugins/session-board/)**: a board pane beside the chat
-  that Claude keeps current as the session goes: the goal, where things stand,
-  next steps, open questions, decisions, links, ideas and topics. For the things
-  you would otherwise keep asking it to repeat. Each session has its own board,
-  restored on resume. `/board` opens it, `/board clear` empties it.
-- **[my-pr-board](plugins/my-pr-board/)**: the pull requests this session
-  raised, in a pane beside the chat. Each stack bottom first, one line per pull
-  request with GitHub's live state: draft or ready, merged or closed, CI and
-  conflicts, and a mark on any that waits on you. Pull requests opened with
-  `gh pr create` join on their own, and a toast says when one merges or its CI
-  fails. `/myprs` opens it.
+- **[board](plugins/board/)**: one pane beside the chat holding every board,
+  with a row of buttons to switch between them, each showing how many items wait
+  on you. The session board Claude keeps current, the pull requests this session
+  raised with GitHub's live state, the pr-review-board review this session runs,
+  and any board another process writes as JSON, named in
+  `~/.config/board/boards.json`. `/board` toggles the pane, `/board <name>` opens
+  it on one board, `/board <name> clear` empties one.
 
 ## License
 
