@@ -14,7 +14,6 @@ const SEVERITIES = [
 const STATUS_TAGS = {
   approved: { text: 'approved', color: 'warning' },
   posted: { text: 'posted', color: 'success' },
-  dropped: { text: 'dropped', color: 'inactive' },
 }
 // A posted comment waits on its author until the review marks it addressed
 const FOLLOW_UPS = [
@@ -116,7 +115,7 @@ export function register(on) {
       }
     }
     children.push(prList(els, stack ? [stack] : stacks, stacked && !stack, $))
-    const toDecide = inView.filter((c) => c.status !== 'posted')
+    const toDecide = inView.filter((c) => c.status !== 'posted' && c.status !== 'dropped')
     for (const severity of SEVERITIES) {
       const inSection = toDecide.filter((c) => severityOf(c) === severity)
       if (inSection.length) children.push(section(els, severity, inSection, prs, $))
@@ -442,8 +441,7 @@ function commentRow(els, c, prs, $) {
   if (origin) head.push(Text({ key: 'origin-' + c.n, color: origin.color, children: [origin.text] }))
   const tag = STATUS_TAGS[c.status]
   if (tag) head.push(Text({ key: 'status-' + c.n, color: tag.color, children: [tag.text] }))
-  const quiet = c.status === 'dropped' || undefined
-  const body = [Text({ key: 'summary-' + c.n, wrap: 'wrap', dimColor: quiet, children: [c.summary || c.target || ''] })]
+  const body = [Text({ key: 'summary-' + c.n, wrap: 'wrap', children: [c.summary || c.target || ''] })]
   if (isOpen) {
     const full = []
     if (c.body) full.push(Text({ key: 'body-label-' + c.n, dimColor: true, children: ['Posts as'] }), Markdown({ key: 'body-md-' + c.n, text: c.body }))
