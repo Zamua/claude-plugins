@@ -354,6 +354,11 @@ function link(els, key, href, label, style = {}) {
   return Text({ key, ...style, children: [Link({ href, label })] })
 }
 
+/** A part of a row that keeps its width, so a narrow pane cuts the row's trailing text instead of wrapping a number. */
+function fixed(els, key, child) {
+  return els.Box({ key, flexShrink: 0, children: [child] })
+}
+
 /** A dim label in a fixed column, so the two sentences line up and read as one block. */
 function labelled(els, key, label, sentence) {
   const { Box, Text } = els
@@ -429,8 +434,8 @@ function commentRow(els, c, prs, $) {
   const head = [
     box,
     Button({ key: 'expand-' + c.n, label: isOpen ? '▾' : '▸', plain: true, dimColor: true, onPress: toggler($, 'c' + c.n) }),
-    Text({ key: 'num-' + c.n, bold: true, children: [String(c.n).padStart(2)] }),
-    url ? link(els, 'prlink-' + c.n, url, '#' + number) : Text({ key: 'prlink-' + c.n, dimColor: true, children: ['#' + number] }),
+    fixed(els, 'num-' + c.n, Text({ bold: true, children: [String(c.n).padStart(2)] })),
+    fixed(els, 'prlink-' + c.n, url ? link(els, 'prlink-text-' + c.n, url, '#' + number) : Text({ dimColor: true, children: ['#' + number] })),
   ]
   if (c.confidence !== 'proven') head.push(Text({ key: 'conf-' + c.n, dimColor: true, children: ['?'] }))
   const origin = ORIGIN_TAGS[c.origin]
@@ -514,10 +519,14 @@ function followUpSection(els, followUp, comments, prs) {
   const rows = comments.map((c) => {
     const { number, url } = prOf(c, prs)
     const parts = [
-      Text({ key: followUp.id + '-num-' + c.n, dimColor: true, children: [String(c.n).padStart(2)] }),
-      url ? link(els, followUp.id + '-pr-' + c.n, url, '#' + number, { dimColor: true }) : Text({ key: followUp.id + '-pr-' + c.n, dimColor: true, children: ['#' + number] }),
+      fixed(els, followUp.id + '-num-' + c.n, Text({ dimColor: true, children: [String(c.n).padStart(2)] })),
+      fixed(
+        els,
+        followUp.id + '-pr-' + c.n,
+        url ? link(els, followUp.id + '-pr-text-' + c.n, url, '#' + number, { dimColor: true }) : Text({ dimColor: true, children: ['#' + number] }),
+      ),
     ]
-    if (c.posted_url) parts.push(link(els, followUp.id + '-link-' + c.n, c.posted_url, 'comment', { color: followUp.color }))
+    if (c.posted_url) parts.push(fixed(els, followUp.id + '-link-' + c.n, link(els, followUp.id + '-link-text-' + c.n, c.posted_url, 'comment', { color: followUp.color })))
     parts.push(Text({ key: followUp.id + '-summary-' + c.n, dimColor: true, wrap: 'truncate-end', children: [c.summary || c.target || ''] }))
     const row = Box({ key: followUp.id + '-row-' + c.n, flexDirection: 'row', columnGap: 1, children: parts })
     if (!c.addressed_note) return Box({ key: followUp.id + '-' + c.n, flexDirection: 'column', children: [row] })
@@ -682,7 +691,7 @@ function prRows(els, stack, tree = false, authorWidth = authorWidthOf([stack])) 
       flexDirection: 'row',
       columnGap: 1,
       children: [
-        ...(tree ? [Text({ dimColor: true, children: [i === stack.prs.length - 1 ? '└' : '├'] })] : []),
+        ...(tree ? [fixed(els, 'tree-' + p.number, Text({ dimColor: true, children: [i === stack.prs.length - 1 ? '└' : '├'] }))] : []),
         Box({
           key: 'approval-' + p.number,
           width: 1,
@@ -695,8 +704,8 @@ function prRows(els, stack, tree = false, authorWidth = authorWidthOf([stack])) 
           flexShrink: 0,
           children: hasOpenThreads(p) ? [Text({ color: 'warning', bold: true, children: ['!'] })] : [],
         }),
-        link(els, 'pr-open-' + p.number, p.url, '#' + p.number),
-        Text({ color: RISK_COLORS[p.risk] || 'inactive', children: ['●'] }),
+        fixed(els, 'prnum-' + p.number, link(els, 'pr-open-' + p.number, p.url, '#' + p.number)),
+        fixed(els, 'risk-' + p.number, Text({ color: RISK_COLORS[p.risk] || 'inactive', children: ['●'] })),
         ...(authorWidth
           ? [
               Box({
@@ -707,7 +716,7 @@ function prRows(els, stack, tree = false, authorWidth = authorWidthOf([stack])) 
               }),
             ]
           : []),
-        ...(branch ? [Text({ dimColor: true, children: ['on #' + branch] })] : []),
+        ...(branch ? [fixed(els, 'base-' + p.number, Text({ dimColor: true, children: ['on #' + branch] }))] : []),
         ...(p.title ? [Text({ dimColor: true, wrap: 'truncate-end', children: [p.title] })] : []),
       ],
     })
