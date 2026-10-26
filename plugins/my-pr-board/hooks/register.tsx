@@ -594,7 +594,6 @@ function prsBox(els: Els, groups: Stack[]) {
   return (
     <Box key="prs" flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
       {groups.map((group, at) => {
-        const waiting = group.prs.some(needsYou)
         const landed = group.prs.every(p => p.facts?.state === 'MERGED')
 
         return (
@@ -602,7 +601,6 @@ function prsBox(els: Els, groups: Stack[]) {
             {group.title !== '' && (
               <Box flexDirection="row" columnGap={1}>
                 <Text bold>{group.title}</Text>
-                {waiting && <Text color="warning">needs you</Text>}
                 {landed && <Text color="success">merged</Text>}
               </Box>
             )}
