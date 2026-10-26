@@ -149,14 +149,15 @@ default branch.
 The poller keeps the facts GitHub holds current on its own. Each pass it writes
 `github.json` beside the board, and the pane lays it over `prs` when drawing: each
 pull request's `author`, `head` and `base`, whether the operator's account approves
-it, and the review threads that account started. The pane draws a green check left
-of the number on an approved pull request, and a warning mark beside it while a
+it, its state, and the review threads that account started. Left of the number the
+pane draws a purple diamond on a merged pull request, a red cross on one closed
+unmerged, and a green check on an approved open one, and beside that a warning mark while a
 thread waits on the author: a posted comment of the board's own not yet `addressed`,
 or another thread from the operator's account, from another session or another
 reviewer under their login, still unresolved with no reply from anyone else. A stack
 with anything waiting does not read as all addressed. You do not maintain these. Run
 `poll.sh facts <key>` when you need them fresher than the next pass, and write
-`author`, `base`, `approved` and `other_open_threads` on the board only for a review
+`author`, `base`, `state`, `approved` and `other_open_threads` on the board only for a review
 with no poller, where `github.json` never appears.
 
 `stacks` groups them, one entry per stack: an `id`, a `title` of a few words, and its
