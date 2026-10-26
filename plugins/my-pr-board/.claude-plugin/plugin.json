@@ -1,0 +1,17 @@
+{
+  "name": "my-pr-board",
+  "description": "A pane beside the chat tracking the pull requests this session raised: each stack bottom first, with GitHub's live state for every pull request, draft or ready, merged or closed, CI, conflicts, review and the threads waiting on you, plus Claude's one-line note on what is left. Pull requests opened with gh pr create join on their own. Each session keeps its own board, restored on resume. /myprs opens it.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Zamua"
+  },
+  "keywords": [
+    "board",
+    "pane",
+    "pull-request",
+    "github",
+    "session",
+    "mod"
+  ],
+  "types": "./types/index.d.ts"
+}

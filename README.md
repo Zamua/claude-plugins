@@ -41,6 +41,12 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   next steps, open questions, decisions, links, ideas and topics. For the things
   you would otherwise keep asking it to repeat. Each session has its own board,
   restored on resume. `/board` opens it, `/board clear` empties it.
+- **[my-pr-board](plugins/my-pr-board/)**: the pull requests this session
+  raised, in a pane beside the chat. Each stack bottom first, with GitHub's live
+  state per pull request: draft or ready, merged or closed, CI, conflicts, review
+  and the threads waiting on you, plus Claude's note on what is left. Pull
+  requests opened with `gh pr create` join on their own, and a toast says when
+  one merges or its CI fails. `/myprs` opens it.
 
 ## License
 
