@@ -3,7 +3,9 @@
 # entry per pull request in the review, with what GitHub says about it, and names the
 # pull request each one is stacked on by matching its base branch to another's head.
 # A pull request GitHub cannot answer for leaves the last github.json in place rather
-# than replacing it with a partial one.
+# than replacing it with a partial one. A board written by hand, which state.json
+# does not know, gets the same file for the pull requests it lists, at most every ten
+# minutes.
 #
 # The GitHub call is replaced by canned answers, so no network is used.
 #
@@ -60,5 +62,16 @@ before="$(cat "$facts")"
 WEB_DOWN=1 _refresh_facts api-2 2>/dev/null
 eq "a pull request GitHub cannot answer for leaves the last file in place" "$before" "$(cat "$facts")"
 eq "no partial file is left behind" "" "$(ls -A "$TD/reviews/.pr-review-board/api-2" | grep -v '^github.json$')"
+
+manual="$TD/reviews/.pr-review-board/manual-sess-1"
+mkdir -p "$manual"
+printf '%s' '{"schema":2,"title":"tracked","verdict":"low","prs":[{"pr":"acme/api#1"},{"pr":"acme/api#2"}]}' > "$manual/board.json"
+eq "a hand-written board without github.json is due" "manual-sess-1" "$(_manual_keys_due)"
+_refresh_facts manual-sess-1 2>/dev/null
+eq "a hand-written board gets github.json for the pull requests it lists" "acme/api#1 acme/api#2" "$(jq -r '.prs | keys | join(" ")' "$manual/github.json")"
+eq "a hand-written board with fresh facts is not due" "" "$(_manual_keys_due)"
+touch -t "$(date -v-11M +%Y%m%d%H%M.%S 2>/dev/null || date -d '-11 minutes' +%Y%m%d%H%M.%S)" "$manual/github.json"
+eq "a hand-written board with facts over ten minutes old is due again" "manual-sess-1" "$(_manual_keys_due)"
+eq "a spawned review is never listed as hand-written" "" "$(_manual_keys_due | grep -v '^manual-')"
 
 [ "$fail" = 0 ] || echo "FAILURES PRESENT"

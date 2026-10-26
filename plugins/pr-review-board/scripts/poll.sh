@@ -15,7 +15,7 @@
 #   poll.sh stack <pr>         every open pull request in <pr>'s stack, bottom first
 #   poll.sh adopt <k> <pr>...  add pull requests to live review <k>
 #   poll.sh assignment <k>     print a review's assignment file path
-#   poll.sh facts [<k>]        refresh github.json for review <k>, or every live review
+#   poll.sh facts [<k>]        refresh github.json for review <k>, or every live review and hand-written board
 #   poll.sh install            arm the scheduler (launchd on macOS, else a cron line)
 #   poll.sh uninstall          disarm the scheduler
 #   poll.sh config-init        write a starter config
@@ -283,7 +283,7 @@ cmd_once() {
 
   while IFS= read -r k; do
     [ -n "$k" ] && { _refresh_facts "$k" || true; }
-  done < <(prb_active_keys)
+  done < <(prb_active_keys; _manual_keys_due)
   prb_log "pass done: running=$running"
 }
 
@@ -301,7 +301,7 @@ _refresh_facts() {  # <key>
     [ -n "$pr" ] || continue
     one="$(src_pr_facts "$pr")" && [ -n "$one" ] || { prb_log "facts: no answer for $pr; '$key' keeps its last github.json"; return 1; }
     all="$all$one"$'\n'
-  done < <(prb_review_prs "$key")
+  done < <(_facts_prs "$key")
   tmp="$(mktemp "$meta/.github.json.XXXXXX")" || return 1
   if printf '%s' "$all" | jq -s --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
       . as $all
@@ -318,11 +318,32 @@ _refresh_facts() {  # <key>
   fi
 }
 
+# A board written by hand has no entry in state.json, so its pull requests are the ones it lists
+_facts_prs() {  # <key>
+  local listed board
+  listed="$(prb_review_prs "$1")"
+  if [ -n "$listed" ]; then printf '%s\n' "$listed"; return; fi
+  board="$(prb_meta_dir "$1")/board.json"
+  [ -f "$board" ] && jq -r '.prs[]?.pr // empty' "$board" 2>/dev/null
+}
+
+# Boards written by hand whose github.json is missing or ten minutes old. Nothing marks
+# one finished, so each costs a GitHub call per pull request every ten minutes until
+# the cleanup skill deletes it.
+_manual_keys_due() {
+  local d
+  for d in "$(prb_reviews_root)/.pr-review-board"/manual-*; do
+    [ -f "$d/board.json" ] || continue
+    [ -f "$d/github.json" ] && [ -z "$(find "$d/github.json" -mmin +10)" ] && continue
+    basename "$d"
+  done
+}
+
 cmd_facts() {  # [<key>]
   prb_need $(src_deps) || return 1
   if [ -n "${1:-}" ]; then _refresh_facts "$1"; return; fi
   local k
-  while IFS= read -r k; do [ -n "$k" ] && { _refresh_facts "$k" || true; }; done < <(prb_active_keys)
+  while IFS= read -r k; do [ -n "$k" ] && { _refresh_facts "$k" || true; }; done < <(prb_active_keys; _manual_keys_due)
 }
 
 cmd_fresh() {
