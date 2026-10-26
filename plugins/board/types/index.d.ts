@@ -1,3 +1,27 @@
+export type SessionSection =
+  | 'next'
+  | 'questions'
+  | 'decisions'
+  | 'links'
+  | 'ideas'
+  | 'topics'
+
+export type SessionItem = {
+  id: string
+  section: SessionSection
+  text: string
+  url?: string
+  isDone?: boolean
+}
+
+export type SessionBoard = {
+  sessionId: string
+  goal: string
+  summary: string
+  items: SessionItem[]
+  seq: number
+}
+
 export type CiState = 'pass' | 'fail' | 'pending' | 'none'
 
 export type PrFacts = {
@@ -41,6 +65,13 @@ export type PrBoard = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'my-pr-board': { board: Shaped<PrBoard>; isDismissed: boolean }
+    board: {
+      sessionId: string
+      selected: string
+      isDismissed: boolean
+      reviewStack: string
+      session: Shaped<SessionBoard>
+      prs: Shaped<PrBoard>
+    }
   }
 }
