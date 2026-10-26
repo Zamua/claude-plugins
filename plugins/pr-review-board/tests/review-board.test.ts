@@ -467,6 +467,27 @@ test('open threads the board did not post keep a stack from reading as all addre
   await ui.unmount()
 })
 
+test('a merged pull request shows a purple diamond and a closed one a red cross where the approval check sits', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const facts = {
+    updated_at: '2026-10-21T13:58:00Z',
+    prs: {
+      'acme/api#6954': { state: 'MERGED', approved: true, author: 'ann', threads: [] },
+      'acme/api#7472': { state: 'CLOSED', approved: false, author: 'ann', threads: [] },
+      'acme/api#7500': { state: 'OPEN', approved: true, author: 'bo', threads: [] },
+    },
+  }
+  stubs(on, { board: STACKED, facts })
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, requestId: 'review-lead', surface: 'terminal' })
+  expect((await ui.find({ key: 'approval-6954', text: '◆' })).children[0].props.color).toBe('merged')
+  expect((await ui.find({ key: 'approval-7472', text: '✕' })).children[0].props.color).toBe('error')
+  expect((await ui.find({ key: 'approval-7500', text: '✓' })).children[0].props.color).toBe('success')
+  expect(await ui.find({ key: 'approval-6954', text: '✓' })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('github.json beside the board decides approvals, authors, bases and waiting threads', async ($, on) => {
   mock.clock(on, { now: NOW })
   const board = { ...STACKED, prs: STACKED.prs.map((p) => (p.number === 7472 ? { ...p, approved: true, author: 'stale' } : p)) }

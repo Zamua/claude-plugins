@@ -29,6 +29,8 @@ _B_CHECK='
     ((.prs // []) | to_entries[] | select((.value.pr | pr_ok) | not) | "prs[\(.key)].pr is not owner/repo#N"),
     ((.prs // []) | to_entries[] | select(.value.author != null and (.value.author | type) != "string") | "prs[\(.key)].author is not a string"),
     ((.prs // []) | to_entries[] | select(.value.approved != null and (.value.approved | type) != "boolean") | "prs[\(.key)].approved is not a boolean"),
+    ((.prs // []) | to_entries[] | select(.value.state != null and ([.value.state] | inside(["OPEN", "MERGED", "CLOSED"]) | not))
+       | "prs[\(.key)].state is not OPEN, MERGED or CLOSED"),
     ((.prs // []) | to_entries[] | select(.value.other_open_threads != null)
        | select((.value.other_open_threads | type) != "number" or .value.other_open_threads < 0 or (.value.other_open_threads | floor) != .value.other_open_threads)
        | "prs[\(.key)].other_open_threads is not a count"),

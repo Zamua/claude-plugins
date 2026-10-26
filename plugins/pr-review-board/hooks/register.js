@@ -303,6 +303,7 @@ function withFacts(raw, f) {
           ...p,
           author: g.author || p.author,
           head: g.head || p.head,
+          state: g.state || p.state,
           base: 'base' in g ? g.base || undefined : p.base,
           approved: g.approved === true,
           other_open_threads: threads.filter((t) => !posted.has(t.url) && !t.resolved && !t.replied).length,
@@ -609,6 +610,14 @@ function stackOf(c, prs, stacks) {
   return stack ? stack.id : undefined
 }
 
+/** Once a pull request leaves review its state outranks the operator's approval in the one column they share. */
+function stateMark(Text, p) {
+  if (p.state === 'MERGED') return [Text({ color: 'merged', children: ['◆'] })]
+  if (p.state === 'CLOSED') return [Text({ color: 'error', children: ['✕'] })]
+  if (p.approved === true) return [Text({ color: 'success', children: ['✓'] })]
+  return []
+}
+
 /** Threads the board posted count by its own `addressed`; `other_open_threads` counts the account's others. */
 function hasOpenThreads(p) {
   const comments = board && Array.isArray(board.comments) ? board.comments : []
@@ -653,11 +662,12 @@ function stackHeading(els, key, stack, $, pressable = false, marginTop = 0) {
 }
 
 /**
- * One quiet line per pull request, hung on a tree rule under its stack's heading when All lists several stacks: a
- * green check once the operator approved it, a warning mark while a thread from the operator's account waits on the
- * author, its number linking it, a dot for its risk, a short title. The check and the mark each sit in a one-cell
- * column that stays empty without them, so the numbers line up. The author follows in a column `authorWidth` wide, so
- * the titles line up too, and a layer based on something other than the row above names its base.
+ * One quiet line per pull request, hung on a tree rule under its stack's heading when All lists several stacks. The
+ * first column holds a purple diamond once it merged, a red cross once it closed, else a green check once the operator
+ * approved it; the second a warning mark while a thread from the operator's account waits on the author. Each is one
+ * cell that stays empty without its mark, so the numbers line up. Then its number linking it, a dot for its risk, the
+ * author in a column `authorWidth` wide so the titles line up too, the base when it is not the row above, and a short
+ * title.
  */
 function prRows(els, stack, tree = false, authorWidth = authorWidthOf([stack])) {
   const { Box, Text } = els
@@ -674,7 +684,7 @@ function prRows(els, stack, tree = false, authorWidth = authorWidthOf([stack])) 
           key: 'approval-' + p.number,
           width: 1,
           flexShrink: 0,
-          children: p.approved === true ? [Text({ color: 'success', children: ['✓'] })] : [],
+          children: stateMark(Text, p),
         }),
         Box({
           key: 'open-' + p.number,

@@ -122,7 +122,8 @@ itself in the review's session:
 - the verdict, the risk and the blast radius, one sentence each
 - one tab per stack beside an All tab, each heading with its own verdict, risk and
   blast radius and listing its pull requests, linked, with their authors and risk,
-  a green check beside each one you approved, and a warning mark beside each one
+  a purple diamond beside each merged one, a green check beside each one you
+  approved, and a warning mark beside each one
   with a thread from your account still waiting on its author. The poller reads
   those from GitHub every pass into `github.json` beside the board, so they follow
   an approval or a reply within one pass, without the worker. Claude Code draws a tab it opens by itself only from 144 columns, so on a narrower
