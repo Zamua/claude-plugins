@@ -1,23 +1,22 @@
 import { atom, read, update } from 'claude-code'
-import type { Color, Elements, EngineInterface, Register, RenderSurface } from 'claude-code'
+import type { Color, EngineInterface, On } from 'claude-code'
 
-import type { CiState, PrBoard, PrFacts, TrackedPr } from '../types'
+import type { CiState, PrBoard, PrFacts, TrackedPr } from '../../types'
+import { ago, prRow } from '../kit'
+import type { Els, View } from '../kit'
+import { showView } from '../pane'
+import { loadBoard, saveBoard } from '../store'
 
-const PANE = 'my-pr-board'
-const TITLE = 'My PRs'
-const TOOL = 'mcp__my-pr-board__prs'
-const SHAPE = 'prs-1'
-const SAVED_BOARDS = 40
+export const PRS_TOOL = 'mcp__board__prs'
+
 const REFRESH_MS = 60_000
 
-const TOOL_DESCRIPTION = `Track the pull requests this session raised on the My PRs pane beside the chat. The pane shows GitHub's live state for each: draft or ready, merged or closed, CI, conflicts, review, and review threads waiting on the person.
+const TOOL_DESCRIPTION = `Track the pull requests this session raised on the prs view of the board pane beside the chat. The view shows GitHub's live state for each: draft or ready, merged or closed, CI, conflicts, review, and review threads waiting on the person.
 - add: a pull request this session opened or owns, by URL or owner/repo#N. Ones opened here with gh pr create or gh stack submit join on their own.
 - note: one line on what is left on it, the next step or the question it waits on. Keep it current as that changes.
 - stack: a short shared name for pull requests that belong together. Stacked branches group on their own.
 - remove: stop tracking one.
 Call with no fields to refresh from GitHub and read every tracked pull request's state. Use that rather than gh when asked where the pull requests stand. Do not mention board updates in your reply. Main conversation only.`
-
-const REMINDER = `The person keeps a ${TITLE} pane beside the chat listing the pull requests this session raised. Keep it current with ${TOOL}, as its description says.`
 
 const ENTRY = {
   type: 'object',
@@ -79,7 +78,6 @@ type Applied = { board: PrBoard; added: string[] } | { error: string }
 type Stack = { title: string; prs: TrackedPr[] }
 type Need = { text: string; href?: string }
 type Word = { text: string; color?: Color; isDim?: boolean }
-type Els = Elements[RenderSurface]
 
 type Login = { login: string } | null
 type GqlCheck = {
@@ -123,10 +121,17 @@ const emptyBoard = (sessionId: string): PrBoard => ({
   error: '',
 })
 
-const board = atom({ plugin: 'my-pr-board', key: 'board' } as const, emptyBoard(''), {
-  shape: SHAPE,
-})
-const isDismissed = atom({ plugin: 'my-pr-board', key: 'isDismissed' } as const, false)
+const SHAPE = 'prs-1'
+const board = atom({ plugin: 'board', key: 'prs' } as const, emptyBoard(''), { shape: SHAPE })
+const PREFIX = 'prs'
+
+// session.start fires once per process, not after /clear or /resume, so every entry point re-checks the session
+async function syncBoard($: EngineInterface) {
+  const sessionId = await $.session.id()
+  if ((await read($, board)).sessionId === sessionId) return
+  const loaded = (await loadBoard<PrBoard>($, PREFIX, SHAPE, sessionId)) ?? emptyBoard(sessionId)
+  await update($, board, () => loaded)
+}
 
 function refOf(text: string): Ref | undefined {
   const [, owner, repo, number] = REF.exec(text.trim()) ?? []
@@ -375,19 +380,10 @@ function groupsOf(prs: readonly TrackedPr[]): Stack[] {
   return [...headed, { title: headed.length > 0 ? 'Other' : '', prs: loose }]
 }
 
-function span(ms: number): string {
-  const minutes = Math.max(0, Math.round(ms / 60_000))
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.round(minutes / 60)
-
-  return hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`
-}
-
 const checkedLine = (b: PrBoard, now: number) => {
   if (b.error) return `GitHub check failed: ${b.error}`
 
-  return b.checkedAt ? `GitHub checked ${span(now - b.checkedAt)}` : 'Checking GitHub'
+  return b.checkedAt ? `GitHub checked ${ago(now - b.checkedAt)}` : 'Checking GitHub'
 }
 
 function describe(b: PrBoard, now: number): string {
@@ -411,35 +407,6 @@ function describe(b: PrBoard, now: number): string {
   }
 
   return lines.join('\n')
-}
-
-const storeKey = (sessionId: string) => `board:${sessionId}`
-
-async function loadSaved($: EngineInterface, sessionId: string): Promise<PrBoard> {
-  const saved = await $.store.get(storeKey(sessionId))
-  const isBoard =
-    typeof saved === 'object' && saved !== null && (saved as { shape?: unknown }).shape === SHAPE
-
-  return isBoard ? (saved as { value: PrBoard }).value : emptyBoard(sessionId)
-}
-
-async function save($: EngineInterface, value: PrBoard) {
-  const key = storeKey(value.sessionId)
-  await $.store.set(key, { shape: SHAPE, value })
-  const older = (await $.store.keys()).filter(one => one.startsWith('board:') && one !== key)
-  for (const one of older.slice(0, Math.max(0, older.length - SAVED_BOARDS + 1))) {
-    await $.store.delete(one)
-  }
-}
-
-// session.start fires once per process, not after /clear or /resume, so every
-// entry point re-checks which session it is in.
-async function syncSession($: EngineInterface) {
-  const sessionId = await $.session.id()
-  if ((await read($, board)).sessionId === sessionId) return
-  const loaded = await loadSaved($, sessionId)
-  await update($, board, () => loaded)
-  await update($, isDismissed, () => false)
 }
 
 async function change($: EngineInterface, fn: (current: PrBoard) => Applied): Promise<Applied> {
@@ -485,7 +452,7 @@ async function fetchFacts($: EngineInterface, b: PrBoard) {
 }
 
 async function refreshNow($: EngineInterface) {
-  await syncSession($)
+  await syncBoard($)
   const b = await read($, board)
   if (b.prs.length === 0) return
   const now = await $.clock.now()
@@ -509,11 +476,9 @@ async function refreshNow($: EngineInterface) {
     for (const text of toasts) $.ui.toast(text)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    await update($, board, current =>
-      current.sessionId === b.sessionId ? { ...current, error: message } : current,
-    )
+    await update($, board, current => (current.sessionId === b.sessionId ? { ...current, error: message } : current))
   }
-  await save($, await read($, board))
+  await saveBoard($, PREFIX, SHAPE, await read($, board))
 }
 
 let queue: Promise<void> = Promise.resolve()
@@ -525,65 +490,36 @@ function refresh($: EngineInterface): Promise<void> {
   return queue
 }
 
-async function show($: EngineInterface) {
-  if (await read($, isDismissed)) return
-  await $.ui.open({ id: PANE, title: TITLE })
-}
-
-async function track($: EngineInterface, urls: string[]): Promise<string[]> {
-  await syncSession($)
-  const applied = await change($, current => apply(current, { add: urls.map(pr => ({ pr })) }))
-  if ('error' in applied) return []
-  await save($, applied.board)
-  void show($)
-  void refresh($)
-
-  return applied.added
-}
-
 /**
  * One line per pull request: a check once approved, a mark while it needs the person, its number, a dot for CI and
- * mergeability, its state and its title. The check, the mark and the state each hold a fixed column so the numbers
- * and titles line up, and a layer based on something other than the row above names its base.
+ * mergeability, its state and its title. A layer based on something other than the row above names its base.
  */
 function prRows(els: Els, group: Stack, tree: boolean) {
-  const { Box, Text, Link } = els
+  const { Box, Text } = els
 
   return group.prs.map((p, at) => {
     const below = belowOf(p, group.prs)
     const named = below && group.prs[at - 1] !== below ? below : undefined
     const state = stateOf(p)
 
-    return (
-      <Box key={`row-${p.key}`} flexDirection="row" columnGap={1}>
-        {tree && <Text dimColor>{at === group.prs.length - 1 ? '└' : '├'}</Text>}
-        <Box width={1} flexShrink={0}>
-          {p.facts?.review === 'APPROVED' && <Text color="success">✓</Text>}
-        </Box>
-        <Box width={1} flexShrink={0}>
-          {needsYou(p) && (
-            <Text color="warning" bold>
-              !
-            </Text>
-          )}
-        </Box>
-        <Box flexShrink={0}>
-          <Text>
-            <Link href={p.url} label={`#${p.number}`} />
-          </Text>
-        </Box>
-        <Text color={healthOf(p)}>●</Text>
-        <Box width={6} flexShrink={0}>
+    return prRow(els, {
+      id: p.key,
+      number: p.number,
+      url: p.url,
+      ...(tree && { tree: at === group.prs.length - 1 ? ('last' as const) : ('mid' as const) }),
+      ...(p.facts?.review === 'APPROVED' && { mark: { glyph: '✓', color: 'success' } }),
+      isFlagged: needsYou(p),
+      dot: healthOf(p),
+      columns: [
+        <Box key={`state-${p.key}`} width={6} flexShrink={0}>
           <Text color={state.color} dimColor={state.isDim}>
             {state.text}
           </Text>
-        </Box>
-        {named && <Text dimColor>{`on #${named.number}`}</Text>}
-        <Text dimColor wrap="truncate-end">
-          {p.facts?.title ?? `${p.owner}/${p.repo}`}
-        </Text>
-      </Box>
-    )
+        </Box>,
+      ],
+      ...(named && { on: named.number }),
+      title: p.facts?.title ?? `${p.owner}/${p.repo}`,
+    })
   })
 }
 
@@ -612,64 +548,32 @@ function prsBox(els: Els, groups: Stack[]) {
   )
 }
 
-export const register: Register = on => {
-  on('session.start', async ($, e, next) => {
-    await $.tool.register({
-      name: 'prs',
-      description: TOOL_DESCRIPTION,
-      inputSchema: INPUT_SCHEMA,
-      isDeferred: false,
-    })
-    await $.command.register({
-      name: 'myprs',
-      description: 'Open the board of pull requests this session raised, or empty it with /myprs clear',
-      argumentHint: '[clear]',
-    })
-    await syncSession($)
-    if ((await read($, board)).prs.length > 0) {
-      void show($)
-      void refresh($)
-    }
-    $.clock.every(REFRESH_MS, async () => {
-      const b = await read($, board)
-      if (b.prs.some(p => !p.facts || p.facts.state === 'OPEN')) await refresh($)
-    })
+async function track($: EngineInterface, urls: string[]): Promise<string[]> {
+  await syncBoard($)
+  const applied = await change($, current => apply(current, { add: urls.map(pr => ({ pr })) }))
+  if ('error' in applied) return []
+  await saveBoard($, PREFIX, SHAPE, applied.board)
+  await showView($, 'prs')
+  void refresh($)
 
-    return next(e)
-  })
+  return applied.added
+}
 
-  on('turn.start', async ($, e, next) => {
-    await syncSession($)
+export function prsHooks(on: On) {
+  on('tool.check', { tool: PRS_TOOL }, () => ({ decision: 'allow' as const }))
 
-    return next(e)
-  })
-
-  on('prompt.compose', async ($, e, next) => {
-    const composed = await next(e)
-    if (!e.tools.includes(TOOL)) return composed
-
-    return {
-      sections: [
-        ...composed.sections,
-        { id: 'my-pr-board:guide', text: REMINDER, scope: 'session' as const },
-      ],
-    }
-  })
-
-  on('tool.check', { tool: TOOL }, () => ({ decision: 'allow' as const }))
-
-  on('tool.call', { tool: TOOL }, async ($, e) => {
-    if (e.agentId) return { deny: `The ${TITLE} board belongs to the main conversation.` }
+  on('tool.call', { tool: PRS_TOOL }, async ($, e) => {
+    if (e.agentId) return { deny: 'The prs board belongs to the main conversation.' }
     const { tool, tool_use_id, consent, agentId, ...args } = e
     const input = args as Input
-    await syncSession($)
+    await syncBoard($)
 
     const isRead = !input.add?.length && !input.update?.length && !input.remove?.length
     if (!isRead) {
       const applied = await change($, current => apply(current, input))
       if ('error' in applied) return { deny: applied.error }
-      await save($, applied.board)
-      void show($)
+      await saveBoard($, PREFIX, SHAPE, applied.board)
+      await showView($, 'prs')
       if (applied.added.length === 0) return { result: 'Board updated.' }
     }
     await refresh($)
@@ -689,61 +593,67 @@ export const register: Register = on => {
 
     return {
       ...ran,
-      context: [
-        ...(ran.context ?? []),
-        `${TITLE} now tracks ${added.join(', ')}. Give each a note with ${TOOL}.`,
-      ],
+      context: [...(ran.context ?? []), `The board now tracks ${added.join(', ')}. Give each a note with ${PRS_TOOL}.`],
     }
   }).catch(($, e, next) => next(e))
+}
 
-  on('command.run', { command: 'myprs' }, async ($, e) => {
-    await syncSession($)
-    if (e.args.trim() === 'clear') {
-      const applied = await change($, current => ({ board: emptyBoard(current.sessionId), added: [] }))
-      if ('board' in applied) await save($, applied.board)
-
-      return { text: `${TITLE} board cleared.` }
-    }
-    await update($, isDismissed, () => false)
-    const opened = await $.ui.open({ id: PANE, title: TITLE })
-    void refresh($)
-
-    return {
-      text: opened.isPlaced ? `${TITLE} opened.` : `${TITLE} is waiting for room: ${opened.reason}`,
-    }
+export async function prsStart($: EngineInterface) {
+  await $.tool.register({
+    name: 'prs',
+    description: TOOL_DESCRIPTION,
+    inputSchema: INPUT_SCHEMA,
+    isDeferred: false,
   })
-
-  on('ui.close', async ($, e, next) => {
-    if (e.id === PANE && e.origin.kind === 'person') await update($, isDismissed, () => true)
-
-    return next(e)
-  })
-
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const els = $.ui.resolve(e)
-    const { Box, Text } = els
+  await syncBoard($)
+  if ((await read($, board)).prs.length > 0) void refresh($)
+  $.clock.every(REFRESH_MS, async () => {
     const b = await read($, board)
-    if (b.prs.length === 0) {
-      return (
-        <Text dimColor wrap="wrap">
-          No pull requests tracked yet. The ones this session opens show here.
-        </Text>
-      )
-    }
-    const now = await $.clock.now()
-    const groups = groupsOf(b.prs)
-    // The surface draws a tab row only while more than one pane is open, and the board would sit flush under it
-    const tabbed = (await $.ui.panes()).filter(pane => pane.isPlaced).length > 1
-
-    return (
-      <Box key="board" flexDirection="column" marginTop={tabbed ? 1 : 0}>
-        <Box key="checked" flexDirection="row" justifyContent="flex-end" paddingX={1}>
-          <Text color={b.error ? 'error' : undefined} dimColor={!b.error} wrap="wrap">
-            {checkedLine(b, now)}
-          </Text>
-        </Box>
-        {prsBox(els, groups)}
-      </Box>
-    )
+    if (b.prs.some(p => !p.facts || p.facts.state === 'OPEN')) await refresh($)
   })
+}
+
+export async function prsSync($: EngineInterface) {
+  await syncBoard($)
+}
+
+export function prsView($: EngineInterface): View {
+  return {
+    id: 'prs',
+    title: 'prs',
+    guide: { tool: PRS_TOOL, text: `track the pull requests this session raised on it with ${PRS_TOOL}` },
+    onShow: async () => void refresh($),
+    isAvailable: async () => (await read($, board)).prs.length > 0,
+    needs: async () => (await read($, board)).prs.filter(needsYou).length,
+    opensAtStart: async () => (await read($, board)).prs.length > 0,
+    clear: async () => {
+      const applied = await change($, current => ({ board: emptyBoard(current.sessionId), added: [] }))
+      if ('board' in applied) await saveBoard($, PREFIX, SHAPE, applied.board)
+
+      return 'Pull request board cleared.'
+    },
+    render: async els => {
+      const { Box, Text } = els
+      const b = await read($, board)
+      if (b.prs.length === 0) {
+        return (
+          <Text dimColor wrap="wrap">
+            No pull requests tracked yet. The ones this session opens show here.
+          </Text>
+        )
+      }
+      const now = await $.clock.now()
+
+      return (
+        <Box key="prs-view" flexDirection="column">
+          <Box key="checked" flexDirection="row" justifyContent="flex-end" paddingX={1}>
+            <Text color={b.error ? 'error' : undefined} dimColor={!b.error} wrap="wrap">
+              {checkedLine(b, now)}
+            </Text>
+          </Box>
+          {prsBox(els, groupsOf(b.prs))}
+        </Box>
+      )
+    },
+  }
 }

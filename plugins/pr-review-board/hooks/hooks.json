@@ -1,4 +1,0 @@
-{
-  "description": "The review board: a /reviewboard pane that draws the board.json of the review this session runs",
-  "modules": ["./register.js"]
-}

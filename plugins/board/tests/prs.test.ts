@@ -1,25 +1,11 @@
-import { expect, mock, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
-import type { Engine } from 'claude-code/testing'
+import { expect, test } from 'claude-code/testing'
 
-const TOOL = 'mcp__my-pr-board__prs'
+import { board, engine, open, start, world } from './engine'
+
+const TOOL = 'mcp__board__prs'
 const NOW = Date.parse('2026-10-25T12:00:00Z')
-const BOTTOM = 'https://github.com/joinmason/cherry-pos/pull/6047'
-const TOP = 'https://github.com/joinmason/cherry-pos/pull/6050'
-
-const PANE = {
-  plugin: 'my-pr-board',
-  component: 'Pane',
-  requestId: 'my-pr-board',
-  props: {
-    title: 'My PRs',
-    isFocused: false,
-    bodyColumns: 60,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 30 },
-    view: {},
-  },
-} as const
+const BOTTOM = 'https://github.com/acme/api/pull/6047'
+const TOP = 'https://github.com/acme/api/pull/6050'
 
 type Pr = {
   title: string
@@ -61,7 +47,7 @@ function asGraphql(p: Pr) {
     headRefName: p.headRefName,
     baseRefName: p.baseRefName,
     headRefOid: 'abc123',
-    author: { login: 'Zamua' },
+    author: { login: 'octo' },
     commits: {
       nodes: [
         {
@@ -89,54 +75,37 @@ function asGraphql(p: Pr) {
   }
 }
 
-/** Answers gh's GraphQL call from `github`, keyed by pull request number. */
-function engine(on: On, session: { id: string }, github: Record<number, Pr>, toasts: string[] = []) {
-  mock.clock(on, { now: NOW })
-  mock.store(on)
-  on('session.id', () => ({ value: session.id }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('ui.panes', () => ({ value: [] }))
-  on('command.register', () => ({ value: { command: 'myprs' } }))
-  on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('ui.toast', (_, e) => {
-    toasts.push(e.text)
-    return { value: undefined }
-  })
-  on('process.run', (_, e) => {
-    const query = e.argv[e.argv.length - 1] ?? ''
-    const data: Record<string, unknown> = { viewer: { login: 'Zamua' } }
-    for (const [, alias, number] of query.matchAll(/(p\d+): repository\([^)]*\) \{ pullRequest\(number: (\d+)\)/g)) {
-      const found = github[Number(number)]
-      data[alias as string] = { pullRequest: found ? asGraphql(found) : null }
-    }
-    return {
-      value: {
-        exitCode: 0,
-        stdout: JSON.stringify({ data }),
-        stderr: '',
-        isStdoutTruncated: false,
-        isStderrTruncated: false,
-      },
-    }
+/** A world whose gh answers GitHub's GraphQL from `github`, keyed by pull request number. */
+function gh(github: Record<number, Pr>) {
+  return world({
+    run: argv => {
+      if (argv[0] !== 'gh') return undefined
+      const query = argv[argv.length - 1] ?? ''
+      const data: Record<string, unknown> = { viewer: { login: 'octo' } }
+      for (const [, alias, number] of query.matchAll(/(p\d+): repository\([^)]*\) \{ pullRequest\(number: (\d+)\)/g)) {
+        const found = github[Number(number)]
+        data[alias as string] = { pullRequest: found ? asGraphql(found) : null }
+      }
+
+      return { exitCode: 0, stdout: JSON.stringify({ data }), stderr: '' }
+    },
   })
 }
 
-const start = ($: Engine) =>
-  $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-
 test('a pull request opened with gh pr create joins the board with its GitHub state', async ($, on) => {
-  engine(on, { id: 's1' }, {
+  const w = gh({
     6050: pr({
-      title: 'MM-819 nets the held reserve',
+      title: 'Nets the held reserve',
       mergeable: 'CONFLICTING',
       mergeStateStatus: 'DIRTY',
       threads: [
-        { isResolved: true, by: 'Zamua' },
+        { isResolved: true, by: 'octo' },
         { isResolved: false, by: 'cursor' },
-        { isResolved: false, by: 'Zamua' },
+        { isResolved: false, by: 'octo' },
       ],
     }),
   })
+  engine(on, w, NOW)
   on('tool.call', { tool: 'Bash' }, () => ({
     result: { stdout: `${TOP}\n`, stderr: '', interrupted: false },
     text: `${TOP}\n`,
@@ -144,35 +113,47 @@ test('a pull request opened with gh pr create joins the board with its GitHub st
   await start($)
 
   const ran = await $.tool.call({ tool: 'Bash', command: 'gh pr create --draft --title x' })
-  expect(ran.context?.join('\n')).toContain('now tracks joinmason/cherry-pos#6050')
+  expect(ran.context?.join('\n')).toContain('now tracks acme/api#6050')
+  expect(w.opens).toContainEqual(expect.objectContaining({ id: 'board' }))
   await $.tool.call({ tool: TOOL })
 
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ type: 'Text', text: /MM-819 nets the held reserve/ })).toBeDefined()
-    expect(await ui.find({ key: 'checked', text: /^GitHub checked just now$/ })).toBeDefined()
-    expect(await ui.find({ key: 'row-joinmason/cherry-pos#6050', text: /^!\s*#6050/ })).toBeDefined()
+    const ui = await $.ui.mount({
+      plugin: 'board',
+      component: 'Pane',
+      requestId: 'board',
+      surface,
+      props: { title: 'Board', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    })
+    expect(await ui.find({ key: 'tab-prs', text: 'prs 1' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Nets the held reserve/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'GitHub checked just now' })).toBeDefined()
+    expect(await ui.find({ key: 'prrow-acme/api#6050', text: /^!\s*#6050/ })).toBeDefined()
     await ui.unmount()
   }
 })
 
 test('a pull request based on another tracked one sits above it in one stack', async ($, on) => {
-  engine(on, { id: 's1' }, {
-    6047: pr({ title: 'MM-818 fee lookup', headRefName: 'feature/mm-818' }),
-    6050: pr({ title: 'MM-819 reserve netting', headRefName: 'feature/mm-819', baseRefName: 'feature/mm-818' }),
-  })
+  engine(
+    on,
+    gh({
+      6047: pr({ title: 'Fee lookup', headRefName: 'feature/ac-818' }),
+      6050: pr({ title: 'Reserve netting', headRefName: 'feature/ac-819', baseRefName: 'feature/ac-818' }),
+    }),
+    NOW,
+  )
   await start($)
 
   const read = await $.tool.call({
     tool: TOOL,
-    add: [{ pr: TOP, note: 'Rebase onto main' }, { pr: 'joinmason/cherry-pos#6047' }],
+    add: [{ pr: TOP, note: 'Rebase onto main' }, { pr: 'acme/api#6047' }],
   })
   const text = String(read.result)
   expect(text.indexOf('#6047')).toBeLessThan(text.indexOf('#6050'))
   expect(text).toContain('on #6047')
   expect(text).toContain('note: Rebase onto main')
 
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const ui = await open($, 'prs')
   expect(await ui.find({ type: 'Text', text: /^Stack$/ })).toBeDefined()
   const rows = (await ui.find({ key: 'prs' }))?.text ?? ''
   expect(rows.indexOf('#6047')).toBeLessThan(rows.indexOf('#6050'))
@@ -180,12 +161,9 @@ test('a pull request based on another tracked one sits above it in one stack', a
 })
 
 test('a refresh says when a tracked pull request merged or its CI failed', async ($, on) => {
-  const toasts: string[] = []
-  const github = {
-    6047: pr({}),
-    6050: pr({ rollup: 'PENDING' }),
-  }
-  engine(on, { id: 's1' }, github, toasts)
+  const github = { 6047: pr({}), 6050: pr({ rollup: 'PENDING' }) }
+  const w = gh(github)
+  engine(on, w, NOW)
   await start($)
   await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }, { pr: TOP }] })
 
@@ -195,32 +173,41 @@ test('a refresh says when a tracked pull request merged or its CI failed', async
 
   expect(String(read.result)).toMatch(/#6047.*\n\s+merged/)
   expect(String(read.result)).toContain('CI failing: unit-test')
-  expect(toasts).toEqual(['#6047 merged', '#6050 CI failed: unit-test'])
+  expect(w.toasts).toEqual(['#6047 merged', '#6050 CI failed: unit-test'])
 })
 
 test('a change naming a pull request the board does not track is refused whole', async ($, on) => {
-  engine(on, { id: 's1' }, { 6047: pr({}) })
+  engine(on, gh({ 6047: pr({}) }), NOW)
   await start($)
   await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })
 
   const refused = await $.tool.call({
     tool: TOOL,
     update: [{ pr: BOTTOM, note: 'Ready to mark ready' }],
-    remove: ['joinmason/cherry-pos#1'],
+    remove: ['acme/api#1'],
   })
-  expect(refused.deny).toContain('joinmason/cherry-pos#1')
+  expect(refused.deny).toContain('acme/api#1')
   expect(String((await $.tool.call({ tool: TOOL })).result)).not.toContain('Ready to mark ready')
 })
 
-test('each session keeps its own board', async ($, on) => {
-  const session = { id: 's1' }
-  engine(on, session, { 6047: pr({}) })
+test('each session keeps its own pull request board', async ($, on) => {
+  const w = gh({ 6047: pr({}) })
+  engine(on, w, NOW)
   await start($)
   await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })
 
-  session.id = 's2'
+  w.session.id = 's2'
   expect((await $.tool.call({ tool: TOOL })).result).toBe('No pull requests tracked.')
 
-  session.id = 's1'
+  w.session.id = 's1'
   expect(String((await $.tool.call({ tool: TOOL })).result)).toContain('#6047')
+})
+
+test('/board prs clear empties the pull request board', async ($, on) => {
+  engine(on, gh({ 6047: pr({}) }), NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })
+
+  expect((await board($, 'prs clear')).text).toBe('Pull request board cleared.')
+  expect((await $.tool.call({ tool: TOOL })).result).toBe('No pull requests tracked.')
 })
