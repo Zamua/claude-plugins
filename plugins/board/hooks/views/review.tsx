@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, RenderNode } from 'claude-code'
 
-import { ago, fixed, link, prRow, refreshJson, section } from '../kit'
+import { ago, fixed, link, prMark, prRow, refreshJson, section } from '../kit'
 import type { Els, JsonFile, SectionSpec, View } from '../kit'
 
 // The poller records every review here; the worker running one is the session it records
@@ -175,15 +175,6 @@ const otherOpen = (prs: readonly Pr[]) =>
 const authorWidthOf = (stacks: readonly Stack[]) =>
   Math.max(0, ...stacks.flatMap(s => s.prs.map(p => (p.author ? p.author.length : 0))))
 
-/** Once a pull request leaves review its state outranks the operator's approval in the one column they share. */
-function markOf(p: Pr): { glyph: string; color: Color } | undefined {
-  if (p.state === 'MERGED') return { glyph: '◆', color: 'merged' }
-  if (p.state === 'CLOSED') return { glyph: '✕', color: 'error' }
-  if (p.approved === true) return { glyph: '✓', color: 'success' }
-
-  return undefined
-}
-
 function labelled(els: Els, key: string, label: string, sentence: string) {
   const { Box, Text } = els
 
@@ -348,7 +339,7 @@ function prRows(els: Els, b: Board, stack: Stack, tree: boolean, authorWidth: nu
   return stack.prs.map((p, i) => {
     const below = i > 0 ? stack.prs[i - 1]?.pr : undefined
     const branch = p.base && p.base !== below ? p.base.split('#')[1] : undefined
-    const mark = markOf(p)
+    const mark = prMark(p.state, p.approved === true)
     const id = String(p.number)
 
     return prRow(els, {

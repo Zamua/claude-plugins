@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, On } from 'claude-code'
 
 import type { CiState, PrBoard, PrFacts, TrackedPr } from '../../types'
-import { ago, prRow } from '../kit'
+import { ago, messageOf, prMark, prRow } from '../kit'
 import type { Els, View } from '../kit'
 import { showView } from '../pane'
 import { legacyValue, loadBoard, saveBoard } from '../store'
@@ -10,6 +10,8 @@ import { legacyValue, loadBoard, saveBoard } from '../store'
 export const PRS_TOOL = 'mcp__board__prs'
 
 const REFRESH_MS = 60_000
+// GitHub times out with HTTP 504 on one query covering a few dozen pull requests
+const BATCH = 8
 
 const TOOL_DESCRIPTION = `Track the pull requests this session raised on the prs view of the board pane beside the chat. The view shows GitHub's live state for each: draft or ready, merged or closed, CI, conflicts, review, and review threads waiting on the person.
 - add: a pull request this session opened or owns, by URL or owner/repo#N. Ones opened here with gh pr create or gh stack submit join on their own.
@@ -391,7 +393,7 @@ const needsYou = (p: TrackedPr) => needsOf(p).length > 0
 function stateOf(p: TrackedPr): Word {
   const f = p.facts
   if (!f) return { text: '', isDim: true }
-  if (f.state === 'MERGED') return { text: 'merged', color: 'success' }
+  if (f.state === 'MERGED') return { text: 'merged', color: 'merged' }
   if (f.state === 'CLOSED') return { text: 'closed', isDim: true }
 
   return f.isDraft ? { text: 'draft', isDim: true } : { text: 'ready', color: 'suggestion' }
@@ -460,8 +462,9 @@ async function change($: EngineInterface, fn: (current: PrBoard) => Applied): Pr
   return out.applied ?? { error: 'The board did not change.' }
 }
 
-async function fetchFacts($: EngineInterface, b: PrBoard) {
-  const parts = b.prs.map(
+/** Facts for one batch of pull requests, keyed by pull request; undefined for one GitHub no longer has. */
+async function fetchBatch($: EngineInterface, prs: readonly TrackedPr[], viewer: string) {
+  const parts = prs.map(
     (p, at) =>
       `p${at}: repository(owner: ${JSON.stringify(p.owner)}, name: ${JSON.stringify(p.repo)}) { pullRequest(number: ${p.number}) { ...F } }`,
   )
@@ -480,15 +483,43 @@ async function fetchFacts($: EngineInterface, b: PrBoard) {
     const why = ran.stderr.trim().split('\n')[0] || answer.errors?.[0]?.message
     throw new Error(why || `gh exited ${ran.exitCode}`)
   }
-  const viewer = (data.viewer as { login?: string } | undefined)?.login ?? b.viewer
+  const login = (data.viewer as { login?: string } | undefined)?.login ?? viewer
   const found = new Map(
-    b.prs.map((p, at) => {
+    prs.map((p, at) => {
       const node = data[`p${at}`] as { pullRequest: GqlPr | null } | null | undefined
-      return [p.key, node?.pullRequest ? factsOf(node.pullRequest, viewer) : undefined] as const
+      return [p.key, node?.pullRequest ? factsOf(node.pullRequest, login) : undefined] as const
     }),
   )
 
-  return { viewer, found }
+  return { viewer: login, found }
+}
+
+/**
+ * Every pull request's facts but the merged ones', which no longer change. A batch GitHub fails leaves its pull
+ * requests with the facts they had and says so in `error`; only every batch failing throws.
+ */
+async function fetchFacts($: EngineInterface, b: PrBoard) {
+  const due = b.prs.filter(p => p.facts?.state !== 'MERGED')
+  const batches: TrackedPr[][] = []
+  for (let at = 0; at < due.length; at += BATCH) batches.push(due.slice(at, at + BATCH))
+  const settled = await Promise.allSettled(batches.map(batch => fetchBatch($, batch, b.viewer)))
+  const found = new Map<string, PrFacts | undefined>()
+  let viewer = b.viewer
+  let missed = 0
+  let why = ''
+  settled.forEach((one, at) => {
+    if (one.status === 'fulfilled') {
+      viewer = one.value.viewer
+      for (const [key, facts] of one.value.found) found.set(key, facts)
+      return
+    }
+    missed += batches[at]?.length ?? 0
+    why ||= messageOf(one.reason)
+  })
+  if (missed > 0 && missed === due.length) throw new Error(why)
+  const error = missed > 0 ? `${why}, ${missed} of ${due.length} pull requests not refreshed` : ''
+
+  return { viewer, found, error }
 }
 
 async function refreshNow($: EngineInterface) {
@@ -497,7 +528,7 @@ async function refreshNow($: EngineInterface) {
   if (b.prs.length === 0) return
   const now = await $.clock.now()
   try {
-    const { viewer, found } = await fetchFacts($, b)
+    const { viewer, found, error } = await fetchFacts($, b)
     const toasts = b.prs.flatMap(p => {
       const facts = found.get(p.key)
       return facts ? transitions(p, facts) : []
@@ -511,7 +542,7 @@ async function refreshNow($: EngineInterface) {
         return facts ? { ...rest, facts } : { ...rest, error: 'Not found on GitHub.' }
       })
 
-      return { ...current, prs, viewer, checkedAt: now, error: '' }
+      return { ...current, prs, viewer, checkedAt: now, error }
     })
     for (const text of toasts) $.ui.toast(text)
   } catch (err) {
@@ -541,13 +572,14 @@ function prRows(els: Els, group: Stack, tree: boolean) {
     const below = belowOf(p, group.prs)
     const named = below && group.prs[at - 1] !== below ? below : undefined
     const state = stateOf(p)
+    const mark = prMark(p.facts?.state, p.facts?.review === 'APPROVED')
 
     return prRow(els, {
       id: p.key,
       number: p.number,
       url: p.url,
       ...(tree && { tree: at === group.prs.length - 1 ? ('last' as const) : ('mid' as const) }),
-      ...(p.facts?.review === 'APPROVED' && { mark: { glyph: '✓', color: 'success' } }),
+      ...(mark && { mark }),
       isFlagged: needsYou(p),
       dot: healthOf(p),
       columns: [
@@ -577,7 +609,7 @@ function prsBox(els: Els, groups: Stack[]) {
             {group.title !== '' && (
               <Box flexDirection="row" columnGap={1}>
                 <Text bold>{group.title}</Text>
-                {landed && <Text color="success">merged</Text>}
+                {landed && <Text color="merged">merged</Text>}
               </Box>
             )}
             {prRows(els, group, several)}
