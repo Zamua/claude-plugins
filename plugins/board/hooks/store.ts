@@ -21,3 +21,22 @@ export async function loadBoard<T>($: EngineInterface, prefix: string, shape: st
 
   return isBoard ? (saved as { value: T }).value : undefined
 }
+
+/**
+ * What another plugin's store holds under `key`, read from its file in the Claude Code configuration directory. Each
+ * install of a plugin keeps a file of its own, so the marketplace install answers before a development copy.
+ */
+export async function legacyValue($: EngineInterface, plugin: string, key: string): Promise<unknown> {
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) || `${await $.env.get('HOME')}/.claude`
+  const dir = `${config}/plugins/store`
+  if (!(await $.fs.exists(dir))) return undefined
+  const files = (await $.fs.list(dir))
+    .filter(f => f.kind === 'file' && f.name.startsWith(`${plugin}_`) && f.name.endsWith('.json'))
+    .sort((a, b) => Number(a.name.includes('_inline-')) - Number(b.name.includes('_inline-')))
+  for (const f of files) {
+    const held = JSON.parse(await $.fs.read(`${dir}/${f.name}`)) as Record<string, unknown>
+    if (key in held) return held[key]
+  }
+
+  return undefined
+}

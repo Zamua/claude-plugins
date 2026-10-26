@@ -621,6 +621,7 @@ export function reviewView($: EngineInterface): View {
   return {
     id: 'review',
     title: 'review',
+    scope: 'session',
     onShow: () => reviewRefresh($),
     isAvailable: async () => review !== undefined,
     opensAtStart: async () => review !== undefined,

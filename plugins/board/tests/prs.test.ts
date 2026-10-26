@@ -126,6 +126,7 @@ test('a pull request opened with gh pr create joins the board with its GitHub st
       props: { title: 'Board', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
     })
     expect(await ui.find({ key: 'tab-prs', text: 'prs 1' })).toBeDefined()
+    expect(await ui.find({ key: 'switcher', text: /^session\s*·\s*prs 1$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Nets the held reserve/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'GitHub checked just now' })).toBeDefined()
     expect(await ui.find({ key: 'prrow-acme/api#6050', text: /^!\s*#6050/ })).toBeDefined()

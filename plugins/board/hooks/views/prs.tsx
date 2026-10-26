@@ -5,7 +5,7 @@ import type { CiState, PrBoard, PrFacts, TrackedPr } from '../../types'
 import { ago, prRow } from '../kit'
 import type { Els, View } from '../kit'
 import { showView } from '../pane'
-import { loadBoard, saveBoard } from '../store'
+import { legacyValue, loadBoard, saveBoard } from '../store'
 
 export const PRS_TOOL = 'mcp__board__prs'
 
@@ -128,9 +128,49 @@ const PREFIX = 'prs'
 // session.start fires once per process, not after /clear or /resume, so every entry point re-checks the session
 async function syncBoard($: EngineInterface) {
   const sessionId = await $.session.id()
-  if ((await read($, board)).sessionId === sessionId) return
-  const loaded = (await loadBoard<PrBoard>($, PREFIX, SHAPE, sessionId)) ?? emptyBoard(sessionId)
-  await update($, board, () => loaded)
+  if ((await read($, board)).sessionId !== sessionId) {
+    const loaded = (await loadBoard<PrBoard>($, PREFIX, SHAPE, sessionId)) ?? emptyBoard(sessionId)
+    await update($, board, () => loaded)
+  }
+  await importLegacy($)
+}
+
+/**
+ * The my-pr-board plugin kept a board per session in its own store. The first sync of a session takes in the pull
+ * requests that board tracked and this one does not, and fills a note or stack this board left empty.
+ */
+async function importLegacy($: EngineInterface) {
+  const current = await read($, board)
+  if (current.legacyImported) return
+  let held: unknown
+  try {
+    held = await legacyValue($, 'my-pr-board', `board:${current.sessionId}`)
+  } catch {
+    return
+  }
+  const old = (held as { shape?: string; value?: PrBoard } | undefined)?.shape === SHAPE
+    ? (held as { value: PrBoard }).value
+    : undefined
+  await update($, board, now => (now.sessionId === current.sessionId ? withLegacy(now, old) : now))
+  if (old) await saveBoard($, PREFIX, SHAPE, await read($, board))
+}
+
+function withLegacy(current: PrBoard, old: PrBoard | undefined): PrBoard {
+  if (!old) return { ...current, legacyImported: true }
+  const theirs = new Map(old.prs.map(p => [p.key, p]))
+  const prs = current.prs.map(p => {
+    const was = theirs.get(p.key)
+
+    return was ? { ...p, note: p.note || was.note, stack: p.stack || was.stack } : p
+  })
+  const tracked = new Set(prs.map(p => p.key))
+
+  return {
+    ...current,
+    prs: [...prs, ...old.prs.filter(p => !tracked.has(p.key))],
+    viewer: current.viewer || old.viewer,
+    legacyImported: true,
+  }
 }
 
 function refOf(text: string): Ref | undefined {
@@ -621,6 +661,7 @@ export function prsView($: EngineInterface): View {
   return {
     id: 'prs',
     title: 'prs',
+    scope: 'session',
     guide: { tool: PRS_TOOL, text: `track the pull requests this session raised on it with ${PRS_TOOL}` },
     onShow: async () => void refresh($),
     isAvailable: async () => (await read($, board)).prs.length > 0,

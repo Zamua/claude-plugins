@@ -13,6 +13,8 @@ export type World = {
   session: { id: string }
   env: Record<string, string>
   files: Record<string, string>
+  /** What the plugin's own store holds at the start. */
+  store: Record<string, unknown>
   panes: Pane[]
   opens: { id: string; title?: string; focus?: boolean }[]
   closes: { id: string }[]
@@ -27,6 +29,7 @@ export function world(over: Partial<World> = {}): World {
     session: { id: 's1' },
     env: {},
     files: {},
+    store: {},
     panes: [],
     opens: [],
     closes: [],
@@ -43,10 +46,22 @@ export const json = (value: unknown) => JSON.stringify(value)
 /** Nothing sits beneath the plugin in a test, so each hook here answers as the engine would. */
 export function engine(on: On, w: World, now: number) {
   mock.clock(on, { now })
-  mock.store(on)
+  mock.store(on, w.store)
   mock.env(on, { HOME, ...w.env })
   on('session.id', () => ({ value: w.session.id }))
-  on('fs.exists', (_, e) => ({ value: e.path in w.files }))
+  on('fs.exists', (_, e) => ({ value: e.path in w.files || Object.keys(w.files).some(p => p.startsWith(`${e.path}/`)) }))
+  on('fs.list', (_, e) => {
+    const dir = `${e.path}/`
+    const names = [...new Set(Object.keys(w.files).filter(p => p.startsWith(dir)).map(p => p.slice(dir.length).split('/')[0] ?? ''))]
+
+    return {
+      value: names.map(name => {
+        const text = w.files[dir + name]
+
+        return { name, kind: text === undefined ? ('dir' as const) : ('file' as const), size: (text ?? '').length, mtimeMs: 1, isLink: false }
+      }),
+    }
+  })
   on('fs.stat', (_, e) => ({
     value: { kind: 'file', size: (w.files[e.path] ?? '').length, mtimeMs: (w.files[e.path] ?? '').length, isLink: false },
   }))

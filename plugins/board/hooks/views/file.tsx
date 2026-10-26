@@ -147,6 +147,7 @@ export function fileView($: EngineInterface, board: FileBoard): View {
   return {
     id: spec.id,
     title: spec.title ?? spec.id,
+    scope: 'shared',
     onShow: () => fileRefresh($, board),
     isAvailable: async () => !file.isMissing,
     needs: async () => (file.value ? itemsOf(file.value).filter(item => item.section === 'needs').length : 0),
