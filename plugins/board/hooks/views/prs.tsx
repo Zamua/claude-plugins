@@ -280,10 +280,6 @@ function factsOf(pr: GqlPr, viewer: string): PrFacts {
     pr.latestReviews.nodes
       .filter(review => review.state === state && review.author)
       .map(review => (review.author as { login: string }).login)
-  const approvedBy = reviewers('APPROVED')
-  const changesRequestedBy = reviewers('CHANGES_REQUESTED')
-  // GitHub gives no decision in a repo that requires no review, so the latest reviews stand in for one
-  const fromReviews = changesRequestedBy.length > 0 ? 'CHANGES_REQUESTED' : approvedBy.length > 0 ? 'APPROVED' : ''
 
   return {
     title: pr.title,
@@ -291,9 +287,9 @@ function factsOf(pr: GqlPr, viewer: string): PrFacts {
     isDraft: pr.isDraft,
     mergeable: pr.mergeable,
     mergeState: pr.mergeStateStatus,
-    review: pr.reviewDecision || fromReviews,
-    approvedBy,
-    changesRequestedBy,
+    review: pr.reviewDecision ?? '',
+    approvedBy: reviewers('APPROVED'),
+    changesRequestedBy: reviewers('CHANGES_REQUESTED'),
     ...ciOf(pr.commits.nodes[0]?.commit.statusCheckRollup ?? null),
     author: pr.author?.login ?? '',
     head: pr.headRefName,
@@ -305,6 +301,17 @@ function factsOf(pr: GqlPr, viewer: string): PrFacts {
 }
 
 const isConflicted = (f: PrFacts) => f.mergeable === 'CONFLICTING' || f.mergeState === 'DIRTY'
+
+/**
+ * GitHub's review decision, or in a repo that requires no review, where GitHub gives none, the one the latest reviews
+ * make. Read here rather than stored, since sessions of every version share the facts they fetch.
+ */
+function reviewOf(f: PrFacts): string {
+  if (f.review) return f.review
+  if (f.changesRequestedBy.length > 0) return 'CHANGES_REQUESTED'
+
+  return f.approvedBy.length > 0 ? 'APPROVED' : ''
+}
 
 function transitions(p: TrackedPr, now: PrFacts): string[] {
   const was = p.facts
@@ -319,8 +326,8 @@ function transitions(p: TrackedPr, now: PrFacts): string[] {
   if (was.ci === 'pending' && now.ci === 'pass') out.push(`${name} CI passed`)
   if (!isConflicted(was) && isConflicted(now)) out.push(`${name} has conflicts`)
   if (now.waiting > was.waiting) out.push(`${name} has a new thread waiting on you`)
-  if (was.review !== now.review && now.review === 'APPROVED') out.push(`${name} approved`)
-  if (was.review !== now.review && now.review === 'CHANGES_REQUESTED') {
+  if (reviewOf(was) !== reviewOf(now) && reviewOf(now) === 'APPROVED') out.push(`${name} approved`)
+  if (reviewOf(was) !== reviewOf(now) && reviewOf(now) === 'CHANGES_REQUESTED') {
     out.push(`${name} has changes requested`)
   }
 
@@ -409,7 +416,7 @@ export function needsOf(p: TrackedPr): Need[] {
   } else if (f.mergeState === 'BEHIND') {
     out.push({ text: 'is behind its base' })
   }
-  if (f.review === 'CHANGES_REQUESTED') {
+  if (reviewOf(f) === 'CHANGES_REQUESTED') {
     const by = f.changesRequestedBy.length > 0 ? ` by ${f.changesRequestedBy.join(', ')}` : ''
     out.push({ text: `has changes requested${by}` })
   }
@@ -701,7 +708,7 @@ function prRows(els: Els, group: Stack, hasChains: boolean) {
     const below = belowOf(p, group.prs)
     const named = below && group.prs[at - 1] !== below ? below : undefined
     const state = stateOf(p)
-    const mark = prMark(p.facts?.state, p.facts?.review === 'APPROVED')
+    const mark = prMark(p.facts?.state, p.facts ? reviewOf(p.facts) === 'APPROVED' : false)
 
     return prRow(els, {
       id: p.key,
