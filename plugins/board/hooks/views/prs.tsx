@@ -548,7 +548,11 @@ async function change($: EngineInterface, fn: (current: PrBoard) => Applied): Pr
   return out.applied ?? { error: 'The board did not change.' }
 }
 
-type Cached = { facts?: PrFacts; at: number }
+type Cached = { facts?: PrFacts; at: number; v?: number }
+
+// Raised when facts are derived from GitHub differently: an entry a session on an older board wrote is fetched again
+// rather than shown
+const FACTS_VERSION = 2
 type Cache = { prs: Record<string, Cached>; viewer?: string; pausedUntil?: number; pauseReason?: string }
 type Budget = { remaining: number; resetAt: string }
 
@@ -632,10 +636,11 @@ async function fetchFacts($: EngineInterface, b: PrBoard) {
   let oldest = now
   for (const p of b.prs) {
     const cached = cache.prs[p.key]
-    if (!cached || (now - cached.at >= FRESH_MS && cached.facts?.state !== 'MERGED')) continue
+    const isFinal = cached?.facts?.state === 'MERGED'
+    if (!cached || (!isFinal && (now - cached.at >= FRESH_MS || cached.v !== FACTS_VERSION))) continue
     found.set(p.key, cached.facts)
     // A merged pull request's facts are final however old, so only the ones that can change date the check
-    if (cached.facts?.state !== 'MERGED') oldest = Math.min(oldest, cached.at)
+    if (!isFinal) oldest = Math.min(oldest, cached.at)
   }
   const due = b.prs.filter(p => !found.has(p.key) && p.facts?.state !== 'MERGED')
   const viewer = cache.viewer || b.viewer
@@ -674,7 +679,7 @@ async function fetchFacts($: EngineInterface, b: PrBoard) {
   await writeCache($, path, current => {
     const prs: Record<string, Cached> = {}
     for (const [key, entry] of Object.entries(current.prs)) if (now - entry.at < KEEP_MS) prs[key] = entry
-    for (const [key, facts] of fetched) prs[key] = facts ? { facts, at: now } : { at: now }
+    for (const [key, facts] of fetched) prs[key] = facts ? { facts, at: now, v: FACTS_VERSION } : { at: now, v: FACTS_VERSION }
     const { pausedUntil, pauseReason, ...rest } = current
     const held = (pausedUntil ?? 0) > now ? { pausedUntil, pauseReason } : {}
 
