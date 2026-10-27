@@ -60,7 +60,7 @@ test('a hand link beats an alias, and a session in no Item waits behind an unpla
   expect(read).toMatch(/file:scope #4 \[Task, flight\] Scope the split\n\s+session:herdr:default\/w1:p1/)
 
   const ui = await open($, 'work')
-  expect(await ui.find({ key: 'wunplaced' })).toMatchObject({ props: { label: '◦ 2 unplaced' } })
+  expect(await ui.find({ key: 'wunplaced', text: '▸ Unplaced 2 sessions' })).toBeDefined()
   expect(await ui.find({ key: 'wsess-unplaced-session:herdr:default/w5:p1' })).toBeUndefined()
   await ui.press({ key: 'wunplaced' })
   expect(await ui.find({ key: 'wsess-unplaced-session:herdr:default/w5:p1', text: /idle\s*random/ })).toBeDefined()
@@ -130,7 +130,7 @@ test('a pull request some session tracks sits under the Item its title names, fr
   await ui.press({ key: 'wtoggle-file:gross' })
   await ui.press({ key: 'wtoggle-file:fee' })
   expect(await ui.find({ key: 'wart-pr:acme/api#7502', text: /you\s*#7502\s*MM-809 adds the gross fee leg: CI failing: build/ })).toBeDefined()
-  expect(await ui.find({ key: 'wunplaced' })).toMatchObject({ props: { label: '◦ 1 unplaced' } })
+  expect(await ui.find({ key: 'wunplaced', text: '▸ Unplaced 1 pull request' })).toBeDefined()
   await ui.unmount()
   expect(w.runs.some(argv => argv[0] === 'gh')).toBe(false)
 })

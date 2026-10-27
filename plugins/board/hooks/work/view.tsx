@@ -213,6 +213,8 @@ type Ctx = { els: Els; now: number; tree: Tree; self?: Session; columns: number 
 
 type Part = { text: string; color?: Color; dimColor?: boolean; bold?: boolean }
 
+const counted = (n: number, noun: string) => (n === 0 ? '' : `${n} ${noun}${n === 1 ? '' : 's'}`)
+
 /**
  * `parts`, then `title` cut to fit, joined by single spaces into at most `room` cells. A Button cannot cut its own
  * text at the pane's edge, so a whole row can be one only once it is cut to fit.
@@ -301,7 +303,14 @@ export function workView($: EngineInterface, w: WorkBoard): View {
               Nothing tracked yet. Claude adds work here with {WORK_TOOL}.
             </Text>
           )}
-          {level(ctx, 'top-outcomes', tree.outcomes)}
+          {tree.outcomes.length > 0 && (
+            <Box key="outcomes" flexDirection="column">
+              <Text dimColor bold>
+                Outcomes
+              </Text>
+              {level(ctx, 'top-outcomes', tree.outcomes)}
+            </Box>
+          )}
           {tree.responsibilities.length > 0 && (
             <Box key="responsibilities" flexDirection="column" marginTop={1}>
               <Text dimColor bold>
@@ -477,17 +486,22 @@ export function workView($: EngineInterface, w: WorkBoard): View {
     )
   }
 
-  /** Sessions and open pull requests that match no Item, folded behind a count so none is invisible. */
+  /** Sessions and open pull requests that match no Item, folded under a heading that counts each, so none is invisible. */
   function unplaced(ctx: Ctx, tree: Tree): RenderNode | undefined {
-    const { Box, Button } = ctx.els
+    const { Box, Button, Text } = ctx.els
     const { sessions, artifacts } = tree.unplaced
-    const count = sessions.length + artifacts.length
-    if (count === 0) return undefined
+    if (sessions.length + artifacts.length === 0) return undefined
     const isOpen = doneShown.has('unplaced')
+    const counts = [counted(sessions.length, 'session'), counted(artifacts.length, 'pull request')].filter(Boolean)
 
     return (
       <Box key="unplaced" flexDirection="column" marginTop={1}>
-        <Button key="wunplaced" label={`◦ ${count} unplaced`} plain dimColor onPress={toggle($, doneShown, 'unplaced')} />
+        <Button key="wunplaced" plain onPress={toggle($, doneShown, 'unplaced')}>
+          <Text dimColor bold>
+            {`${isOpen ? '▾' : '▸'} Unplaced`}
+          </Text>{' '}
+          <Text dimColor>{counts.join(' · ')}</Text>
+        </Button>
         {isOpen && sessions.flatMap(s => sessionLines(ctx, s, 1, 'unplaced', new Set()))}
         {isOpen && artifacts.map(a => artifactLine(ctx, a, 1))}
       </Box>
