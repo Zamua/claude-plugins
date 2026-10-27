@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Color, EngineInterface, On } from 'claude-code'
+import type { Color, EngineInterface, On, RenderNode } from 'claude-code'
 
 import type { CiState, PrBoard, PrFacts, TrackedPr } from '../../types'
 import { ago, messageOf, prMark, prRow, span, stamp } from '../kit'
@@ -852,6 +852,95 @@ export async function prsSync($: EngineInterface) {
   await syncBoard($)
 }
 
+type FilterField = 'author' | 'repo'
+
+/** What the person filtered the view to, for the session `filterFor` names: empty sets show every pull request. */
+const picked: Record<FilterField, Set<string>> = { author: new Set(), repo: new Set() }
+let openFilter: FilterField | '' = ''
+let filterFor = ''
+
+const valueOf = (p: TrackedPr, field: FilterField) => (field === 'author' ? (p.facts?.author ?? '') : p.repo)
+
+const FILTER_TITLES: Record<FilterField, string> = { author: 'Author', repo: 'Repo' }
+
+/**
+ * A box per field that has more than one value. Pressing a box drops its values down beneath the row, each pressed to
+ * tick or untick it; pressing the box again folds them.
+ */
+function filterRow($: EngineInterface, els: Els, prs: readonly TrackedPr[]): RenderNode | undefined {
+  const { Box, Button, Text } = els
+  const fields = (['author', 'repo'] as const).filter(field => new Set(prs.map(p => valueOf(p, field))).size > 1)
+  if (fields.length === 0) return undefined
+  const redraw = () => $.ui.invalidate('ui.render')
+  const shown = (field: FilterField) => {
+    const set = picked[field]
+    if (set.size === 0) return 'all'
+
+    return set.size === 1 ? [...set][0] : `${set.size} picked`
+  }
+  const values = (field: FilterField) => {
+    const counts = new Map<string, number>()
+    for (const p of prs) counts.set(valueOf(p, field), (counts.get(valueOf(p, field)) ?? 0) + 1)
+
+    return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  }
+
+  return (
+    <Box key="pfilters" flexDirection="column" paddingX={1}>
+      <Box key="pfilter-row" flexDirection="row" columnGap={2}>
+        {fields.map(field => (
+          <Button
+            key={`pfilter-${field}`}
+            label={`${FILTER_TITLES[field]}: ${shown(field)} ${openFilter === field ? '▴' : '▾'}`}
+            onPress={() => {
+              openFilter = openFilter === field ? '' : field
+              redraw()
+            }}
+          />
+        ))}
+      </Box>
+      {openFilter !== '' && fields.includes(openFilter) && (
+        <Box key="pfilter-options" flexDirection="column" paddingLeft={2}>
+          {values(openFilter).map(([value, count]) => {
+            const field = openFilter as FilterField
+            const isPicked = picked[field].has(value)
+
+            return (
+              <Button
+                key={`pfopt-${field}-${value}`}
+                plain
+                onPress={() => {
+                  if (isPicked) picked[field].delete(value)
+                  else picked[field].add(value)
+                  redraw()
+                }}
+              >
+                <Text color={isPicked ? 'claude' : undefined}>{isPicked ? '☑' : '☐'}</Text>{' '}
+                <Text>{value || 'unknown'}</Text> <Text dimColor>{String(count)}</Text>
+              </Button>
+            )
+          })}
+          {picked[openFilter].size > 0 && (
+            <Button
+              key={`pfclear-${openFilter}`}
+              label="clear"
+              plain
+              dimColor
+              onPress={() => {
+                picked[openFilter as FilterField].clear()
+                redraw()
+              }}
+            />
+          )}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+const matches = (p: TrackedPr) =>
+  (['author', 'repo'] as const).every(field => picked[field].size === 0 || picked[field].has(valueOf(p, field)))
+
 export function prsView($: EngineInterface): View {
   return {
     id: 'prs',
@@ -886,11 +975,25 @@ export function prsView($: EngineInterface): View {
         )
       }
       const now = await $.clock.now()
+      if (filterFor !== b.sessionId) {
+        picked.author.clear()
+        picked.repo.clear()
+        openFilter = ''
+        filterFor = b.sessionId
+      }
+      const shown = b.prs.filter(matches)
 
       return (
-        <Box key="prs-view" flexDirection="column">
+        <Box key="prs-view" flexDirection="column" rowGap={0}>
           {stamp(els, checkedLine(b, now), Boolean(b.error))}
-          {prsBox(els, groupsOf(b.prs), b.viewer)}
+          {filterRow($, els, b.prs)}
+          {shown.length > 0 ? (
+            prsBox(els, groupsOf(shown), b.viewer)
+          ) : (
+            <Text key="pnone" dimColor>
+              No pull requests match the filter.
+            </Text>
+          )}
         </Box>
       )
     },
