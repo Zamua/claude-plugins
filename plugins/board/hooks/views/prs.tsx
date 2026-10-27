@@ -769,21 +769,12 @@ function prsBox(els: Els, groups: Stack[], viewer: string) {
 
   return (
     <Box key="prs" flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
-      {groups.map((group, at) => {
-        const landed = group.prs.every(p => p.facts?.state === 'MERGED')
-
-        return (
-          <Box key={`group-${at}`} flexDirection="column" marginTop={at > 0 ? 1 : 0}>
-            {group.title !== '' && (
-              <Box flexDirection="row" columnGap={1}>
-                <Text bold>{group.title}</Text>
-                {landed && <Text color="merged">merged</Text>}
-              </Box>
-            )}
-            {prRows(els, group, hasChains, viewer, authorWidth)}
-          </Box>
-        )
-      })}
+      {groups.map((group, at) => (
+        <Box key={`group-${at}`} flexDirection="column" marginTop={at > 0 ? 1 : 0}>
+          {group.title !== '' && <Text bold>{group.title}</Text>}
+          {prRows(els, group, hasChains, viewer, authorWidth)}
+        </Box>
+      ))}
     </Box>
   )
 }
