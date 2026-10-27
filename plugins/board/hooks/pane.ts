@@ -4,6 +4,15 @@ import type { EngineInterface } from 'claude-code'
 export const PANE = 'board'
 export const TITLE = 'Board'
 
+let width = 60
+
+/** The pane's width when it was last drawn, which views fit their rows to. */
+export const paneWidth = () => width
+
+export function setPaneWidth(columns: number) {
+  width = columns
+}
+
 const selected = atom({ plugin: 'board', key: 'selected' } as const, '')
 const isDismissed = atom({ plugin: 'board', key: 'isDismissed' } as const, false)
 

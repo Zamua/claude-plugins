@@ -91,7 +91,7 @@ test("an attached session's work view first draws open down to its Item, with it
 
   const ui = await open($, 'work')
   expect(await ui.find({ key: 'wrow-file:fee' })).toBeDefined()
-  expect(await ui.find({ key: `where-file:fee-${SELF_ID}`, text: 'here' })).toBeDefined()
+  expect(await ui.find({ key: `wsfocus-file:fee-${SELF_ID}`, text: /^● here idle\s+fee-work$/ })).toBeDefined()
   await ui.unmount()
 })
 

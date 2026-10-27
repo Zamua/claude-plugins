@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { messageOf } from './kit'
 import type { View } from './kit'
-import { PANE, showView, TITLE } from './pane'
+import { PANE, paneWidth, setPaneWidth, showView, TITLE } from './pane'
 import { exportPng, PLAIN_ELS } from './png'
 import { fileBoard, fileStart, fileView } from './views/file'
 import type { FileBoard, FileBoardSpec, LinkPair } from './views/file'
@@ -28,8 +28,6 @@ const seenSession = atom({ plugin: 'board', key: 'sessionId' } as const, '')
 type Config = { boards?: unknown[]; link_labels?: Record<string, string>; link_pairs?: LinkPair[] }
 
 let fileBoards: FileBoard[] = []
-// The pane's width when last drawn, which an export draws at
-let paneColumns = 60
 
 const isSpec = (one: unknown): one is FileBoardSpec =>
   typeof one === 'object' &&
@@ -217,7 +215,7 @@ export const register: Register = on => {
         </Box>
       )
 
-      return { text: await exportPng($, target.id, tree, paneColumns) }
+      return { text: await exportPng($, target.id, tree, paneWidth()) }
     }
 
     if (verb === 'clear') {
@@ -253,7 +251,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Button, Text } = els
-    paneColumns = e.props.bodyColumns
+    setPaneWidth(e.props.bodyColumns)
     const list = await listed($)
     const current = await shown($, list)
     const counts = await Promise.all(list.map(v => v.needs()))
