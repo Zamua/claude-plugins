@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { engine, open, start } from './engine'
+import { engine, HOME, json, open, start } from './engine'
 import {
   herdrHost,
   prsBoard,
@@ -133,4 +133,21 @@ test('a pull request some session tracks sits under the Item its title names, fr
   expect(await ui.find({ key: 'wunplaced', text: '▸ Unplaced 1 pull request' })).toBeDefined()
   await ui.unmount()
   expect(w.runs.some(argv => argv[0] === 'gh')).toBe(false)
+})
+
+test("someone else's pull request a session watches needs you only for a thread waiting on you", async ($, on) => {
+  const held = prsBoard('s9', [
+    trackedPr(7502, 'MM-809 adds the gross fee leg', { ci: 'fail', failing: ['build'] }),
+    trackedPr(7600, 'MM-809 adds the fee lookup', { author: 'mert', ci: 'fail', failing: ['build'] }),
+    trackedPr(7601, 'MM-809 adds the fee record', { author: 'mert', waiting: 1 }),
+  ])
+  const cache = { [`${HOME}/.cache/board/github.json`]: json({ prs: {}, viewer: 'me' }) }
+  engine(on, withLive(withAliases(), herdrHost([]), { ...storeFile(held), ...cache }), NOW)
+  await start($)
+
+  const read = String((await $.tool.call({ tool: TOOL })).result)
+  expect(read).toContain('pr:acme/api#7502 [needs] MM-809 adds the gross fee leg')
+  expect(read).toContain('pr:acme/api#7600 [watching] MM-809 adds the fee lookup')
+  expect(read).toContain('pr:acme/api#7601 [needs] MM-809 adds the fee record')
+  expect(read).toContain('file:fee #3 [Task, needs, 2 need you] Settle the fee account')
 })
