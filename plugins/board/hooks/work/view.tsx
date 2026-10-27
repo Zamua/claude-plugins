@@ -525,6 +525,8 @@ export function workView($: EngineInterface, w: WorkBoard): View {
   function details(ctx: Ctx, node: Node): RenderNode | undefined {
     const { Box, Button, Markdown, Text } = ctx.els
     const { item } = node
+    // The block's indent, its rule and the space after it
+    const room = ctx.columns - (node.depth * 2 + 2) - 2
     const buttons: RenderNode[] = item.links.map((link, i) => (
       <Button
         key={`wlink-${item.id}-${i}`}
@@ -534,7 +536,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
           $.ui.invalidate('ui.render')
         }}
       >
-        <Text color="suggestion">{`↗ ${link.label || sourceLabel(link.url, w.labels)}`}</Text>
+        {spans(ctx.els, fitLine([{ text: '↗', color: 'suggestion' }], { text: link.label || sourceLabel(link.url, w.labels), color: 'suggestion' }, room))}
       </Button>
     ))
     if (!item.detail && !item.owner && buttons.length === 0) return undefined
@@ -552,7 +554,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         {item.owner && <Text dimColor>{item.owner}</Text>}
         {item.detail && <Markdown key={`wdetail-${item.id}`} dimColor text={item.detail} />}
         {buttons.length > 0 && (
-          <Box key={`wlinks-${item.id}`} flexDirection="row" flexWrap="wrap" columnGap={2}>
+          <Box key={`wlinks-${item.id}`} flexDirection="column">
             {buttons}
           </Box>
         )}
