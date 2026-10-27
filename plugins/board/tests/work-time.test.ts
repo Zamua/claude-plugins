@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { board, CONFIG_FILE, engine, HOME, json, open, start, world } from './engine'
+import type { World } from './engine'
 import { herdrHost, TREE, withLive, WORK_CONFIG, WORK_FILE } from './work-fixtures'
 
 const NOW = Date.parse('2026-10-27T14:00:00Z')
@@ -8,6 +9,15 @@ const TOOL = 'mcp__board__work'
 const TIME_FILE = `${HOME}/.cache/board/time.json`
 const at = (minutes: number) => new Date(NOW - 60 * 60_000 + minutes * 60_000).toISOString()
 const transcript = (minutes: number[]) => minutes.map(m => json({ type: 'user', timestamp: at(m) })).join('\n')
+
+/** The transcript's minutes, as the harness's grep pipeline prints them. */
+const minutesOf = (text: string) =>
+  [...text.matchAll(/"timestamp":"([^"]*)/g)]
+    .map(match => (match[1] ?? '').slice(0, 16))
+    .filter((minute, at, all) => minute !== all[at - 1])
+    .join('\n')
+const counting = (host: World['run'], files: Record<string, string>): World['run'] => argv =>
+  argv[0] === 'sh' ? { exitCode: 0, stdout: minutesOf(files[argv[argv.length - 1] ?? ''] ?? ''), stderr: '' } : host(argv)
 
 test('a target inside two hours counts down in red, and inside a day in yellow', async ($, on) => {
   const items = [
@@ -31,7 +41,7 @@ test("an Item's time is its sessions' active time, gaps over five minutes cut, s
     [`${HOME}/.claude/projects/-home-test/h1.jsonl`]: transcript([0, 2, 4, 20, 21]),
     [TIME_FILE]: json({ sessions: { 'h-old': { at: NOW - 3600e3, activeMs: 3 * 3600e3, item: 'file:scope' } } }),
   }
-  const w = withLive(file, herdrHost([{ id: 'w4:p1', label: 'fee-work', harnessId: 'h1' }]), files)
+  const w = withLive(file, counting(herdrHost([{ id: 'w4:p1', label: 'fee-work', harnessId: 'h1' }]), files), files)
   engine(on, w, NOW)
   await start($)
 

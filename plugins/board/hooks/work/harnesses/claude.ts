@@ -14,7 +14,10 @@ const GAP_MS = 5 * 60_000
 // A transcript still being written is counted again at most this often, since a long one takes a while to read
 const RECOUNT_MS = 5 * 60_000
 const KEEP_MS = 90 * 24 * 3600e3
-const STAMP = /"timestamp":"([^"]+)"/g
+// A transcript runs to hundreds of megabytes, past what one file read takes, so grep cuts it to the minutes it has
+// entries in, in order, one line each
+const MINUTES = ['sh', '-c', 'grep -o \'"timestamp":"[^"]*\' "$1" | cut -c14-29 | uniq', 'minutes']
+const COUNT_TIMEOUT_MS = 60_000
 
 async function configDir($: EngineInterface) {
   return (await $.env.get('CLAUDE_CONFIG_DIR')) || `${await $.env.get('HOME')}/.claude`
@@ -54,10 +57,12 @@ export function claudeArgs(config: unknown): string[] {
   return Array.isArray(args) ? args.filter((one): one is string => typeof one === 'string') : []
 }
 
-/** The time a transcript's entries span, with every gap over five minutes cut out, so idle hours do not count. */
-export function activeTime(transcript: string): number {
-  const stamps = [...transcript.matchAll(STAMP)]
-    .map(match => Date.parse(match[1] ?? ''))
+/**
+ * The time a transcript's entries span, from the minutes they fall in, such as `2026-10-27T19:32`, with every gap over
+ * five minutes cut out, so idle hours do not count.
+ */
+export function activeTime(minutes: string): number {
+  const stamps = [...new Set(minutes.split('\n').map(line => Date.parse(`${line.trim()}Z`)))]
     .filter(at => !Number.isNaN(at))
     .sort((a, b) => a - b)
   let total = 0
@@ -106,17 +111,24 @@ export async function claudeTime($: EngineInterface, ids: string[]): Promise<{ a
   let isChanged = false
   for (const id of ids) {
     const entry = cache.sessions[id]
-    const transcript = entry?.path ?? (await transcriptOf($, id))
-    if (!transcript) continue
-    const mtimeMs = (await $.fs.stat(transcript).catch(() => undefined))?.mtimeMs
-    if (entry && (entry.mtimeMs === mtimeMs || now - entry.at < RECOUNT_MS)) {
-      active.set(id, entry.activeMs)
-      continue
+    try {
+      const transcript = entry?.path ?? (await transcriptOf($, id))
+      if (!transcript) continue
+      const mtimeMs = (await $.fs.stat(transcript).catch(() => undefined))?.mtimeMs
+      if (entry && (entry.mtimeMs === mtimeMs || now - entry.at < RECOUNT_MS)) {
+        active.set(id, entry.activeMs)
+        continue
+      }
+      const counted = await $.process.run([...MINUTES, transcript], { timeoutMs: COUNT_TIMEOUT_MS })
+      if (counted.exitCode !== 0 && counted.stdout === '') continue
+      const activeMs = activeTime(counted.stdout)
+      cache.sessions[id] = { ...entry, path: transcript, ...(mtimeMs !== undefined && { mtimeMs }), at: now, activeMs }
+      active.set(id, activeMs)
+      isChanged = true
+    } catch {
+      // A transcript that cannot be counted leaves its session's time as last counted
+      if (entry) active.set(id, entry.activeMs)
     }
-    const activeMs = activeTime(await $.fs.read(transcript))
-    cache.sessions[id] = { ...entry, path: transcript, ...(mtimeMs !== undefined && { mtimeMs }), at: now, activeMs }
-    active.set(id, activeMs)
-    isChanged = true
   }
   const live = new Set(ids)
   const past: PastTime[] = []
