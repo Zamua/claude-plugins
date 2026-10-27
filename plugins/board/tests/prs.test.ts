@@ -258,6 +258,7 @@ test('author and repo boxes drop down a checklist, and ticked values narrow the 
   expect(await ui.find({ key: 'pfilter-repo' })).toMatchObject({ props: { label: 'Repo: all ▾' } })
   await ui.press({ key: 'pfilter-author' })
   expect(await ui.find({ key: 'pfopt-author-rojen', text: '☐ rojen 2' })).toBeDefined()
+  expect(await ui.find({ key: 'pfilter-popup' })).toMatchObject({ props: { position: 'absolute', top: 2, left: 1 } })
   await ui.press({ key: 'pfopt-author-rojen' })
   expect(await rows()).toEqual(['#6022', '#6023'])
   expect(await ui.find({ key: 'pfilter-author' })).toMatchObject({ props: { label: 'Author: rojen ▴' } })
