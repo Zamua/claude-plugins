@@ -159,7 +159,12 @@ US6. Each story ends with a live check and a version bump, so each ships alone.
 
 - [X] T047 [P] Document the work model in `plugins/board/README.md`: the tree, Kinds, each Source, Host and Harness and its config, the work tool, starting sessions, the root session and its skill, migration; make `plugins/board/.claude-plugin/plugin.json` and its `.claude-plugin/marketplace.json` entry say the same thing (Constitution VII)
 - [X] T048 [P] Remove the `groups` layout from `plugins/board/hooks/views/file.tsx` and its tests in `plugins/board/tests/file-board.test.ts` once no configured board uses it (Constitution I)
-- [ ] T049 Run every block in `specs/001-board-work-model/quickstart.md` in a live session and check SC-001 to SC-006
+- [X] T049 Run every block in `specs/001-board-work-model/quickstart.md` in a live session and check SC-001 to SC-006
+  - 2026-10-27, in `BOARD_CONFIG` sandboxes: stories 1 to 4 pass; stories 5 and 6 are not built.
+  - SC-001 passes. SC-002: 39 of 39 groups and items carried over, titles equal. SC-003: 20 of 22 running sessions
+    attach with no hand link (91%). SC-004: no Source paused and GraphQL at 4966 of 5000; the week-long measure is
+    still open. SC-005: an academic config with Thesis, Chapter and Experiment on the local file alone. SC-006: a
+    local file change showed in 10s; Linear and Rhythms follow their cache windows and were not changed live.
 
 ---
 
