@@ -12,6 +12,7 @@ import { reviewStart, reviewSync, reviewView } from './views/review'
 import { sessionHooks, sessionStart, sessionSync, sessionView } from './views/session'
 import { markWorkActive } from './work/cache'
 import { migrateFile, reportText } from './work/migrate'
+import { rhythmsHooks } from './work/sources/rhythms'
 import { workHooks, workToolStart } from './work/tool'
 import { configureWork, currentWork, workBreadcrumb, workRefresh, workStart, workView } from './work/view'
 import type { WorkSpec } from './work/view'
@@ -106,6 +107,7 @@ export const register: Register = on => {
   sessionHooks(on)
   prsHooks(on)
   workHooks(on)
+  rhythmsHooks(on)
 
   on('session.start', async ($, e, next) => {
     const home = (await $.env.get('HOME')) ?? ''
@@ -128,7 +130,7 @@ export const register: Register = on => {
       }
       taken.add(spec.id)
     }
-    configureWork(work, home, shared.labels)
+    configureWork(work, home, shared.labels, Object.fromEntries(fileBoards.map(one => [one.spec.id, one.path])))
     await sessionStart($)
     await prsStart($)
     await reviewStart($)

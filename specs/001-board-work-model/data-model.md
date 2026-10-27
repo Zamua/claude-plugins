@@ -14,6 +14,7 @@ tool consume them.
 | `url` | string? | where to open it |
 | `shape` | `outcome` \| `responsibility` | a Responsibility never ends and has no target date |
 | `status` | Status | the Item's own status, before rollup |
+| `isStatusLive` | boolean? | its Source keeps the status current, so it counts in its rollup once it has children |
 | `origin` | Origin? | why it exists |
 | `parent` | ItemId? | from its Source; a Link overrides it |
 | `aliases` | string[] | identifiers a Session or Artifact may carry, e.g. `MM-809` |
@@ -98,7 +99,8 @@ of its dates falls inside it, or when a descendant is.
 
 Built in memory from the local file, the Source caches and the Links:
 
-1. Gather Items from every Source; apply Links over Source parents.
+1. Gather Items from every Source; an external Item that a local Item names by alias is drawn as
+   the local one, and its children move under it. Apply Links over Source parents.
 2. Attach Sessions and Artifacts to Items by Link, else by alias match (research R6), else to
    Unplaced; give each Session its Coordinator from its Link.
 3. Roll up Status, `needsCount` and `activeMs` from the leaves.

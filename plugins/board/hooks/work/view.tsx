@@ -3,7 +3,7 @@ import type { Color, EngineInterface, RenderNode } from 'claude-code'
 import { ago, dueOf, fixed, link, openUrl, refreshJson, sourceLabel, stamp } from '../kit'
 import type { Els, View } from '../kit'
 import { paneWidth, selectView } from '../pane'
-import { buildTree, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
+import { buildTree, mergeItems, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
 import type { Artifact, Node, Period, Session, SessionState, Status, Tree } from './model'
 import { focusSession, liveNow, refreshLive } from './sessions'
 import type { Live } from './sessions'
@@ -23,6 +23,8 @@ export type WorkSpec = {
   hosts?: Record<string, unknown>
   harnesses?: Record<string, unknown>
   periods?: Period[]
+  /** Every other board's file, by board id; set from `boards.json`, not written there. */
+  boardPaths?: Record<string, string>
 }
 
 export type WorkBoard = {
@@ -69,14 +71,19 @@ let pressedFor = ''
 let placedFor = ''
 let drawnAt = 0
 
-export function configureWork(spec: WorkSpec | undefined, home: string, labels: Record<string, string> = {}) {
+export function configureWork(
+  spec: WorkSpec | undefined,
+  home: string,
+  labels: Record<string, string> = {},
+  boardPaths: Record<string, string> = {},
+) {
   if (!spec) {
     board = undefined
     return
   }
   const unknown = Object.keys(spec).filter(key => !SPEC_KEYS.has(key))
   board = {
-    spec,
+    spec: { ...spec, boardPaths },
     path: spec.path.startsWith('~/') ? home + spec.path.slice(1) : spec.path,
     state: {},
     warnings: unknown.length > 0 ? [`boards.json: ${spec.id} has keys nothing reads: ${unknown.join(', ')}.`] : [],
@@ -93,7 +100,9 @@ export function workTree(file: unknown, live: Live = liveNow()): { tree?: Tree; 
   const { items, links } = itemsAndLinks(file as LocalFile)
   const root = (file as LocalFile).root
 
-  return { tree: buildTree(items, links, live.sessions, live.artifacts, typeof root === 'string' ? root : undefined) }
+  const all = mergeItems(items, live.items)
+
+  return { tree: buildTree(all, links, live.sessions, live.artifacts, typeof root === 'string' ? root : undefined) }
 }
 
 export async function workRefresh($: EngineInterface, force = false) {
@@ -389,6 +398,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       ...(due ? [due.color ? { text: due.text, color: due.color } : { text: due.text, dimColor: true }] : []),
       ...(showKind ? [{ text: item.kind, dimColor: true }] : []),
       ...(item.ref !== undefined ? [{ text: `#${item.ref}`, dimColor: true }] : []),
+      ...(item.progress !== undefined ? [{ text: `${item.progress}%`, dimColor: true }] : []),
     ]
     const room = ctx.columns - node.depth * 2 - (hasMark ? 2 : 0)
     const content = spans(ctx.els, fitLine(parts, { text: item.title, dimColor: quiet }, room))
@@ -524,10 +534,11 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         }}
       />
     ))
-    if (!item.detail && buttons.length === 0) return undefined
+    if (!item.detail && !item.owner && buttons.length === 0) return undefined
 
     return (
       <Box key={`wmore-${item.id}`} flexDirection="column" paddingLeft={node.depth * 2 + 2}>
+        {item.owner && <Text dimColor>{item.owner}</Text>}
         {item.detail && <Markdown key={`wdetail-${item.id}`} dimColor text={item.detail} />}
         {buttons.length > 0 && (
           <Box key={`wlinks-${item.id}`} flexDirection="row" flexWrap="wrap" columnGap={1}>
