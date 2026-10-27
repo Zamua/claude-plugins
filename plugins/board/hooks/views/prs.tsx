@@ -568,7 +568,8 @@ async function fetchFacts($: EngineInterface, b: PrBoard) {
     const cached = cache.prs[p.key]
     if (!cached || (now - cached.at >= FRESH_MS && cached.facts?.state !== 'MERGED')) continue
     found.set(p.key, cached.facts)
-    oldest = Math.min(oldest, cached.at)
+    // A merged pull request's facts are final however old, so only the ones that can change date the check
+    if (cached.facts?.state !== 'MERGED') oldest = Math.min(oldest, cached.at)
   }
   const due = b.prs.filter(p => !found.has(p.key) && p.facts?.state !== 'MERGED')
   const viewer = cache.viewer || b.viewer
