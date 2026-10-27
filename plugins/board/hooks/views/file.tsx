@@ -9,8 +9,7 @@ export type FileBoardSpec = {
   id: string
   title?: string
   path: string
-  /** `sections` draws one box per status; `groups` one box per project, nesting workstreams. */
-  layout?: 'sections' | 'groups'
+  layout?: 'sections'
   /** A board older than this says its writer may be stuck. */
   stale_minutes?: number
   stale_text?: string
@@ -28,7 +27,6 @@ type Item = {
   id: string
   ref?: number
   section?: string
-  group?: string
   title: string
   workspace?: string
   source?: string
@@ -37,20 +35,11 @@ type Item = {
   due?: string
   due_label?: string
 }
-type Group = {
-  id: string
-  parent?: string
-  title?: string
-  source?: string
-  source_label?: string
-  links?: Link[]
-}
-type Data = { updated_at?: string; items?: Item[]; groups?: Group[] }
+type Data = { updated_at?: string; items?: Item[] }
 
 type Status = {
   id: string
   title: string
-  tag: string
   color: Color
   isQuiet?: boolean
   empty?: string
@@ -58,20 +47,15 @@ type Status = {
 
 // An item's section is its status, in draw order; colors are theme keys, so they follow the person's theme
 const STATUSES: readonly Status[] = [
-  { id: 'needs', title: 'Needs you', tag: 'you', color: 'warning', empty: 'Nothing needs you' },
-  { id: 'flight', title: 'Running', tag: 'now', color: 'success' },
-  { id: 'next', title: 'Up next', tag: 'next', color: 'suggestion' },
-  { id: 'waiting', title: 'Waiting', tag: 'wait', color: 'permission' },
-  { id: 'watching', title: 'Watching', tag: 'watch', color: 'suggestion' },
-  { id: 'done', title: 'Done', tag: 'done', color: 'inactive', isQuiet: true },
+  { id: 'needs', title: 'Needs you', color: 'warning', empty: 'Nothing needs you' },
+  { id: 'flight', title: 'Running', color: 'success' },
+  { id: 'next', title: 'Up next', color: 'suggestion' },
+  { id: 'waiting', title: 'Waiting', color: 'permission' },
+  { id: 'watching', title: 'Watching', color: 'suggestion' },
+  { id: 'done', title: 'Done', color: 'inactive', isQuiet: true },
 ]
-const TAG_WIDTH = Math.max(...STATUSES.map(s => s.tag.length))
 const POLL_MS = 15_000
-const OTHER: Group = { id: 'other', title: 'Other' }
 
-const DONE = STATUSES[STATUSES.length - 1] as Status
-const statusOf = (item: Item) => STATUSES.find(s => s.id === item.section) ?? DONE
-const statusRank = (item: Item) => STATUSES.indexOf(statusOf(item))
 const refOf = (item: Item) => (Number.isInteger(item.ref) ? `#${item.ref} ` : '')
 const itemsOf = (data: Data) => (Array.isArray(data.items) ? data.items : [])
 const linksOf = (owner: { links?: Link[] }) => (Array.isArray(owner.links) ? owner.links : [])
@@ -186,11 +170,9 @@ export function fileView($: EngineInterface, board: FileBoard): View {
           }
         },
       }
-      const body = spec.layout === 'groups' ? groupsLayout(ctx, data) : sectionsLayout(ctx, data, statuses)
-
       return (
         <Box flexDirection="column">
-          {body}
+          {sectionsLayout(ctx, data, statuses)}
           {footer(els, data, ctx.now)}
         </Box>
       )
@@ -208,151 +190,6 @@ function sectionsLayout(ctx: Ctx, data: Data, statuses: readonly Status[]): Rend
   }
 
   return out
-}
-
-type Tree = { top: Group[]; itemsOf: (id: string) => Item[]; childrenOf: (id: string) => Group[] }
-
-/**
- * Groups nest by `parent`. An item names its group; one naming no known group, and a group whose parent is unknown,
- * fall to the top level, so a typo never hides an item.
- */
-function groupTree(data: Data): Tree {
-  const groups = (Array.isArray(data.groups) ? data.groups : []).filter(g => g && g.id)
-  const known = new Set(groups.map(g => g.id))
-  const items = itemsOf(data)
-  const parentOf = (g: Group) => (g.parent && known.has(g.parent) && g.parent !== g.id ? g.parent : undefined)
-  const top = groups.filter(g => !parentOf(g))
-  if (items.some(item => !known.has(item.group ?? ''))) top.push(OTHER)
-
-  return {
-    top,
-    itemsOf: id =>
-      items
-        .map((item, index) => ({ item, index }))
-        .filter(({ item }) => (known.has(item.group ?? '') ? item.group === id : id === OTHER.id))
-        .sort((a, b) => statusRank(a.item) - statusRank(b.item) || a.index - b.index)
-        .map(({ item }) => item),
-    childrenOf: id => groups.filter(g => parentOf(g) === id),
-  }
-}
-
-function openCount(tree: Tree, group: Group): number {
-  const own = tree.itemsOf(group.id).filter(item => item.section !== 'done').length
-
-  return tree.childrenOf(group.id).reduce((sum, child) => sum + openCount(tree, child), own)
-}
-
-function groupsLayout(ctx: Ctx, data: Data): RenderNode[] {
-  const { Box } = ctx.els
-  const tree = groupTree(data)
-
-  return [
-    summary(ctx, data),
-    ...tree.top.map(group => (
-      <Box
-        key={`group-${group.id}`}
-        flexDirection="column"
-        borderStyle="round"
-        borderColor={group === OTHER ? 'inactive' : 'claude'}
-        paddingX={1}
-      >
-        {groupBody(ctx, tree, group, 0)}
-      </Box>
-    )),
-  ]
-}
-
-/** Groups split up next across projects, so the take order is listed once here. */
-function summary(ctx: Ctx, data: Data) {
-  const { Box, Text } = ctx.els
-  const items = itemsOf(data)
-  const counted = STATUSES.filter(s => !s.isQuiet).filter(
-    s => s.id === 'needs' || items.some(item => item.section === s.id),
-  )
-  const next = items
-    .filter(item => item.section === 'next')
-    .map(item => refOf(item).trim())
-    .filter(Boolean)
-
-  return (
-    <Box key="summary" flexDirection="column" paddingX={1}>
-      <Box key="counts" flexDirection="row" columnGap={2}>
-        {counted.map(s => (
-          <Text color={s.color} bold={s.id === 'needs' || undefined}>
-            {`${s.tag} ${items.filter(item => item.section === s.id).length}`}
-          </Text>
-        ))}
-      </Box>
-      {next.length > 0 && (
-        <Text dimColor wrap="wrap">
-          {`Up next: ${next.join(', ')}`}
-        </Text>
-      )}
-    </Box>
-  )
-}
-
-/**
- * A group draws its open items, then its workstreams, then what it finished. Finished items show their title alone,
- * so history stays out of the way of the work, and everything under a heading is indented, so a workstream heading
- * never reads as one of the items above it.
- */
-function groupBody(ctx: Ctx, tree: Tree, group: Group, depth: number): RenderNode[] {
-  const { Box, Text } = ctx.els
-  const open = openCount(tree, group)
-  const items = tree.itemsOf(group.id)
-  const children = tree.childrenOf(group.id)
-  const done = items.filter(item => item.section === 'done')
-  const body: RenderNode[] = []
-  const links = groupLinks(ctx, group)
-  if (links) body.push(links)
-  body.push(...items.filter(item => item.section !== 'done').map(item => itemRow(ctx, item, { tagged: true })))
-  for (const child of children) {
-    body.push(
-      <Box key={`group-${child.id}`} flexDirection="column" marginTop={1}>
-        {groupBody(ctx, tree, child, depth + 1)}
-      </Box>,
-    )
-  }
-  if (done.length > 0) {
-    body.push(
-      <Box key={`done-${group.id}`} flexDirection="column" marginTop={children.length > 0 ? 1 : 0}>
-        {done.map(item => itemRow(ctx, item, { tagged: true, compact: true }))}
-      </Box>,
-    )
-  }
-
-  return [
-    <Box key={`heading-${group.id}`} flexDirection="row" columnGap={1}>
-      <Text bold color={depth > 0 ? 'claude' : undefined}>
-        {group.title || group.id}
-      </Text>
-      {open > 0 && <Text dimColor>{String(open)}</Text>}
-    </Box>,
-    <Box key={`body-${group.id}`} flexDirection="column" paddingLeft={2}>
-      {body}
-    </Box>,
-  ]
-}
-
-/** One wrapping row of short labels, so a project's standing links cost a line rather than one each. */
-function groupLinks(ctx: Ctx, group: Group) {
-  const { Box, Button, Text } = ctx.els
-  const links: { label: string; url: string }[] = []
-  if (group.source) links.push({ label: group.source_label || label(ctx, group.source), url: group.source })
-  for (const one of linksOf(group)) {
-    if (one && one.url) links.push({ label: one.label || label(ctx, one.url), url: one.url })
-  }
-  if (links.length === 0) return undefined
-
-  return (
-    <Box key={`glinks-${group.id}`} flexDirection="row" flexWrap="wrap" columnGap={1}>
-      {links.flatMap((one, i) => [
-        ...(i > 0 ? [<Text dimColor>·</Text>] : []),
-        <Button key={`glink-${group.id}-${i}`} label={one.label} plain dimColor onPress={ctx.open(one.url)} />,
-      ])}
-    </Box>
-  )
 }
 
 const label = (ctx: Ctx, url: string) => sourceLabel(url, ctx.shared.labels)
@@ -398,20 +235,14 @@ function bulletsOf(ctx: Ctx, item: Item): Bullet[][] {
   return lines
 }
 
-function itemRow(ctx: Ctx, item: Item, opts: { tagged?: boolean; compact?: boolean; quiet?: boolean }) {
+function itemRow(ctx: Ctx, item: Item, opts: { quiet?: boolean }) {
   const { Box, Text, Button } = ctx.els
-  const status = statusOf(item)
-  const quiet = opts.quiet || (opts.tagged && status.isQuiet) || undefined
+  const quiet = opts.quiet || undefined
   const title = refOf(item) + item.title
   const jump = ctx.jump(item)
   const due = dueOf(item.due, item.due_label, ctx.now)
   const head = (
     <Box key={`head-${item.id}`} flexDirection="row" columnGap={1}>
-      {opts.tagged && (
-        <Text bold={!quiet} color={status.color} dimColor={quiet}>
-          {status.tag.padEnd(TAG_WIDTH)}
-        </Text>
-      )}
       {jump ? (
         <Button key={`title-${item.id}`} label={title} plain dimColor={quiet} onPress={jump} />
       ) : (
@@ -420,22 +251,13 @@ function itemRow(ctx: Ctx, item: Item, opts: { tagged?: boolean; compact?: boole
       {due && (due.color ? <Text color={due.color}>{due.text}</Text> : <Text dimColor>{due.text}</Text>)}
     </Box>
   )
-  if (opts.compact) {
-    return (
-      <Box key={`row-${item.id}`} flexDirection="column">
-        {head}
-      </Box>
-    )
-  }
-  // Indented past the tag, so subitems sit under the title
-  const dot = opts.tagged ? `${' '.repeat(TAG_WIDTH)}·` : '   ·'
 
   return (
     <Box key={`row-${item.id}`} flexDirection="column">
       {head}
       {bulletsOf(ctx, item).map(line => (
         <Box key={`line-${line[0]?.key}`} flexDirection="row" columnGap={1}>
-          <Text dimColor>{dot}</Text>
+          <Text dimColor>{'   ·'}</Text>
           {line.map(b => (
             <Button key={b.key} label={b.label} plain dimColor onPress={ctx.open(b.url)} />
           ))}

@@ -10,7 +10,7 @@ const TICKET_HISTORY = 'https://tickets.example.com/history/'
 
 const CONFIG = {
   boards: [
-    { id: 'work', path: '~/boards/work.json', layout: 'groups' },
+    { id: 'work', path: '~/boards/work.json' },
     {
       id: 'oncall',
       path: '~/boards/oncall.json',
@@ -26,43 +26,31 @@ const CONFIG = {
 
 const WORK = {
   updated_at: '2026-10-16T13:55:00Z',
-  groups: [
-    {
-      id: 'pay',
-      title: 'Payments rework',
-      source: 'https://linear.app/acme/project/payments',
-      links: [{ label: 'SDD', url: 'https://www.notion.so/sdd' }],
-    },
-    { id: 'pay-gross', parent: 'pay', title: 'Gross' },
-    { id: 'tooling', title: 'Tooling' },
-  ],
   items: [
     {
       id: 'scope',
       ref: 1,
-      group: 'pay',
       section: 'needs',
       title: 'Scope the split against main',
       source: 'https://linear.app/acme/issue/AC-808',
       links: [{ label: 'api#6266', url: 'https://github.com/acme/api/pull/6266' }, { url: 'https://acme.slack.com/archives/D1/p1' }],
     },
-    { id: 'fee-account', ref: 22, group: 'pay-gross', section: 'waiting', title: 'Fee account' },
-    { id: 'gross', ref: 2, group: 'pay-gross', section: 'flight', title: 'Gross funding', workspace: 'ac-809-gross', due: '2026-10-16T20:00:00Z', due_label: 'review' },
-    { id: 'fee-done', ref: 12, group: 'pay-gross', section: 'done', title: 'Fee pull settled', links: [{ label: 'Slack thread', url: 'https://acme.slack.com/archives/C1/p1' }] },
+    { id: 'fee-account', ref: 22, section: 'waiting', title: 'Fee account' },
+    { id: 'gross', ref: 2, section: 'flight', title: 'Gross funding', workspace: 'ac-809-gross', due: '2026-10-16T20:00:00Z', due_label: 'review' },
+    { id: 'fee-done', ref: 12, section: 'done', title: 'Fee pull settled', links: [{ label: 'Slack thread', url: 'https://acme.slack.com/archives/C1/p1' }] },
     {
       id: 'adapter',
       ref: 7,
-      group: 'pay',
       section: 'next',
       title: 'Purchase adapter',
       due: '2026-10-23T00:00:00Z',
       source: 'https://linear.app/acme/issue/AC-806',
       links: [{ url: 'https://linear.app/acme/issue/AC-806' }, { label: 'api#1', url: 'https://github.com/acme/api/pull/1' }, { label: 'again', url: 'https://github.com/acme/api/pull/1' }],
     },
-    { id: 'alerts', ref: 8, group: 'pay', section: 'next', title: 'Alerts' },
-    { id: 'okta', ref: 3, group: 'tooling', section: 'waiting', title: 'Okta app' },
+    { id: 'alerts', ref: 8, section: 'next', title: 'Alerts' },
+    { id: 'okta', ref: 3, section: 'waiting', title: 'Okta app' },
     { id: 'refund-fee', ref: 10, section: 'next', title: 'Refund fee' },
-    { id: 'gate', ref: 20, group: 'mystery', section: 'done', title: 'Registry gate' },
+    { id: 'gate', ref: 20, section: 'done', title: 'Registry gate' },
   ],
 }
 
@@ -100,64 +88,13 @@ const herdr = (argv: readonly string[]) =>
 const boards = (over: Record<string, string> = {}) =>
   world({ files: { [CONFIG_FILE]: json(CONFIG), [WORK_FILE]: json(WORK), [ONCALL_FILE]: json(ONCALL), ...over }, run: herdr })
 
-test('items draw inside their project box, nested by workstream, whatever their status', async ($, on) => {
+test('a due date inside a day counts down in yellow, and a later one shows its day', async ($, on) => {
   engine(on, boards(), NOW)
   await start($)
 
   const ui = await open($, 'work')
-  expect(await ui.find({ key: 'group-pay' })).toMatchObject({ props: { borderStyle: 'round' } })
-  expect(await ui.find({ key: 'group-pay', text: /Scope the split against main/ })).toBeDefined()
-  expect(await ui.find({ key: 'group-pay', text: /Purchase adapter/ })).toBeDefined()
-  expect(await ui.find({ key: 'group-pay-gross', text: /Fee account/ })).toBeDefined()
-  expect(await ui.find({ key: 'group-pay-gross', text: /Gross funding/ })).toBeDefined()
-  expect(await ui.find({ key: 'group-pay-gross', text: /Purchase adapter/ })).toBeUndefined()
-  expect(await ui.find({ key: 'group-tooling', text: /Okta app/ })).toBeDefined()
-  expect(await ui.find({ key: 'body-pay', text: /Gross/ })).toMatchObject({ props: { paddingLeft: 2 } })
-  expect(await ui.find({ key: 'heading-pay', text: /Payments rework\s*5/ })).toBeDefined()
-  expect(await ui.find({ key: 'heading-pay-gross', text: /Gross\s*2/ })).toBeDefined()
-  await ui.unmount()
-})
-
-test('each work item carries its status as a colored tag, sorted by status inside its group', async ($, on) => {
-  engine(on, boards(), NOW)
-  await start($)
-
-  const ui = await open($, 'work')
-  expect(await ui.find({ key: 'head-scope', text: /^you\s+#1 Scope/ })).toBeDefined()
-  expect(await ui.find({ key: 'head-gross', text: /^now\s+#2 Gross/ })).toBeDefined()
-  const colors = (await ui.findAll({ type: 'Text', text: /^(you|now|wait)\s*$/ })).map(el => [el.text.trim(), el.props.color])
-  expect(colors).toContainEqual(['you', 'warning'])
-  expect(colors).toContainEqual(['now', 'success'])
-  expect(colors).toContainEqual(['wait', 'permission'])
-  expect(await ui.find({ type: 'Text', text: '#12 Fee pull settled' })).toMatchObject({ props: { dimColor: true } })
   expect(await ui.find({ type: 'Text', text: 'review in 6h' })).toMatchObject({ props: { color: 'yellow' } })
   expect(await ui.find({ type: 'Text', text: 'Fri 10-23' })).toBeDefined()
-  const titles = (await ui.findAll({ text: /^#(2|7|12|20|22) / })).map(el => el.text.split(' ')[0])
-  expect(titles).toEqual(['#7', '#2', '#22', '#12', '#20'])
-  await ui.unmount()
-})
-
-test('finished work items show their title alone, and items in no known group land in Other', async ($, on) => {
-  engine(on, boards(), NOW)
-  await start($)
-
-  const ui = await open($, 'work')
-  expect(await ui.find({ key: 'link-fee-done-0' })).toBeUndefined()
-  expect(await ui.find({ key: 'group-other', text: /Refund fee/ })).toBeDefined()
-  expect(await ui.find({ key: 'group-other', text: /Registry gate/ })).toBeDefined()
-  await ui.unmount()
-})
-
-test('the work summary counts each status and lists up next in take order across groups', async ($, on) => {
-  engine(on, boards(), NOW)
-  await start($)
-
-  const ui = await open($, 'work')
-  expect(await ui.find({ type: 'Text', text: 'you 1' })).toMatchObject({ props: { color: 'warning' } })
-  expect(await ui.find({ key: 'counts', text: /next 3/ })).toBeDefined()
-  expect(await ui.find({ key: 'counts', text: /wait 2/ })).toBeDefined()
-  expect(await ui.find({ key: 'summary', text: /Up next: #7, #8, #10$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^Updated 5m ago\. A title opens/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -167,8 +104,6 @@ test('links are labelled by site, drawn once each, and open in the browser', asy
   await start($)
 
   const ui = await open($, 'work')
-  expect(await ui.find({ key: 'glink-pay-0' })).toMatchObject({ props: { label: 'Linear' } })
-  expect(await ui.find({ key: 'glink-pay-1' })).toMatchObject({ props: { label: 'SDD' } })
   expect(await ui.find({ key: 'src-scope' })).toMatchObject({ props: { label: 'Linear' } })
   expect(await ui.find({ key: 'link-scope-1' })).toMatchObject({ props: { label: 'Slack' } })
   expect(await ui.find({ key: 'link-adapter-0' })).toBeUndefined()

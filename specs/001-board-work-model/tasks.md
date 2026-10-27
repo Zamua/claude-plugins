@@ -157,8 +157,8 @@ US6. Each story ends with a live check and a version bump, so each ships alone.
 
 ## Phase 9: Polish
 
-- [ ] T047 [P] Document the work model in `plugins/board/README.md`: the tree, Kinds, each Source, Host and Harness and its config, the work tool, starting sessions, the root session and its skill, migration; make `plugins/board/.claude-plugin/plugin.json` and its `.claude-plugin/marketplace.json` entry say the same thing (Constitution VII)
-- [ ] T048 [P] Remove the `groups` layout from `plugins/board/hooks/views/file.tsx` and its tests in `plugins/board/tests/file-board.test.ts` once no configured board uses it (Constitution I)
+- [X] T047 [P] Document the work model in `plugins/board/README.md`: the tree, Kinds, each Source, Host and Harness and its config, the work tool, starting sessions, the root session and its skill, migration; make `plugins/board/.claude-plugin/plugin.json` and its `.claude-plugin/marketplace.json` entry say the same thing (Constitution VII)
+- [X] T048 [P] Remove the `groups` layout from `plugins/board/hooks/views/file.tsx` and its tests in `plugins/board/tests/file-board.test.ts` once no configured board uses it (Constitution I)
 - [ ] T049 Run every block in `specs/001-board-work-model/quickstart.md` in a live session and check SC-001 to SC-006
 
 ---
