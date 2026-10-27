@@ -86,7 +86,8 @@ type Ref = Pick<TrackedPr, 'key' | 'owner' | 'repo' | 'number' | 'url'>
 type Entry = { pr: string; note?: string; stack?: string }
 type Input = { add?: Entry[]; update?: Entry[]; remove?: string[] }
 type Applied = { board: PrBoard; added: string[] } | { error: string }
-type Stack = { title: string; prs: TrackedPr[] }
+/** A group of pull requests: `chains` holds each git stack bottom first, a lone pull request as a chain of one. */
+type Stack = { title: string; prs: TrackedPr[]; chains: TrackedPr[][] }
 type Need = { text: string; href?: string }
 type Word = { text: string; color?: Color; isDim?: boolean }
 
@@ -333,19 +334,27 @@ function belowOf(p: TrackedPr, prs: readonly TrackedPr[]): TrackedPr | undefined
   return prs.find(other => other !== p && other.facts && branchKey(other, other.facts.head) === base)
 }
 
-function ordered(members: TrackedPr[]): TrackedPr[] {
-  const depth = (p: TrackedPr, seen: Set<TrackedPr>): number => {
-    const below = belowOf(p, members)
-    if (!below || seen.has(below)) return 0
+/**
+ * Each git stack as one run from its bottom up, in the order its bottom was tracked, then the lone pull requests. A
+ * branch that two layers are based on keeps both above it in the one run.
+ */
+function chainsOf(members: TrackedPr[]): TrackedPr[][] {
+  const below = new Map(members.map(p => [p, belowOf(p, members)]))
+  const above = (p: TrackedPr) => members.filter(other => below.get(other) === p)
+  const seen = new Set<TrackedPr>()
+  const run = (p: TrackedPr): TrackedPr[] => {
+    if (seen.has(p)) return []
     seen.add(p)
 
-    return 1 + depth(below, seen)
+    return [p, ...above(p).flatMap(run)]
   }
+  const bottoms = members.filter(p => !below.get(p))
+  const stacks = bottoms.filter(p => above(p).length > 0).map(run)
+  // Layers whose bases loop have no bottom; each loop is drawn as a run of its own
+  const looped = members.filter(p => below.get(p) && !seen.has(p)).map(run).filter(one => one.length > 0)
+  const lone = bottoms.filter(p => above(p).length === 0).map(p => [p])
 
-  return members
-    .map((p, at) => ({ p, at, depth: depth(p, new Set()) }))
-    .sort((a, b) => a.depth - b.depth || a.at - b.at)
-    .map(one => one.p)
+  return [...stacks, ...looped, ...lone]
 }
 
 /** Stacked branches and pull requests sharing a stack name each form one stack, bottom first. */
@@ -372,10 +381,11 @@ function stacksOf(prs: readonly TrackedPr[]): Stack[] {
     groups.set(root, [...(groups.get(root) ?? []), p])
   }
 
-  return [...groups.values()].map(members => ({
-    title: members.find(p => p.stack)?.stack ?? '',
-    prs: ordered(members),
-  }))
+  return [...groups.values()].map(members => {
+    const chains = chainsOf(members)
+
+    return { title: members.find(p => p.stack)?.stack ?? '', prs: chains.flat(), chains }
+  })
 }
 
 /** What a pull request waits on the person for, one line each; none once it merged or closed. */
@@ -440,7 +450,7 @@ function groupsOf(prs: readonly TrackedPr[]): Stack[] {
   const loose = stacks.filter(stack => stack.title === '' && stack.prs.length === 1).flatMap(stack => stack.prs)
   if (loose.length === 0) return headed
 
-  return [...headed, { title: headed.length > 0 ? 'Other' : '', prs: loose }]
+  return [...headed, { title: headed.length > 0 ? 'Other' : '', prs: loose, chains: loose.map(p => [p]) }]
 }
 
 const checkedLine = (b: PrBoard, now: number) => {
@@ -664,11 +674,22 @@ function refresh($: EngineInterface): Promise<void> {
   return queue
 }
 
+const CHAIN_GLYPHS = { first: '╭', mid: '│', last: '╰', none: '' } as const
+
+function chainOf(group: Stack, p: TrackedPr): keyof typeof CHAIN_GLYPHS {
+  const run = group.chains.find(one => one.includes(p)) ?? [p]
+  const at = run.indexOf(p)
+  if (run.length < 2) return 'none'
+
+  return at === 0 ? 'first' : at === run.length - 1 ? 'last' : 'mid'
+}
+
 /**
- * One line per pull request: a check once approved, a mark while it needs the person, its number, a dot for CI and
- * mergeability, its state and its title. A layer based on something other than the row above names its base.
+ * One line per pull request: where it sits in its git stack, a check once approved, a mark while it needs the person,
+ * its number, a dot for CI and mergeability, its state and its title. A layer based on something other than the row
+ * above names its base.
  */
-function prRows(els: Els, group: Stack, tree: boolean) {
+function prRows(els: Els, group: Stack, hasChains: boolean) {
   const { Box, Text } = els
 
   return group.prs.map((p, at) => {
@@ -681,7 +702,7 @@ function prRows(els: Els, group: Stack, tree: boolean) {
       id: p.key,
       number: p.number,
       url: p.url,
-      ...(tree && { tree: at === group.prs.length - 1 ? ('last' as const) : ('mid' as const) }),
+      ...(hasChains && { chain: CHAIN_GLYPHS[chainOf(group, p)] }),
       ...(mark && { mark }),
       isFlagged: needsYou(p),
       dot: healthOf(p),
@@ -700,7 +721,7 @@ function prRows(els: Els, group: Stack, tree: boolean) {
 
 function prsBox(els: Els, groups: Stack[]) {
   const { Box, Text } = els
-  const several = groups.length > 1
+  const hasChains = groups.some(group => group.chains.some(run => run.length > 1))
 
   return (
     <Box key="prs" flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
@@ -715,7 +736,7 @@ function prsBox(els: Els, groups: Stack[]) {
                 {landed && <Text color="merged">merged</Text>}
               </Box>
             )}
-            {prRows(els, group, several)}
+            {prRows(els, group, hasChains)}
           </Box>
         )
       })}
