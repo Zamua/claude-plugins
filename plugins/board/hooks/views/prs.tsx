@@ -280,6 +280,10 @@ function factsOf(pr: GqlPr, viewer: string): PrFacts {
     pr.latestReviews.nodes
       .filter(review => review.state === state && review.author)
       .map(review => (review.author as { login: string }).login)
+  const approvedBy = reviewers('APPROVED')
+  const changesRequestedBy = reviewers('CHANGES_REQUESTED')
+  // GitHub gives no decision in a repo that requires no review, so the latest reviews stand in for one
+  const fromReviews = changesRequestedBy.length > 0 ? 'CHANGES_REQUESTED' : approvedBy.length > 0 ? 'APPROVED' : ''
 
   return {
     title: pr.title,
@@ -287,9 +291,9 @@ function factsOf(pr: GqlPr, viewer: string): PrFacts {
     isDraft: pr.isDraft,
     mergeable: pr.mergeable,
     mergeState: pr.mergeStateStatus,
-    review: pr.reviewDecision ?? '',
-    approvedBy: reviewers('APPROVED'),
-    changesRequestedBy: reviewers('CHANGES_REQUESTED'),
+    review: pr.reviewDecision || fromReviews,
+    approvedBy,
+    changesRequestedBy,
     ...ciOf(pr.commits.nodes[0]?.commit.statusCheckRollup ?? null),
     author: pr.author?.login ?? '',
     head: pr.headRefName,
