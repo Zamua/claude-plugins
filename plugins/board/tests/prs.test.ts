@@ -161,7 +161,7 @@ test('a pull request based on another tracked one sits above it in one stack', a
   await ui.unmount()
 })
 
-test('each git stack in a named group draws as one run, bottom first, marked ╭ │ ╰, with lone pull requests after', async ($, on) => {
+test('each git stack in a named group draws as one run, bottom first, marked ┌ ├ └, with lone pull requests after', async ($, on) => {
   const url = (n: number) => `https://github.com/acme/api/pull/${n}`
   engine(
     on,
@@ -185,7 +185,7 @@ test('each git stack in a named group draws as one run, bottom first, marked ╭
   const drawn = [...rows.matchAll(/#(\d{4})/g)].map(m => Number(m[1]))
   expect(drawn).toEqual([8111, 8117, 8118, 8139, 8145, 8042, 8047])
   const glyph = async (n: number) => (await ui.find({ key: `chain-acme/api#${n}` }))?.text ?? ''
-  expect(await Promise.all(drawn.map(glyph))).toEqual(['╭', '│', '╰', '╭', '╰', '', ''])
+  expect(await Promise.all(drawn.map(glyph))).toEqual(['┌', '├', '└', '┌', '└', '', ''])
   expect(rows).not.toContain('on #')
   await ui.unmount()
 })
