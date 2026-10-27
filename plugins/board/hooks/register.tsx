@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { messageOf } from './kit'
 import type { View } from './kit'
 import { PANE, showView, TITLE } from './pane'
+import { exportPng, PLAIN_ELS } from './png'
 import { fileBoard, fileStart, fileView } from './views/file'
 import type { FileBoard, FileBoardSpec, LinkPair } from './views/file'
 import { prsHooks, prsStart, prsSync, prsView } from './views/prs'
@@ -27,6 +28,8 @@ const seenSession = atom({ plugin: 'board', key: 'sessionId' } as const, '')
 type Config = { boards?: unknown[]; link_labels?: Record<string, string>; link_pairs?: LinkPair[] }
 
 let fileBoards: FileBoard[] = []
+// The pane's width when last drawn, which an export draws at
+let paneColumns = 60
 
 const isSpec = (one: unknown): one is FileBoardSpec =>
   typeof one === 'object' &&
@@ -139,7 +142,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'board',
       description: 'Show or hide the board pane, open it on one view, or empty a view with clear',
-      argumentHint: `[${[...taken].join('|')}] [clear|migrate]`,
+      argumentHint: `[${[...taken].join('|')}] [clear|migrate|png]`,
       immediate: true,
     })
     // Countdowns and ages move even when no board does
@@ -177,12 +180,14 @@ export const register: Register = on => {
     const views = viewsOf($)
     const ids = views.map(v => v.id)
     const words = e.args.trim().split(/\s+/).filter(Boolean)
-    const isBareClear = words.length === 1 && words[0] === 'clear'
-    const name = isBareClear ? '' : (words[0] ?? '')
-    const verb = isBareClear ? 'clear' : (words[1] ?? '')
+    const isBareVerb = words.length === 1 && (words[0] === 'clear' || words[0] === 'png')
+    const name = isBareVerb ? '' : (words[0] ?? '')
+    const verb = isBareVerb ? (words[0] as string) : (words[1] ?? '')
     const named = name ? match(views, name) : undefined
     if (name && !named) return { text: `No board named ${name}. Boards: ${ids.join(', ')}.` }
-    if (verb && verb !== 'clear' && verb !== 'migrate') return { text: `Usage: /board [${ids.join('|')}] [clear|migrate]` }
+    if (verb && verb !== 'clear' && verb !== 'migrate' && verb !== 'png') {
+      return { text: `Usage: /board [${ids.join('|')}] [clear|migrate|png]` }
+    }
     const current = await shown($, await listed($))
 
     if (verb === 'migrate') {
@@ -197,6 +202,22 @@ export const register: Register = on => {
       } catch (err) {
         return { text: messageOf(err) }
       }
+    }
+
+    if (verb === 'png') {
+      const target = named ?? current
+      await target.onShow?.()
+      const { Box, Text } = PLAIN_ELS
+      const tree = (
+        <Box flexDirection="column">
+          <Text bold color="claude">
+            {`${TITLE} · ${target.title}`}
+          </Text>
+          {await target.render(PLAIN_ELS)}
+        </Box>
+      )
+
+      return { text: await exportPng($, target.id, tree, paneColumns) }
     }
 
     if (verb === 'clear') {
@@ -232,6 +253,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Button, Text } = els
+    paneColumns = e.props.bodyColumns
     const list = await listed($)
     const current = await shown($, list)
     const counts = await Promise.all(list.map(v => v.needs()))
