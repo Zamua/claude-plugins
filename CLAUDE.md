@@ -32,3 +32,8 @@ Descriptions live in three places, and they drift: the manifest entry, the
 plugin's own `plugin.json`, and the README. The manifest and `plugin.json` should
 say the same thing. The README may be shorter and more direct, since it is prose
 rather than metadata.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
