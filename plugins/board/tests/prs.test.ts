@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { board, engine, open, PANE, start, world } from './engine'
+import { board, engine, HOME, open, PANE, start, world } from './engine'
 
 const TOOL = 'mcp__board__prs'
 const NOW = Date.parse('2026-10-25T12:00:00Z')
@@ -461,6 +461,18 @@ test('a pull request another session fetched moments ago is read from the shared
   const read = String((await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })).result)
   expect(queries.length).toBe(1)
   expect(read).toContain('acme/api#6047 Fee lookup')
+})
+
+test('facts a session on an older board cached are asked again, however fresh', async ($, on) => {
+  const { w, queries } = recording({ 6047: pr({ title: 'Fee lookup' }) })
+  const stale = { title: 'Fee lookup', state: 'OPEN', isDraft: true, ci: 'fail', failing: ['ktlint'], author: 'octo' }
+  w.files[`${HOME}/.cache/board/github.json`] = JSON.stringify({ viewer: 'octo', prs: { 'acme/api#6047': { facts: stale, at: NOW } } })
+  engine(on, w, NOW)
+  await start($)
+
+  const read = String((await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }] })).result)
+  expect(queries.length).toBe(1)
+  expect(read).not.toContain('CI failing')
 })
 
 test('while the rate limit runs low no session asks GitHub, and the board says when it will again', async ($, on) => {
