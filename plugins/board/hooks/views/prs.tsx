@@ -862,15 +862,19 @@ let filterFor = ''
 const valueOf = (p: TrackedPr, field: FilterField) => (field === 'author' ? (p.facts?.author ?? '') : p.repo)
 
 const FILTER_TITLES: Record<FilterField, string> = { author: 'Author', repo: 'Repo' }
+const FILTER_GAP = 2
+// The filter boxes sit on the view's second row, under the freshness stamp
+const FILTER_ROW = 1
 
 /**
- * A box per field that has more than one value. Pressing a box drops its values down beneath the row, each pressed to
- * tick or untick it; pressing the box again folds them.
+ * A box per field that has more than one value, and the open one's values in a popup over the rows below, each
+ * pressed to tick or untick it; pressing the box again folds them. The popup pads every line to its full width, since
+ * cells it leaves blank show the rows beneath.
  */
-function filterRow($: EngineInterface, els: Els, prs: readonly TrackedPr[]): RenderNode | undefined {
+function filters($: EngineInterface, els: Els, prs: readonly TrackedPr[]): { row?: RenderNode; popup?: RenderNode } {
   const { Box, Button, Text } = els
   const fields = (['author', 'repo'] as const).filter(field => new Set(prs.map(p => valueOf(p, field))).size > 1)
-  if (fields.length === 0) return undefined
+  if (fields.length === 0) return {}
   const redraw = () => $.ui.invalidate('ui.render')
   const shown = (field: FilterField) => {
     const set = picked[field]
@@ -878,64 +882,75 @@ function filterRow($: EngineInterface, els: Els, prs: readonly TrackedPr[]): Ren
 
     return set.size === 1 ? [...set][0] : `${set.size} picked`
   }
-  const values = (field: FilterField) => {
-    const counts = new Map<string, number>()
-    for (const p of prs) counts.set(valueOf(p, field), (counts.get(valueOf(p, field)) ?? 0) + 1)
+  const labelOf = (field: FilterField) => `${FILTER_TITLES[field]}: ${shown(field)} ${openFilter === field ? '▴' : '▾'}`
+  const row = (
+    <Box key="pfilter-row" flexDirection="row" columnGap={FILTER_GAP} paddingX={1}>
+      {fields.map(field => (
+        <Button
+          key={`pfilter-${field}`}
+          label={labelOf(field)}
+          onPress={() => {
+            openFilter = openFilter === field ? '' : field
+            redraw()
+          }}
+        />
+      ))}
+    </Box>
+  )
+  const field = openFilter
+  if (field === '' || !fields.includes(field)) return { row }
 
-    return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  }
+  const counts = new Map<string, number>()
+  for (const p of prs) counts.set(valueOf(p, field), (counts.get(valueOf(p, field)) ?? 0) + 1)
+  const values = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  const lines = values.map(([value, count]) => `${value || 'unknown'} ${count}`)
+  const inner = Math.max(5, ...lines.map(line => [...line].length)) + 2
+  // A box is drawn as `[ label ]`, four cells wider than its label
+  const before = fields.slice(0, fields.indexOf(field)).reduce((n, one) => n + [...labelOf(one)].length + 4 + FILTER_GAP, 0)
+  const popup = (
+    <Box
+      key="pfilter-popup"
+      position="absolute"
+      top={FILTER_ROW + 1}
+      left={1 + before}
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="inactive"
+    >
+      {values.map(([value], at) => {
+        const isPicked = picked[field].has(value)
 
-  return (
-    <Box key="pfilters" flexDirection="column" paddingX={1}>
-      <Box key="pfilter-row" flexDirection="row" columnGap={2}>
-        {fields.map(field => (
+        return (
           <Button
-            key={`pfilter-${field}`}
-            label={`${FILTER_TITLES[field]}: ${shown(field)} ${openFilter === field ? '▴' : '▾'}`}
+            key={`pfopt-${field}-${value}`}
+            plain
             onPress={() => {
-              openFilter = openFilter === field ? '' : field
+              if (isPicked) picked[field].delete(value)
+              else picked[field].add(value)
               redraw()
             }}
-          />
-        ))}
-      </Box>
-      {openFilter !== '' && fields.includes(openFilter) && (
-        <Box key="pfilter-options" flexDirection="column" paddingLeft={2}>
-          {values(openFilter).map(([value, count]) => {
-            const field = openFilter as FilterField
-            const isPicked = picked[field].has(value)
-
-            return (
-              <Button
-                key={`pfopt-${field}-${value}`}
-                plain
-                onPress={() => {
-                  if (isPicked) picked[field].delete(value)
-                  else picked[field].add(value)
-                  redraw()
-                }}
-              >
-                <Text color={isPicked ? 'claude' : undefined}>{isPicked ? '☑' : '☐'}</Text>{' '}
-                <Text>{value || 'unknown'}</Text> <Text dimColor>{String(count)}</Text>
-              </Button>
-            )
-          })}
-          {picked[openFilter].size > 0 && (
-            <Button
-              key={`pfclear-${openFilter}`}
-              label="clear"
-              plain
-              dimColor
-              onPress={() => {
-                picked[openFilter as FilterField].clear()
-                redraw()
-              }}
-            />
-          )}
-        </Box>
+          >
+            <Text color={isPicked ? 'claude' : undefined}>{` ${isPicked ? '☑' : '☐'} `}</Text>
+            <Text>{`${(lines[at] ?? '').padEnd(inner)}`}</Text>
+          </Button>
+        )
+      })}
+      {picked[field].size > 0 && (
+        <Button
+          key={`pfclear-${field}`}
+          plain
+          onPress={() => {
+            picked[field].clear()
+            redraw()
+          }}
+        >
+          <Text dimColor>{'   clear'.padEnd(inner + 3)}</Text>
+        </Button>
       )}
     </Box>
   )
+
+  return { row, popup }
 }
 
 const matches = (p: TrackedPr) =>
@@ -982,11 +997,12 @@ export function prsView($: EngineInterface): View {
         filterFor = b.sessionId
       }
       const shown = b.prs.filter(matches)
+      const { row, popup } = filters($, els, b.prs)
 
       return (
-        <Box key="prs-view" flexDirection="column" rowGap={0}>
+        <Box key="prs-view" flexDirection="column">
           {stamp(els, checkedLine(b, now), Boolean(b.error))}
-          {filterRow($, els, b.prs)}
+          {row}
           {shown.length > 0 ? (
             prsBox(els, groupsOf(shown), b.viewer)
           ) : (
@@ -994,6 +1010,7 @@ export function prsView($: EngineInterface): View {
               No pull requests match the filter.
             </Text>
           )}
+          {popup}
         </Box>
       )
     },

@@ -59,8 +59,15 @@ function boxStyle(p: Record<string, unknown>) {
   const x = p.paddingX ?? p.padding
   const y = p.paddingY ?? p.padding
 
+  const floats = p.position === 'absolute'
+
   return css({
     display: p.display === 'none' ? 'none' : 'flex',
+    position: floats ? 'absolute' : 'relative',
+    top: floats ? lines(p.top) : undefined,
+    left: floats ? cells(p.left) : undefined,
+    // A floating box covers the rows it is drawn over, as its padded cells do in the terminal
+    background: floats ? BACKGROUND : undefined,
     'flex-direction': p.flexDirection === 'column' ? 'column' : 'row',
     'flex-wrap': p.flexWrap === 'wrap' ? 'wrap' : undefined,
     'justify-content': typeof p.justifyContent === 'string' ? p.justifyContent : undefined,
