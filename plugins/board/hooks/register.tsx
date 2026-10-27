@@ -9,6 +9,11 @@ import type { FileBoard, FileBoardSpec, LinkPair } from './views/file'
 import { prsHooks, prsStart, prsSync, prsView } from './views/prs'
 import { reviewStart, reviewSync, reviewView } from './views/review'
 import { sessionHooks, sessionStart, sessionSync, sessionView } from './views/session'
+import { markWorkActive } from './work/cache'
+import { migrateFile, reportText } from './work/migrate'
+import { workHooks, workToolStart } from './work/tool'
+import { configureWork, currentWork, workRefresh, workStart, workView } from './work/view'
+import type { WorkSpec } from './work/view'
 
 const CONFIG_PATH = '.config/board/boards.json'
 const BUILT_IN = ['session', 'prs', 'review']
@@ -44,7 +49,15 @@ async function readConfig($: EngineInterface, home: string): Promise<Config> {
 }
 
 function viewsOf($: EngineInterface): View[] {
-  return [sessionView($), prsView($), reviewView($), ...fileBoards.map(board => fileView($, board))]
+  const work = currentWork()
+
+  return [
+    sessionView($),
+    prsView($),
+    reviewView($),
+    ...(work ? [workView($, work)] : []),
+    ...fileBoards.map(board => fileView($, board)),
+  ]
 }
 
 /** The views the switcher lists: those with something to show, and the chosen one whatever it holds. */
@@ -76,6 +89,7 @@ async function sync($: EngineInterface) {
   await sessionSync($)
   await prsSync($)
   await reviewSync($)
+  await markWorkActive($)
 }
 
 function match(views: View[], name: string): View | undefined {
@@ -90,6 +104,7 @@ function match(views: View[], name: string): View | undefined {
 export const register: Register = on => {
   sessionHooks(on)
   prsHooks(on)
+  workHooks(on)
 
   on('session.start', async ($, e, next) => {
     const home = (await $.env.get('HOME')) ?? ''
@@ -100,19 +115,31 @@ export const register: Register = on => {
     }
     const taken = new Set(BUILT_IN)
     fileBoards = []
+    let work: WorkSpec | undefined
     for (const spec of Array.isArray(config.boards) ? config.boards : []) {
       if (!isSpec(spec) || taken.has(spec.id)) continue
+      if ((spec as { layout?: string }).layout === 'model') {
+        // One work model per person; a second model board is ignored rather than merged
+        if (work) continue
+        work = spec as unknown as WorkSpec
+      } else {
+        fileBoards.push(fileBoard(spec, shared, home))
+      }
       taken.add(spec.id)
-      fileBoards.push(fileBoard(spec, shared, home))
     }
+    configureWork(work, home, shared.labels)
     await sessionStart($)
     await prsStart($)
     await reviewStart($)
     for (const board of fileBoards) await fileStart($, board)
+    if (work) {
+      await workToolStart($)
+      await workStart($)
+    }
     await $.command.register({
       name: 'board',
       description: 'Show or hide the board pane, open it on one view, or empty a view with clear',
-      argumentHint: `[${[...taken].join('|')}] [clear]`,
+      argumentHint: `[${[...taken].join('|')}] [clear|migrate]`,
       immediate: true,
     })
     // Countdowns and ages move even when no board does
@@ -155,8 +182,22 @@ export const register: Register = on => {
     const verb = isBareClear ? 'clear' : (words[1] ?? '')
     const named = name ? match(views, name) : undefined
     if (name && !named) return { text: `No board named ${name}. Boards: ${ids.join(', ')}.` }
-    if (verb && verb !== 'clear') return { text: `Usage: /board [${ids.join('|')}] [clear]` }
+    if (verb && verb !== 'clear' && verb !== 'migrate') return { text: `Usage: /board [${ids.join('|')}] [clear|migrate]` }
     const current = await shown($, await listed($))
+
+    if (verb === 'migrate') {
+      const work = currentWork()
+      if (!work || named?.id !== work.spec.id) return { text: 'Only the work model board migrates: /board <its name> migrate.' }
+      try {
+        const report = await migrateFile($, work.path)
+        work.state.mtime = undefined
+        await workRefresh($)
+
+        return { text: reportText(report, work.path) }
+      } catch (err) {
+        return { text: messageOf(err) }
+      }
+    }
 
     if (verb === 'clear') {
       const target = named ?? current

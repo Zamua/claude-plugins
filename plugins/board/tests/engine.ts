@@ -22,6 +22,10 @@ export type World = {
   runs: string[][]
   fills: { text: string }[]
   run: (argv: readonly string[]) => Ran | undefined
+  /** Answers for tools other plugins serve, by tool name, such as an MCP server's. */
+  mcp: Record<string, (input: Record<string, unknown>) => unknown>
+  /** Every call the plugin made to one of those tools, with its input. */
+  toolCalls: { tool: string; input: Record<string, unknown> }[]
 }
 
 export function world(over: Partial<World> = {}): World {
@@ -37,6 +41,8 @@ export function world(over: Partial<World> = {}): World {
     runs: [],
     fills: [],
     run: () => undefined,
+    mcp: {},
+    toolCalls: [],
     ...over,
   }
 }
@@ -97,6 +103,14 @@ export function engine(on: On, w: World, now: number) {
     const ran = w.run(e.argv) ?? { exitCode: 0, stdout: '', stderr: '' }
     return { value: { ...ran, isStdoutTruncated: false, isStderrTruncated: false } }
   })
+  for (const [tool, answer] of Object.entries(w.mcp)) {
+    const exactly = new RegExp(`^${tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+    on('tool.call', { tool: exactly }, (_, e) => {
+      const { tool: _name, tool_use_id: _id, consent: _consent, agentId: _agent, ...input } = e as unknown as Record<string, unknown>
+      w.toolCalls.push({ tool, input })
+      return { result: JSON.stringify(answer(input)) }
+    })
+  }
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
