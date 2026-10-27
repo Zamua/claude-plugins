@@ -55,7 +55,7 @@ function css(rules: Record<string, string | undefined>) {
 }
 
 function boxStyle(p: Record<string, unknown>) {
-  const border = typeof p.borderStyle === 'string' && p.borderStyle !== 'none'
+  const border = typeof p.borderStyle === 'string' && p.borderStyle !== 'none' && p.borderStyle !== 'quote'
   const x = p.paddingX ?? p.padding
   const y = p.paddingY ?? p.padding
 
@@ -81,6 +81,7 @@ function boxStyle(p: Record<string, unknown>) {
     'min-width': '0',
     border: border ? `1px solid ${colorOf(p.borderColor) ?? TEXT}` : undefined,
     'border-radius': p.borderStyle === 'round' ? '6px' : undefined,
+    'border-left': p.borderStyle === 'quote' ? `2px solid ${colorOf(p.borderColor) ?? TEXT}` : undefined,
   })
 }
 

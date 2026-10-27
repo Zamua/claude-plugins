@@ -518,31 +518,42 @@ export function workView($: EngineInterface, w: WorkBoard): View {
     )
   }
 
-  /** What a pressed-open Item shows above its children: its detail and links. */
+  /**
+   * What a pressed-open Item shows above its children, behind a rule down its left: who owns it, its detail dim, then
+   * its links in the link color, so what can be pressed stands apart from what is read.
+   */
   function details(ctx: Ctx, node: Node): RenderNode | undefined {
     const { Box, Button, Markdown, Text } = ctx.els
     const { item } = node
     const buttons: RenderNode[] = item.links.map((link, i) => (
       <Button
         key={`wlink-${item.id}-${i}`}
-        label={link.label || sourceLabel(link.url, w.labels)}
         plain
-        dimColor
         onPress={async () => {
           w.notice = await openUrl($, link.url)
           $.ui.invalidate('ui.render')
         }}
-      />
+      >
+        <Text color="suggestion">{`↗ ${link.label || sourceLabel(link.url, w.labels)}`}</Text>
+      </Button>
     ))
     if (!item.detail && !item.owner && buttons.length === 0) return undefined
 
     return (
-      <Box key={`wmore-${item.id}`} flexDirection="column" paddingLeft={node.depth * 2 + 2}>
+      <Box
+        key={`wmore-${item.id}`}
+        flexDirection="column"
+        rowGap={item.detail && buttons.length > 0 ? 1 : 0}
+        marginLeft={node.depth * 2 + 2}
+        paddingLeft={1}
+        borderStyle="quote"
+        borderColor="inactive"
+      >
         {item.owner && <Text dimColor>{item.owner}</Text>}
         {item.detail && <Markdown key={`wdetail-${item.id}`} dimColor text={item.detail} />}
         {buttons.length > 0 && (
-          <Box key={`wlinks-${item.id}`} flexDirection="row" flexWrap="wrap" columnGap={1}>
-            {buttons.flatMap((b, i) => [...(i > 0 ? [<Text dimColor>·</Text>] : []), b])}
+          <Box key={`wlinks-${item.id}`} flexDirection="row" flexWrap="wrap" columnGap={2}>
+            {buttons}
           </Box>
         )}
       </Box>
