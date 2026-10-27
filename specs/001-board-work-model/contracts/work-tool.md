@@ -11,7 +11,7 @@ Every field is optional; the changes apply together, or none do.
 |---|---|---|
 | (none) | | returns the tree as text: one line per Item with id, kind, status and needs count |
 | `add` | `{ title, kind, parent?, shape?, status?, origin?, target?, detail?, links? }[]` | adds local Items; returns their ids |
-| `update` | `{ id, title?, kind?, status?, target?, detail?, links? }[]` | changes local Items |
+| `update` | `{ id, title?, kind?, parent?, status?, origin?, target?, detail?, links? }[]` | changes local Items; `parent` moves one, which is how an Inbox ask is placed |
 | `remove` | `id[]` | removes local Items with no children |
 | `link` | `{ child, parent }[]` | sets a hand link for any Item, Session or Artifact |
 | `unlink` | `child[]` | removes hand links |
