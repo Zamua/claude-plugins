@@ -42,12 +42,26 @@ the Item in the Inbox.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string | `session:<Claude session id>` |
-| `label` | string | the herdr workspace label |
-| `workspace` | string | herdr session and workspace id, for focusing it |
-| `state` | string | herdr's status word |
+| `id` | string | `session:<harness session id>`, from the Harness |
+| `host` | string | the Host adapter that found it, e.g. `herdr` |
+| `address` | string | the Host's own locator, opaque to the core, passed back to focus it |
+| `label` | string | the name the Host shows, e.g. a workspace label; aliases are matched against it |
+| `state` | `working` \| `waiting` \| `idle` \| `done` | mapped by the Host from its own words |
 | `parent` | ItemId \| SessionId? | a Link, else the alias match |
-| `activeMs` | number | from the transcript (research R5) |
+| `activeMs` | number | from the Harness (research R5) |
+| `lastActive` | ISO time? | from the Harness; picks which session a press focuses |
+
+## Host and Harness
+
+Two ports keep the core free of any multiplexer or agent runtime (spec FR-022):
+
+- **Host**: lists the Sessions it runs (address, label, state, and the Harness and its session id
+  where it knows them) and brings one to the front by address. herdr is the first Host.
+- **Harness**: given a Harness session id, gives its active time and last activity. Claude Code is
+  the first Harness, read from its transcripts.
+
+A local Item's `workspace` field is a Host label from the version 1 board; once the Host reports a
+Session with that label, it attaches as a Link.
 
 ## Artifact
 

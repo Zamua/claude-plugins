@@ -37,18 +37,24 @@ the phase that needs them.
 - **Alternatives**: `gh search prs --author @me` (rejected for now: costs budget for a set the board
   mostly has).
 
-## R4. Sessions
+## R4. Sessions: the herdr Host
 
-- **Decision**: `herdr session list`, then `herdr --session <name> pane list` for each, keeping
-  panes whose `agent` is `claude`. A pane gives the workspace label, the Claude session id
-  (`agent_session.value`) and `agent_status` (idle, working, done; checked).
+- **Decision**: Sessions come through a Host port (data-model.md "Host and Harness"); herdr is its
+  first adapter. It runs `herdr session list`, then `herdr --session <name> pane list` for each,
+  keeping panes with an `agent`. A pane gives the workspace label, the agent kind, its session id
+  (`agent_session.value`) and `agent_status` (idle, working, done; checked). Focusing runs
+  `herdr --session <name> workspace focus <id>`, the same call `focusWorkspace` in `kit.tsx` makes
+  today, which moves into the herdr Host.
+- **Alternatives**: calling herdr from the core and the views (rejected: FR-022; a tmux or Zellij
+  user would need core changes).
 - **Rationale**: local and cheap; refreshed every 30 s only while the work view is shown.
 - **To verify**: whether any herdr status means "waiting on the person". Until then a session shows
   herdr's own status word.
 
-## R5. Time spent
+## R5. Time spent: the Claude Code Harness
 
-- **Decision**: a session's active time is read from its transcript,
+- **Decision**: active time comes through a Harness port; Claude Code is its first adapter. A
+  session's active time is read from its transcript,
   `~/.claude/projects/<cwd>/<session id>.jsonl`: the sum of the spans from each person's prompt to
   the last entry before the next prompt, with any gap over 5 minutes cut out. Results are cached
   per transcript by mtime.
@@ -83,7 +89,8 @@ the phase that needs them.
   - Linear: state type `completed` or `canceled` done; `started` in flight, except a state named
     "In Review" waiting; `unstarted`, `backlog`, `triage` next.
   - Artifacts: the prs view's existing "needs you" rule.
-  - Sessions: they carry herdr's status and do not roll up into Status.
+  - Sessions: they carry the Host's state, mapped to working, waiting, idle or done, and do not roll
+    up into Status.
 - **Rationale**: one scale everywhere (spec FR-005); tool-specific words stay in the adapters.
 
 ## R9. Rollup order

@@ -7,8 +7,9 @@
 
 The board's `work` view becomes a tree of Items built in memory from five Sources: the local file
 (Responsibilities, side projects, asks, hand links), Rhythms (goals), Linear (projects and tasks),
-the prs boards (pull requests) and herdr (sessions). Each Source is one adapter that maps its
-system into the core types; the core names no tool. Sessions and pull requests attach to Items by
+the prs boards (pull requests). Sessions come from a Host (herdr first) and a Harness (Claude Code
+first). Each Source, Host and Harness is one adapter that maps its system into the core types; the
+core names no tool, multiplexer or agent runtime. Sessions and pull requests attach to Items by
 identifiers already in their names, and Claude edits the local file through a new
 `mcp__board__work` tool. Delivery follows the spec's six stories, each shippable alone.
 
@@ -86,8 +87,11 @@ plugins/board/
 │           ├── rhythms.ts       # goals through $.tool.call, shared cache
 │           ├── linear.ts        # projects and issues through the linear CLI, shared cache
 │           ├── github.ts        # Artifacts from prs boards and the GitHub cache
-│           ├── herdr.ts         # Sessions and their active time
 │           └── boards.ts        # another file board's items under a local Item
+│       ├── hosts/
+│       │   └── herdr.ts         # Host: lists sessions, focuses one; takes over focusWorkspace
+│       └── harnesses/
+│           └── claude.ts        # Harness: active time and last activity from transcripts
 └── tests/
     ├── work-model.test.ts       # tree, rollup, matching, cycles, through the view and tool
     ├── work-migrate.test.ts
@@ -106,7 +110,8 @@ Each step ships as its own plugin version and is checked live before the next:
 
 1. Story 1: model, local file Source, migration, work view, work tool.
 2. Story 2: Linear, then Rhythms (after the R1 spike), then the `boards` Source for on-call.
-3. Story 3: herdr and github Sources, alias matching, hand links, child sessions.
+3. Story 3: the Host and Harness ports with herdr and Claude Code, the github Source, alias
+   matching, hand links, child sessions, and the session mark that focuses a session.
 4. Story 4: breadcrumb in the session view.
 5. Story 5: dates on lines, active time, Periods.
 6. Story 6: Inbox.
