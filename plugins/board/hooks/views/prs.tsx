@@ -4,7 +4,7 @@ import type { Color, EngineInterface, On, RenderNode } from 'claude-code'
 import type { CiState, PrBoard, PrFacts, TrackedPr } from '../../types'
 import { ago, messageOf, prMark, prRow, span, stamp } from '../kit'
 import type { Els, View } from '../kit'
-import { showView } from '../pane'
+import { PANE, paneFocused, showView } from '../pane'
 import { legacyValue, loadBoard, saveBoard, storedBoard } from '../store'
 
 export const PRS_TOOL = 'mcp__board__prs'
@@ -812,6 +812,18 @@ export function prsHooks(on: On) {
     return { result: describe(await read($, board), await $.clock.now()) }
   })
 
+  on('ui.press', { requestId: PANE }, async ($, e, next) => {
+    foldFilters($, e.element)
+
+    return next(e)
+  })
+
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    foldFilters($, e.element)
+
+    return next(e)
+  })
+
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
     if (ran.deny !== undefined || !OPENS_PR.test(e.command)) return ran
@@ -858,6 +870,14 @@ type FilterField = 'author' | 'repo'
 const picked: Record<FilterField, Set<string>> = { author: new Set(), repo: new Set() }
 let openFilter: FilterField | '' = ''
 let filterFor = ''
+let wasFocused = false
+
+/** Folds the open popup on a press or a focus move anywhere but the filters themselves, as a click off it. */
+function foldFilters($: EngineInterface, element: string | undefined) {
+  if (openFilter === '' || (element !== undefined && /^pf(ilter|opt|clear)-/.test(element))) return
+  openFilter = ''
+  $.ui.invalidate('ui.render')
+}
 
 const valueOf = (p: TrackedPr, field: FilterField) => (field === 'author' ? (p.facts?.author ?? '') : p.repo)
 
@@ -997,6 +1017,9 @@ export function prsView($: EngineInterface): View {
         openFilter = ''
         filterFor = b.sessionId
       }
+      // A click outside the pane takes the keyboard back from it, which folds the popup too
+      if (wasFocused && !paneFocused()) openFilter = ''
+      wasFocused = paneFocused()
       const shown = b.prs.filter(matches)
       const { row, popup } = filters($, els, b.prs)
 

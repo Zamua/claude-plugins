@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { board, engine, open, start, world } from './engine'
+import { board, engine, open, PANE, start, world } from './engine'
 
 const TOOL = 'mcp__board__prs'
 const NOW = Date.parse('2026-10-25T12:00:00Z')
@@ -271,6 +271,26 @@ test('author and repo boxes drop down a checklist, and ticked values narrow the 
   await ui.press({ key: 'pfopt-repo-pay' })
   expect(await rows()).toEqual(['#6023'])
   await ui.unmount()
+})
+
+test('the filter popup folds on a press elsewhere in the pane, or once the pane gives the keyboard back', async ($, on) => {
+  engine(on, gh({ 6021: pr({ author: 'octo' }), 6022: pr({ author: 'rojen' }) }), NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: [{ pr: 'https://github.com/acme/api/pull/6021' }, { pr: 'https://github.com/acme/api/pull/6022' }] })
+  const ui = await open($, 'prs')
+
+  await ui.press({ key: 'pfilter-author' })
+  await ui.press({ key: 'pfopt-author-rojen' })
+  expect(await ui.find({ key: 'pfilter-popup' })).toBeDefined()
+  await ui.press({ key: 'tab-prs' })
+  expect(await ui.find({ key: 'pfilter-popup' })).toBeUndefined()
+  expect(await ui.find({ key: 'pfilter-author' })).toMatchObject({ props: { label: 'Author: rojen ▾' } })
+
+  await ui.press({ key: 'pfilter-author' })
+  await ui.unmount()
+  const blurred = await $.ui.mount({ ...PANE, props: { ...PANE.props, isFocused: false }, surface: 'terminal' })
+  expect(await blurred.find({ key: 'pfilter-popup' })).toBeUndefined()
+  await blurred.unmount()
 })
 
 test('a refresh says when a tracked pull request merged or its CI failed', async ($, on) => {
