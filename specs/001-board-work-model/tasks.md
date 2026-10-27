@@ -124,7 +124,7 @@ US6. Each story ends with a live check and a version bump, so each ships alone.
 - [X] T036 [P] [US2] Implement `plugins/board/hooks/work/sources/linear.ts`: one `linear issue list --team <team> --project <name> --all-states --all-assignees --json` per configured project, Items `linear:<identifier>` with the identifier as an alias, the project as a parent Item, `under` applied, Kinds from config, through `readSource` in `plugins/board/hooks/work/cache.ts`
 - [X] T037 [P] [US2] Implement `plugins/board/hooks/work/sources/rhythms.ts`: one `search_knowledge` call with the followed goals' ids and `include_children`, Items `rhythms:<short id>` with progress, status per R8, owner and `checkinDue`; register its `tool.check` hook as a bare statement allowing only the board-origin calls
 - [X] T038 [P] [US2] Implement `plugins/board/hooks/work/sources/boards.ts`: read another configured board's file and place its items under the named local Item, reusing the file reading in `plugins/board/hooks/views/file.tsx`
-- [ ] T039 [US2] Live check and ship: add `rhythms`, `linear` and `boards` sources to `~/.config/board/boards.json` (follow OBJ-2346; CRB Funding - Money Movement under its instant-funding key result), confirm one `at` per cache file across two sessions, ask the root session how the work stands against the goals, bump the version, commit and push
+- [X] T039 [US2] Live check and ship: add `rhythms`, `linear` and `boards` sources to `~/.config/board/boards.json` (follow OBJ-2346; CRB Funding - Money Movement under its instant-funding key result), confirm one `at` per cache file across two sessions, ask the root session how the work stands against the goals, bump the version, commit and push
 
 **Checkpoint**: goals and tasks arrive without hand copying.
 
@@ -216,5 +216,9 @@ the next story.
   opened its pane on the work view down to its Item, marked "here", under a root mark. 23 of the 26
   sessions running then attached with no hand link; the CRB architecture session's workspace had been
   renamed `crb`, which no alias can match without tying with other CRB sessions.
+- T039, checked 2026-10-27 on 0.6.1: OBJ-2228 and its 8 key results came from Rhythms through the board's
+  own tool call with no prompt, the CRB Funding project's 51 issues from Linear, and the on-call board's
+  4 open items under On-call. CRB integration is linked under OBJ-2228. Of the PRs sessions track, 14 need
+  the person: 3 of their own, and 11 others' with review threads waiting on them.
 - The memory note on the work board (`~/.claude/projects/-Users-zamua/memory/work-board.md`) needs
   updating once US3 and US4 ship.
