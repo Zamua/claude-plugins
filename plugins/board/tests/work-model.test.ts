@@ -48,6 +48,7 @@ test('a leaf opens to its detail, and Responsibilities draw after the Outcomes',
   await ui.press({ key: 'wtoggle-file:scope' })
   expect(await ui.find({ type: 'Markdown', text: 'Against **main**.' })).toBeDefined()
 
+  expect(await ui.find({ key: 'outcomes', text: /^Outcomes.*Payments rework/ })).toBeDefined()
   expect(await ui.find({ key: 'responsibilities', text: /^Responsibilities.*Tooling/ })).toBeDefined()
   expect(await ui.find({ key: 'responsibilities', text: /Payments/ })).toBeUndefined()
   await ui.unmount()
