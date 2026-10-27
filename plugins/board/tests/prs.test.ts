@@ -239,6 +239,39 @@ test("someone else's pull request is flagged only for a thread waiting on you, y
   await ui.unmount()
 })
 
+test('author and repo boxes drop down a checklist, and ticked values narrow the rows', async ($, on) => {
+  const prs: Record<number, Pr> = {
+    6021: pr({ isDraft: false }),
+    6022: pr({ isDraft: false, author: 'rojen' }),
+    6023: pr({ isDraft: false, author: 'rojen' }),
+  }
+  engine(on, gh(prs), NOW)
+  await start($)
+  await $.tool.call({
+    tool: TOOL,
+    add: [{ pr: 'https://github.com/acme/api/pull/6021' }, { pr: 'https://github.com/acme/api/pull/6022' }, { pr: 'https://github.com/acme/pay/pull/6023' }],
+  })
+  const ui = await open($, 'prs')
+  const rows = async () => ((await ui.find({ key: 'prs' }))?.text ?? '').match(/#\d{4}/g)
+
+  expect(await ui.find({ key: 'pfilter-author' })).toMatchObject({ props: { label: 'Author: all ▾' } })
+  expect(await ui.find({ key: 'pfilter-repo' })).toMatchObject({ props: { label: 'Repo: all ▾' } })
+  await ui.press({ key: 'pfilter-author' })
+  expect(await ui.find({ key: 'pfopt-author-rojen', text: '☐ rojen 2' })).toBeDefined()
+  await ui.press({ key: 'pfopt-author-rojen' })
+  expect(await rows()).toEqual(['#6022', '#6023'])
+  expect(await ui.find({ key: 'pfilter-author' })).toMatchObject({ props: { label: 'Author: rojen ▴' } })
+
+  await ui.press({ key: 'pfopt-author-octo' })
+  expect(await rows()).toEqual(['#6021', '#6022', '#6023'])
+  expect(await ui.find({ key: 'pfilter-author' })).toMatchObject({ props: { label: 'Author: 2 picked ▴' } })
+  await ui.press({ key: 'pfclear-author' })
+  await ui.press({ key: 'pfilter-repo' })
+  await ui.press({ key: 'pfopt-repo-pay' })
+  expect(await rows()).toEqual(['#6023'])
+  await ui.unmount()
+})
+
 test('a refresh says when a tracked pull request merged or its CI failed', async ($, on) => {
   const github = { 6047: pr({}), 6050: pr({ rollup: 'PENDING' }) }
   const w = gh(github)
