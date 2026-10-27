@@ -44,7 +44,10 @@ the phase that needs them.
   keeping panes with an `agent`. A pane gives the workspace label, the agent kind, its session id
   (`agent_session.value`) and `agent_status` (idle, working, done; checked). Focusing runs
   `herdr --session <name> workspace focus <id>`, the same call `focusWorkspace` in `kit.tsx` makes
-  today, which moves into the herdr Host.
+  today, which moves into the herdr Host. Starting runs `herdr workspace create --cwd <cwd> --label
+  <label> --no-focus`, then `herdr agent start <label> --kind <harness> --pane <root pane> --
+  <args>`, then `herdr agent prompt <label> <brief>`, the recipe the on-call coordinator has used
+  since 2026-10-14 (checked).
 - **Alternatives**: calling herdr from the core and the views (rejected: FR-022; a tmux or Zellij
   user would need core changes).
 - **Rationale**: local and cheap; refreshed every 30 s only while the work view is shown.
@@ -57,9 +60,10 @@ the phase that needs them.
   session's active time is read from its transcript,
   `~/.claude/projects/<cwd>/<session id>.jsonl`: the sum of the spans from each person's prompt to
   the last entry before the next prompt, with any gap over 5 minutes cut out. Results are cached
-  per transcript by mtime.
+  per transcript by mtime. The message name is the `name` field of the record in
+  `~/.claude/sessions/<pid>.json` whose `sessionId` matches (checked: both fields are there).
 - **Rationale**: herdr reports no durations (checked: no time field on a pane); the session record
-  in `~/.claude/sessions/<pid>.json` has only `startedAt` and `statusUpdatedAt` (checked).
+  in `~/.claude/sessions/<pid>.json` has only `startedAt` and `statusUpdatedAt` for time (checked).
 - **Alternatives**: wall time since start (rejected: counts idle days).
 
 ## R6. Matching Sessions and Artifacts to Items
@@ -99,3 +103,26 @@ the phase that needs them.
   shown status is the first in that order among itself and its descendants, and it counts its
   descendants that need the person.
 - **Rationale**: the order the work board already sorts by.
+
+## R10. A Session is the place it runs
+
+- **Decision**: a Session's id is its Host and address, `session:<host>:<address>`, not the agent's
+  own id. The agent's id is a field the Host reports. `attach` finds the calling session's address
+  by matching `$.session.id()` against the Host's `harnessId`s.
+- **Rationale**: `start` knows the address before the agent has an id, so it can write the Item and
+  Coordinator Links at once. The agent's id changes when the person clears or resumes the agent in
+  the same pane, and the attachment should survive that.
+- **Alternatives**: the agent's id, with the brief telling the new session to attach itself on its
+  first turn (rejected: the session is unplaced until then, and it rests on the agent following the
+  brief).
+
+## R11. Messages stay with the harness
+
+- **Decision**: sessions message each other through the harness's own channel, Claude Code's
+  `SendMessage` to the names `ListAgents` prints. The board gives each Session's message name in the
+  tree read and carries no messages itself.
+- **Rationale**: the channel already reaches other local sessions (checked: a message to session
+  zamua-59 on 2026-10-27 was acted on). A second channel in the board would be a new system of
+  record (Constitution II).
+- **Alternatives**: native subagents or teams for the session tree (rejected: the person cannot drop
+  into a subagent, and a subagent lives inside its parent's turn).

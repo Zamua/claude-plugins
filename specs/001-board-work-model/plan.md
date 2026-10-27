@@ -11,7 +11,8 @@ the prs boards (pull requests). Sessions come from a Host (herdr first) and a Ha
 first). Each Source, Host and Harness is one adapter that maps its system into the core types; the
 core names no tool, multiplexer or agent runtime. Sessions and pull requests attach to Items by
 identifiers already in their names, and Claude edits the local file through a new
-`mcp__board__work` tool. Delivery follows the spec's six stories, each shippable alone.
+`mcp__board__work` tool, which can also start a Session for an Item through the Host. Delivery
+follows the spec's six stories, each shippable alone.
 
 ## Technical Context
 
@@ -35,7 +36,7 @@ in `~/.cache/board/`; per-session fold state in module memory
 
 | Principle | Check | Result |
 |---|---|---|
-| I. Simplest design at 90% | Five adapters, each one the first user needs; no Kind editor, no write-back, no new GitHub calls | Pass |
+| I. Simplest design at 90% | Five adapters, each one the first user needs; no Kind editor, no write-back beyond starting a Session, no new GitHub calls; coordination is a skill, not code | Pass |
 | II. Read models | External Items are read and cached, never copied into the local file; the file holds only what has no other home | Pass |
 | III. Domain-neutral core | `work/model.ts` names no tool; Kind names come from config; ids, states and aliases are mapped in adapters | Pass |
 | IV. Shared budgets | Rhythms hourly and Linear every 10 minutes through shared caches, only from sessions in use; GitHub through the existing cache with no new calls | Pass |
@@ -54,7 +55,7 @@ and on opening the view, which keeps Principle IV and adds no machinery.
 ```text
 specs/001-board-work-model/
 ├── plan.md              # this file
-├── research.md          # Phase 0: decisions R1 to R9
+├── research.md          # Phase 0: decisions R1 to R11
 ├── data-model.md        # Phase 1: Item, Status, Session, Artifact, Link, Period, tree
 ├── quickstart.md        # Phase 1: how to see each story work
 ├── contracts/
@@ -74,7 +75,7 @@ plugins/board/
 │   ├── kit.tsx                  # shared drawing helpers, unchanged API
 │   ├── views/
 │   │   ├── file.tsx             # stays for the oncall board and other file boards
-│   │   ├── session.tsx          # gains the breadcrumb (story 4)
+│   │   ├── session.tsx          # gains the breadcrumb and root mark (story 4)
 │   │   ├── prs.tsx              # unchanged; its cache feeds the github Source
 │   │   └── review.tsx           # unchanged
 │   └── work/
@@ -82,21 +83,23 @@ plugins/board/
 │       ├── view.tsx             # the work view: fold state, lines, freshness
 │       ├── tool.tsx             # mcp__board__work: validation and file writes
 │       ├── migrate.ts           # version 1 to version 2
-│       └── sources/
-│           ├── file.ts          # the local file
-│           ├── rhythms.ts       # goals through $.tool.call, shared cache
-│           ├── linear.ts        # projects and issues through the linear CLI, shared cache
-│           ├── github.ts        # Artifacts from prs boards and the GitHub cache
-│           └── boards.ts        # another file board's items under a local Item
+│       ├── sources/
+│       │   ├── file.ts          # the local file
+│       │   ├── rhythms.ts       # goals through $.tool.call, shared cache
+│       │   ├── linear.ts        # projects and issues through the linear CLI, shared cache
+│       │   ├── github.ts        # Artifacts from prs boards and the GitHub cache
+│       │   └── boards.ts        # another file board's items under a local Item
 │       ├── hosts/
-│       │   └── herdr.ts         # Host: lists sessions, focuses one; takes over focusWorkspace
+│       │   └── herdr.ts         # Host: lists, starts and focuses sessions; takes over focusWorkspace
 │       └── harnesses/
-│           └── claude.ts        # Harness: active time and last activity from transcripts
+│           └── claude.ts        # Harness: active time, last activity, message name, launch command
+├── skills/
+│   └── root/SKILL.md            # how a root session starts, briefs and checks on other sessions
 └── tests/
     ├── work-model.test.ts       # tree, rollup, matching, cycles, through the view and tool
     ├── work-migrate.test.ts
     ├── work-sources.test.ts     # each adapter against stubbed CLIs and MCP answers
-    └── work-session.test.ts     # attach, child sessions, breadcrumb
+    └── work-session.test.ts     # attach, start, Coordinators, breadcrumb, root
 ```
 
 **Structure Decision**: the work model lives in `hooks/work/`, beside the existing `views/`, so the
@@ -108,13 +111,18 @@ not the work model, such as oncall.
 
 Each step ships as its own plugin version and is checked live before the next:
 
-1. Story 1: model, local file Source, migration, work view, work tool.
-2. Story 2: Linear, then Rhythms (after the R1 spike), then the `boards` Source for on-call.
-3. Story 3: the Host and Harness ports with herdr and Claude Code, the github Source, alias
-   matching, hand links, child sessions, and the session mark that focuses a session.
-4. Story 4: breadcrumb in the session view.
+1. Story 1: model, local file Source, migration, work view, work tool. Shipped in 0.2.0.
+2. Story 3: the Host and Harness ports with herdr and Claude Code, the github Source, alias
+   matching, hand links, Coordinators, the session mark that focuses a session, starting a Session
+   for an Item, and session summaries in the tree read.
+3. Story 4: breadcrumb, the root session and its mark, the work view opened down to the current
+   session, and the root-session skill.
+4. Story 2: Linear, then Rhythms (after the R1 spike), then the `boards` Source for on-call.
 5. Story 5: dates on lines, active time, Periods.
 6. Story 6: Inbox.
+
+Stories 3 and 4 come before Story 2 because together they let one root session start, track and
+reach every other session.
 
 ## Complexity Tracking
 

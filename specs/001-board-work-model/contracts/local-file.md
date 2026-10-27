@@ -17,15 +17,20 @@ hand, unplaced asks, and Links.
       "parent": "hostit", "status": "needs",
       "origin": { "type": "asked", "by": "Hasan" }, "target": "2026-10-30" }
   ],
+  "root": "session:herdr:default/w1",
   "links": [
-    { "child": "session:fc4d702e-2ba2-4ce0-ae40-f1143655d025", "parent": "crb-architecture",
+    { "child": "session:herdr:default/w9", "parent": "crb-architecture",
+      "at": "2026-10-27T14:00:00Z" },
+    { "child": "session:herdr:default/w9", "parent": "session:herdr:default/w1",
       "at": "2026-10-27T14:00:00Z" }
   ]
 }
 ```
 
 Item fields are those of the data model's Item, minus `source` (always `file`) and with `id`
-local to the file. `ref` keeps the work board's `#N` numbers. Unknown fields are kept on rewrite.
+local to the file. `ref` keeps the work board's `#N` numbers. `root` names the root session. A
+Session may have two Links, one to an Item and one to its Coordinator. Unknown fields are kept on
+rewrite.
 
 ## Migration from version 1
 
@@ -39,7 +44,7 @@ beside it as `board.v1.json`:
 | group `source`, `links` | Item `links`, the source first |
 | item | Item, kind `Task`, `parent` its `group` |
 | item `section` | `status`, same word |
-| `due`, `due_label` | `target`; the label goes in `detail` |
+| `due`, `due_label` | `target`, `target_label` |
 | `workspace` | a Link from that workspace's session, once it is seen |
 | `ref`, `detail`, `links`, `source` | kept |
 

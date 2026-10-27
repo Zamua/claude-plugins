@@ -28,8 +28,10 @@ boards keep their current layouts.
         "github": {},                                 // Artifacts from the prs boards; no options
         "boards": { "oncall": "on-call" }             // another board's items, under a local Item
       },
-      "hosts": { "herdr": {} },                        // where Sessions run, and how to focus one
-      "harnesses": { "claude": {} },                   // the agent inside them, and its active time
+      "hosts": { "herdr": { "cwd": "~" } },            // where Sessions run; cwd for started ones
+      "harnesses": {                                   // the agent inside them
+        "claude": { "args": ["--model", "opus[1m]", "--effort", "xhigh"] }
+      },
       "periods": [{ "name": "Q4 2026-27", "start": "2026-11-01", "end": "2027-01-31" }]
     }
   ]

@@ -25,11 +25,19 @@ How to see each story work once it is built. Each block stands alone.
    beside it.
 3. In a coordinating session, ask Claude to attach it to the project. Expect the coordinator under
    the project, with the task sessions listed once linked to it.
+4. From the coordinator, ask Claude to start a session for another task with a short brief. Expect a
+   new workspace labeled after the task, the session under the task at once with the coordinator as
+   its Coordinator, and the brief as its first prompt. Ask again and expect a refusal naming it.
+5. Ask the coordinator for a status update. Expect it to answer from one tree read, with each
+   session's goal and summary.
 
-## Story 4: breadcrumb
+## Story 4: breadcrumb and the root
 
-In an attached session, `/board session`. Expect one line such as
-`Objective › Key result › Project › MM-809 › this session` above the session board.
+1. In the session you talk to, ask Claude to make it the root session.
+2. Press a task's session mark in the work view. In the session that comes up, `/board session`.
+   Expect one line such as `⌂ › Objective › Key result › Project › MM-809 › this session` above the
+   session board, and its work view opened down to the session, marked.
+3. Press the root mark. Expect the root session to come to the front.
 
 ## Story 5: deadlines, time, periods
 
