@@ -46,12 +46,12 @@ test("an Item's time is its sessions' active time, gaps over five minutes cut, s
   await start($)
 
   const ui = await open($, 'work')
-  expect(await ui.find({ key: 'waside-file:pay', text: '3h' })).toBeDefined()
+  expect(await ui.find({ key: 'waside-file:pay', text: /^3h\s*$/ })).toBeDefined()
   await ui.press({ key: 'wtoggle-file:pay' })
   await ui.press({ key: 'wtoggle-file:gross' })
-  expect(await ui.find({ key: 'waside-file:gross', text: '5m' })).toBeDefined()
+  expect(await ui.find({ key: 'waside-file:gross', text: /^5m\s*$/ })).toBeDefined()
   expect(await ui.find({ key: 'waside-file:fee', text: /^5m\s*$/ })).toBeDefined()
-  expect(await ui.find({ key: 'waside-file:scope', text: '3h' })).toBeDefined()
+  expect(await ui.find({ key: 'waside-file:scope', text: /^3h\s*$/ })).toBeDefined()
   await ui.unmount()
 
   expect(JSON.parse(w.files[TIME_FILE] ?? '{}').sessions.h1).toMatchObject({ activeMs: 5 * 60_000, item: 'file:fee' })

@@ -1,6 +1,6 @@
 import type { Color, EngineInterface, On, RenderNode } from 'claude-code'
 
-import { ago, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, span, spans, stamp } from '../kit'
+import { ago, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, span, spans } from '../kit'
 import type { Els, Part, View } from '../kit'
 import { PANE, paneFocused, paneWidth, selectView } from '../pane'
 import { buildTree, inPeriod, mergeItems, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
@@ -319,12 +319,12 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       // A click outside the pane takes the keyboard back from it, which folds the Period list too
       if (wasFocused && !paneFocused()) isPeriodOpen = false
       wasFocused = paneFocused()
-      // One cell spare, so a row that fits exactly does not reach the pane's edge
+      // The view keeps a cell clear of the pane's right edge, and one more spare so a row that fits exactly stops short
       const ctx: Ctx = {
         els,
         now,
         tree,
-        columns: paneWidth() - 1,
+        columns: paneWidth() - 2,
         ...(self.session && { self: self.session }),
         ...(chosen && { shows: inPeriod(tree, chosen) }),
       }
@@ -347,8 +347,8 @@ export function workView($: EngineInterface, w: WorkBoard): View {
             }}
           />
         ) : undefined
-      const head = root || box ? (
-        <Box key="whead" flexDirection="row" columnGap={1} paddingX={1}>
+      const head = (root || box || fresh !== '') && (
+        <Box key="whead" flexDirection="row" columnGap={1} paddingLeft={1}>
           {root && rootMark($, w, els, root, 'wroot')}
           {box}
           <Box key="stamp" flexGrow={1} justifyContent="flex-end">
@@ -357,12 +357,10 @@ export function workView($: EngineInterface, w: WorkBoard): View {
             </Text>
           </Box>
         </Box>
-      ) : (
-        fresh !== '' && stamp(els, fresh, readError !== undefined)
       )
 
       return (
-        <Box key="work-view" flexDirection="column">
+        <Box key="work-view" flexDirection="column" paddingRight={1}>
           {head}
           {outcomes.length + responsibilities.length + inbox.length === 0 && (
             <Text dimColor wrap="wrap">
@@ -423,12 +421,12 @@ export function workView($: EngineInterface, w: WorkBoard): View {
 
     return (
       <Box key="wperiod-list" position="absolute" top={1} left={before} flexDirection="column" borderStyle="round" borderColor="inactive">
-        {options.map(one => {
+        {options.map((one, at) => {
           const isOn = one.name === period
 
           return (
             <Button
-              key={`wper-${one.name || 'all'}`}
+              key={one.name ? `wper-${at}` : 'wper-all'}
               plain
               onPress={() => {
                 period = one.name
@@ -504,7 +502,9 @@ export function workView($: EngineInterface, w: WorkBoard): View {
     ]
     const asker = node.depth === 0 && item.origin?.type === 'asked' && item.origin.by ? `from ${item.origin.by}` : ''
     const aside = [asker, node.activeMs >= 60_000 ? span(node.activeMs) : ''].filter(Boolean).join(' · ')
-    const room = ctx.columns - node.depth * 2 - (hasMark ? 2 : 0) - (aside ? [...aside].length + 1 : 0)
+    // A line with an aside keeps the mark's cell even without a mark, so asides line up in one column and marks in the next
+    const hasEnd = hasMark || aside !== ''
+    const room = ctx.columns - node.depth * 2 - (hasEnd ? 2 : 0) - (aside ? [...aside].length + 1 : 0)
     const content = spans(ctx.els, fitLine(parts, { text: item.title, dimColor: quiet }, room))
 
     return (
@@ -516,9 +516,9 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         ) : (
           <Text>{content}</Text>
         )}
-        {(hasMark || aside) && <Box key={`wgap-${item.id}`} flexGrow={1} />}
-        {aside && fixed(ctx.els, `waside-${item.id}`, <Text dimColor>{hasMark ? `${aside} ` : aside}</Text>)}
-        {hasMark && sessionMark(ctx, item.id, node.sessions)}
+        {hasEnd && <Box key={`wgap-${item.id}`} flexGrow={1} />}
+        {aside && fixed(ctx.els, `waside-${item.id}`, <Text dimColor>{`${aside} `}</Text>)}
+        {hasMark ? sessionMark(ctx, item.id, node.sessions) : hasEnd && fixed(ctx.els, `wnomark-${item.id}`, <Text> </Text>)}
       </Box>
     )
   }
