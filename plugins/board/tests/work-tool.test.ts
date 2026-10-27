@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { engine, HOME, open, start } from './engine'
+import { CONFIG_FILE, engine, HOME, open, start } from './engine'
 import { herdrHost, sessionBoard, sessionRecord, storeFile, TREE, withLive, withTree } from './work-fixtures'
 
 const NOW = Date.parse('2026-10-27T14:00:00Z')
@@ -103,6 +103,19 @@ test('start opens a session for an Item through herdr, briefed and linked under 
   await ui.press({ key: 'wtoggle-file:pay' })
   expect(await ui.find({ key: 'wmark-file:scope' })).toBeDefined()
   await ui.unmount()
+})
+
+test('a session started from one on another board config runs on that config too', async ($, on) => {
+  const created = { id: 'w9:p1', label: 'scope-the-split', harnessId: 'h-new' }
+  const w = withLive(TREE, herdrHost([SELF], created), sessionRecord(9, 'h-new', 'zamua-9', NOW))
+  w.env = { ...w.env, BOARD_CONFIG: CONFIG_FILE }
+  engine(on, w, NOW)
+  await start($)
+
+  await $.tool.call({ tool: TOOL, start: [{ item: 'scope', brief: 'Split the scope doc in two.' }] })
+  const create = w.runs.find(argv => argv.includes('create')) ?? []
+  expect(create).toContain(`BOARD_CONFIG=${CONFIG_FILE}`)
+  expect(create).toContain('BOARD_WORK_ITEM=file:scope')
 })
 
 test('a second start for an Item with a running session is refused, naming it, unless asked again', async ($, on) => {
