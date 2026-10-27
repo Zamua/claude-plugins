@@ -38,6 +38,7 @@ Sessions come from two more ports, so the core never names a multiplexer or an a
 // Host: where Sessions run. One module per multiplexer, e.g. hosts/herdr.ts.
 listSessions($, config): Promise<{ sessions: HostSession[]; error?: string }>
 focusSession($, address: string): Promise<string | undefined>   // the reason when it could not
+startSession($, config, start: HostStart): Promise<{ address?: string; error?: string }>
 
 type HostSession = {
   address: string            // opaque to the core
@@ -47,9 +48,19 @@ type HostSession = {
   harnessId?: string         // the Harness's own session id, when the Host knows it
 }
 
+type HostStart = {
+  label: string
+  cwd: string
+  harness: string            // the Harness to run, e.g. 'claude'
+  command: string[]          // from the Harness's launchCommand
+  brief: string              // sent as the first prompt once the agent is up
+}
+
 // Harness: the agent inside a Session. One module per runtime, e.g. harnesses/claude.ts.
-sessionTime($, harnessId: string): Promise<{ activeMs: number; lastActive?: string }>
+sessionInfo($, harnessId: string): Promise<{ activeMs: number; lastActive?: string; messageName?: string }>
+launchCommand(config): string[]   // the command and arguments a Host runs to start this Harness
 ```
 
 The `sources.herdr` config key becomes `hosts: { herdr: {} }`; `harnesses: { claude: {} }` names the
-Harness. Pressing a session mark calls `focusSession` of the Session's own Host.
+Harness. Pressing a session mark calls `focusSession` of the Session's own Host. The work tool's
+`start` calls `startSession` of the first configured Host with the first configured Harness.

@@ -38,15 +38,16 @@ on its top-level line.
 
 ---
 
-### User Story 2 - My goals and tasks come from where they already live (Priority: P2)
+### User Story 2 - My goals and tasks come from where they already live (Priority: P4)
 
 The person's objectives and key results appear from their goal tracker, and their projects and
 tasks from their issue tracker, placed in the same tree without being copied by hand. Progress and
 the next check-in date of a goal show on its line. The data stays fresh without any session asking
 the same tracker more often than needed.
 
-**Why this priority**: it removes the hand upkeep that makes the current board drift, but it needs
-the tree from Story 1 to land in.
+**Why this priority**: it removes the hand upkeep that makes the current board drift, and it answers
+"how are we doing against our goals". It comes after Stories 3 and 4, which make one root session
+able to run the rest.
 
 **Independent Test**: configure one followed goal and one issue-tracker project linked beneath one
 of its key results, open the work view, and confirm the goal, its key results with progress, and
@@ -66,7 +67,7 @@ the project's open tasks appear in place.
 
 ---
 
-### User Story 3 - Sessions and pull requests attach to the work they serve (Priority: P3)
+### User Story 3 - Sessions and pull requests attach to the work they serve (Priority: P2)
 
 Each running agent session and each pull request appears under the Item it serves, found from the
 identifiers already in its workspace name, branch or title. A session can sit at any level: a
@@ -74,12 +75,21 @@ session coordinating a goal tracks project sessions, which track task sessions, 
 session tracks the sessions investigating each alert. Where no identifier matches, the person, or
 Claude on their behalf, links it by hand.
 
+Claude in any session can start a session for an Item with a brief. The new session sits under the
+Item from the moment it starts, with the session that started it as its Coordinator, so a root
+session that starts project sessions, which start task sessions, builds the session tree as it
+works. Reading the tree gives each session's state, its own summary of where it stands, and the name
+to message it by, so one read answers "give me a status update" without interrupting anyone.
+
 **Why this priority**: it answers "which agents are working on this, and what did they produce",
-the question the person asks most while coordinating many sessions.
+the question the person asks most while coordinating many sessions, and it lets one root session
+start and track the rest.
 
 **Independent Test**: start sessions in workspaces named after two tasks and one coordinating
 session linked to their project, open the work view, and confirm each session sits under its task,
-the coordinator sits under the project and lists the two task sessions as its children.
+the coordinator sits under the project and lists the two task sessions as its children. From the
+coordinator, start a session for a third task and confirm it appears under that task with the
+coordinator as its Coordinator.
 
 **Acceptance Scenarios**:
 
@@ -100,20 +110,33 @@ the coordinator sits under the project and lists the two task sessions as its ch
 7. **Given** sessions run under a different terminal multiplexer or agent harness, **When** an
    adapter for it is configured instead, **Then** every scenario above holds with no change outside
    that adapter.
+8. **Given** an Item, **When** Claude in a session starts a session for it with a brief, **Then** a
+   new session starts where sessions run, labeled after the Item, appears under the Item at once
+   with the starting session as its Coordinator, and receives the brief.
+9. **Given** an Item that already has a running session, **When** Claude asks to start another for
+   it, **Then** the start is refused naming the running session, unless Claude asks for another
+   one explicitly.
+10. **Given** running sessions in the tree, **When** Claude reads the tree, **Then** each session's
+    line gives its state, the goal and summary it keeps on its session board, and the name to
+    message it by.
 
 ---
 
-### User Story 4 - Each session knows where it sits (Priority: P4)
+### User Story 4 - Each session knows where it sits, and the way back to the root (Priority: P3)
 
 The session view shows a one-line breadcrumb of the Item its session is attached to, from the top of
 the tree down to the session, such as "Q4 › CRB funding › MM-809 › this session". Pressing a step
-opens the work view at that Item.
+opens the work view at that Item. The person marks one session as the root session, the one they
+talk to; every breadcrumb and every work view starts with a root mark that brings it to the front.
+In an attached session, the work view opens down to that session and marks it, so the person who
+jumped in from the tree sees where they are.
 
-**Why this priority**: it keeps the person and the agent oriented in a single session, but it
-depends on Story 3's attachments.
+**Why this priority**: it keeps the person and the agent oriented while moving between many
+sessions, but it depends on Story 3's attachments.
 
 **Independent Test**: attach a session to a task three levels deep and confirm its session view
-shows the full path on one line.
+shows the full path on one line, its work view opens down to it, and the root mark brings the root
+session to the front.
 
 **Acceptance Scenarios**:
 
@@ -121,6 +144,10 @@ shows the full path on one line.
    every ancestor's title in order, cut at the pane's edge from the left rather than wrapping.
 2. **Given** an unattached session, **When** its session view draws, **Then** no breadcrumb is
    drawn.
+3. **Given** a root session, **When** any session's breadcrumb or work view draws, **Then** it
+   starts with a root mark, and pressing the mark brings the root session to the front.
+4. **Given** an attached session, **When** its work view first draws, **Then** the path to its Item
+   is open and its own line is marked as the current session.
 
 ---
 
@@ -179,6 +206,11 @@ place it under a project and confirm it moves.
 - A tree deeper than the pane can indent legibly: deeper levels are reached by opening, and the
   breadcrumb carries the path.
 - A finished session: it leaves the tree, and its active time still counts toward its Item.
+- A session whose agent is cleared or restarted in the same place: it keeps its attachment and its
+  Coordinator, since a session is the place it runs, not the agent's id at the moment.
+- A root session that has ended: the root mark is drawn dim until another session is marked root.
+- A start for an Item that is not drawn anywhere yet, such as a new ask: Claude adds the Item first,
+  then starts the session for it.
 - No external Source is configured: the tree works from the local file alone.
 
 ## Requirements *(mandatory)*
@@ -214,8 +246,8 @@ place it under a project and confirm it moves.
   workspace names, branch names and pull request titles.
 - **FR-014**: The person, or Claude on their behalf, MUST be able to link an Item, Session or
   Artifact to a parent by hand; a hand link MUST win over an inferred one.
-- **FR-015**: A Session MUST be attachable to an Item at any level, and MAY track child Sessions,
-  drawn beneath it.
+- **FR-015**: A Session MUST be attachable to an Item at any level, and MAY have a Coordinator, the
+  Session that started or tracks it; a Coordinator's Sessions MUST be drawn beneath it.
 - **FR-016**: An Item's time spent MUST be the active time of the Sessions under it, summed up the
   tree, including Sessions that have finished.
 - **FR-017**: The session view MUST show a one-line breadcrumb of its Session's attachment when it
@@ -229,8 +261,19 @@ place it under a project and confirm it moves.
 - **FR-021**: An Item with a Session attached MUST show a session mark on its line, colored by the
   Session's state; pressing the mark MUST bring that Session to the front where it runs.
 - **FR-022**: The core model MUST NOT name a terminal multiplexer or an agent harness. Sessions MUST
-  come from a Host adapter, which lists where sessions run and brings one to the front, and a
-  Harness adapter, which identifies the agent in a session and reads its active time.
+  come from a Host adapter, which lists where sessions run, starts one and brings one to the front,
+  and a Harness adapter, which identifies the agent in a session, reads its active time and gives
+  the name to message it by.
+- **FR-023**: Claude in any session MUST be able to start a Session for an Item with a brief. The
+  Host starts it; the board places it under the Item with the starting Session as its Coordinator
+  before its first turn, and refuses when the Item already has a running Session unless asked for
+  another.
+- **FR-024**: Reading the tree through the tool MUST give, for each Session, its state, the goal and
+  summary from its session board, and the name to message it by.
+- **FR-025**: The person MAY mark one Session as the root session. Every breadcrumb and the work
+  view's title line MUST then start with a root mark that brings the root session to the front.
+- **FR-026**: In an attached Session, the work view MUST first draw with the path to that Session's
+  Item open and the Session's own line marked as the current one.
 
 ### Key Entities
 
@@ -245,11 +288,13 @@ place it under a project and confirm it moves.
 - **Status**: the one scale shared by every Item, rolled up from descendants.
 - **Period**: a named date range used to group or filter.
 - **Session**: an agent working somewhere a Host can find and focus, attached to one Item at any
-  level, with a state, active time and optional child Sessions.
+  level, with a state, active time and an optional Coordinator.
+- **Coordinator**: the Session that started or tracks another Session.
+- **Root session**: the one Session the person talks to; it coordinates the top-level Sessions.
 - **Host**: where Sessions run, such as a terminal multiplexer: it lists them with a name and a
-  state, and brings one to the front.
+  state, starts one with a brief, and brings one to the front.
 - **Harness**: the agent runtime inside a Session, such as Claude Code: it gives the Session's own
-  id and its active time.
+  id, its active time and the name to message it by.
 - **Artifact**: something an Item produces, such as a pull request or a document, attached to an
   Item.
 - **Link**: a hand-set parent for an Item, Session or Artifact, stored locally.
@@ -275,8 +320,14 @@ place it under a project and confirm it moves.
 ## Assumptions
 
 - One person on one machine; multi-person views are out of scope.
-- The board only reads Sources: it posts no check-ins and edits no tracker. Editing Kinds in a UI is
+- The board only reads Sources: it posts no check-ins and edits no tracker. Its one action outside
+  the local file is starting a Session through the Host when Claude asks. Editing Kinds in a UI is
   out of scope; Kinds are names in the configuration file.
+- Sessions message each other through the harness's own messaging. The board gives each Session's
+  message name and carries no messages.
+- The root session keeps track through Claude's own memory, compaction and reading the boards; the
+  board keeps no memory for it. How a root session starts, briefs and checks on other sessions is
+  guidance in a skill, not board behavior.
 - The first user's Kinds are Objective, Key result, Project and Task, read from Rhythms (objectives
   and key results) and Linear (projects and issues); pull requests come from GitHub, Responsibilities
   from the local file, and sessions from herdr as the Host with Claude Code as the Harness.

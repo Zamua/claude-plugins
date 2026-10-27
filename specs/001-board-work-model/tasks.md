@@ -7,8 +7,8 @@
 every change, and Principle VI sets how tests are written: assert drawn lines and tool results,
 stub only CLIs, MCP answers, files and the clock.
 
-**Organization**: one phase per user story, in the spec's priority order. Each story ends with a
-live check and a version bump, so each ships alone.
+**Organization**: one phase per user story, in the spec's priority order: US1, US3, US4, US2, US5,
+US6. Each story ends with a live check and a version bump, so each ships alone.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -66,7 +66,47 @@ live check and a version bump, so each ships alone.
 
 ---
 
-## Phase 4: User Story 2 - Goals and tasks from their trackers (Priority: P2)
+## Phase 4: User Story 3 - Sessions and pull requests attach to their work (Priority: P2)
+
+**Goal**: each running session and each pull request sits under the Item it serves, inferred from ids or linked by hand; Coordinators show their Sessions; Claude can start a Session for an Item; the tree read gives each Session's state, summary and message name.
+
+**Independent Test**: two task sessions and one coordinator linked to their project appear in place, with the coordinator listing both; a session the coordinator starts for a third task appears under it at once.
+
+### Tests for User Story 3
+
+- [ ] T017 [P] [US3] Write `plugins/board/tests/work-session.test.ts`: stubbed herdr Host answers (`herdr session list`, `pane list`) become Sessions with ids `session:herdr:<address>`; a label containing `mm-809` attaches under the Item with alias `MM-809`; the deepest match wins; two equally deep matches go to Unplaced; a hand link beats a match; a session with a Coordinator Link draws beneath its Coordinator and keeps its Item Link; an unmatched session shows in Unplaced; an Item with sessions shows a session mark colored by state, and pressing it runs the Host's focus for the most recently active one
+- [ ] T018 [P] [US3] Write start and read cases in `plugins/board/tests/work-tool.test.ts`: `start` with an Item and a brief runs the Host's create, agent start and prompt commands with a label from the Item's alias and title and the Harness's launch command, writes the Item and Coordinator Links keyed by the new address, and the new session draws under the Item before the Host lists it; a start for an Item with a running session is refused naming that session and its message name unless `again: true`; a read lists each Session under its Item with state, message name, and goal and summary from its stored session board
+- [ ] T019 [P] [US3] Write Artifact cases in `plugins/board/tests/work-session.test.ts`: a pull request on a stored prs board whose title starts `MM-809` attaches under that Item with its review and CI state from the GitHub cache, and makes no `gh` call
+
+### Implementation for User Story 3
+
+- [ ] T020 [US3] Implement alias matching in `plugins/board/hooks/work/model.ts` per research R6: lowercase, whole-token match bounded by non-alphanumerics, deepest Item wins, equal depth goes to Unplaced, Links first; Sessions get `item` and `coordinator` separately per data-model.md
+- [ ] T021 [P] [US3] Implement the herdr Host in `plugins/board/hooks/work/hosts/herdr.ts` per `contracts/source-adapter.md`: `listSessions` runs `herdr session list`, then `herdr --session <name> pane list` per session, keeping panes with an `agent`, and maps herdr's status words to working, waiting, idle or done; `focusSession` focuses a workspace by address; `startSession` runs the recipe in research R4 and returns the new address. Move `focusWorkspace` out of `plugins/board/hooks/kit.tsx` into this module and have `plugins/board/hooks/views/file.tsx` call it from there; accept `hosts` and `harnesses` in `SPEC_KEYS` in `plugins/board/hooks/work/view.tsx`
+- [ ] T022 [P] [US3] Implement the Claude Code Harness in `plugins/board/hooks/work/harnesses/claude.ts`: `sessionInfo` gives last activity from the transcript's mtime under `~/.claude/projects/*/<session id>.jsonl` and the message name from the `~/.claude/sessions/*.json` record whose `sessionId` matches (research R5); `launchCommand` returns `claude` plus the configured `args`; active time follows in T041
+- [ ] T023 [P] [US3] Implement `plugins/board/hooks/work/sources/github.ts`: read every stored prs board from the plugin store and the facts in `~/.cache/board/github.json`, producing Artifacts with title, branch and facts; no network calls
+- [ ] T024 [US3] Extend `plugins/board/hooks/work/tool.tsx` per `contracts/work-tool.md`: `attach` finds the calling session's address by matching `$.session.id()` to a Host session's `harnessId` (research R10); `link` accepts Session and Artifact children and Session parents, keeping one Item Link and one Coordinator Link per Session; `start` refuses an Item with a running Session unless `again`, calls the Host's `startSession`, then writes both Links; the read adds one line per Session with state and message name, and its goal and summary from the stored session board; update the tool's description and input schema to match
+- [ ] T025 [US3] Draw Sessions and Artifacts in `plugins/board/hooks/work/view.tsx`: a Session line shows its label and state and focuses it on press through its Host's `focusSession`; a Coordinator's Sessions draw beneath it; an Item with sessions gets a one-glyph session mark (●) colored by the most urgent session state, which focuses the most recently active session (spec FR-021); an Artifact line uses `prRow` from `plugins/board/hooks/kit.tsx`; Unplaced draws last
+- [ ] T026 [US3] Live check and ship: confirm at least 90% of open workspaces attach with no hand link (SC-003); from this session, start a session for one Item with a short brief and confirm it appears under the Item with this session as Coordinator and gets the brief; message it by the name the read gives; close its workspace; attach the CRB architecture session to its Responsibility by hand; bump the version, commit and push
+
+**Checkpoint**: one session can start, track and reach the others.
+
+---
+
+## Phase 5: User Story 4 - Each session knows where it sits, and the way back to the root (Priority: P3)
+
+**Goal**: the breadcrumb, the root session and its mark, and the work view opened down to the current session.
+
+**Independent Test**: a session attached three levels deep shows its full path on one line, its work view opens down to it, and the root mark brings the root session to the front.
+
+- [ ] T027 [P] [US4] Add breadcrumb and root cases to `plugins/board/tests/work-session.test.ts`: an attached session's view shows every ancestor's title in order on one line; an unattached session's view shows none; pressing a step opens the work view with that Item's ancestors open; with a root set, the breadcrumb and the work view's title line start with a root mark that runs the Host's focus for the root session, drawn dim once that session has ended; `root: true` through the tool sets the file's `root`; an attached session's work view first draws with its Item's ancestors open and its own line marked
+- [ ] T028 [US4] Add `root` to `plugins/board/hooks/work/tool.tsx`, writing the calling session's id to the local file's `root`; export the last built tree and a `pathOf(sessionId)` lookup from `plugins/board/hooks/work/view.tsx`; draw the breadcrumb in `plugins/board/hooks/views/session.tsx` above the goal, root mark first, cut from the left with `truncate-start`
+- [ ] T029 [US4] In `plugins/board/hooks/work/view.tsx`, draw the root mark on the title line, and on the first draw in an attached session open its Item's ancestors and mark its own line; in `plugins/board/hooks/register.tsx`, open the pane on the work view at `session.start` when the session is attached
+- [ ] T030 [US4] Write `plugins/board/skills/root/SKILL.md`: how a root session starts sessions for top-level Items and Responsibilities with a brief, reads the tree for status, messages Coordinators by the names the read gives rather than their workers, and adds an Item before starting a session for work the tree lacks
+- [ ] T031 [US4] Live check and ship: mark this session as root, start one child, jump to it from its session mark, confirm its breadcrumb and opened work view, then press the root mark to come back; bump the version, commit and push
+
+---
+
+## Phase 6: User Story 2 - Goals and tasks from their trackers (Priority: P4)
 
 **Goal**: Rhythms objectives and key results, Linear projects and issues, and the on-call board appear in the tree, cached and shared.
 
@@ -74,54 +114,19 @@ live check and a version bump, so each ships alone.
 
 ### Tests for User Story 2
 
-- [ ] T017 [P] [US2] Write Linear cases in `plugins/board/tests/work-sources.test.ts`: a stubbed `linear issue list --json` answer becomes a Project Item under its configured `under` parent with Task children; state types map per research R8; a second refresh inside the fresh window runs no `linear` command; a failing command keeps the last Items and names Linear on the freshness line
-- [ ] T018 [P] [US2] Write Rhythms cases in `plugins/board/tests/work-sources.test.ts`: a stubbed `mcp__rhythms__search_knowledge` answer becomes an Objective with Key result children carrying progress and the configured Kind names; `checkinDue` is the Monday after the last check-in; the board's `tool.check` allows only its own read calls to the listed Rhythms tools and leaves the model's own calls alone
-- [ ] T019 [P] [US2] Write `boards` Source cases in `plugins/board/tests/work-sources.test.ts`: the oncall board's items appear as children of the configured local Item, with their section as status
+- [ ] T032 [P] [US2] Write Linear cases in `plugins/board/tests/work-sources.test.ts`: a stubbed `linear issue list --json` answer becomes a Project Item under its configured `under` parent with Task children; state types map per research R8; a second refresh inside the fresh window runs no `linear` command; a failing command keeps the last Items and names Linear on the freshness line
+- [ ] T033 [P] [US2] Write Rhythms cases in `plugins/board/tests/work-sources.test.ts`: a stubbed `mcp__rhythms__search_knowledge` answer becomes an Objective with Key result children carrying progress and the configured Kind names; `checkinDue` is the Monday after the last check-in; the board's `tool.check` allows only its own read calls to the listed Rhythms tools and leaves the model's own calls alone
+- [ ] T034 [P] [US2] Write `boards` Source cases in `plugins/board/tests/work-sources.test.ts`: the oncall board's items appear as children of the configured local Item, with their section as status
 
 ### Implementation for User Story 2
 
-- [ ] T020 [US2] Spike research R1 in a live session: call `mcp__rhythms__search_knowledge` through `$.tool.call` from a `$.clock.every` callback outside a turn; record the result in `specs/001-board-work-model/research.md` R1 and, if it fails, refresh Rhythms only on `turn.start` and when the view is shown
-- [ ] T021 [P] [US2] Implement `plugins/board/hooks/work/sources/linear.ts`: one `linear issue list --team <team> --project <name> --all-states --all-assignees --json` per configured project, Items `linear:<identifier>` with the identifier as an alias, the project as a parent Item, `under` applied, Kinds from config, through `readSource` in `plugins/board/hooks/work/cache.ts`
-- [ ] T022 [P] [US2] Implement `plugins/board/hooks/work/sources/rhythms.ts`: one `search_knowledge` call with the followed goals' ids and `include_children`, Items `rhythms:<short id>` with progress, status per R8, owner and `checkinDue`; register its `tool.check` hook as a bare statement allowing only the board-origin calls
-- [ ] T023 [P] [US2] Implement `plugins/board/hooks/work/sources/boards.ts`: read another configured board's file and place its items under the named local Item, reusing the file reading in `plugins/board/hooks/views/file.tsx`
-- [ ] T024 [US2] Live check and ship: add `rhythms`, `linear` and `boards` sources to `~/.config/board/boards.json` (follow OBJ-2346; CRB Funding - Money Movement under its instant-funding key result), confirm one `at` per cache file across two sessions, bump the version, commit and push
+- [ ] T035 [US2] Spike research R1 in a live session: call `mcp__rhythms__search_knowledge` through `$.tool.call` from a `$.clock.every` callback outside a turn; record the result in `specs/001-board-work-model/research.md` R1 and, if it fails, refresh Rhythms only on `turn.start` and when the view is shown
+- [ ] T036 [P] [US2] Implement `plugins/board/hooks/work/sources/linear.ts`: one `linear issue list --team <team> --project <name> --all-states --all-assignees --json` per configured project, Items `linear:<identifier>` with the identifier as an alias, the project as a parent Item, `under` applied, Kinds from config, through `readSource` in `plugins/board/hooks/work/cache.ts`
+- [ ] T037 [P] [US2] Implement `plugins/board/hooks/work/sources/rhythms.ts`: one `search_knowledge` call with the followed goals' ids and `include_children`, Items `rhythms:<short id>` with progress, status per R8, owner and `checkinDue`; register its `tool.check` hook as a bare statement allowing only the board-origin calls
+- [ ] T038 [P] [US2] Implement `plugins/board/hooks/work/sources/boards.ts`: read another configured board's file and place its items under the named local Item, reusing the file reading in `plugins/board/hooks/views/file.tsx`
+- [ ] T039 [US2] Live check and ship: add `rhythms`, `linear` and `boards` sources to `~/.config/board/boards.json` (follow OBJ-2346; CRB Funding - Money Movement under its instant-funding key result), confirm one `at` per cache file across two sessions, ask the root session how the work stands against the goals, bump the version, commit and push
 
 **Checkpoint**: goals and tasks arrive without hand copying.
-
----
-
-## Phase 5: User Story 3 - Sessions and pull requests attach to their work (Priority: P3)
-
-**Goal**: each running session and each pull request sits under the Item it serves, inferred from ids or linked by hand; coordinator sessions show their children.
-
-**Independent Test**: two task sessions and one coordinator linked to their project appear in place, with the coordinator listing both.
-
-### Tests for User Story 3
-
-- [ ] T025 [P] [US3] Write `plugins/board/tests/work-session.test.ts`: stubbed herdr Host answers (`herdr session list`, `pane list`) become Sessions; a label containing `mm-809` attaches under the Item with alias `MM-809`; the deepest match wins; two equally deep matches go to Unplaced; a hand link beats a match; a session linked to another session draws beneath it; an unmatched session shows in Unplaced; an Item with sessions shows a session mark colored by state, and pressing it runs the Host's focus for the most recently active one
-- [ ] T026 [P] [US3] Write Artifact cases in `plugins/board/tests/work-session.test.ts`: a pull request on a stored prs board whose title starts `MM-809` attaches under that Item with its review and CI state from the GitHub cache, and makes no `gh` call
-
-### Implementation for User Story 3
-
-- [ ] T027 [US3] Implement alias matching in `plugins/board/hooks/work/model.ts` per research R6: lowercase, whole-token match bounded by non-alphanumerics, deepest Item wins, equal depth goes to Unplaced, Links first
-- [ ] T028 [P] [US3] Implement the herdr Host in `plugins/board/hooks/work/hosts/herdr.ts` per `contracts/source-adapter.md`: `listSessions` runs `herdr session list`, then `herdr --session <name> pane list` per session, keeping panes with an `agent`, and maps herdr's status words to working, waiting, idle or done; `focusSession` focuses a workspace by address. Move `focusWorkspace` out of `plugins/board/hooks/kit.tsx` into this module and have `plugins/board/hooks/views/file.tsx` call it from there; accept `hosts` and `harnesses` in `SPEC_KEYS` in `plugins/board/hooks/work/view.tsx`
-- [ ] T029 [P] [US3] Implement the Claude Code Harness in `plugins/board/hooks/work/harnesses/claude.ts`: `sessionTime` finds `~/.claude/projects/*/<session id>.jsonl` and returns its last activity from the transcript's mtime; active time follows in T038
-- [ ] T030 [P] [US3] Implement `plugins/board/hooks/work/sources/github.ts`: read every stored prs board from the plugin store and the facts in `~/.cache/board/github.json`, producing Artifacts with title, branch and facts; no network calls
-- [ ] T031 [US3] Add `attach` and session references to `plugins/board/hooks/work/tool.tsx`: `attach` links the calling session (`session:<id>`) to a parent; `link` accepts Session and Artifact ids as children and Session ids as parents
-- [ ] T032 [US3] Draw Sessions and Artifacts in `plugins/board/hooks/work/view.tsx`: a Session line shows its label and state and focuses it on press through its Host's `focusSession`; an Item with sessions gets a one-glyph session mark (●) colored by the most urgent session state, which focuses the most recently active session (spec FR-021); an Artifact line uses `prRow` from `plugins/board/hooks/kit.tsx`; Unplaced draws last
-- [ ] T033 [US3] Live check and ship: confirm at least 90% of open workspaces attach with no hand link (SC-003), attach the CRB architecture session to its Responsibility by hand, bump the version, commit and push
-
----
-
-## Phase 6: User Story 4 - Each session knows where it sits (Priority: P4)
-
-**Goal**: the session view shows a one-line breadcrumb of its attachment.
-
-**Independent Test**: a session attached three levels deep shows its full path on one line.
-
-- [ ] T034 [P] [US4] Add breadcrumb cases to `plugins/board/tests/work-session.test.ts`: an attached session's view shows every ancestor's title in order on one line; an unattached session's view shows none; pressing a step opens the work view with that Item's ancestors open
-- [ ] T035 [US4] Export the last built tree and a `pathOf(sessionId)` lookup from `plugins/board/hooks/work/view.tsx`, and draw the breadcrumb in `plugins/board/hooks/views/session.tsx` above the goal, cut from the left with `truncate-start`
-- [ ] T036 [US4] Live check and ship: bump the version, commit and push
 
 ---
 
@@ -131,10 +136,10 @@ live check and a version bump, so each ships alone.
 
 **Independent Test**: a task due tomorrow shows yellow, and its parent shows the summed active time of two sessions under it.
 
-- [ ] T037 [P] [US5] Write `plugins/board/tests/work-time.test.ts`: a target inside two hours draws red as a countdown, inside a day yellow; a transcript with prompts and entries yields active time with gaps over 5 minutes cut; a parent sums its sessions' time, finished ones included; `/board work <period>` draws only Items whose dates fall in it, with their ancestors
-- [ ] T038 [US5] Compute active time in `sessionTime` in `plugins/board/hooks/work/harnesses/claude.ts` from `~/.claude/projects/*/<session id>.jsonl` per research R5, caching each result by transcript mtime in `~/.cache/board/time.json`
-- [ ] T039 [US5] Draw dates with `dueOf` and time with `span` from `plugins/board/hooks/kit.tsx` in `plugins/board/hooks/work/view.tsx`, and accept a Period name as `/board work <period>` in `plugins/board/hooks/register.tsx`
-- [ ] T040 [US5] Live check and ship: bump the version, commit and push
+- [ ] T040 [P] [US5] Write `plugins/board/tests/work-time.test.ts`: a target inside two hours draws red as a countdown, inside a day yellow; a transcript with prompts and entries yields active time with gaps over 5 minutes cut; a parent sums its sessions' time, finished ones included; `/board work <period>` draws only Items whose dates fall in it, with their ancestors
+- [ ] T041 [US5] Compute active time in `sessionInfo` in `plugins/board/hooks/work/harnesses/claude.ts` from `~/.claude/projects/*/<session id>.jsonl` per research R5, caching each result by transcript mtime in `~/.cache/board/time.json`
+- [ ] T042 [US5] Draw dates with `dueOf` and time with `span` from `plugins/board/hooks/kit.tsx` in `plugins/board/hooks/work/view.tsx`, and accept a Period name as `/board work <period>` in `plugins/board/hooks/register.tsx`
+- [ ] T043 [US5] Live check and ship: bump the version, commit and push
 
 ---
 
@@ -144,17 +149,17 @@ live check and a version bump, so each ships alone.
 
 **Independent Test**: an ask with no parent shows in the Inbox with who asked, and moves once placed.
 
-- [ ] T041 [P] [US6] Add Inbox cases to `plugins/board/tests/work-tool.test.ts`: an `add` with `origin.type: "asked"` and no parent draws under Inbox with the requester; an `update` with `parent` moves it out
-- [ ] T042 [US6] Place parentless asks in the Inbox group in `buildTree` in `plugins/board/hooks/work/model.ts` and draw the group in `plugins/board/hooks/work/view.tsx`
-- [ ] T043 [US6] Live check and ship: bump the version, commit and push
+- [ ] T044 [P] [US6] Add Inbox cases to `plugins/board/tests/work-tool.test.ts`: an `add` with `origin.type: "asked"` and no parent draws under Inbox with the requester; an `update` with `parent` moves it out
+- [ ] T045 [US6] Place parentless asks in the Inbox group in `buildTree` in `plugins/board/hooks/work/model.ts` and draw the group in `plugins/board/hooks/work/view.tsx`
+- [ ] T046 [US6] Live check and ship: bump the version, commit and push
 
 ---
 
 ## Phase 9: Polish
 
-- [ ] T044 [P] Document the work model in `plugins/board/README.md`: the tree, Kinds, each Source and its config, the work tool, migration; make `plugins/board/.claude-plugin/plugin.json` and its `.claude-plugin/marketplace.json` entry say the same thing (Constitution VII)
-- [ ] T045 [P] Remove the `groups` layout from `plugins/board/hooks/views/file.tsx` and its tests in `plugins/board/tests/file-board.test.ts` once no configured board uses it (Constitution I)
-- [ ] T046 Run every block in `specs/001-board-work-model/quickstart.md` in a live session and check SC-001 to SC-006
+- [ ] T047 [P] Document the work model in `plugins/board/README.md`: the tree, Kinds, each Source, Host and Harness and its config, the work tool, starting sessions, the root session and its skill, migration; make `plugins/board/.claude-plugin/plugin.json` and its `.claude-plugin/marketplace.json` entry say the same thing (Constitution VII)
+- [ ] T048 [P] Remove the `groups` layout from `plugins/board/hooks/views/file.tsx` and its tests in `plugins/board/tests/file-board.test.ts` once no configured board uses it (Constitution I)
+- [ ] T049 Run every block in `specs/001-board-work-model/quickstart.md` in a live session and check SC-001 to SC-006
 
 ---
 
@@ -163,9 +168,9 @@ live check and a version bump, so each ships alone.
 ### Phase dependencies
 
 - Setup (T001 to T002) first; Foundational (T003 to T006) blocks every story.
-- US1 (Phase 3) is the MVP and comes first: every later story draws into its view.
-- US2, US3 and US6 depend only on US1 and may run in any order after it.
-- US4 depends on US3 (attachments); US5's active time depends on US3's Claude Code Harness.
+- US1 (Phase 3) is the MVP and comes first: every later story draws into its view. Shipped in 0.2.0.
+- US3 (Phase 4) next, then US4 (Phase 5), which needs US3's Sessions and Host.
+- US2 and US6 depend only on US1; US5's active time depends on US3's Claude Code Harness.
 - Polish last.
 
 ### Within each story
@@ -174,25 +179,23 @@ Tests first, then Sources and model changes, then the view and tool, then the li
 
 ### Parallel opportunities
 
-- T006 beside T003 to T005.
-- T007, T008 and T009 together; T017, T018 and T019 together; T021, T022 and T023 together;
-  T025 and T026 together; T028, T029 and T030 together.
-- After US1, US2 and US3 can proceed side by side in separate sessions.
+- T017, T018 and T019 together; T021, T022 and T023 together.
+- T032, T033 and T034 together; T036, T037 and T038 together.
+- US2 and US6 can proceed beside US3 and US4 in a separate session.
 
-## Parallel Example: User Story 2
+## Parallel Example: User Story 3
 
 ```text
-T017 Linear tests, T018 Rhythms tests, T019 boards tests   # one file, separate describe blocks
-T021 linear.ts, T022 rhythms.ts, T023 boards.ts            # separate files
+T017 session tests, T018 tool tests, T019 Artifact tests   # separate describe blocks
+T021 herdr.ts, T022 claude.ts, T023 github.ts              # separate files
 ```
 
 ## Implementation Strategy
 
-### MVP first
+### Delivery order
 
-1. Setup and Foundational.
-2. User Story 1, through T016's live check.
-3. Stop and use it for a day before Story 2.
+US1 (shipped), US3, US4, US2, US5, US6. After US4, one root session can start, track and reach
+every other session; US2 then lets it answer how the work stands against the goals.
 
 ### Incremental delivery
 
@@ -206,4 +209,4 @@ the next story.
 - The validator lets `$` reach only function declarations and wants each atom read in its own file;
   keep each view's atoms in that view's file.
 - The memory note on the work board (`~/.claude/projects/-Users-zamua/memory/work-board.md`) needs
-  updating once T016 ships.
+  updating once US3 and US4 ship.
