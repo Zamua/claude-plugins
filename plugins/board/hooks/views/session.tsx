@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import type { SessionBoard, SessionItem, SessionSection } from '../../types'
-import type { View } from '../kit'
+import { fixed } from '../kit'
+import type { Els, View } from '../kit'
 import { showView } from '../pane'
 import { legacyValue, loadBoard, saveBoard } from '../store'
 
@@ -26,7 +27,7 @@ const TOOL_DESCRIPTION = `Update the session board, the view of the board pane b
 - links: every PR, issue, doc, dashboard or other URL likely to be needed again, with a short label.
 - ideas: ideas and follow-ups parked for later.
 - topics: threads the session has covered.
-Keep entries short, the board is for glancing. Do not mention board updates in your reply or repeat the board's contents unless asked. When the person names an item by its id (q3, l2), it is the board's.
+Keep each entry to one line of about 60 characters: the view draws one line per item and cuts off the rest. Before adding an item, check whether one already says the same thing and update that one instead. Do not mention board updates in your reply or repeat the board's contents unless asked. When the person names an item by its id (q3, l2), it is the board's.
 Every field is optional and the changes apply together. Call with no fields to read the board and its item ids. Main conversation only.`
 
 const SECTION_KEYS = SECTIONS.map(one => one.key)
@@ -228,17 +229,130 @@ function describe(b: SessionBoard): string {
   return lines.join('\n')
 }
 
+const OPEN_AT_START: ReadonlySet<SessionSection> = new Set(['next', 'questions'])
+
+// What the person pressed open or shut, for the session `pressedFor` names
+const expanded = new Set<string>()
+const flipped = new Set<SessionSection>()
+const doneShown = new Set<SessionSection>()
+let pressedFor = ''
+
+const isOpen = (key: SessionSection) => OPEN_AT_START.has(key) !== flipped.has(key)
+
 const mark = (item: SessionItem) => {
   if (item.isDone) return '✓'
 
   return item.section === 'next' || item.section === 'questions' ? '○' : '•'
 }
 
-const lineOf = (item: SessionItem) => {
-  const label = item.text.replace(/[[\]]/g, '\\$&')
-  const body = item.url ? `[${label}](${item.url})` : item.text
+/** The text as one line with its markdown taken out, for a row cut off at the pane's edge. */
+const plainOf = (text: string) =>
+  text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\*\*([^*]*)\*\*/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
 
-  return `${mark(item)} ${body} \`${item.id}\``
+function toggle<T>($: EngineInterface, set: Set<T>, key: T) {
+  return async () => {
+    if (set.has(key)) set.delete(key)
+    else set.add(key)
+    $.ui.invalidate('ui.render')
+  }
+}
+
+/** One line per item, pressed open to its whole markdown; a link item is the link itself, so a press follows it. */
+function itemRow($: EngineInterface, els: Els, item: SessionItem, idWidth: number) {
+  const { Box, Text, Button, Markdown, Link } = els
+  const id = fixed(els, `id-${item.id}`, <Text dimColor>{item.id.padEnd(idWidth)}</Text>)
+  const quiet = item.isDone || undefined
+  if (item.url) {
+    return (
+      <Box key={`item-${item.id}`} flexDirection="row" columnGap={1}>
+        {id}
+        {fixed(els, `mark-${item.id}`, <Text dimColor>{mark(item)}</Text>)}
+        <Text dimColor={quiet} wrap="truncate-end">
+          <Link href={item.url} label={plainOf(item.text)} />
+        </Text>
+      </Box>
+    )
+  }
+  if (expanded.has(item.id)) {
+    return (
+      <Box key={`item-${item.id}`} flexDirection="row" columnGap={1}>
+        {id}
+        <Button key={`fold-${item.id}`} label="▾" plain dimColor onPress={toggle($, expanded, item.id)} />
+        <Box key={`full-${item.id}`} flexShrink={1}>
+          <Markdown dimColor={quiet} text={item.text} />
+        </Box>
+      </Box>
+    )
+  }
+
+  return (
+    <Box key={`item-${item.id}`} flexDirection="row" columnGap={1}>
+      {id}
+      <Button key={`open-${item.id}`} plain dimColor={quiet} onPress={toggle($, expanded, item.id)}>
+        <Text wrap="truncate-end">{`${mark(item)} ${plainOf(item.text)}`}</Text>
+      </Button>
+    </Box>
+  )
+}
+
+type Filled = { key: SessionSection; title: string; items: SessionItem[] }
+
+/** A heading that folds the section, its open items, and its finished ones behind a count until that is pressed. */
+function sectionBlock($: EngineInterface, els: Els, one: Filled, idWidth: number) {
+  const { Box, Text, Button } = els
+  const open = one.items.filter(item => !item.isDone)
+  const done = one.items.filter(item => item.isDone)
+  const rows = [...open, ...(doneShown.has(one.key) ? done : [])]
+
+  return (
+    <Box key={`section-${one.key}`} flexDirection="column">
+      <Box key={`heading-${one.key}`} flexDirection="row" columnGap={1}>
+        <Button key={`fold-section-${one.key}`} plain onPress={toggle($, flipped, one.key)}>
+          <Text bold color="claude">
+            {one.title}
+          </Text>
+          {' '}
+          <Text dimColor>{String(open.length)}</Text>
+        </Button>
+        {done.length > 0 && <Text dimColor>·</Text>}
+        {done.length > 0 && (
+          <Button
+            key={`done-${one.key}`}
+            label={`${done.length} done`}
+            plain
+            dimColor
+            onPress={toggle($, doneShown, one.key)}
+          />
+        )}
+      </Box>
+      {rows.map(item => itemRow($, els, item, idWidth))}
+    </Box>
+  )
+}
+
+/** The folded sections as one row of names and counts; a press opens one in its place. */
+function foldedRow($: EngineInterface, els: Els, folded: Filled[]) {
+  const { Box, Text, Button } = els
+
+  return (
+    <Box key="folded" flexDirection="row" flexWrap="wrap" columnGap={1}>
+      {folded.flatMap((one, at) => [
+        ...(at > 0 ? [<Text dimColor>·</Text>] : []),
+        <Button
+          key={`unfold-${one.key}`}
+          label={`${one.title} ${one.items.length}`}
+          plain
+          dimColor
+          onPress={toggle($, flipped, one.key)}
+        />,
+      ])}
+    </Box>
+  )
 }
 
 async function change($: EngineInterface, fn: (current: SessionBoard) => Applied): Promise<Applied> {
@@ -315,25 +429,30 @@ export function sessionView($: EngineInterface): View {
       if (!hasContent(b)) {
         return <Text dimColor>Nothing tracked yet. Claude fills this in as the session goes.</Text>
       }
-      const filled = SECTIONS.map(one => ({
-        ...one,
+      if (pressedFor !== b.sessionId) {
+        expanded.clear()
+        flipped.clear()
+        doneShown.clear()
+        pressedFor = b.sessionId
+      }
+      const filled: Filled[] = SECTIONS.map(one => ({
+        key: one.key,
+        title: one.title,
         items: b.items.filter(item => item.section === one.key),
       })).filter(one => one.items.length > 0)
+      const idWidth = Math.max(0, ...b.items.map(item => item.id.length))
+      const folded = filled.filter(one => !isOpen(one.key))
 
       return (
-        <Box flexDirection="column" gap={1}>
-          {b.goal !== '' && <Text bold>{b.goal}</Text>}
-          {b.summary !== '' && <Markdown text={b.summary} />}
-          {filled.map(one => (
-            <Box flexDirection="column">
-              <Text color="claude" bold>
-                {one.title}
-              </Text>
-              {[...one.items.filter(item => !item.isDone), ...one.items.filter(item => item.isDone)].map(item => (
-                <Markdown dimColor={item.isDone === true} text={lineOf(item)} />
-              ))}
+        <Box key="session-view" flexDirection="column" gap={1}>
+          {(b.goal !== '' || b.summary !== '') && (
+            <Box key="about" flexDirection="column">
+              {b.goal !== '' && <Text bold>{b.goal}</Text>}
+              {b.summary !== '' && <Markdown dimColor text={b.summary} />}
             </Box>
-          ))}
+          )}
+          {filled.filter(one => isOpen(one.key)).map(one => sectionBlock($, els, one, idWidth))}
+          {folded.length > 0 && foldedRow($, els, folded)}
         </Box>
       )
     },

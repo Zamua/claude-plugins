@@ -34,10 +34,67 @@ test('items the session tool adds show in the pane, on every surface', async ($,
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect((await ui.find({ type: 'Text', text: /refund fix/ }))?.text).toBe('Ship the refund fix')
-    expect(await ui.find({ type: 'Markdown', text: /^✓ Backfill/ })).toBeDefined()
-    expect(await ui.find({ type: 'Markdown', text: /\[PR 123\]\(https:\/\/github/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '✓ Backfill old refunds?' })).toBeUndefined()
+    await ui.press({ key: 'done-questions' })
+    expect(await ui.find({ type: 'Text', text: '✓ Backfill old refunds?' })).toBeDefined()
+    expect(await ui.find({ type: 'Link' })).toBeUndefined()
+    await ui.press({ key: 'unfold-links' })
+    expect(await ui.find({ type: 'Link' })).toMatchObject({ props: { href: 'https://github.com/o/r/pull/123', label: 'PR 123' } })
+    await ui.press({ key: 'fold-section-links' })
+    await ui.press({ key: 'done-questions' })
     await ui.unmount()
   }
+})
+
+test('a session item draws as one plain line until pressed, then as its whole markdown', async ($, on) => {
+  engine(on, world(), NOW)
+  await start($)
+  await $.tool.call({
+    tool: TOOL,
+    add: [
+      { section: 'next', text: 'Run `gradle test` on [the PR](https://github.com/o/r/pull/1)' },
+      { section: 'decisions', text: 'Ship behind a gate' },
+    ],
+  })
+
+  const ui = await open($, 'session')
+  expect(await ui.find({ type: 'Text', text: '○ Run gradle test on the PR' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'n1' })).toBeDefined()
+  expect(await ui.find({ type: 'Markdown', text: /gradle test/ })).toBeUndefined()
+
+  await ui.press({ key: 'open-n1' })
+  expect(await ui.find({ type: 'Markdown', text: 'Run `gradle test` on [the PR](https://github.com/o/r/pull/1)' })).toBeDefined()
+  await ui.press({ key: 'fold-n1' })
+  expect(await ui.find({ type: 'Markdown', text: /gradle test/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('next steps and questions start open, the other sections fold into one row, and each heading folds its own', async ($, on) => {
+  engine(on, world(), NOW)
+  await start($)
+  await $.tool.call({
+    tool: TOOL,
+    add: [
+      { section: 'next', text: 'Run tests' },
+      { section: 'decisions', text: 'Ship behind a gate' },
+      { section: 'ideas', text: 'Cache it' },
+    ],
+  })
+
+  const ui = await open($, 'session')
+  expect(await ui.find({ key: 'folded', text: /^Decisions 1\s*·\s*Ideas 1$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '• Ship behind a gate' })).toBeUndefined()
+
+  await ui.press({ key: 'unfold-decisions' })
+  expect(await ui.find({ type: 'Text', text: '• Ship behind a gate' })).toBeDefined()
+  expect(await ui.find({ key: 'folded', text: /^Ideas 1$/ })).toBeDefined()
+
+  await ui.press({ key: 'fold-section-next' })
+  expect(await ui.find({ type: 'Text', text: '○ Run tests' })).toBeUndefined()
+  expect(await ui.find({ key: 'unfold-next' })).toMatchObject({ props: { label: 'Next 1' } })
+  await ui.press({ key: 'fold-section-decisions' })
+  await ui.press({ key: 'unfold-next' })
+  await ui.unmount()
 })
 
 test('a session change naming an unknown item is refused whole', async ($, on) => {
@@ -85,11 +142,11 @@ test('the switcher lists each view with something to show and how many of its it
   expect(await ui.find({ key: 'switcher', text: /^session 1\s*│\s*work 2$/ })).toBeDefined()
   expect(await ui.find({ key: 'tab-prs' })).toBeUndefined()
   expect(await ui.find({ key: 'tab-review' })).toBeUndefined()
-  expect(await ui.find({ type: 'Markdown', text: /Which bank\?/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '○ Which bank?' })).toBeDefined()
 
   await ui.press({ key: 'tab-work' })
   expect(await ui.find({ type: 'Text', text: 'Answer the vendor' })).toBeDefined()
-  expect(await ui.find({ type: 'Markdown', text: /Which bank\?/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '○ Which bank?' })).toBeUndefined()
   await ui.unmount()
 })
 
