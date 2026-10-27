@@ -265,6 +265,19 @@ test('a merged pull request is not asked about again', async ($, on) => {
   expect(read).toMatch(/#6047.*\n\s+merged/)
 })
 
+test('a pull request merged long ago leaves the GitHub stamp at the time the open ones were checked', async ($, on) => {
+  const w = gh({ 6047: pr({ state: 'MERGED' }), 6050: pr({}) })
+  const clock = engine(on, w, NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: [{ pr: BOTTOM }, { pr: TOP }] })
+
+  await clock.advance(18 * 3600_000)
+  await $.tool.call({ tool: TOOL })
+  const ui = await open($, 'prs')
+  expect(await ui.find({ key: 'stamp', text: 'GitHub checked just now' })).toBeDefined()
+  await ui.unmount()
+})
+
 /** Records every query gh is asked, answering from `github`. */
 function recording(github: Record<number, Pr>, budget?: { remaining: number; resetAt: string }) {
   const w = gh(github, budget)
