@@ -674,7 +674,7 @@ function refresh($: EngineInterface): Promise<void> {
   return queue
 }
 
-const CHAIN_GLYPHS = { first: '╭', mid: '│', last: '╰', none: '' } as const
+const CHAIN_GLYPHS = { first: '┌', mid: '├', last: '└', none: '' } as const
 
 function chainOf(group: Stack, p: TrackedPr): keyof typeof CHAIN_GLYPHS {
   const run = group.chains.find(one => one.includes(p)) ?? [p]
