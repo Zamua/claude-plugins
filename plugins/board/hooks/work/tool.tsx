@@ -143,6 +143,18 @@ const patch = (item: LocalItem, fields: Fields): LocalItem => {
   return next
 }
 
+/** An Item's first move off `next` starts it and a move to `done` finishes it, so a Period can place hand-kept work. */
+function stamped(before: LocalItem | undefined, after: LocalItem, now: string): LocalItem {
+  const was = before?.status ?? 'next'
+  const is = after.status ?? 'next'
+
+  return {
+    ...after,
+    ...(is !== 'next' && was === 'next' && !after.started && { started: now }),
+    ...(is === 'done' && was !== 'done' && !after.finished && { finished: now }),
+  }
+}
+
 /** `others` holds the ids of Items other Sources have, which local Items and links may sit under. */
 export function applyChange(current: LocalFile, input: Input, now: string, others: ReadonlySet<string> = new Set()): Applied {
   let items = [...current.items]
@@ -166,12 +178,12 @@ export function applyChange(current: LocalFile, input: Input, now: string, other
     let id = slug(one.title)
     for (let n = 2; ids.has(id); n++) id = `${slug(one.title)}-${n}`
     ids.add(id)
-    items.push(patch({ id, title: one.title.trim(), kind: one.kind.trim(), status: 'next', ref: nextRef }, one))
+    items.push(stamped(undefined, patch({ id, title: one.title.trim(), kind: one.kind.trim(), status: 'next', ref: nextRef }, one), now))
     added.push(`file:${id} (#${nextRef})`)
     nextRef += 1
   }
   for (const one of input.update ?? []) {
-    items = items.map(item => (item.id === localId(one.id) ? patch(item, one) : item))
+    items = items.map(item => (item.id === localId(one.id) ? stamped(item, patch(item, one), now) : item))
   }
   for (const id of input.remove ?? []) {
     const local = localId(id)

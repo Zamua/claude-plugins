@@ -38,6 +38,7 @@ values.
 | `/board <name>` | open the pane on one board, by name or a unique prefix; again closes it |
 | `/board <name> clear` | empty the session or prs board; bare `/board clear` empties the one on show |
 | `/board <name> png` | save the board as a picture on the Desktop, at the pane's width and its full height, and copy it; needs Google Chrome |
+| `/board work <period>` | cut the work view to a Period from its config, by name; `all` shows every Item again |
 | `/board work migrate` | rewrite a work board from the old groups format; the old file stays beside it as `board.v1.json` |
 
 The pane opens by itself when Claude first writes to the session or prs board, and
@@ -51,12 +52,14 @@ never does, a Responsibility such as on-call or code review. Outcomes come first
 the Unplaced sessions and pull requests last.
 
 ```
-                                               Updated 2m ago
+[ Period: all ▾ ]                              Updated 2m ago
 Outcomes
-▸ you   1 Objective 40% Grow funding partners
-▸ next  Project Thread release notes                        ●
+▸ you   1 Fri 10-31 Objective 40% Grow funding partners   12h
+▸ next  Project Thread release notes                     2h ●
 Responsibilities
-▸ now   Responsibility On-call                              ●
+▸ now   Responsibility On-call                           5h ●
+Inbox
+· next  Task Answer the vendor                     from Hasan
 ▸ Unplaced 3 sessions · 1 pull request
 ```
 
@@ -69,6 +72,13 @@ Responsibilities
   an Item's id or alias, such as `mm-809-crb-gross-funding` for MM-809; Claude links the rest by hand.
 - **Pull requests** from every session's prs board sit under the Item whose id or alias their title or branch
   carries, such as `MM-809 adds …` or `feature/mm-809`.
+- **Dates**: a target date shows on its line, yellow inside a day and red inside two hours or once past.
+- **Time** on the right of a line is the active time of every session under it, finished ones included: a session's
+  transcript from first entry to last, with every gap over five minutes cut out.
+- **Periods**, such as quarters, cut the view to the Items dated in one, the undated work under them and their
+  ancestors. Responsibilities and the Inbox show in every Period. Pick one in the Period box or with
+  `/board work <period>`.
+- **Inbox**: an ask with no parent waits here, with who asked, until it is placed under an Item.
 - Pressing an Item opens its children, its detail and its links. The view re-reads its file every 15 seconds, and
   lists sessions only while someone looks at it.
 
@@ -79,7 +89,7 @@ Each Source is read through one adapter and cached in `~/.cache/board/` for ever
 | Source | Items it gives | Fresh for |
 | --- | --- | --- |
 | the local file | Responsibilities, side projects, anything kept by hand, and the links no other Source holds | re-read every 15 seconds |
-| `rhythms` | the goals you follow and their children, with progress and the latest check-in; a goal you own that is overdue for a check-in needs you | an hour, asked when the view opens or Claude reads the tree |
+| `rhythms` | the goals you follow and their children, with progress, the latest check-in and their start and end dates; a goal you own that is overdue for a check-in needs you | an hour, asked when the view opens or Claude reads the tree |
 | `linear` | each project you follow and its issues, through the `linear` CLI | ten minutes |
 | `github` | the pull requests on every session's prs board | the prs board's three minutes |
 | `boards` | another board's items, under an Item of yours; its archive stays off | re-read every 15 seconds |
@@ -128,13 +138,15 @@ The `work` entry in `~/.config/board/boards.json` takes `layout: "model"`:
     "boards": { "oncall": "on-call" }
   },
   "hosts": { "herdr": { "cwd": "~" } },
-  "harnesses": { "claude": { "args": ["--model", "opus[1m]"] } }
+  "harnesses": { "claude": { "args": ["--model", "opus[1m]"] } },
+  "periods": [{ "name": "Q4 2026-27", "start": "2026-11-01", "end": "2027-01-31" }]
 }
 ```
 
 A Source left out of `sources` is off; with none, the view runs on the local file alone. `under` places a Source's
 Item under one of yours, by id. `hosts` says where started sessions run and from which directory, and `harnesses`
-which agent starts in them and with what arguments. A key nothing reads draws one warning line in the view.
+which agent starts in them and with what arguments. `periods` are named date ranges, the end date included. A key
+nothing reads draws one warning line in the view.
 
 The local file:
 
@@ -151,8 +163,9 @@ The local file:
 }
 ```
 
-An Item also takes `detail`, markdown shown when it is pressed open, and `origin`, why it exists: `planned`, `asked`
-with `by`, `interrupt` or `self`. Unknown fields are kept when the tool rewrites the file. A file still in the old
+An Item also takes `detail`, markdown shown when it is pressed open, `origin`, why it exists: `planned`, `asked`
+with `by`, `interrupt` or `self`, and `started` and `finished` dates, which the tool stamps when an Item first moves
+off `next` and when it is marked `done`. Unknown fields are kept when the tool rewrites the file. A file still in the old
 format, `groups` plus `items` with a `section`, says to run `/board work migrate`, which turns groups into Projects
 and items into Tasks under them.
 

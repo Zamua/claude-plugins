@@ -63,7 +63,7 @@ the phase that needs them.
   session's active time is read from its transcript,
   `~/.claude/projects/<cwd>/<session id>.jsonl`: the sum of the spans from each person's prompt to
   the last entry before the next prompt, with any gap over 5 minutes cut out. Results are cached
-  per transcript by mtime. The message name and last activity are the `name` and `updatedAt` fields of
+  per transcript by mtime, and a transcript still growing is read again at most every 5 minutes. The message name and last activity are the `name` and `updatedAt` fields of
   the record in `~/.claude/sessions/<pid>.json` whose `sessionId` matches (checked: the fields are
   there, and no two records share an id).
 - **Rationale**: herdr reports no durations (checked: no time field on a pane); the session record

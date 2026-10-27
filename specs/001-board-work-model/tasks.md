@@ -136,10 +136,10 @@ US6. Each story ends with a live check and a version bump, so each ships alone.
 
 **Independent Test**: a task due tomorrow shows yellow, and its parent shows the summed active time of two sessions under it.
 
-- [ ] T040 [P] [US5] Write `plugins/board/tests/work-time.test.ts`: a target inside two hours draws red as a countdown, inside a day yellow; a transcript with prompts and entries yields active time with gaps over 5 minutes cut; a parent sums its sessions' time, finished ones included; `/board work <period>` draws only Items whose dates fall in it, with their ancestors
-- [ ] T041 [US5] Compute active time in `sessionInfo` in `plugins/board/hooks/work/harnesses/claude.ts` from `~/.claude/projects/*/<session id>.jsonl` per research R5, caching each result by transcript mtime in `~/.cache/board/time.json`
-- [ ] T042 [US5] Draw dates with `dueOf` and time with `span` from `plugins/board/hooks/kit.tsx` in `plugins/board/hooks/work/view.tsx`, and accept a Period name as `/board work <period>` in `plugins/board/hooks/register.tsx`
-- [ ] T043 [US5] Live check and ship: bump the version, commit and push
+- [X] T040 [P] [US5] Write `plugins/board/tests/work-time.test.ts`: a target inside two hours draws red as a countdown, inside a day yellow; a transcript with prompts and entries yields active time with gaps over 5 minutes cut; a parent sums its sessions' time, finished ones included; `/board work <period>` draws only Items whose dates fall in it, with their ancestors
+- [X] T041 [US5] Compute active time in `sessionInfo` in `plugins/board/hooks/work/harnesses/claude.ts` from `~/.claude/projects/*/<session id>.jsonl` per research R5, caching each result by transcript mtime in `~/.cache/board/time.json`
+- [X] T042 [US5] Draw dates with `dueOf` and time with `span` from `plugins/board/hooks/kit.tsx` in `plugins/board/hooks/work/view.tsx`, and accept a Period name as `/board work <period>` in `plugins/board/hooks/register.tsx`
+- [X] T043 [US5] Live check and ship: bump the version, commit and push
 
 ---
 
@@ -149,9 +149,9 @@ US6. Each story ends with a live check and a version bump, so each ships alone.
 
 **Independent Test**: an ask with no parent shows in the Inbox with who asked, and moves once placed.
 
-- [ ] T044 [P] [US6] Add Inbox cases to `plugins/board/tests/work-tool.test.ts`: an `add` with `origin.type: "asked"` and no parent draws under Inbox with the requester; an `update` with `parent` moves it out
-- [ ] T045 [US6] Place parentless asks in the Inbox group in `buildTree` in `plugins/board/hooks/work/model.ts` and draw the group in `plugins/board/hooks/work/view.tsx`
-- [ ] T046 [US6] Live check and ship: bump the version, commit and push
+- [X] T044 [P] [US6] Add Inbox cases to `plugins/board/tests/work-tool.test.ts`: an `add` with `origin.type: "asked"` and no parent draws under Inbox with the requester; an `update` with `parent` moves it out
+- [X] T045 [US6] Place parentless asks in the Inbox group in `buildTree` in `plugins/board/hooks/work/model.ts` and draw the group in `plugins/board/hooks/work/view.tsx`
+- [X] T046 [US6] Live check and ship: bump the version, commit and push
 
 ---
 

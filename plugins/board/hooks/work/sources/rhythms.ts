@@ -22,6 +22,8 @@ type Goal = {
   owner_names?: string[]
   current_user_roles?: string[]
   last_checkin_date?: string | null
+  start_date?: string | null
+  end_date?: string | null
   latest_checkin?: { note?: string; checkin_date?: string } | null
 }
 type Search = { data?: { records?: Goal[]; children?: Goal[] } }
@@ -101,6 +103,8 @@ export async function readRhythms($: EngineInterface, config: RhythmsConfig): Pr
       ...(parent && { parent: `rhythms:${parent}` }),
       aliases: [goal.short_id],
       ...(typeof goal.progress === 'number' && { progress: goal.progress }),
+      ...(goal.start_date && { started: goal.start_date }),
+      ...(goal.end_date && { target: goal.end_date }),
       ...(goal.owner_names?.[0] && { owner: goal.owner_names[0] }),
       ...(note && { detail: `${note}\n\n${goal.latest_checkin?.checkin_date ?? ''} check-in` }),
       links: goal.url ? [{ label: 'Rhythms', url: goal.url }] : [],

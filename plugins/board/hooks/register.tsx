@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { messageOf } from './kit'
 import type { View } from './kit'
-import { PANE, paneWidth, setPaneFocused, setPaneWidth, showView, TITLE } from './pane'
+import { PANE, paneWidth, selectView, setPaneFocused, setPaneWidth, showView, TITLE } from './pane'
 import { exportPng, PLAIN_ELS } from './png'
 import { fileBoard, fileStart, fileView } from './views/file'
 import type { FileBoard, FileBoardSpec, LinkPair } from './views/file'
@@ -16,7 +16,7 @@ import { markWorkActive } from './work/cache'
 import { migrateFile, reportText } from './work/migrate'
 import { rhythmsHooks } from './work/sources/rhythms'
 import { workHooks, workToolStart } from './work/tool'
-import { configureWork, currentWork, workBreadcrumb, workRefresh, workStart, workView } from './work/view'
+import { choosePeriod, configureWork, currentWork, workBreadcrumb, workRefresh, workStart, workView, workViewHooks } from './work/view'
 import type { WorkSpec } from './work/view'
 
 const CONFIG_PATH = '.config/board/boards.json'
@@ -111,6 +111,7 @@ export const register: Register = on => {
   sessionHooks(on)
   prsHooks(on)
   workHooks(on)
+  workViewHooks(on)
   rhythmsHooks(on)
 
   on('session.start', async ($, e, next) => {
@@ -193,13 +194,21 @@ export const register: Register = on => {
     const verb = isBareVerb ? (words[0] as string) : (words[1] ?? '')
     const named = name ? match(views, name) : undefined
     if (name && !named) return { text: `No board named ${name}. Boards: ${ids.join(', ')}.` }
+    const work = currentWork()
+    if (verb && verb !== 'clear' && verb !== 'migrate' && verb !== 'png' && named && named.id === work?.spec.id) {
+      const why = choosePeriod(words.slice(1).join(' '))
+      if (why) return { text: why }
+      await selectView($, named.id)
+      $.ui.invalidate('ui.render')
+
+      return {}
+    }
     if (verb && verb !== 'clear' && verb !== 'migrate' && verb !== 'png') {
       return { text: `Usage: /board [${ids.join('|')}] [clear|migrate|png]` }
     }
     const current = await shown($, await listed($))
 
     if (verb === 'migrate') {
-      const work = currentWork()
       if (!work || named?.id !== work.spec.id) return { text: 'Only the work model board migrates: /board <its name> migrate.' }
       try {
         const report = await migrateFile($, work.path)

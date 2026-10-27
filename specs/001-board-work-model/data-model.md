@@ -92,8 +92,9 @@ its first turn. A Link whose parent no Source has any more is kept and shown as 
 
 ## Period
 
-`{ name: string, start: ISO date, end: ISO date }`, from config. An Item is in a Period when any
-of its dates falls inside it, or when a descendant is.
+`{ name: string, start: ISO date, end: ISO date }`, from config, the end date included. An Item is in a Period
+when any of its dates falls inside it, or when it has no dates and its nearest dated ancestor is in it. A Period draws
+its Items and their ancestors. Responsibilities and the Inbox are in every Period.
 
 ## Tree (derived, never stored)
 

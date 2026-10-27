@@ -74,7 +74,12 @@ export type Session = HostSession & {
   goal?: string
   summary?: string
   lastActive?: number
+  /** Time the person and the agent spent in it, from its Harness. */
+  activeMs?: number
 }
+
+/** A Session no Host lists any more, by the Item it last sat under, so its time still counts there. */
+export type PastTime = { item: string; activeMs: number }
 
 /** Something an Item produces, drawn under it with its own status. */
 export type Artifact = {
@@ -112,11 +117,15 @@ export type Node = {
   shown: Status
   /** Descendants whose own status is `needs`. */
   needsCount: number
+  /** The active time of every Session in the subtree, finished ones included. */
+  activeMs: number
 }
 
 export type Tree = {
   outcomes: Node[]
   responsibilities: Node[]
+  /** Asks with no parent yet, until they are placed. */
+  inbox: Node[]
   byId: Map<string, Node>
   /** Items put at the top level because their parent is missing or would make a cycle. */
   warnings: string[]
@@ -149,6 +158,7 @@ export function buildTree(
   sessions: Session[] = [],
   artifacts: Artifact[] = [],
   root?: string,
+  past: PastTime[] = [],
 ): Tree {
   const parentOf = new Map<string, string>()
   for (const item of items) if (item.parent) parentOf.set(item.id, item.parent)
@@ -174,7 +184,7 @@ export function buildTree(
 
   const nodes = new Map<string, Node>()
   for (const item of items) {
-    nodes.set(item.id, { item, children: [], sessions: [], artifacts: [], depth: 0, shown: item.status, needsCount: 0 })
+    nodes.set(item.id, { item, children: [], sessions: [], artifacts: [], depth: 0, shown: item.status, needsCount: 0, activeMs: 0 })
   }
   const tops: Node[] = []
   for (const item of items) {
@@ -191,12 +201,19 @@ export function buildTree(
   }
   for (const node of tops) setDepth(node, 0)
   const placed = place(nodes, links, sessions, artifacts, root)
+  for (const node of nodes.values()) node.activeMs = node.sessions.reduce((sum, s) => sum + (s.activeMs ?? 0), 0)
+  for (const one of past) {
+    const node = nodes.get(one.item)
+    if (node) node.activeMs += one.activeMs
+  }
   for (const node of tops) rollUp(node)
   const ordered = [...tops].sort(byUrgency)
+  const isAsk = (n: Node) => n.item.origin?.type === 'asked' && !parentOf.has(n.item.id)
 
   return {
-    outcomes: ordered.filter(n => n.item.shape === 'outcome'),
+    outcomes: ordered.filter(n => n.item.shape === 'outcome' && !isAsk(n)),
     responsibilities: ordered.filter(n => n.item.shape === 'responsibility'),
+    inbox: ordered.filter(n => n.item.shape === 'outcome' && isAsk(n)),
     byId: nodes,
     warnings,
     cycles,
@@ -281,6 +298,36 @@ function rollUp(node: Node) {
   if (artifactNeeds > 0) node.shown = 'needs'
   node.needsCount =
     artifactNeeds + node.children.reduce((sum, c) => sum + c.needsCount + (c.item.status === 'needs' ? 1 : 0), 0)
+  node.activeMs += node.children.reduce((sum, c) => sum + c.activeMs, 0)
+}
+
+const DAY_MS = 24 * 3600e3
+
+/**
+ * The Items a Period shows: each whose own dates fall in it, an undated one under such an Item, and the ancestors of
+ * both, so the work under a quarter's goal shows with it. A Responsibility runs through every Period, as does an ask
+ * waiting in the Inbox.
+ */
+export function inPeriod(tree: Tree, period: Period): Set<string> {
+  const start = Date.parse(period.start)
+  // The end date is the Period's last whole day
+  const end = Date.parse(period.end) + DAY_MS
+  const shown = new Set<string>()
+  const show = (node: Node) => {
+    for (let at: Node | undefined = node; at && !shown.has(at.item.id); at = at.parent) shown.add(at.item.id)
+  }
+  const visit = (node: Node, inherited: boolean) => {
+    const dates = [node.item.target, node.item.started, node.item.finished]
+      .map(date => (date ? Date.parse(date) : NaN))
+      .filter(at => !Number.isNaN(at))
+    const isIn = dates.length === 0 ? inherited : dates.some(at => at >= start && at < end)
+    if (isIn) show(node)
+    for (const child of node.children) visit(child, isIn)
+  }
+  for (const node of tree.outcomes) visit(node, false)
+  for (const node of [...tree.responsibilities, ...tree.inbox]) visit(node, true)
+
+  return shown
 }
 
 const byUrgency = (a: Node, b: Node) => rank(a.shown) - rank(b.shown)
@@ -304,7 +351,9 @@ export function treeText(tree: Tree): string {
     const needs = node.needsCount > 0 ? `, ${node.needsCount} need you` : ''
     const ref = node.item.ref !== undefined ? ` #${node.item.ref}` : ''
     const pad = '  '.repeat(node.depth)
-    lines.push(`${pad}${node.item.id}${ref} [${node.item.kind}, ${node.shown}${needs}] ${node.item.title}`)
+    const time = node.activeMs >= 60_000 ? `, ${Math.round(node.activeMs / 60_000)}m spent` : ''
+    const by = node.item.origin?.by ? `, asked by ${node.item.origin.by}` : ''
+    lines.push(`${pad}${node.item.id}${ref} [${node.item.kind}, ${node.shown}${needs}${time}${by}] ${node.item.title}`)
     for (const session of node.sessions) lines.push(...sessionText(tree, session, `${pad}  `))
     for (const artifact of node.artifacts) lines.push(`${pad}  ${artifact.id} [${artifact.status}] ${artifact.title}`)
     for (const child of node.children) walk(child)
@@ -313,6 +362,8 @@ export function treeText(tree: Tree): string {
   for (const node of tree.outcomes) walk(node)
   if (tree.responsibilities.length > 0) lines.push('Responsibilities:')
   for (const node of tree.responsibilities) walk(node)
+  if (tree.inbox.length > 0) lines.push('Inbox:')
+  for (const node of tree.inbox) walk(node)
   if (tree.unplaced.sessions.length > 0) lines.push('Unplaced sessions:')
   for (const session of tree.unplaced.sessions) lines.push(...sessionText(tree, session, ''))
   for (const warning of tree.warnings) lines.push(`warning: ${warning}`)

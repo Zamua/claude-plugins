@@ -74,6 +74,27 @@ test('a change that names an unknown Item, edits another source, loops, or orpha
   expect(fileOf(w.files).items).toHaveLength(TREE.items.length - 1)
 })
 
+test('an ask with no parent waits in the Inbox with who asked, and leaves it once placed', async ($, on) => {
+  const w = withTree()
+  engine(on, w, NOW)
+  await start($)
+
+  const ask = { title: 'Answer the vendor', kind: 'Task', origin: { type: 'asked', by: 'Hasan' } }
+  await $.tool.call({ tool: TOOL, add: [ask] })
+  expect(String((await $.tool.call({ tool: TOOL })).result)).toMatch(/Inbox:\nfile:answer-the-vendor #10 \[Task, next, asked by Hasan\] Answer the vendor/)
+  const ui = await open($, 'work')
+  expect(await ui.find({ key: 'inbox', text: /^Inbox/ })).toBeDefined()
+  expect(await ui.find({ key: 'waside-file:answer-the-vendor', text: 'from Hasan' })).toBeDefined()
+  await ui.unmount()
+
+  await $.tool.call({ tool: TOOL, update: [{ id: 'answer-the-vendor', parent: 'pay' }] })
+  const placed = await open($, 'work')
+  expect(await placed.find({ key: 'inbox' })).toBeUndefined()
+  await placed.press({ key: 'wtoggle-file:pay' })
+  expect(await placed.find({ key: 'wrow-file:answer-the-vendor' })).toBeDefined()
+  await placed.unmount()
+})
+
 // The session the tests run as, `s1`, sits in the herdr pane w4:p1
 const SELF = { id: 'w4:p1', label: 'coordinator', harnessId: 's1' }
 const SELF_ID = 'session:herdr:default/w4:p1'
