@@ -163,6 +163,19 @@ export function fixed(els: Els, key: string, child: RenderNode) {
   )
 }
 
+/** How fresh the view is, on its own right-aligned first row so a view taller than the pane still shows it. */
+export function stamp(els: Els, text: string, isError = false) {
+  const { Box, Text } = els
+
+  return (
+    <Box key="stamp" flexDirection="row" justifyContent="flex-end" paddingX={1}>
+      <Text color={isError ? 'error' : undefined} dimColor={!isError} wrap="wrap">
+        {text}
+      </Text>
+    </Box>
+  )
+}
+
 /** A hyperlink, drawn inside a Text so it can carry a color. */
 export function link(
   els: Els,

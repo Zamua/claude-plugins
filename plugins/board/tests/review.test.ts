@@ -469,7 +469,7 @@ test('github.json beside the board decides approvals, authors, bases and waiting
   expect(await ui.find({ key: 'flag-6954', text: '!' })).toBeDefined()
   expect(await ui.find({ key: 'flag-7472', text: '!' })).toBeUndefined()
   expect(await ui.find({ key: 'prrow-7500', text: /on #/ })).toBeUndefined()
-  expect(await ui.find({ text: /Updated 10m ago\. GitHub checked 2m ago\./ })).toBeDefined()
+  expect(await ui.find({ key: 'stamp', text: 'Updated 10m ago · GitHub checked 2m ago' })).toBeDefined()
   await ui.unmount()
 })
 

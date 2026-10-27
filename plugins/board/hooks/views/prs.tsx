@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, On } from 'claude-code'
 
 import type { CiState, PrBoard, PrFacts, TrackedPr } from '../../types'
-import { ago, messageOf, prMark, prRow, span } from '../kit'
+import { ago, messageOf, prMark, prRow, span, stamp } from '../kit'
 import type { Els, View } from '../kit'
 import { showView } from '../pane'
 import { legacyValue, loadBoard, saveBoard } from '../store'
@@ -809,11 +809,7 @@ export function prsView($: EngineInterface): View {
 
       return (
         <Box key="prs-view" flexDirection="column">
-          <Box key="checked" flexDirection="row" justifyContent="flex-end" paddingX={1}>
-            <Text color={b.error ? 'error' : undefined} dimColor={!b.error} wrap="wrap">
-              {checkedLine(b, now)}
-            </Text>
-          </Box>
+          {stamp(els, checkedLine(b, now), Boolean(b.error))}
           {prsBox(els, groupsOf(b.prs))}
         </Box>
       )
