@@ -50,7 +50,7 @@ const ALWAYS_SHOWN = new Set(['gap', 'blocked'])
 const POLL_MS = 15_000
 // The fewest cells a cut title or note is still worth drawing in, and the most an owner or an env value takes
 const MIN_TITLE = 16
-const MIN_TAIL = 8
+const MIN_TAIL = 12
 const MAX_OWNER = 14
 const MAX_ENV = 7
 
@@ -85,16 +85,16 @@ function toggle($: EngineInterface, key: string) {
 }
 
 /**
- * The tag, the title, the owner, then the note, in at most `room` cells. The title comes first, cut only to leave a
- * readable part of the note; the owner shows where it fits, and the note takes what is left. What an item waits on
- * stands in for its note and comes before the owner, since it says why the item cannot move.
+ * The tag, the title, the owner, then the note, in at most `room` cells. The title comes first; the owner shows where
+ * it fits, and the note where enough is left to read. What an item waits on stands in for its note, keeps room ahead
+ * of the owner, since it says why the item cannot move.
  */
 function lineOf(room: number, look: Look, item: RolloutItem, waitsOn: string | undefined): Part[] {
   const quiet = item.status === 'done'
   const parts: Part[] = [{ text: look.tag.padEnd(TAG_WIDTH), color: look.color, bold: look.bold, dimColor: look.dimColor }]
   let left = room - TAG_WIDTH - 1
   const tail = waitsOn ? `after ${waitsOn}` : item.note
-  const title = cut(item.title, Math.max(MIN_TITLE, left - (tail ? MIN_TAIL + 1 : 0)))
+  const title = cut(item.title, Math.max(MIN_TITLE, left - (waitsOn ? MIN_TAIL + 1 : 0)))
   parts.push({ text: title, dimColor: quiet })
   left -= cells(title) + 1
   const owner = item.owner ? cut(item.owner, MAX_OWNER) : ''
@@ -276,7 +276,7 @@ export function rolloutView($: EngineInterface, board: RolloutBoard): View {
     return out
   }
 
-  /** An opened item: what it waits on, its detail dim, then its links and its work Item in the link color. */
+  /** An opened item: who owns it and its note, what it waits on, its detail dim, then its links and work Item. */
   function details(ctx: Ctx, item: RolloutItem, waiting: RolloutItem[]): RenderNode {
     const { Box, Button, Markdown, Text } = ctx.els
     const room = ctx.columns - 4 - 2
@@ -312,6 +312,11 @@ export function rolloutView($: EngineInterface, board: RolloutBoard): View {
         borderStyle="quote"
         borderColor="inactive"
       >
+        {(item.owner || item.note) && (
+          <Text dimColor wrap="wrap">
+            {[item.owner, item.note].filter(Boolean).join(' · ')}
+          </Text>
+        )}
         {waiting.length > 0 && (
           <Text color="permission">{`After ${waiting.map(one => `${one.title} (${one.status})`).join(', ')}`}</Text>
         )}

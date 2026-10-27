@@ -34,12 +34,12 @@ test('each section folds to its header and counts, showing only its gaps and blo
 
   const ui = await open($, 'rollout')
   expect(await ui.find({ key: 'rsec-gates', text: '▸ Gates, in flip order 1 gap · 1 block · 1 todo · 1 done' })).toBeDefined()
-  expect(await ui.find({ key: 'ritem-g-gap', text: /^gap\s+Who flips prod at 100%\? Decide wit…$/ })).toBeDefined()
-  expect(await ui.find({ key: 'ritem-g-routing', text: 'block release.application_servi… furkan' })).toBeDefined()
+  expect(await ui.find({ key: 'ritem-g-gap', text: 'gap   Who flips prod at 100%?' })).toBeDefined()
+  expect(await ui.find({ key: 'ritem-g-routing', text: 'block release.application_service.crb_ba…' })).toBeDefined()
   expect(await ui.find({ key: 'ritem-g-crb' })).toBeUndefined()
 
   await ui.press({ key: 'rsec-gates' })
-  expect(await ui.find({ key: 'ritem-g-crb', text: /^todo\s+release\.loan_service\.crb_… after r…$/ })).toBeDefined()
+  expect(await ui.find({ key: 'ritem-g-crb', text: /^todo\s+release\.loan_service\.… after relea…$/ })).toBeDefined()
   expect(await ui.find({ key: 'rrow-g-crb', text: /on\s*off$/ })).toBeDefined()
   expect(await ui.find({ key: 'renvs-gates', text: /staging\s*prod$/ })).toBeDefined()
 
@@ -55,6 +55,7 @@ test('pressing an item opens its detail, its links and a jump to its work Item',
 
   const ui = await open($, 'rollout')
   await ui.press({ key: 'ritem-g-gap' })
+  expect(await ui.find({ type: 'Text', text: 'Decide with Alex' })).toBeDefined()
   expect(await ui.find({ type: 'Markdown', text: 'Nobody owns the **prod** flip yet.' })).toBeDefined()
   expect(await ui.find({ key: 'rlink-g-gap-Thread', text: '↗ Thread' })).toBeDefined()
   expect(await ui.find({ key: 'rwork-g-gap', text: '↗ work: file:crb' })).toBeDefined()
