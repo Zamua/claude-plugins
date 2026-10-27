@@ -21,6 +21,7 @@ type Pr = {
   threads: { isResolved: boolean; by: string }[]
   approvals?: string[]
   author?: string
+  checks?: Record<string, unknown>[]
 }
 
 const pr = (over: Partial<Pr>): Pr => ({
@@ -57,9 +58,11 @@ function asGraphql(p: Pr) {
             statusCheckRollup: {
               state: p.rollup,
               contexts: {
-                nodes: [
+                nodes: p.checks ?? [
                   ...p.failing.map(name => ({ __typename: 'CheckRun', name, status: 'COMPLETED', conclusion: 'FAILURE' })),
-                  { __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' },
+                  p.rollup === 'PENDING'
+                    ? { __typename: 'CheckRun', name: 'lint', status: 'IN_PROGRESS', conclusion: null }
+                    : { __typename: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS' },
                 ],
               },
             },
@@ -217,6 +220,29 @@ test('the state word says what stops a pull request merging, and ready only once
   const ui = await open($, 'prs')
   const word = async (n: number) => (await ui.find({ key: `state-acme/api#${n}` }))?.text
   expect(await Promise.all([6001, 6002, 6003, 6004, 6005].map(word))).toEqual(['ready', 'CI fail', 'conflict', 'review', 'draft'])
+  await ui.unmount()
+})
+
+test('CI goes by the latest run of each check, as GitHub lists them, not by a run a newer one replaced', async ($, on) => {
+  const run = (name: string, conclusion: string | null, startedAt: string) => ({
+    __typename: 'CheckRun',
+    name,
+    status: conclusion ? 'COMPLETED' : 'IN_PROGRESS',
+    conclusion,
+    startedAt,
+  })
+  const prs: Record<number, Pr> = {
+    6011: pr({ isDraft: false, rollup: 'FAILURE', checks: [run('ktlint', 'CANCELLED', '2026-10-27T11:25:00Z'), run('ktlint', 'SUCCESS', '2026-10-27T11:29:00Z')] }),
+    6012: pr({ isDraft: false, rollup: 'FAILURE', checks: [run('build', 'SUCCESS', '2026-10-27T11:00:00Z'), run('build', 'FAILURE', '2026-10-27T11:30:00Z')] }),
+    6013: pr({ isDraft: false, rollup: 'FAILURE', checks: [run('build', 'FAILURE', '2026-10-27T11:00:00Z'), run('build', null, '2026-10-27T11:30:00Z')] }),
+  }
+  engine(on, gh(prs), NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: Object.keys(prs).map(n => ({ pr: `https://github.com/acme/api/pull/${n}` })) })
+
+  const ui = await open($, 'prs')
+  const word = async (n: number) => (await ui.find({ key: `state-acme/api#${n}` }))?.text
+  expect(await Promise.all([6011, 6012, 6013].map(word))).toEqual(['review', 'CI fail', 'CI run'])
   await ui.unmount()
 })
 

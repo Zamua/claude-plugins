@@ -83,7 +83,7 @@ const FAILED_RUNS = ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'ST
 const PR_FIELDS = `title state isDraft mergeable mergeStateStatus reviewDecision
   headRefName baseRefName headRefOid author { login }
   commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes {
-    __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } } } } } }
+    __typename ... on CheckRun { name status conclusion startedAt completedAt } ... on StatusContext { context state createdAt } } } } } } }
   reviewThreads(first: 100) { nodes { isResolved comments(last: 1) { nodes { author { login } url } } } }
   latestReviews(first: 20) { nodes { author { login } state } }`
 
@@ -102,8 +102,11 @@ type GqlCheck = {
   name?: string
   status?: string
   conclusion?: string | null
+  startedAt?: string | null
+  completedAt?: string | null
   context?: string
   state?: string
+  createdAt?: string
 }
 type GqlPr = {
   title: string
@@ -257,21 +260,34 @@ function apply(current: PrBoard, input: Input): Applied {
   return { board: { ...current, prs }, added }
 }
 
+// A run not started yet is the newest of its check
+const startOf = (check: GqlCheck) =>
+  check.startedAt ?? (check.status === 'COMPLETED' ? check.completedAt : undefined) ?? check.createdAt ?? '\uffff'
+
+/**
+ * CI as GitHub's checks list shows it, by the latest run of each check. The commit's rollup state counts every run,
+ * so one a newer run replaced, such as a run cancelled by its workflow's concurrency group, keeps it failed.
+ */
 function ciOf(rollup: GqlPr['commits']['nodes'][number]['commit']['statusCheckRollup']) {
   if (!rollup) return { ci: 'none' as CiState, failing: [] }
-  const failing = rollup.contexts.nodes
-    .filter(check =>
+  const latest = new Map<string, GqlCheck>()
+  for (const check of rollup.contexts.nodes) {
+    const name = check.name ?? check.context ?? 'a check'
+    const seen = latest.get(name)
+    if (!seen || startOf(check) >= startOf(seen)) latest.set(name, check)
+  }
+  const checks = [...latest]
+  const failing = checks
+    .filter(([, check]) =>
       check.__typename === 'CheckRun'
         ? FAILED_RUNS.includes(check.conclusion ?? '')
         : check.state === 'FAILURE' || check.state === 'ERROR',
     )
-    .map(check => check.name ?? check.context ?? 'a check')
-  const ci: CiState =
-    rollup.state === 'SUCCESS'
-      ? 'pass'
-      : rollup.state === 'FAILURE' || rollup.state === 'ERROR'
-        ? 'fail'
-        : 'pending'
+    .map(([name]) => name)
+  const isRunning = checks.some(([, check]) =>
+    check.__typename === 'CheckRun' ? check.status !== 'COMPLETED' : check.state === 'PENDING' || check.state === 'EXPECTED',
+  )
+  const ci: CiState = failing.length > 0 ? 'fail' : isRunning ? 'pending' : 'pass'
 
   return { ci, failing }
 }
