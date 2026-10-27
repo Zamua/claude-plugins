@@ -262,7 +262,9 @@ async function change($: EngineInterface, w: WorkBoard, current: LocalFile, inpu
   if (input.attach !== undefined && !self) return { deny: 'No host lists this session, so it cannot be attached.' }
   if (input.root === true && !self) return { deny: 'No host lists this session, so it cannot be the root.' }
   const attach = input.attach !== undefined && self ? [{ child: self.id, parent: input.attach }] : []
-  const applied = applyChange(current, { ...input, link: [...(input.link ?? []), ...attach] }, now)
+  if (liveNow().at === 0) await refreshLive($, w.spec, true)
+  const others = new Set(liveNow().items.map(item => item.id))
+  const applied = applyChange(current, { ...input, link: [...(input.link ?? []), ...attach] }, now, others)
   if ('error' in applied) return { deny: applied.error }
 
   const tree = workTree(applied.file).tree as Tree

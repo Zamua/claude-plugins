@@ -18,6 +18,8 @@ export type Item = {
   url?: string
   shape: Shape
   status: Status
+  /** Its Source keeps the status current, so it counts in its own rollup even once it has children. */
+  isStatusLive?: boolean
   origin?: Origin
   parent?: string
   /** Identifiers a session or pull request may carry in its name. */
@@ -263,16 +265,17 @@ function place(nodes: Map<string, Node>, links: Link[], sessions: Session[], art
 }
 
 /**
- * A leaf shows its own status. A parent shows its most urgent child, and its own status only when that is `needs`:
- * a project's own status says little once it has tasks, but a goal waiting on the person still does. An Artifact
- * only adds urgency: one that needs the person counts like an Item that does, and a merged one leaves its Item as is.
+ * A leaf shows its own status. A parent shows its most urgent child, and its own status only when that is `needs` or
+ * its Source keeps it current: a hand-kept project's own status says little once it has tasks, but a goal waiting on
+ * the person still does. An Artifact only adds urgency: one that needs the person counts like an Item that does, and
+ * a merged one leaves its Item as is.
  */
 function rollUp(node: Node) {
   for (const child of node.children) rollUp(child)
   node.children.sort(byUrgency)
   const artifactNeeds = node.artifacts.filter(a => a.status === 'needs').length
   if (node.children.length > 0) {
-    const own: Status[] = node.item.status === 'needs' ? ['needs'] : []
+    const own: Status[] = node.item.status === 'needs' || node.item.isStatusLive ? [node.item.status] : []
     node.shown = mostUrgent([...own, ...node.children.map(c => c.shown)])
   }
   if (artifactNeeds > 0) node.shown = 'needs'
@@ -315,6 +318,25 @@ export function treeText(tree: Tree): string {
   for (const warning of tree.warnings) lines.push(`warning: ${warning}`)
 
   return lines.length > 0 ? lines.join('\n') : 'The work board is empty.'
+}
+
+/**
+ * Every Source's Items, once each. An external Item that a local Item already names by alias is left out, and its
+ * children sit under the local Item instead, since the local one is where the person placed it.
+ */
+export function mergeItems(local: Item[], external: Item[]): Item[] {
+  const byAlias = new Map<string, string>()
+  for (const item of local) for (const alias of item.aliases) byAlias.set(alias.toLowerCase(), item.id)
+  const replaced = new Map<string, string>()
+  for (const item of external) {
+    const named = item.aliases.map(alias => byAlias.get(alias.toLowerCase())).find(Boolean)
+    if (named) replaced.set(item.id, named)
+  }
+  const kept = external
+    .filter(item => !replaced.has(item.id))
+    .map(item => (item.parent && replaced.has(item.parent) ? { ...item, parent: replaced.get(item.parent) } : item))
+
+  return [...local, ...kept]
 }
 
 /** The Items from the top of the tree down to `id`. */

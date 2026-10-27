@@ -26,7 +26,7 @@ boards keep their current layouts.
           "fresh_minutes": 10
         },
         "github": {},                                 // Artifacts from the prs boards; no options
-        "boards": { "oncall": "on-call" }             // another board's items, under a local Item
+        "boards": { "oncall": "on-call" }             // another board's items, under a local Item; its archive stays off
       },
       "hosts": { "herdr": { "cwd": "~" } },            // where Sessions run; cwd for started ones
       "harnesses": {                                   // the agent inside them

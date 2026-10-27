@@ -13,8 +13,10 @@ the phase that needs them.
 - **Rationale**: Rhythms has no CLI or public API key flow; its MCP server is connected at user
   scope (checked), and `$.tool.call` runs any tool the session has (checked in the API types).
   Goals change weekly, so an hourly window costs almost nothing.
-- **To verify**: that `$.tool.call` of an MCP tool works from a `$.clock.every` callback outside a
-  turn. Fallback: refresh only on `turn.start` and when the work view is shown.
+- **Decided 2026-10-27**: Rhythms is asked only from a tree read and when the work view is shown,
+  never from the timer, so the open question of calling an MCP tool outside a turn never arises. The
+  timer reads whatever any session cached. The tool's answer is read from the call's `text`, the
+  result as the model would read it.
 - **Alternatives**: a separate sync agent writing a file (rejected: a second moving part,
   Constitution I); scraping the Rhythms app (rejected: brittle).
 

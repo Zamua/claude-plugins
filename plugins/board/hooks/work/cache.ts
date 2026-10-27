@@ -40,18 +40,19 @@ async function writeEntry($: EngineInterface, path: string, entry: Entry) {
 /**
  * The Source's answer from the shared cache while it is fresh, else from `ask`. A session nobody has used for a while
  * keeps the last answer instead of asking, and a failure keeps the last answer and pauses every session's asking.
+ * Without `ask`, the last answer any session cached.
  */
 export async function readSource(
   $: EngineInterface,
   source: string,
   freshMs: number,
-  ask: () => Promise<SourceAnswer>,
+  ask?: () => Promise<SourceAnswer>,
 ): Promise<Cached> {
   const path = `${await $.env.get('HOME')}/${CACHE_DIR}/${source}.json`
   const entry = await readEntry($, path)
   const now = await $.clock.now()
   const last: Cached = entry ? { ...entry.answer, at: entry.at } : {}
-  if (entry && now - entry.at < freshMs) return last
+  if ((entry && now - entry.at < freshMs) || !ask) return last
   if (entry?.pausedUntil !== undefined && entry.pausedUntil > now) {
     return { ...last, error: `${entry.pauseReason ?? 'paused'}, retrying in ${span(entry.pausedUntil - now)}` }
   }
