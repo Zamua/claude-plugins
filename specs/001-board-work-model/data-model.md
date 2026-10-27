@@ -47,13 +47,13 @@ the Item in the Inbox.
 | `address` | string | the Host's own locator, opaque to the core, passed back to focus it |
 | `harnessId` | string? | the Harness's id for the agent there now, from the Host |
 | `label` | string | the name the Host shows, e.g. a workspace label; aliases are matched against it |
-| `state` | `working` \| `waiting` \| `idle` \| `done` | mapped by the Host from its own words |
+| `state` | `waiting` \| `done` \| `working` \| `idle` | mapped by the Host from its own words, most in need of a look first |
 | `item` | ItemId? | the Item it serves: a Link, else the alias match |
 | `coordinator` | SessionId? | the Session that started it, or a Link |
 | `messageName` | string? | from the Harness: the name its messaging addresses it by |
 | `goal`, `summary` | string? | from its session board, read by `harnessId` |
 | `activeMs` | number | from the Harness (research R5) |
-| `lastActive` | ISO time? | from the Harness; picks which session a press focuses |
+| `lastActive` | ms? | from the Harness; picks which session a press focuses |
 
 The root session is the one the local file's `root` field names. It sits on the work view's title
 line rather than in the tree.

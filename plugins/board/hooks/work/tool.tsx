@@ -1,19 +1,25 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import { messageOf } from '../kit'
-import { buildTree, ORIGINS, qualify, treeText, URGENCY } from './model'
-import type { ItemLink, Origin, Shape, Status } from './model'
+import { buildTree, isSessionId, ORIGINS, qualify, treeText, URGENCY } from './model'
+import type { Item, ItemLink, Link, Node, Origin, Shape, Status, Tree } from './model'
+import { liveNow, refreshLive, selfSession, startSession } from './sessions'
 import { isLocal, itemsAndLinks, localId, readLocalNow, writeLocal } from './sources/file'
 import type { LocalFile, LocalItem } from './sources/file'
 import { currentWork, WORK_TOOL, workTree } from './view'
+import type { WorkBoard } from './view'
 
 const DESCRIPTION = `Read and change the work view of the board pane: one tree of everything the person works on, from their goals down to tasks, with responsibilities such as on-call or tooling beside them. Items nest to any depth; each has a kind (the person's own name for its level, such as Project or Task) and a status: needs (needs the person), flight (in flight), waiting, next, watching, done.
 - Call with no fields to read the tree with every Item's id.
 - add: new Items, each with a title and a kind, under a parent by id. A responsibility (shape: responsibility) never ends.
 - update: change an Item's fields, including parent to move it. Mark finished work status done rather than removing it.
 - remove: delete Items that have no children.
-- link / unlink: set or clear a hand-set parent for any Item, which wins over the parent its source gives.
-Only Items whose ids start with file: (or have no prefix) can be added, updated or removed; Items from other sources can only be linked. The changes apply together, or none do. Keep titles to one short line.`
+- link / unlink: set or clear a hand-set parent for any Item, Session or pull request, which wins over the parent its source gives. A session parent makes it that session's Coordinator; a Session keeps one Item parent and one Coordinator.
+- attach: put this session under an Item.
+- start: start a new session for an Item with a brief, as this session's child. It is refused when the Item already has a running session, naming it, so message that one instead, or pass again: true for another.
+- aliases: identifiers a session's workspace name or a pull request's title or branch may carry, such as an issue key, so they attach to the Item without a link.
+A read lists each session under its Item with its state, the name to message it by, and the goal and summary from its session board.
+Only Items whose ids start with file: (or have no prefix) can be added, updated or removed; Items from other sources can only be linked. File changes apply together, or none do; a started session stays started. Keep titles to one short line.`
 
 const STATUS_ENUM = [...URGENCY]
 const ITEM_FIELDS = {
@@ -29,6 +35,7 @@ const ITEM_FIELDS = {
   },
   target: { type: 'string', description: 'The deadline, as an ISO date or time.' },
   detail: { type: 'string', description: 'Markdown shown when the Item is pressed open.' },
+  aliases: { type: 'array', items: { type: 'string' }, description: 'Identifiers such as an issue key.' },
   links: {
     type: 'array',
     items: { type: 'object', properties: { label: { type: 'string' }, url: { type: 'string' } }, required: ['url'] },
@@ -46,6 +53,21 @@ const INPUT_SCHEMA = {
       items: { type: 'object', properties: { child: { type: 'string' }, parent: { type: 'string' } }, required: ['child', 'parent'] },
     },
     unlink: { type: 'array', items: { type: 'string' } },
+    attach: { type: 'string', description: 'The Item id to put this session under.' },
+    start: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          item: { type: 'string', description: 'The Item id the new session serves.' },
+          brief: { type: 'string', description: 'The first prompt the new session gets: what to do, the decisions made, where to stop.' },
+          label: { type: 'string', description: 'Its workspace name; by default, from the Item.' },
+          cwd: { type: 'string' },
+          again: { type: 'boolean', description: 'Start one even though the Item has a running session.' },
+        },
+        required: ['item', 'brief'],
+      },
+    },
   },
 }
 
@@ -59,13 +81,17 @@ type Fields = {
   target?: string
   detail?: string
   links?: ItemLink[]
+  aliases?: string[]
 }
+type Start = { item: string; brief: string; label?: string; cwd?: string; again?: boolean }
 type Input = {
   add?: (Fields & { title: string; kind: string })[]
   update?: (Fields & { id: string })[]
   remove?: string[]
   link?: { child: string; parent: string }[]
   unlink?: string[]
+  attach?: string
+  start?: Start[]
 }
 
 type Applied = { file: LocalFile; added: string[] } | { error: string }
@@ -79,6 +105,24 @@ const slug = (title: string) =>
 
 // A session or pull request is not an Item, so it can be linked before any Source has seen it
 const isExternalChild = (id: string) => id.startsWith('session:') || id.startsWith('pr:')
+
+/** A Session keeps one Item parent and one Coordinator, so a new link replaces only the old one of its kind. */
+const sameKind = (link: Link, child: string, parent: string) =>
+  qualify(link.child) === child && isSessionId(link.parent) === isSessionId(parent)
+
+const WORDS = 5
+
+/** A workspace name from an Item: its first alias and its title, in lowercase kebab case of a few words. */
+export function labelFor(item: Item, taken: ReadonlySet<string>): string {
+  const alias = item.aliases[0] ?? ''
+  const title = alias && item.title.toLowerCase().startsWith(alias.toLowerCase()) ? item.title.slice(alias.length) : item.title
+  const words = `${alias} ${title}`.trim().split(/\s+/).slice(0, WORDS).join(' ')
+  const base = slug(words)
+  let label = base
+  for (let n = 2; taken.has(label); n++) label = `${base}-${n}`
+
+  return label
+}
 
 function checkFields(fields: Fields): string | undefined {
   if (fields.status !== undefined && !URGENCY.includes(fields.status)) return `No status ${fields.status}.`
@@ -144,8 +188,9 @@ export function applyChange(current: LocalFile, input: Input, now: string, other
     const child = qualify(one.child)
     const parent = qualify(one.parent)
     if (!known.has(child) && !isExternalChild(child)) return { error: `No Item ${one.child}.` }
-    if (!known.has(parent) && !parent.startsWith('session:')) return { error: `No Item ${one.parent}.` }
-    links = [...links.filter(link => qualify(link.child) !== child), { child, parent, at: now }]
+    if (!known.has(parent) && !isSessionId(parent)) return { error: `No Item ${one.parent}.` }
+    if (isSessionId(parent) && !isSessionId(child)) return { error: `Only a session can sit under the session ${one.parent}.` }
+    links = [...links.filter(link => !sameKind(link, child, parent)), { child, parent, at: now }]
   }
 
   const result: LocalFile = { ...changed, links }
@@ -168,7 +213,14 @@ export function workHooks(on: On) {
     if (!w) return { deny: 'No work board is configured: add a board with layout "model" to ~/.config/board/boards.json.' }
     const { tool, tool_use_id, consent, agentId, ...args } = e
     const input = args as Input
-    const isRead = !input.add?.length && !input.update?.length && !input.remove?.length && !input.link?.length && !input.unlink?.length
+    const isRead =
+      !input.add?.length &&
+      !input.update?.length &&
+      !input.remove?.length &&
+      !input.link?.length &&
+      !input.unlink?.length &&
+      input.attach === undefined &&
+      !input.start?.length
     let current: LocalFile
     try {
       current = await readLocalNow($, w.path)
@@ -176,16 +228,80 @@ export function workHooks(on: On) {
       return { deny: messageOf(err) }
     }
     if (isRead) {
+      await refreshLive($, w.spec, true)
       const { tree } = workTree(current)
       return { result: tree ? treeText(tree) : 'The work board is empty.' }
     }
-    const applied = applyChange(current, input, new Date(await $.clock.now()).toISOString())
-    if ('error' in applied) return { deny: applied.error }
-    await writeLocal($, w.state, w.path, applied.file)
-    $.ui.invalidate('ui.render')
 
-    return { result: applied.added.length > 0 ? `Work updated. Added ${applied.added.join(', ')}.` : 'Work updated.' }
+    return change($, w, current, input)
   })
+}
+
+/** Where a started session runs: the start's own cwd, else the first Host's configured one, else home. */
+async function cwdOf($: EngineInterface, w: WorkBoard, asked: string | undefined) {
+  const home = (await $.env.get('HOME')) ?? ''
+  const host = Object.values(w.spec.hosts ?? {})[0] as { cwd?: unknown } | undefined
+  const cwd = asked ?? (typeof host?.cwd === 'string' ? host.cwd : '~')
+
+  return cwd === '~' ? home : cwd.startsWith('~/') ? home + cwd.slice(1) : cwd
+}
+
+/**
+ * Applies the file changes, then starts each asked-for session and links it under its Item with this session as its
+ * Coordinator. A Host cannot undo a start, so a start that fails leaves the ones before it, and the result says so.
+ */
+async function change($: EngineInterface, w: WorkBoard, current: LocalFile, input: Input) {
+  const now = new Date(await $.clock.now()).toISOString()
+  const starts = input.start ?? []
+  const self = input.attach !== undefined || starts.length > 0 ? await selfSession($, w.spec) : undefined
+  if (input.attach !== undefined && !self) return { deny: 'No host lists this session, so it cannot be attached.' }
+  const attach = input.attach !== undefined && self ? [{ child: self.id, parent: input.attach }] : []
+  const applied = applyChange(current, { ...input, link: [...(input.link ?? []), ...attach] }, now)
+  if ('error' in applied) return { deny: applied.error }
+
+  const tree = workTree(applied.file).tree as Tree
+  for (const one of starts) {
+    const node = tree.byId.get(qualify(one.item))
+    if (!node) return { deny: `No Item ${one.item} to start a session for.` }
+    if (!one.brief?.trim()) return { deny: `The start for ${one.item} needs a brief.` }
+    const running = node.sessions[0]
+    if (running && !one.again) {
+      const message = running.messageName ? `, message ${running.messageName}` : ''
+      return {
+        deny: `${node.item.id} already has a running session, ${running.label}${message}. Message it instead, or pass again: true to start another.`,
+      }
+    }
+  }
+
+  let file = applied.file
+  const started: string[] = []
+  const failed: string[] = []
+  const taken = new Set(liveNow().sessions.map(one => one.label))
+  for (const one of starts) {
+    const { item } = tree.byId.get(qualify(one.item)) as Node
+    const label = one.label?.trim() || labelFor(item, taken)
+    taken.add(label)
+    const cwd = await cwdOf($, w, one.cwd)
+    const out = await startSession($, w.spec, { label, cwd, brief: one.brief, ...(self && { near: self.address }) })
+    if (!out.id) {
+      failed.push(out.error ?? `${label} did not start.`)
+      continue
+    }
+    const id = out.id
+    const coordinated = self ? [{ child: id, parent: self.id, at: now }] : []
+    file = { ...file, links: [...file.links, { child: id, parent: item.id, at: now }, ...coordinated] }
+    const name = liveNow().sessions.find(s => s.id === id)?.messageName
+    started.push(`${id} (${label}${name ? `, message ${name}` : ''}) for ${item.id}`)
+  }
+  await writeLocal($, w.state, w.path, file)
+  $.ui.invalidate('ui.render')
+
+  const parts = ['Work updated.']
+  if (applied.added.length > 0) parts.push(`Added ${applied.added.join(', ')}.`)
+  if (started.length > 0) parts.push(`Started ${started.join('; ')}.`)
+  if (failed.length > 0) parts.push(`Not started: ${failed.join(' ')}`)
+
+  return { result: parts.join(' ') }
 }
 
 export async function workToolStart($: EngineInterface) {

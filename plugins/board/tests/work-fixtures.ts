@@ -1,4 +1,5 @@
 import { CONFIG_FILE, HOME, json, world } from './engine'
+import type { World } from './engine'
 
 export const WORK_FILE = `${HOME}/work.json`
 export const WORK_CONFIG = { boards: [{ id: 'work', layout: 'model', path: '~/work.json' }] }
@@ -22,3 +23,102 @@ export const TREE = {
 
 export const withTree = (file: unknown = TREE) =>
   world({ files: { [CONFIG_FILE]: json(WORK_CONFIG), [WORK_FILE]: json(file) } })
+
+export const LIVE_CONFIG = {
+  boards: [
+    {
+      id: 'work',
+      layout: 'model',
+      path: '~/work.json',
+      sources: { github: {} },
+      hosts: { herdr: {} },
+      harnesses: { claude: { args: ['--model', 'opus'] } },
+    },
+  ],
+}
+
+/** A pane herdr lists: `agent: ''` is a shell with no agent in it. */
+export type HerdrPane = { id: string; label: string; status?: string; harnessId?: string; agent?: string }
+
+const ran = (stdout: string) => ({ exitCode: 0, stdout, stderr: '' })
+const workspaceOf = (pane: string) => pane.split(':')[0] ?? pane
+
+/** herdr with one running session, `default`, holding `panes`; creating a workspace adds `created`. */
+export function herdrHost(panes: HerdrPane[], created?: HerdrPane) {
+  let all = panes
+
+  return (argv: readonly string[]) => {
+    if (argv[0] !== 'herdr') return undefined
+    const args = argv.slice(argv[1] === '--session' ? 3 : 1).join(' ')
+    if (args === 'session list') {
+      return ran('name     status   directory  socket\ndefault  running  /h/default  /h/default.sock\nold      stopped  /h/old      /h/old.sock\n')
+    }
+    if (args === 'pane list') {
+      const listed = all.map(p => ({
+        pane_id: p.id,
+        workspace_id: workspaceOf(p.id),
+        ...(p.agent !== '' && { agent: p.agent ?? 'claude' }),
+        agent_status: p.status ?? 'idle',
+        ...(p.harnessId && { agent_session: { value: p.harnessId } }),
+      }))
+      return ran(json({ result: { panes: listed } }))
+    }
+    if (args === 'workspace list') {
+      return ran(json({ result: { workspaces: all.map(p => ({ workspace_id: workspaceOf(p.id), label: p.label })) } }))
+    }
+    if (args.startsWith('workspace create') && created) {
+      all = [...all, created]
+      return ran(json({ result: { root_pane: { pane_id: created.id, workspace_id: workspaceOf(created.id) } } }))
+    }
+
+    return ran('')
+  }
+}
+
+/** Claude Code's record of a running agent, as its harness id and message name. */
+export const sessionRecord = (pid: number, sessionId: string, name: string, updatedAt: number) => ({
+  [`${HOME}/.claude/sessions/${pid}.json`]: json({ sessionId, name, updatedAt }),
+})
+
+/** The board plugin's store file as other sessions left it. */
+export const storeFile = (held: Record<string, unknown>) => ({ [`${HOME}/.claude/plugins/store/board_test.json`]: json(held) })
+
+export const sessionBoard = (sessionId: string, goal: string, summary: string) => ({
+  [`session:${sessionId}`]: { shape: 'session-1', value: { sessionId, goal, summary, items: [], seq: 0 } },
+})
+
+export const prsBoard = (sessionId: string, prs: unknown[]) => ({
+  [`prs:${sessionId}`]: { shape: 'prs-1', value: { sessionId, prs, viewer: 'me', checkedAt: 0, error: '' } },
+})
+
+export const trackedPr = (number: number, title: string, over: Record<string, unknown> = {}) => ({
+  key: `acme/api#${number}`,
+  owner: 'acme',
+  repo: 'api',
+  number,
+  url: `https://github.com/acme/api/pull/${number}`,
+  note: '',
+  stack: '',
+  facts: {
+    title,
+    state: 'OPEN',
+    isDraft: false,
+    mergeable: 'MERGEABLE',
+    mergeState: 'CLEAN',
+    review: 'REVIEW_REQUIRED',
+    approvedBy: [],
+    changesRequestedBy: [],
+    ci: 'pass',
+    failing: [],
+    author: 'me',
+    head: 'feature/x',
+    base: 'main',
+    headSha: 'abc',
+    waiting: 0,
+    ...over,
+  },
+})
+
+export function withLive(file: unknown, run: World['run'], files: Record<string, string> = {}) {
+  return world({ files: { [CONFIG_FILE]: json(LIVE_CONFIG), [WORK_FILE]: json(file), ...files }, run })
+}

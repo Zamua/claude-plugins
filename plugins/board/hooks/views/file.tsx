@@ -1,7 +1,8 @@
 import type { Color, EngineInterface, RenderNode } from 'claude-code'
 
-import { ago, dueOf, focusWorkspace, openUrl, refreshJson, section, sourceLabel, span } from '../kit'
+import { ago, dueOf, openUrl, refreshJson, section, sourceLabel, span } from '../kit'
 import type { Els, JsonFile, View } from '../kit'
+import { focusWorkspace } from '../work/hosts/herdr'
 
 /** A board another process writes as JSON, named in the board config. */
 export type FileBoardSpec = {
