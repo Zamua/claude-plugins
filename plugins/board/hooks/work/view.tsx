@@ -2,7 +2,8 @@ import type { Color, EngineInterface, RenderNode } from 'claude-code'
 
 import { ago, dueOf, fixed, link, openUrl, refreshJson, sourceLabel, stamp } from '../kit'
 import type { Els, View } from '../kit'
-import { buildTree, needsTotal, SESSION_STATES } from './model'
+import { selectView } from '../pane'
+import { buildTree, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
 import type { Artifact, Node, Period, Session, SessionState, Status, Tree } from './model'
 import { focusSession, liveNow, refreshLive } from './sessions'
 import type { Live } from './sessions'
@@ -10,6 +11,8 @@ import { isVersion2, itemsAndLinks } from './sources/file'
 import type { LocalFile, LocalState } from './sources/file'
 
 export const WORK_TOOL = 'mcp__board__work'
+/** Names the Item a started session serves, in that session's environment; `$.env.get` spells it out. */
+export const START_ENV = 'BOARD_WORK_ITEM'
 
 /** A `model` board as `boards.json` names it. */
 export type WorkSpec = {
@@ -62,6 +65,8 @@ let board: WorkBoard | undefined
 const opened = new Set<string>()
 const doneShown = new Set<string>()
 let pressedFor = ''
+// The session whose own Item the view has opened down to, once
+let placedFor = ''
 let drawnAt = 0
 
 export function configureWork(spec: WorkSpec | undefined, home: string, labels: Record<string, string> = {}) {
@@ -103,6 +108,98 @@ export async function workStart($: EngineInterface) {
   $.clock.every(POLL_MS, () => workRefresh($))
 }
 
+function forSession(sessionId: string) {
+  if (pressedFor === sessionId) return
+  opened.clear()
+  doneShown.clear()
+  pressedFor = sessionId
+}
+
+const openPath = (tree: Tree, id: string) => {
+  for (const item of pathTo(tree, id)) opened.add(item.id)
+}
+
+/** The root session the local file names, with the Session a Host lists for it while it runs. */
+function rootOf(file: unknown, tree: Tree): { id: string; session?: Session } | undefined {
+  const id = (file as LocalFile | undefined)?.root
+  if (typeof id !== 'string') return undefined
+  const session = tree.sessions.get(id)
+
+  return session ? { id, session } : { id }
+}
+
+/** This session as a Host lists it, and the Item it serves: its attachment, else the Item it was started for. */
+async function selfOf($: EngineInterface, tree: Tree): Promise<{ session?: Session; item?: string }> {
+  const harnessId = await $.session.id()
+  const session = [...tree.sessions.values()].find(one => one.harnessId === harnessId)
+  const attached = session ? tree.sessionItem.get(session.id) : undefined
+  const started = await $.env.get('BOARD_WORK_ITEM')
+  const item = attached ?? (started && tree.byId.has(qualify(started)) ? qualify(started) : undefined)
+
+  return { ...(session && { session }), ...(item && { item }) }
+}
+
+/** A one-glyph mark that brings the root session to the front, dim once it has ended. */
+function rootMark($: EngineInterface, w: WorkBoard, els: Els, root: { session?: Session }, key: string) {
+  const { Button, Text } = els
+  const press = async () => {
+    w.notice = root.session ? await focusSession($, root.session) : 'The root session is not running.'
+    $.ui.invalidate('ui.render')
+  }
+
+  return fixed(
+    els,
+    `${key}box`,
+    <Button key={key} plain onPress={press}>
+      <Text color="claude" dimColor={!root.session || undefined}>
+        ⌂
+      </Text>{' '}
+      <Text dimColor>{root.session?.label ?? 'root'}</Text>
+    </Button>,
+  )
+}
+
+/** Switches the pane to the work view with the path down to `id` open. */
+async function openWorkAt($: EngineInterface, id: string) {
+  const w = board
+  const tree = w && workTree(w.state.value).tree
+  if (!w || !tree) return
+  forSession(await $.session.id())
+  openPath(tree, id)
+  await selectView($, w.spec.id)
+}
+
+/**
+ * The session view's breadcrumb: the root mark, then the Items from the top of the tree down to this session's, cut
+ * from the left, and a press that opens the work view there.
+ */
+export async function workBreadcrumb($: EngineInterface, els: Els): Promise<RenderNode | undefined> {
+  const w = board
+  if (!w) return undefined
+  drawnAt = await $.clock.now()
+  if (liveNow().at === 0) await refreshLive($, w.spec)
+  const tree = workTree(w.state.value).tree
+  if (!tree) return undefined
+  const { item } = await selfOf($, tree)
+  const root = rootOf(w.state.value, tree)
+  if (!item && !root) return undefined
+  const { Box, Button, Text } = els
+  const path = item ? pathTo(tree, item) : []
+
+  return (
+    <Box key="crumbs" flexDirection="row" columnGap={1}>
+      {root && rootMark($, w, els, root, 'crumbroot')}
+      {path.length > 0 && (
+        <Text dimColor wrap="truncate-start">
+          {path.map(one => one.title).join(' › ')}
+        </Text>
+      )}
+      {item &&
+        fixed(els, 'crumbopenbox', <Button key="crumbopen" label="↗" plain dimColor onPress={() => openWorkAt($, item)} />)}
+    </Box>
+  )
+}
+
 function toggle($: EngineInterface, set: Set<string>, key: string) {
   return async () => {
     if (set.has(key)) set.delete(key)
@@ -111,7 +208,7 @@ function toggle($: EngineInterface, set: Set<string>, key: string) {
   }
 }
 
-type Ctx = { els: Els; now: number; tree: Tree }
+type Ctx = { els: Els; now: number; tree: Tree; self?: Session }
 
 export function workView($: EngineInterface, w: WorkBoard): View {
   const treeNow = () => workTree(w.state.value).tree
@@ -122,6 +219,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
     scope: 'shared',
     guide: { tool: WORK_TOOL, text: `keep its ${w.spec.id} view current with ${WORK_TOOL}` },
     onShow: () => workRefresh($, true),
+    opensAtStart: async () => Boolean(await $.env.get('BOARD_WORK_ITEM')),
     isAvailable: async () => !w.state.isMissing,
     needs: async () => {
       const tree = treeNow()
@@ -130,11 +228,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
     render: async els => {
       const { Box, Text } = els
       const sessionId = await $.session.id()
-      if (pressedFor !== sessionId) {
-        opened.clear()
-        doneShown.clear()
-        pressedFor = sessionId
-      }
+      forSession(sessionId)
       const now = await $.clock.now()
       drawnAt = now
       const { tree, error } = workTree(w.state.value)
@@ -148,14 +242,32 @@ export function workView($: EngineInterface, w: WorkBoard): View {
           </Text>
         )
       }
-      const ctx: Ctx = { els, now, tree }
+      const self = await selfOf($, tree)
+      if (placedFor !== sessionId && self.item) {
+        openPath(tree, self.item)
+        placedFor = sessionId
+      }
+      const ctx: Ctx = { els, now, tree, ...(self.session && { self: self.session }) }
       const at = Date.parse((w.state.value as LocalFile).updated_at ?? '')
       const fresh = readError ?? (Number.isNaN(at) ? '' : `Updated ${ago(now - at)}`)
       const notes = [...w.warnings, ...tree.warnings, ...liveNow().errors]
+      const root = rootOf(w.state.value, tree)
+      const head = root ? (
+        <Box key="whead" flexDirection="row" columnGap={1} paddingX={1}>
+          {rootMark($, w, els, root, 'wroot')}
+          <Box key="stamp" flexGrow={1} justifyContent="flex-end">
+            <Text color={readError ? 'error' : undefined} dimColor={!readError || undefined}>
+              {fresh}
+            </Text>
+          </Box>
+        </Box>
+      ) : (
+        fresh !== '' && stamp(els, fresh, readError !== undefined)
+      )
 
       return (
         <Box key="work-view" flexDirection="column">
-          {fresh !== '' && stamp(els, fresh, readError !== undefined)}
+          {head}
           {tree.outcomes.length + tree.responsibilities.length === 0 && (
             <Text dimColor wrap="wrap">
               Nothing tracked yet. Claude adds work here with {WORK_TOOL}.
@@ -302,6 +414,14 @@ export function workView($: EngineInterface, w: WorkBoard): View {
           fixed(ctx.els, `wsdot-${at}`, <Text dimColor>·</Text>)
         )}
         {sessionMark(ctx, at, [session])}
+        {ctx.self?.id === session.id &&
+          fixed(
+            ctx.els,
+            `where-${at}`,
+            <Text color="claude" bold>
+              here
+            </Text>,
+          )}
         {fixed(
           ctx.els,
           `wstate-${at}`,

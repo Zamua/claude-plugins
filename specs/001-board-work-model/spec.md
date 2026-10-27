@@ -125,7 +125,7 @@ coordinator as its Coordinator.
 ### User Story 4 - Each session knows where it sits, and the way back to the root (Priority: P3)
 
 The session view shows a one-line breadcrumb of the Item its session is attached to, from the top of
-the tree down to the session, such as "Q4 › CRB funding › MM-809 › this session". Pressing a step
+the tree down to the session, such as "Q4 › CRB funding › MM-809", cut from the left. Pressing it
 opens the work view at that Item. The person marks one session as the root session, the one they
 talk to; every breadcrumb and every work view starts with a root mark that brings it to the front.
 In an attached session, the work view opens down to that session and marks it, so the person who
@@ -243,7 +243,8 @@ place it under a project and confirm it moves.
 - **FR-012**: External Sources MUST be read through a cache shared by every session, asked only by
   sessions in use, and never asked while their rate limit is low.
 - **FR-013**: The board MUST attach Sessions and Artifacts to Items by matching identifiers found in
-  workspace names, branch names and pull request titles.
+  workspace names, the name of the set of sessions a Host runs a Session in, branch names and pull
+  request titles.
 - **FR-014**: The person, or Claude on their behalf, MUST be able to link an Item, Session or
   Artifact to a parent by hand; a hand link MUST win over an inferred one.
 - **FR-015**: A Session MUST be attachable to an Item at any level, and MAY have a Coordinator, the

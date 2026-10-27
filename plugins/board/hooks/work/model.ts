@@ -44,6 +44,8 @@ export type HostSession = {
   /** The Host's own locator, opaque to the core. */
   address: string
   label: string
+  /** The Host's name for the set of sessions it runs this one in, matched like the label. */
+  group?: string
   state: SessionState
   harness?: string
   /** The Harness's own id for the agent there now. */
@@ -51,7 +53,16 @@ export type HostSession = {
 }
 
 /** What a Host needs to start a Session. `near` is the starting Session's address, so it can start beside it. */
-export type HostStart = { label: string; cwd: string; harness: string; args: string[]; brief: string; near?: string }
+export type HostStart = {
+  label: string
+  cwd: string
+  harness: string
+  args: string[]
+  brief: string
+  near?: string
+  /** Set in the new session's environment. */
+  env?: Record<string, string>
+}
 
 export type Session = HostSession & {
   /** `session:<host>:<address>`: the place it runs, which outlives the agent's own id. */
@@ -222,7 +233,7 @@ function place(nodes: Map<string, Node>, links: Link[], sessions: Session[], art
   const unplaced = { sessions: [] as Session[], artifacts: [] as Artifact[] }
   for (const session of sessions) {
     const linked = itemLink.get(session.id)
-    const node = (linked ? nodes.get(linked) : undefined) ?? matchItem(nodes, [session.label])
+    const node = (linked ? nodes.get(linked) : undefined) ?? matchItem(nodes, [session.label, ...(session.group ? [session.group] : [])])
     const coordinator = coordinatorOf.get(session.id)
     if (coordinator && byId.has(coordinator)) coordinated.set(coordinator, [...(coordinated.get(coordinator) ?? []), session])
     if (node) {
@@ -271,9 +282,11 @@ export function isWithin(tree: Tree, id: string, ancestor: string): boolean {
   return false
 }
 
-/** The tree as text, one line per Item, for the tool's read. */
-export function treeText(tree: Tree): string {
+/** The tree as text, one line per Item, for the tool's read; `root` is the root session's id. */
+export function treeText(tree: Tree, root?: string): string {
   const lines: string[] = []
+  const rootSession = root ? tree.sessions.get(root) : undefined
+  if (root) lines.push(rootSession ? `Root session: ${sessionText(tree, rootSession, '')[0]}` : `Root session: ${root}, not running`)
   const walk = (node: Node) => {
     const needs = node.needsCount > 0 ? `, ${node.needsCount} need you` : ''
     const ref = node.item.ref !== undefined ? ` #${node.item.ref}` : ''
@@ -292,6 +305,14 @@ export function treeText(tree: Tree): string {
   for (const warning of tree.warnings) lines.push(`warning: ${warning}`)
 
   return lines.length > 0 ? lines.join('\n') : 'The work board is empty.'
+}
+
+/** The Items from the top of the tree down to `id`. */
+export function pathTo(tree: Tree, id: string): Item[] {
+  const out: Item[] = []
+  for (let node = tree.byId.get(id); node; node = node.parent) out.unshift(node.item)
+
+  return out
 }
 
 /** A Session's line, its board's goal and summary, then the Sessions it coordinates that sit under no Item. */

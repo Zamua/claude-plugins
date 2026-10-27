@@ -51,6 +51,7 @@ export async function listHerdr($: EngineInterface): Promise<{ sessions: HostSes
         sessions.push({
           address: `${name}/${pane.pane_id}`,
           label: labels.get(pane.workspace_id) ?? pane.workspace_id,
+          group: name,
           state: STATES[pane.agent_status ?? ''] ?? 'idle',
           harness: pane.agent,
           ...(pane.agent_session?.value && { harnessId: pane.agent_session.value }),
@@ -80,7 +81,16 @@ export async function startHerdr($: EngineInterface, start: HostStart): Promise<
   const session = start.near ? partsOf(start.near).session : 'default'
   try {
     const created = JSON.parse(
-      await herdr($, session, ['workspace', 'create', '--cwd', start.cwd, '--label', start.label, '--no-focus']),
+      await herdr($, session, [
+        'workspace',
+        'create',
+        '--cwd',
+        start.cwd,
+        '--label',
+        start.label,
+        '--no-focus',
+        ...Object.entries(start.env ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`]),
+      ]),
     ) as Created
     const pane = created.result.root_pane.pane_id
     await herdr(

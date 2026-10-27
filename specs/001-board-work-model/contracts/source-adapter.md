@@ -43,6 +43,7 @@ startHerdr($, start: HostStart): Promise<{ address?: string; error?: string }>
 type HostSession = {
   address: string            // opaque to the core
   label: string
+  group?: string             // the Host's name for the set it runs in, e.g. a herdr session; matched like the label
   state: 'waiting' | 'done' | 'working' | 'idle'
   harness?: string           // e.g. 'claude'
   harnessId?: string         // the Harness's own session id, when the Host knows it
@@ -55,6 +56,7 @@ type HostStart = {
   args: string[]             // from the Harness's config
   brief: string              // sent as the first prompt once the agent is up
   near?: string              // the starting Session's address, so the new one starts beside it
+  env?: Record<string, string>   // set in the new session's environment
 }
 
 // Harness: the agent inside a Session. One module per runtime, e.g. harnesses/claude.ts.

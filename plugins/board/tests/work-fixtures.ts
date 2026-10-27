@@ -43,15 +43,15 @@ export type HerdrPane = { id: string; label: string; status?: string; harnessId?
 const ran = (stdout: string) => ({ exitCode: 0, stdout, stderr: '' })
 const workspaceOf = (pane: string) => pane.split(':')[0] ?? pane
 
-/** herdr with one running session, `default`, holding `panes`; creating a workspace adds `created`. */
-export function herdrHost(panes: HerdrPane[], created?: HerdrPane) {
+/** herdr with one running session, named `session`, holding `panes`; creating a workspace adds `created`. */
+export function herdrHost(panes: HerdrPane[], created?: HerdrPane, session = 'default') {
   let all = panes
 
   return (argv: readonly string[]) => {
     if (argv[0] !== 'herdr') return undefined
     const args = argv.slice(argv[1] === '--session' ? 3 : 1).join(' ')
     if (args === 'session list') {
-      return ran('name     status   directory  socket\ndefault  running  /h/default  /h/default.sock\nold      stopped  /h/old      /h/old.sock\n')
+      return ran(`name     status   directory  socket\n${session}  running  /h/a  /h/a.sock\nold      stopped  /h/old      /h/old.sock\n`)
     }
     if (args === 'pane list') {
       const listed = all.map(p => ({

@@ -17,8 +17,10 @@ Every field is optional; the changes apply together, or none do.
 | `unlink` | `child[]` | removes hand links |
 | `attach` | `parent` | links the calling session to `parent`: shorthand for `link` with this session as child |
 | `start` | `{ item, brief, label?, cwd?, again? }[]` | starts a Session for each Item through the Host, linked under the Item with the calling session as Coordinator |
-| `root` | `true` | makes the calling session the root session |
+| `root` | `true` \| `false` | makes the calling session the root session, or clears the root |
 
+A read starts with a `Root session:` line when one is set. `start` sets `BOARD_WORK_ITEM` to the
+Item's id in the new session's environment, so it opens its pane on the work view at that Item.
 `start` labels the Session after the Item, its first alias then its title, in lowercase kebab case
 of at most five words, unless `label` is given. `cwd` defaults to the Host's configured `cwd`.
 
