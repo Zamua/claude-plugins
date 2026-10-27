@@ -287,3 +287,29 @@ export function prRow(els: Els, spec: PrRowSpec) {
     </Box>
   )
 }
+
+export type Part = { text: string; color?: Color; dimColor?: boolean; bold?: boolean }
+
+/**
+ * `parts`, then `title` cut to fit, joined by single spaces into at most `room` cells. A Button cannot cut its own
+ * text at the pane's edge, so a whole row can be one only once it is cut to fit.
+ */
+export function fitLine(parts: Part[], title: Part, room: number): Part[] {
+  const used = parts.reduce((n, part) => n + [...part.text].length + 1, 0)
+  const left = Math.max(1, room - used)
+  const chars = [...title.text]
+  const text = chars.length <= left ? title.text : `${chars.slice(0, left - 1).join('')}…`
+
+  return [...parts, { ...title, text }]
+}
+
+export function spans(els: Els, parts: Part[]): RenderNode[] {
+  const { Text } = els
+
+  return parts.flatMap((part, at) => [
+    ...(at > 0 ? [' '] : []),
+    <Text color={part.color} dimColor={part.dimColor || undefined} bold={part.bold || undefined}>
+      {part.text}
+    </Text>,
+  ])
+}
