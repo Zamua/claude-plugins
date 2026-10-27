@@ -19,6 +19,7 @@ type Pr = {
   rollup: string
   failing: string[]
   threads: { isResolved: boolean; by: string }[]
+  approvals?: string[]
 }
 
 const pr = (over: Partial<Pr>): Pr => ({
@@ -71,7 +72,7 @@ function asGraphql(p: Pr) {
         comments: { nodes: [{ author: { login: t.by }, url: `https://github.com/t/${at}` }] },
       })),
     },
-    latestReviews: { nodes: [] },
+    latestReviews: { nodes: (p.approvals ?? []).map(login => ({ author: { login }, state: 'APPROVED' })) },
   }
 }
 
@@ -187,6 +188,16 @@ test('each git stack in a named group draws as one run, bottom first, marked ┌
   const glyph = async (n: number) => (await ui.find({ key: `chain-acme/api#${n}` }))?.text ?? ''
   expect(await Promise.all(drawn.map(glyph))).toEqual(['┌', '├', '└', '┌', '└', '', ''])
   expect(rows).not.toContain('on #')
+  await ui.unmount()
+})
+
+test('a pull request approved in a repo that requires no review still gets its check', async ($, on) => {
+  engine(on, gh({ 6050: pr({ isDraft: false, reviewDecision: null, approvals: ['berkay', 'mert'] }) }), NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: [{ pr: TOP }] })
+
+  const ui = await open($, 'prs')
+  expect(await ui.find({ key: 'mark-acme/api#6050', text: '✓' })).toBeDefined()
   await ui.unmount()
 })
 
