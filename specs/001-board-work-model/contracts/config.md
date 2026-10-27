@@ -26,9 +26,10 @@ boards keep their current layouts.
           "fresh_minutes": 10
         },
         "github": {},                                 // Artifacts from the prs boards; no options
-        "herdr": {},                                  // Sessions from every herdr session
         "boards": { "oncall": "on-call" }             // another board's items, under a local Item
       },
+      "hosts": { "herdr": {} },                        // where Sessions run, and how to focus one
+      "harnesses": { "claude": {} },                   // the agent inside them, and its active time
       "periods": [{ "name": "Q4 2026-27", "start": "2026-11-01", "end": "2027-01-31" }]
     }
   ]

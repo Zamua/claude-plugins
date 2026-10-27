@@ -94,6 +94,12 @@ the coordinator sits under the project and lists the two task sessions as its ch
    sessions appear beneath it.
 5. **Given** a session that matches no Item, **When** the view draws, **Then** it appears in an
    unplaced group, so no running session is invisible.
+6. **Given** an Item with a session attached, **When** the person presses the Item's session mark,
+   **Then** that session comes to the front where it runs; with several attached, the most recently
+   active one does, and opening the Item lists them all.
+7. **Given** sessions run under a different terminal multiplexer or agent harness, **When** an
+   adapter for it is configured instead, **Then** every scenario above holds with no change outside
+   that adapter.
 
 ---
 
@@ -220,6 +226,11 @@ place it under a project and confirm it moves.
   status, detail, links, due date and workspace, and report anything it could not place.
 - **FR-020**: When a Source fails, its last known Items MUST stay drawn, and the freshness line MUST
   name the failing Source.
+- **FR-021**: An Item with a Session attached MUST show a session mark on its line, colored by the
+  Session's state; pressing the mark MUST bring that Session to the front where it runs.
+- **FR-022**: The core model MUST NOT name a terminal multiplexer or an agent harness. Sessions MUST
+  come from a Host adapter, which lists where sessions run and brings one to the front, and a
+  Harness adapter, which identifies the agent in a session and reads its active time.
 
 ### Key Entities
 
@@ -233,8 +244,12 @@ place it under a project and confirm it moves.
   asked.
 - **Status**: the one scale shared by every Item, rolled up from descendants.
 - **Period**: a named date range used to group or filter.
-- **Session**: an agent working in a workspace, attached to one Item at any level, with a state,
-  active time and optional child Sessions.
+- **Session**: an agent working somewhere a Host can find and focus, attached to one Item at any
+  level, with a state, active time and optional child Sessions.
+- **Host**: where Sessions run, such as a terminal multiplexer: it lists them with a name and a
+  state, and brings one to the front.
+- **Harness**: the agent runtime inside a Session, such as Claude Code: it gives the Session's own
+  id and its active time.
 - **Artifact**: something an Item produces, such as a pull request or a document, attached to an
   Item.
 - **Link**: a hand-set parent for an Item, Session or Artifact, stored locally.
@@ -263,8 +278,8 @@ place it under a project and confirm it moves.
 - The board only reads Sources: it posts no check-ins and edits no tracker. Editing Kinds in a UI is
   out of scope; Kinds are names in the configuration file.
 - The first user's Kinds are Objective, Key result, Project and Task, read from Rhythms (objectives
-  and key results) and Linear (projects and issues); pull requests come from GitHub, sessions from
-  herdr, and Responsibilities from the local file.
+  and key results) and Linear (projects and issues); pull requests come from GitHub, Responsibilities
+  from the local file, and sessions from herdr as the Host with Claude Code as the Harness.
 - A goal-tracker key result and an issue-tracker project share no identifier, so that link is set by
   hand once per project.
 - Agents keep the local file current, as they keep today's work board current; the board needs no
