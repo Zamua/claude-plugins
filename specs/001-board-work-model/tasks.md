@@ -102,7 +102,7 @@ US6. Each story ends with a live check and a version bump, so each ships alone.
 - [X] T028 [US4] Add `root` to `plugins/board/hooks/work/tool.tsx`, writing the calling session's id to the local file's `root`; export the last built tree and a `pathOf(sessionId)` lookup from `plugins/board/hooks/work/view.tsx`; draw the breadcrumb in `plugins/board/hooks/views/session.tsx` above the goal, root mark first, cut from the left with `truncate-start`
 - [X] T029 [US4] In `plugins/board/hooks/work/view.tsx`, draw the root mark on the title line, and on the first draw in an attached session open its Item's ancestors and mark its own line; in `plugins/board/hooks/register.tsx`, open the pane on the work view at `session.start` when the session is attached
 - [X] T030 [US4] Write `plugins/board/skills/root/SKILL.md`: how a root session starts sessions for top-level Items and Responsibilities with a brief, reads the tree for status, messages Coordinators by the names the read gives rather than their workers, and adds an Item before starting a session for work the tree lacks
-- [ ] T031 [US4] Live check and ship: mark this session as root, start one child, jump to it from its session mark, confirm its breadcrumb and opened work view, then press the root mark to come back; bump the version, commit and push
+- [X] T031 [US4] Live check and ship: mark this session as root, start one child, jump to it from its session mark, confirm its breadcrumb and opened work view, then press the root mark to come back; bump the version, commit and push
 
 ---
 
@@ -212,5 +212,9 @@ the next story.
   message name in about 30 seconds, got its brief, and answered a message by that name. Only 5 of 26
   running sessions attached (SC-003 not met): most of the board's Items carry no aliases, Linear Items
   arrive with US2, and on-call, review and side-project sessions have no Item to sit under yet.
+- T031, checked 2026-10-27 on 0.5.0 with throwaway sessions: a root session started a child, the child
+  opened its pane on the work view down to its Item, marked "here", under a root mark. 23 of the 26
+  sessions running then attached with no hand link; the CRB architecture session's workspace had been
+  renamed `crb`, which no alias can match without tying with other CRB sessions.
 - The memory note on the work board (`~/.claude/projects/-Users-zamua/memory/work-board.md`) needs
   updating once US3 and US4 ship.

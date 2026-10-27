@@ -234,8 +234,7 @@ export function workHooks(on: On) {
     if (isRead) {
       await refreshLive($, w.spec, true)
       const { tree } = workTree(current)
-      const root = typeof current.root === 'string' ? current.root : undefined
-      return { result: tree ? treeText(tree, root) : 'The work board is empty.' }
+      return { result: tree ? treeText(tree) : 'The work board is empty.' }
     }
 
     return change($, w, current, input)

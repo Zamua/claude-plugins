@@ -91,8 +91,9 @@ export function workTree(file: unknown, live: Live = liveNow()): { tree?: Tree; 
   if (file === undefined) return {}
   if (!isVersion2(file)) return { error: 'This board is in the old format. Run /board work migrate to move it into the work model.' }
   const { items, links } = itemsAndLinks(file as LocalFile)
+  const root = (file as LocalFile).root
 
-  return { tree: buildTree(items, links, live.sessions, live.artifacts) }
+  return { tree: buildTree(items, links, live.sessions, live.artifacts, typeof root === 'string' ? root : undefined) }
 }
 
 export async function workRefresh($: EngineInterface, force = false) {

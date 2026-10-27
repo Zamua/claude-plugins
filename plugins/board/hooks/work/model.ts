@@ -127,6 +127,8 @@ export type Tree = {
   coordinated: Map<string, Session[]>
   coordinatorOf: Map<string, string>
   unplaced: { sessions: Session[]; artifacts: Artifact[] }
+  /** The root session's id, which sits above the tree rather than in it. */
+  root?: string
 }
 
 export const rank = (status: Status) => URGENCY.indexOf(status)
@@ -139,7 +141,13 @@ export const qualify = (id: string) => (id.includes(':') ? id : `file:${id}`)
 
 export const isSessionId = (id: string) => id.startsWith('session:')
 
-export function buildTree(items: Item[], links: Link[], sessions: Session[] = [], artifacts: Artifact[] = []): Tree {
+export function buildTree(
+  items: Item[],
+  links: Link[],
+  sessions: Session[] = [],
+  artifacts: Artifact[] = [],
+  root?: string,
+): Tree {
   const parentOf = new Map<string, string>()
   for (const item of items) if (item.parent) parentOf.set(item.id, item.parent)
   for (const link of links) if (!isSessionId(link.child)) parentOf.set(link.child, link.parent)
@@ -180,7 +188,7 @@ export function buildTree(items: Item[], links: Link[], sessions: Session[] = []
     }
   }
   for (const node of tops) setDepth(node, 0)
-  const placed = place(nodes, links, sessions, artifacts)
+  const placed = place(nodes, links, sessions, artifacts, root)
   for (const node of tops) rollUp(node)
   const ordered = [...tops].sort(byUrgency)
 
@@ -191,6 +199,7 @@ export function buildTree(items: Item[], links: Link[], sessions: Session[] = []
     warnings,
     cycles,
     ...placed,
+    ...(root && { root }),
   }
 }
 
@@ -220,7 +229,7 @@ function matchItem(nodes: Map<string, Node>, texts: string[]): Node | undefined 
 }
 
 /** Puts each Session and Artifact under its Item: a hand Link first, then an alias in its name. */
-function place(nodes: Map<string, Node>, links: Link[], sessions: Session[], artifacts: Artifact[]) {
+function place(nodes: Map<string, Node>, links: Link[], sessions: Session[], artifacts: Artifact[], root?: string) {
   const itemLink = new Map<string, string>()
   const coordinatorOf = new Map<string, string>()
   for (const link of links) {
@@ -239,7 +248,7 @@ function place(nodes: Map<string, Node>, links: Link[], sessions: Session[], art
     if (node) {
       node.sessions.push(session)
       sessionItem.set(session.id, node.item.id)
-    } else if (!coordinator || !byId.has(coordinator)) {
+    } else if ((!coordinator || !byId.has(coordinator)) && session.id !== root) {
       unplaced.sessions.push(session)
     }
   }
@@ -282,9 +291,10 @@ export function isWithin(tree: Tree, id: string, ancestor: string): boolean {
   return false
 }
 
-/** The tree as text, one line per Item, for the tool's read; `root` is the root session's id. */
-export function treeText(tree: Tree, root?: string): string {
+/** The tree as text, one line per Item, for the tool's read. */
+export function treeText(tree: Tree): string {
   const lines: string[] = []
+  const { root } = tree
   const rootSession = root ? tree.sessions.get(root) : undefined
   if (root) lines.push(rootSession ? `Root session: ${sessionText(tree, rootSession, '')[0]}` : `Root session: ${root}, not running`)
   const walk = (node: Node) => {
