@@ -68,7 +68,9 @@ test('every breadcrumb and work view starts with a root mark that brings the roo
   expect(await ui.find({ key: 'whead', text: /⌂\s*root.*Updated 5m ago/ })).toBeDefined()
   await ui.press({ key: 'wroot' })
   expect(w.runs).toContainEqual(['herdr', '--session', 'default', 'workspace', 'focus', 'w1'])
+  expect(await ui.find({ key: 'wunplaced' })).toBeUndefined()
   await ui.unmount()
+  expect(String((await $.tool.call({ tool: TOOL })).result)).not.toContain('Unplaced sessions')
 })
 
 test('a root that has ended draws dim, and pressing it says it is not running', async ($, on) => {
