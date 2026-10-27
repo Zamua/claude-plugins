@@ -260,6 +260,10 @@ function apply(current: PrBoard, input: Input): Applied {
   return { board: { ...current, prs }, added }
 }
 
+// Graphite's check stays in progress until the pull requests below it in its stack merge: an order to merge in, which
+// the stack drawing shows, not CI
+const NOT_CI = new Set(['Graphite / mergeability_check'])
+
 // A run not started yet is the newest of its check
 const startOf = (check: GqlCheck) =>
   check.startedAt ?? (check.status === 'COMPLETED' ? check.completedAt : undefined) ?? check.createdAt ?? '\uffff'
@@ -273,6 +277,7 @@ function ciOf(rollup: GqlPr['commits']['nodes'][number]['commit']['statusCheckRo
   const latest = new Map<string, GqlCheck>()
   for (const check of rollup.contexts.nodes) {
     const name = check.name ?? check.context ?? 'a check'
+    if (NOT_CI.has(name)) continue
     const seen = latest.get(name)
     if (!seen || startOf(check) >= startOf(seen)) latest.set(name, check)
   }

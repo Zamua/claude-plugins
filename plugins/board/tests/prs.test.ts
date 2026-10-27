@@ -235,6 +235,7 @@ test('CI goes by the latest run of each check, as GitHub lists them, not by a ru
     6011: pr({ isDraft: false, rollup: 'FAILURE', checks: [run('ktlint', 'CANCELLED', '2026-10-27T11:25:00Z'), run('ktlint', 'SUCCESS', '2026-10-27T11:29:00Z')] }),
     6012: pr({ isDraft: false, rollup: 'FAILURE', checks: [run('build', 'SUCCESS', '2026-10-27T11:00:00Z'), run('build', 'FAILURE', '2026-10-27T11:30:00Z')] }),
     6013: pr({ isDraft: false, rollup: 'FAILURE', checks: [run('build', 'FAILURE', '2026-10-27T11:00:00Z'), run('build', null, '2026-10-27T11:30:00Z')] }),
+    6014: pr({ isDraft: false, rollup: 'PENDING', checks: [run('build', 'SUCCESS', '2026-10-27T11:00:00Z'), run('Graphite / mergeability_check', null, '2026-10-27T10:00:00Z')] }),
   }
   engine(on, gh(prs), NOW)
   await start($)
@@ -242,7 +243,7 @@ test('CI goes by the latest run of each check, as GitHub lists them, not by a ru
 
   const ui = await open($, 'prs')
   const word = async (n: number) => (await ui.find({ key: `state-acme/api#${n}` }))?.text
-  expect(await Promise.all([6011, 6012, 6013].map(word))).toEqual(['review', 'CI fail', 'CI run'])
+  expect(await Promise.all([6011, 6012, 6013, 6014].map(word))).toEqual(['review', 'CI fail', 'CI run', 'review'])
   await ui.unmount()
 })
 
