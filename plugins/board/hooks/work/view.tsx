@@ -2,7 +2,7 @@ import type { Color, EngineInterface, RenderNode } from 'claude-code'
 
 import { ago, dueOf, fixed, link, openUrl, refreshJson, sourceLabel, stamp } from '../kit'
 import type { Els, View } from '../kit'
-import { selectView } from '../pane'
+import { paneWidth, selectView } from '../pane'
 import { buildTree, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
 import type { Artifact, Node, Period, Session, SessionState, Status, Tree } from './model'
 import { focusSession, liveNow, refreshLive } from './sessions'
@@ -209,7 +209,33 @@ function toggle($: EngineInterface, set: Set<string>, key: string) {
   }
 }
 
-type Ctx = { els: Els; now: number; tree: Tree; self?: Session }
+type Ctx = { els: Els; now: number; tree: Tree; self?: Session; columns: number }
+
+type Part = { text: string; color?: Color; dimColor?: boolean; bold?: boolean }
+
+/**
+ * `parts`, then `title` cut to fit, joined by single spaces into at most `room` cells. A Button cannot cut its own
+ * text at the pane's edge, so a whole row can be one only once it is cut to fit.
+ */
+function fitLine(parts: Part[], title: Part, room: number): Part[] {
+  const used = parts.reduce((n, part) => n + [...part.text].length + 1, 0)
+  const left = Math.max(1, room - used)
+  const chars = [...title.text]
+  const text = chars.length <= left ? title.text : `${chars.slice(0, left - 1).join('')}…`
+
+  return [...parts, { ...title, text }]
+}
+
+function spans(els: Els, parts: Part[]): RenderNode[] {
+  const { Text } = els
+
+  return parts.flatMap((part, at) => [
+    ...(at > 0 ? [' '] : []),
+    <Text color={part.color} dimColor={part.dimColor || undefined} bold={part.bold || undefined}>
+      {part.text}
+    </Text>,
+  ])
+}
 
 export function workView($: EngineInterface, w: WorkBoard): View {
   const treeNow = () => workTree(w.state.value).tree
@@ -248,7 +274,8 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         openPath(tree, self.item)
         placedFor = sessionId
       }
-      const ctx: Ctx = { els, now, tree, ...(self.session && { self: self.session }) }
+      // One cell spare, so a row that fits exactly does not reach the pane's edge
+      const ctx: Ctx = { els, now, tree, columns: paneWidth() - 1, ...(self.session && { self: self.session }) }
       const at = Date.parse((w.state.value as LocalFile).updated_at ?? '')
       const fresh = readError ?? (Number.isNaN(at) ? '' : `Updated ${ago(now - at)}`)
       const notes = [...w.warnings, ...tree.warnings, ...liveNow().errors]
@@ -330,11 +357,12 @@ export function workView($: EngineInterface, w: WorkBoard): View {
     return out
   }
 
+  /** One line per Item, pressed anywhere to open or fold it; its sessions' mark sits apart at the right edge. */
   function row(ctx: Ctx, node: Node, isOpen: boolean) {
     const { Box, Text, Button } = ctx.els
     const { item } = node
     const tag = TAGS[node.shown]
-    const quiet = node.shown === 'done' || undefined
+    const quiet = node.shown === 'done'
     const hasMore =
       node.children.length > 0 ||
       node.sessions.length > 0 ||
@@ -344,36 +372,29 @@ export function workView($: EngineInterface, w: WorkBoard): View {
     const glyph = !hasMore ? '·' : isOpen ? '▾' : node.children.length > 0 ? '▸' : '›'
     const due = item.target ? dueOf(item.target, item.targetLabel, ctx.now) : undefined
     const showKind = node.depth === 0 || node.children.length > 0
+    const hasMark = node.sessions.length > 0
+    const parts: Part[] = [
+      { text: glyph, dimColor: true },
+      { text: tag.tag.padEnd(TAG_WIDTH), color: tag.color, dimColor: quiet },
+      ...(node.needsCount > 0 ? [{ text: String(node.needsCount), color: 'warning' as const, bold: true }] : []),
+      ...(due ? [due.color ? { text: due.text, color: due.color } : { text: due.text, dimColor: true }] : []),
+      ...(showKind ? [{ text: item.kind, dimColor: true }] : []),
+      ...(item.ref !== undefined ? [{ text: `#${item.ref}`, dimColor: true }] : []),
+    ]
+    const room = ctx.columns - node.depth * 2 - (hasMark ? 2 : 0)
+    const content = spans(ctx.els, fitLine(parts, { text: item.title, dimColor: quiet }, room))
 
     return (
-      <Box key={`wrow-${item.id}`} flexDirection="row" columnGap={1} paddingLeft={node.depth * 2}>
+      <Box key={`wrow-${item.id}`} flexDirection="row" paddingLeft={node.depth * 2}>
         {hasMore ? (
-          <Button key={`wtoggle-${item.id}`} label={glyph} plain dimColor onPress={toggle($, opened, item.id)} />
+          <Button key={`wtoggle-${item.id}`} plain onPress={toggle($, opened, item.id)}>
+            {content}
+          </Button>
         ) : (
-          fixed(ctx.els, `wdot-${item.id}`, <Text dimColor>{glyph}</Text>)
+          <Text>{content}</Text>
         )}
-        {fixed(
-          ctx.els,
-          `wtag-${item.id}`,
-          <Text color={tag.color} dimColor={quiet}>
-            {tag.tag.padEnd(TAG_WIDTH)}
-          </Text>,
-        )}
-        {node.needsCount > 0 &&
-          fixed(
-            ctx.els,
-            `wneeds-${item.id}`,
-            <Text color="warning" bold>
-              {String(node.needsCount)}
-            </Text>,
-          )}
-        {due && fixed(ctx.els, `wdue-${item.id}`, <Text color={due.color} dimColor={!due.color || undefined}>{due.text}</Text>)}
-        {showKind && fixed(ctx.els, `wkind-${item.id}`, <Text dimColor>{item.kind}</Text>)}
-        {item.ref !== undefined && fixed(ctx.els, `wref-${item.id}`, <Text dimColor>{`#${item.ref}`}</Text>)}
-        {node.sessions.length > 0 && sessionMark(ctx, item.id, node.sessions)}
-        <Text dimColor={quiet} wrap="truncate-end">
-          {item.title}
-        </Text>
+        {hasMark && <Box key={`wgap-${item.id}`} flexGrow={1} />}
+        {hasMark && sessionMark(ctx, item.id, node.sessions)}
       </Box>
     )
   }
@@ -399,14 +420,22 @@ export function workView($: EngineInterface, w: WorkBoard): View {
   }
 
   /**
-   * A Session's line, and once pressed open, the Sessions it coordinates beneath it. A Session can be drawn under its
-   * Item and under its Coordinator at once, so its keys carry `where` it is drawn.
+   * A Session's line, pressed anywhere to bring the session to the front, and once its toggle is pressed open, the
+   * Sessions it coordinates beneath it. A Session can be drawn under its Item and under its Coordinator at once, so its
+   * keys carry `where` it is drawn.
    */
   function sessionLines(ctx: Ctx, session: Session, depth: number, where: string, seen: Set<string>): RenderNode[] {
     const { Box, Button, Text } = ctx.els
     const children = (ctx.tree.coordinated.get(session.id) ?? []).filter(child => !seen.has(child.id))
     const at = `${where}-${session.id}`
     const isOpen = opened.has(at)
+    const parts: Part[] = [
+      { text: '●', color: SESSION_COLORS[session.state] },
+      ...(ctx.self?.id === session.id ? [{ text: 'here', color: 'claude' as const, bold: true }] : []),
+      { text: session.state.padEnd(STATE_WIDTH), color: SESSION_COLORS[session.state], dimColor: session.state === 'idle' },
+    ]
+    const title = session.summary ? `${session.label}: ${session.summary.split('\n')[0]}` : session.label
+    const room = ctx.columns - depth * 2 - 2
     const out: RenderNode[] = [
       <Box key={`wsess-${at}`} flexDirection="row" columnGap={1} paddingLeft={depth * 2}>
         {children.length > 0 ? (
@@ -414,25 +443,9 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         ) : (
           fixed(ctx.els, `wsdot-${at}`, <Text dimColor>·</Text>)
         )}
-        {sessionMark(ctx, at, [session])}
-        {ctx.self?.id === session.id &&
-          fixed(
-            ctx.els,
-            `where-${at}`,
-            <Text color="claude" bold>
-              here
-            </Text>,
-          )}
-        {fixed(
-          ctx.els,
-          `wstate-${at}`,
-          <Text color={SESSION_COLORS[session.state]} dimColor={session.state === 'idle' || undefined}>
-            {session.state.padEnd(STATE_WIDTH)}
-          </Text>,
-        )}
-        <Text dimColor wrap="truncate-end">
-          {session.summary ? `${session.label}: ${session.summary.split('\n')[0]}` : session.label}
-        </Text>
+        <Button key={`wsfocus-${at}`} plain onPress={() => focus(session)}>
+          {spans(ctx.els, fitLine(parts, { text: title, dimColor: true }, room))}
+        </Button>
       </Box>,
     ]
     if (!isOpen) return out
