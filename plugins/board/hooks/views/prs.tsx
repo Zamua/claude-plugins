@@ -905,14 +905,15 @@ function filters($: EngineInterface, els: Els, prs: readonly TrackedPr[]): { row
   const values = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
   const lines = values.map(([value, count]) => `${value || 'unknown'} ${count}`)
   const inner = Math.max(5, ...lines.map(line => [...line].length)) + 2
-  // A box is drawn as `[ label ]`, four cells wider than its label
+  // A box is drawn as `[ label ]`, four cells wider than its label. The popup's border sits one cell left of the box's
+  // bracket, over the list's own border.
   const before = fields.slice(0, fields.indexOf(field)).reduce((n, one) => n + [...labelOf(one)].length + 4 + FILTER_GAP, 0)
   const popup = (
     <Box
       key="pfilter-popup"
       position="absolute"
       top={FILTER_ROW + 1}
-      left={1 + before}
+      left={before}
       flexDirection="column"
       borderStyle="round"
       borderColor="inactive"
