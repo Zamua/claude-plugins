@@ -48,9 +48,11 @@ const TAG_WIDTH = Math.max(...Object.values(STATUSES).map(look => look.tag.lengt
 // A folded section still shows these, since they are what the person has to act on
 const ALWAYS_SHOWN = new Set(['gap', 'blocked'])
 const POLL_MS = 15_000
-// The fewest cells a cut title or note is still worth drawing in
+// The fewest cells a cut title or note is still worth drawing in, and the most an owner or an env value takes
 const MIN_TITLE = 16
 const MIN_TAIL = 8
+const MAX_OWNER = 14
+const MAX_ENV = 7
 
 // What the person pressed open, for the session `pressedFor` names
 const opened = new Set<string>()
@@ -83,29 +85,54 @@ function toggle($: EngineInterface, key: string) {
 }
 
 /**
- * The tag, the title, the owner, then the note or what it waits on, in at most `room` cells. The title is cut only
- * where it leaves no room for the owner and a readable part of the note, and the note shows only where that is left.
+ * The tag, the title, the owner, then the note, in at most `room` cells. The title comes first, cut only to leave a
+ * readable part of the note; the owner shows where it fits, and the note takes what is left. What an item waits on
+ * stands in for its note and comes before the owner, since it says why the item cannot move.
  */
 function lineOf(room: number, look: Look, item: RolloutItem, waitsOn: string | undefined): Part[] {
   const quiet = item.status === 'done'
   const parts: Part[] = [{ text: look.tag.padEnd(TAG_WIDTH), color: look.color, bold: look.bold, dimColor: look.dimColor }]
   let left = room - TAG_WIDTH - 1
   const tail = waitsOn ? `after ${waitsOn}` : item.note
-  const after = (item.owner ? cells(item.owner) + 1 : 0) + (tail ? MIN_TAIL + 1 : 0)
-  const title = cut(item.title, Math.max(MIN_TITLE, left - after))
+  const title = cut(item.title, Math.max(MIN_TITLE, left - (tail ? MIN_TAIL + 1 : 0)))
   parts.push({ text: title, dimColor: quiet })
   left -= cells(title) + 1
-  if (item.owner && cells(item.owner) + 1 <= left) {
-    parts.push({ text: item.owner, dimColor: true })
-    left -= cells(item.owner) + 1
+  const owner = item.owner ? cut(item.owner, MAX_OWNER) : ''
+  const tailPart = (room: number): Part =>
+    waitsOn ? { text: cut(tail ?? '', room), color: 'permission' } : { text: cut(tail ?? '', room), dimColor: true }
+  if (waitsOn && left >= MIN_TAIL) {
+    const shown = tailPart(left - (owner ? Math.min(cells(owner) + 1, left - MIN_TAIL) : 0))
+    parts.push(shown)
+    left -= cells(shown.text) + 1
+    if (owner && cells(owner) <= left) parts.push({ text: owner, dimColor: true })
+
+    return parts
   }
-  if (tail && left >= MIN_TAIL) parts.push({ text: cut(tail, left), dimColor: true, ...(waitsOn && { color: 'permission' as const }) })
+  if (owner && cells(owner) + 1 <= left) {
+    parts.push({ text: owner, dimColor: true })
+    left -= cells(owner) + 1
+  }
+  if (tail && left >= MIN_TAIL) parts.push(tailPart(left))
 
   return parts
 }
 
-const envColor = (value: string): Color | undefined =>
-  value === 'on' || value === 'set' ? 'success' : value.endsWith('%') ? 'warning' : undefined
+const ENV_COLORS: Record<string, Color> = {
+  on: 'success',
+  set: 'success',
+  done: 'success',
+  allowed: 'success',
+  gap: 'warning',
+  missing: 'warning',
+  unknown: 'warning',
+  blocked: 'error',
+  suspended: 'error',
+}
+const ENV_QUIET = new Set(['off', 'n/a', 'todo', 'pending'])
+
+/** An env value's look: green once in place, yellow where unknown or missing, red where stopped, dim where not yet. */
+const envLook = (value: string): { color?: Color; dimColor?: boolean } =>
+  ENV_COLORS[value] ? { color: ENV_COLORS[value] } : value.endsWith('%') ? { color: 'warning' } : ENV_QUIET.has(value) ? { dimColor: true } : {}
 
 export function rolloutView($: EngineInterface, board: RolloutBoard): View {
   const { spec } = board
@@ -147,7 +174,7 @@ export function rolloutView($: EngineInterface, board: RolloutBoard): View {
       const all = sections.flatMap(s => s.items ?? [])
       const byId = new Map(all.map(item => [item.id, item]))
       const values = all.flatMap(item => envs.map(env => item.env?.[env] ?? ''))
-      const width = Math.max(0, ...envs.map(cells), ...values.map(cells))
+      const width = Math.min(MAX_ENV, Math.max(0, ...envs.map(cells), ...values.map(cells)))
       const ctx = { els, envs, width, byId, columns: paneWidth() - 1 }
 
       return (
@@ -171,11 +198,11 @@ export function rolloutView($: EngineInterface, board: RolloutBoard): View {
     const { Box, Text } = ctx.els
 
     return (
-      <Box key={`renv-${key}`} flexDirection="row" columnGap={1} flexShrink={0}>
+      <Box key={`renv-${key}`} flexDirection="row" columnGap={1} flexShrink={0} marginLeft={1}>
         {texts.map((one, i) => (
           <Box key={`renv-${key}-${i}`} width={ctx.width}>
             <Text color={one.color} dimColor={one.dimColor || undefined}>
-              {one.text}
+              {cut(one.text, ctx.width)}
             </Text>
           </Box>
         ))}
@@ -239,8 +266,7 @@ export function rolloutView($: EngineInterface, board: RolloutBoard): View {
             item.id,
             ctx.envs.map(env => {
               const value = item.env?.[env] ?? ''
-              const color = envColor(value)
-              return { text: value, ...(color ? { color } : { dimColor: true }) }
+              return { text: value, ...envLook(value) }
             }),
           )}
       </Box>,

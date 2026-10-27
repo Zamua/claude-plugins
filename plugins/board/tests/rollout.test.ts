@@ -35,11 +35,11 @@ test('each section folds to its header and counts, showing only its gaps and blo
   const ui = await open($, 'rollout')
   expect(await ui.find({ key: 'rsec-gates', text: '▸ Gates, in flip order 1 gap · 1 block · 1 todo · 1 done' })).toBeDefined()
   expect(await ui.find({ key: 'ritem-g-gap', text: /^gap\s+Who flips prod at 100%\? Decide wit…$/ })).toBeDefined()
-  expect(await ui.find({ key: 'ritem-g-routing', text: /^block release\.applicatio… furkan Needs t…$/ })).toBeDefined()
+  expect(await ui.find({ key: 'ritem-g-routing', text: 'block release.application_servi… furkan' })).toBeDefined()
   expect(await ui.find({ key: 'ritem-g-crb' })).toBeUndefined()
 
   await ui.press({ key: 'rsec-gates' })
-  expect(await ui.find({ key: 'ritem-g-crb', text: /^todo\s+release\.loan_servic… Zamua after r…$/ })).toBeDefined()
+  expect(await ui.find({ key: 'ritem-g-crb', text: /^todo\s+release\.loan_service\.crb_… after r…$/ })).toBeDefined()
   expect(await ui.find({ key: 'rrow-g-crb', text: /on\s*off$/ })).toBeDefined()
   expect(await ui.find({ key: 'renvs-gates', text: /staging\s*prod$/ })).toBeDefined()
 
