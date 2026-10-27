@@ -35,21 +35,45 @@ export type Item = {
   workspace?: string
 }
 
-export type Session = {
-  id: string
+export const SESSION_STATES = ['waiting', 'done', 'working', 'idle'] as const
+/** How a Session stands, most in need of a look first; `done` is a finished turn nobody has looked at. */
+export type SessionState = (typeof SESSION_STATES)[number]
+
+/** A Session as a Host lists it, before the core places it. */
+export type HostSession = {
+  /** The Host's own locator, opaque to the core. */
+  address: string
   label: string
-  workspace: string
-  state: string
-  parent?: string
-  activeMs: number
+  state: SessionState
+  harness?: string
+  /** The Harness's own id for the agent there now. */
+  harnessId?: string
 }
 
+/** What a Host needs to start a Session. `near` is the starting Session's address, so it can start beside it. */
+export type HostStart = { label: string; cwd: string; harness: string; args: string[]; brief: string; near?: string }
+
+export type Session = HostSession & {
+  /** `session:<host>:<address>`: the place it runs, which outlives the agent's own id. */
+  id: string
+  host: string
+  messageName?: string
+  goal?: string
+  summary?: string
+  lastActive?: number
+}
+
+/** Something an Item produces, drawn under it with its own status. */
 export type Artifact = {
   id: string
   title: string
   url: string
   branch: string
-  parent?: string
+  /** A short handle drawn before the title, such as a pull request number. */
+  tag: string
+  status: Status
+  /** Why it needs the person, when it does. */
+  note?: string
 }
 
 /** A parent set by hand, which wins over the parent a Source gives. */
@@ -68,6 +92,8 @@ export type Node = {
   item: Item
   parent?: Node
   children: Node[]
+  sessions: Session[]
+  artifacts: Artifact[]
   depth: number
   /** The most urgent status in the subtree, which is what its line shows. */
   shown: Status
@@ -83,6 +109,13 @@ export type Tree = {
   warnings: string[]
   /** Ids whose parent was dropped to break a cycle. */
   cycles: string[]
+  sessions: Map<string, Session>
+  /** Each Session's Item, by Session id. */
+  sessionItem: Map<string, string>
+  /** The Sessions each Coordinator started or tracks, by Coordinator id. */
+  coordinated: Map<string, Session[]>
+  coordinatorOf: Map<string, string>
+  unplaced: { sessions: Session[]; artifacts: Artifact[] }
 }
 
 export const rank = (status: Status) => URGENCY.indexOf(status)
@@ -93,10 +126,12 @@ const mostUrgent = (statuses: Status[]): Status =>
 /** A local id has no prefix; every other id names its Source before a colon. */
 export const qualify = (id: string) => (id.includes(':') ? id : `file:${id}`)
 
-export function buildTree(items: Item[], links: Link[]): Tree {
+export const isSessionId = (id: string) => id.startsWith('session:')
+
+export function buildTree(items: Item[], links: Link[], sessions: Session[] = [], artifacts: Artifact[] = []): Tree {
   const parentOf = new Map<string, string>()
   for (const item of items) if (item.parent) parentOf.set(item.id, item.parent)
-  for (const link of links) parentOf.set(link.child, link.parent)
+  for (const link of links) if (!isSessionId(link.child)) parentOf.set(link.child, link.parent)
   const known = new Map(items.map(item => [item.id, item]))
   const warnings: string[] = []
   const cycles: string[] = []
@@ -117,7 +152,9 @@ export function buildTree(items: Item[], links: Link[]): Tree {
   }
 
   const nodes = new Map<string, Node>()
-  for (const item of items) nodes.set(item.id, { item, children: [], depth: 0, shown: item.status, needsCount: 0 })
+  for (const item of items) {
+    nodes.set(item.id, { item, children: [], sessions: [], artifacts: [], depth: 0, shown: item.status, needsCount: 0 })
+  }
   const tops: Node[] = []
   for (const item of items) {
     const node = nodes.get(item.id) as Node
@@ -131,7 +168,9 @@ export function buildTree(items: Item[], links: Link[]): Tree {
       tops.push(node)
     }
   }
-  for (const node of tops) rollUp(node, 0)
+  for (const node of tops) setDepth(node, 0)
+  const placed = place(nodes, links, sessions, artifacts)
+  for (const node of tops) rollUp(node)
   const ordered = [...tops].sort(byUrgency)
 
   return {
@@ -140,21 +179,85 @@ export function buildTree(items: Item[], links: Link[]): Tree {
     byId: nodes,
     warnings,
     cycles,
+    ...placed,
   }
+}
+
+function setDepth(node: Node, depth: number) {
+  node.depth = depth
+  for (const child of node.children) setDepth(child, depth + 1)
+}
+
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** True when `alias` appears in `text` as a whole token, bounded by anything not a letter or digit. */
+export const carries = (text: string, alias: string) =>
+  alias !== '' && new RegExp(`(^|[^a-z0-9])${escaped(alias.toLowerCase())}($|[^a-z0-9])`).test(text.toLowerCase())
+
+/**
+ * The Item whose aliases appear in any of `texts`. An unfinished Item beats a done one, and then the deepest wins;
+ * two equally deep leave it unplaced.
+ */
+function matchItem(nodes: Map<string, Node>, texts: string[]): Node | undefined {
+  const hits = [...nodes.values()].filter(n => n.item.aliases.some(alias => texts.some(text => carries(text, alias))))
+  const open = hits.filter(n => n.item.status !== 'done')
+  const pool = open.length > 0 ? open : hits
+  const deepest = Math.max(-1, ...pool.map(n => n.depth))
+  const best = pool.filter(n => n.depth === deepest)
+
+  return best.length === 1 ? best[0] : undefined
+}
+
+/** Puts each Session and Artifact under its Item: a hand Link first, then an alias in its name. */
+function place(nodes: Map<string, Node>, links: Link[], sessions: Session[], artifacts: Artifact[]) {
+  const itemLink = new Map<string, string>()
+  const coordinatorOf = new Map<string, string>()
+  for (const link of links) {
+    if (isSessionId(link.parent)) coordinatorOf.set(link.child, link.parent)
+    else itemLink.set(link.child, link.parent)
+  }
+  const byId = new Map(sessions.map(one => [one.id, one]))
+  const sessionItem = new Map<string, string>()
+  const coordinated = new Map<string, Session[]>()
+  const unplaced = { sessions: [] as Session[], artifacts: [] as Artifact[] }
+  for (const session of sessions) {
+    const linked = itemLink.get(session.id)
+    const node = (linked ? nodes.get(linked) : undefined) ?? matchItem(nodes, [session.label])
+    const coordinator = coordinatorOf.get(session.id)
+    if (coordinator && byId.has(coordinator)) coordinated.set(coordinator, [...(coordinated.get(coordinator) ?? []), session])
+    if (node) {
+      node.sessions.push(session)
+      sessionItem.set(session.id, node.item.id)
+    } else if (!coordinator || !byId.has(coordinator)) {
+      unplaced.sessions.push(session)
+    }
+  }
+  for (const artifact of artifacts) {
+    const linked = itemLink.get(artifact.id)
+    const node = (linked ? nodes.get(linked) : undefined) ?? matchItem(nodes, [artifact.title, artifact.branch])
+    if (node) node.artifacts.push(artifact)
+    else if (artifact.status !== 'done') unplaced.artifacts.push(artifact)
+  }
+
+  return { sessions: byId, sessionItem, coordinated, coordinatorOf, unplaced }
 }
 
 /**
  * A leaf shows its own status. A parent shows its most urgent child, and its own status only when that is `needs`:
- * a project's own status says little once it has tasks, but a goal waiting on the person still does.
+ * a project's own status says little once it has tasks, but a goal waiting on the person still does. An Artifact
+ * only adds urgency: one that needs the person counts like an Item that does, and a merged one leaves its Item as is.
  */
-function rollUp(node: Node, depth: number) {
-  node.depth = depth
-  for (const child of node.children) rollUp(child, depth + 1)
+function rollUp(node: Node) {
+  for (const child of node.children) rollUp(child)
   node.children.sort(byUrgency)
-  if (node.children.length === 0) return
-  const own: Status[] = node.item.status === 'needs' ? ['needs'] : []
-  node.shown = mostUrgent([...own, ...node.children.map(c => c.shown)])
-  node.needsCount = node.children.reduce((sum, c) => sum + c.needsCount + (c.item.status === 'needs' ? 1 : 0), 0)
+  const artifactNeeds = node.artifacts.filter(a => a.status === 'needs').length
+  if (node.children.length > 0) {
+    const own: Status[] = node.item.status === 'needs' ? ['needs'] : []
+    node.shown = mostUrgent([...own, ...node.children.map(c => c.shown)])
+  }
+  if (artifactNeeds > 0) node.shown = 'needs'
+  node.needsCount =
+    artifactNeeds + node.children.reduce((sum, c) => sum + c.needsCount + (c.item.status === 'needs' ? 1 : 0), 0)
 }
 
 const byUrgency = (a: Node, b: Node) => rank(a.shown) - rank(b.shown)
@@ -174,16 +277,36 @@ export function treeText(tree: Tree): string {
   const walk = (node: Node) => {
     const needs = node.needsCount > 0 ? `, ${node.needsCount} need you` : ''
     const ref = node.item.ref !== undefined ? ` #${node.item.ref}` : ''
-    lines.push(`${'  '.repeat(node.depth)}${node.item.id}${ref} [${node.item.kind}, ${node.shown}${needs}] ${node.item.title}`)
+    const pad = '  '.repeat(node.depth)
+    lines.push(`${pad}${node.item.id}${ref} [${node.item.kind}, ${node.shown}${needs}] ${node.item.title}`)
+    for (const session of node.sessions) lines.push(...sessionText(tree, session, `${pad}  `))
+    for (const artifact of node.artifacts) lines.push(`${pad}  ${artifact.id} [${artifact.status}] ${artifact.title}`)
     for (const child of node.children) walk(child)
   }
   if (tree.outcomes.length > 0) lines.push('Outcomes:')
   for (const node of tree.outcomes) walk(node)
   if (tree.responsibilities.length > 0) lines.push('Responsibilities:')
   for (const node of tree.responsibilities) walk(node)
+  if (tree.unplaced.sessions.length > 0) lines.push('Unplaced sessions:')
+  for (const session of tree.unplaced.sessions) lines.push(...sessionText(tree, session, ''))
   for (const warning of tree.warnings) lines.push(`warning: ${warning}`)
 
   return lines.length > 0 ? lines.join('\n') : 'The work board is empty.'
+}
+
+/** A Session's line, its board's goal and summary, then the Sessions it coordinates that sit under no Item. */
+function sessionText(tree: Tree, session: Session, pad: string): string[] {
+  const message = session.messageName ? `, message ${session.messageName}` : ''
+  const coordinator = tree.coordinatorOf.get(session.id)
+  const by = coordinator && tree.sessions.has(coordinator) ? `, coordinated by ${coordinator}` : ''
+  const out = [`${pad}${session.id} [${session.state}] ${session.label}${message}${by}`]
+  if (session.goal) out.push(`${pad}  goal: ${session.goal}`)
+  if (session.summary) out.push(`${pad}  summary: ${session.summary.replace(/\s*\n\s*/g, ' ')}`)
+  for (const child of tree.coordinated.get(session.id) ?? []) {
+    if (!tree.sessionItem.has(child.id)) out.push(...sessionText(tree, child, `${pad}  `))
+  }
+
+  return out
 }
 
 /** Every Item whose own status is `needs`, for the switcher's count. */

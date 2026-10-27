@@ -36,14 +36,14 @@ Sessions come from two more ports, so the core never names a multiplexer or an a
 
 ```ts
 // Host: where Sessions run. One module per multiplexer, e.g. hosts/herdr.ts.
-listSessions($, config): Promise<{ sessions: HostSession[]; error?: string }>
-focusSession($, address: string): Promise<string | undefined>   // the reason when it could not
-startSession($, config, start: HostStart): Promise<{ address?: string; error?: string }>
+listHerdr($): Promise<{ sessions: HostSession[]; error?: string }>
+focusHerdr($, address: string): Promise<string | undefined>   // the reason when it could not
+startHerdr($, start: HostStart): Promise<{ address?: string; error?: string }>
 
 type HostSession = {
   address: string            // opaque to the core
   label: string
-  state: 'working' | 'waiting' | 'idle' | 'done'
+  state: 'waiting' | 'done' | 'working' | 'idle'
   harness?: string           // e.g. 'claude'
   harnessId?: string         // the Harness's own session id, when the Host knows it
 }
@@ -52,14 +52,18 @@ type HostStart = {
   label: string
   cwd: string
   harness: string            // the Harness to run, e.g. 'claude'
-  command: string[]          // from the Harness's launchCommand
+  args: string[]             // from the Harness's config
   brief: string              // sent as the first prompt once the agent is up
+  near?: string              // the starting Session's address, so the new one starts beside it
 }
 
 // Harness: the agent inside a Session. One module per runtime, e.g. harnesses/claude.ts.
-sessionInfo($, harnessId: string): Promise<{ activeMs: number; lastActive?: string; messageName?: string }>
-launchCommand(config): string[]   // the command and arguments a Host runs to start this Harness
+claudeInfo($, harnessIds: string[]): Promise<Map<string, { messageName?: string; lastActive?: number }>>
+claudeArgs(config): string[]
 ```
+
+`hooks/work/sessions.ts` dispatches by the Host and Harness names in config, and adds each Session's
+goal and summary from its session board.
 
 The `sources.herdr` config key becomes `hosts: { herdr: {} }`; `harnesses: { claude: {} }` names the
 Harness. Pressing a session mark calls `focusSession` of the Session's own Host. The work tool's

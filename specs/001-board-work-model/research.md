@@ -51,8 +51,9 @@ the phase that needs them.
 - **Alternatives**: calling herdr from the core and the views (rejected: FR-022; a tmux or Zellij
   user would need core changes).
 - **Rationale**: local and cheap; refreshed every 30 s only while the work view is shown.
-- **To verify**: whether any herdr status means "waiting on the person". Until then a session shows
-  herdr's own status word.
+- **Checked**: herdr's agent statuses are idle, working, blocked, done and unknown. `blocked` maps to
+  waiting, `done` (a finished turn nobody has looked at) to done, and unknown to idle. A pane gives no
+  workspace label, so `workspace list` runs beside `pane list` for each herdr session.
 
 ## R5. Time spent: the Claude Code Harness
 
@@ -60,8 +61,9 @@ the phase that needs them.
   session's active time is read from its transcript,
   `~/.claude/projects/<cwd>/<session id>.jsonl`: the sum of the spans from each person's prompt to
   the last entry before the next prompt, with any gap over 5 minutes cut out. Results are cached
-  per transcript by mtime. The message name is the `name` field of the record in
-  `~/.claude/sessions/<pid>.json` whose `sessionId` matches (checked: both fields are there).
+  per transcript by mtime. The message name and last activity are the `name` and `updatedAt` fields of
+  the record in `~/.claude/sessions/<pid>.json` whose `sessionId` matches (checked: the fields are
+  there, and no two records share an id).
 - **Rationale**: herdr reports no durations (checked: no time field on a pane); the session record
   in `~/.claude/sessions/<pid>.json` has only `startedAt` and `statusUpdatedAt` for time (checked).
 - **Alternatives**: wall time since start (rejected: counts idle days).

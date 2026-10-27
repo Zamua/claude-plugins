@@ -68,23 +68,6 @@ export async function openUrl($: EngineInterface, url: string): Promise<string |
   }
 }
 
-type HerdrList = { result: { workspaces: { label: string; workspace_id: string }[] } }
-
-/** Raises the herdr workspace a label or id names; the text says why when it could not. */
-export async function focusWorkspace($: EngineInterface, label: string): Promise<string | undefined> {
-  try {
-    const listed = await $.process.run(['herdr', 'workspace', 'list'])
-    const workspaces = (JSON.parse(listed.stdout) as HerdrList).result.workspaces
-    const match = workspaces.find(w => w.label === label || w.workspace_id === label)
-    if (!match) return `No herdr workspace named ${label}.`
-    const focused = await $.process.run(['herdr', 'workspace', 'focus', match.workspace_id])
-
-    return focused.exitCode === 0 ? undefined : `herdr could not open ${label}.`
-  } catch (err) {
-    return `herdr failed: ${messageOf(err)}`
-  }
-}
-
 const LINK_LABELS: [string, string][] = [
   ['slack.com', 'Slack'],
   ['linear.app', 'Linear'],

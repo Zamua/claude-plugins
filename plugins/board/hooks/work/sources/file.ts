@@ -74,7 +74,10 @@ export function toItem(local: LocalItem): Item {
     status: asStatus(local.status),
     origin: asOrigin(local.origin),
     parent: local.parent ? qualify(local.parent) : undefined,
-    aliases: Array.isArray(local.aliases) ? local.aliases.filter(a => typeof a === 'string') : [],
+    aliases: [
+      ...(Array.isArray(local.aliases) ? local.aliases.filter(a => typeof a === 'string') : []),
+      ...(typeof local.workspace === 'string' ? [local.workspace] : []),
+    ],
     target: shape === 'outcome' && typeof local.target === 'string' ? local.target : undefined,
     targetLabel: typeof local.target_label === 'string' ? local.target_label : undefined,
     started: local.started,

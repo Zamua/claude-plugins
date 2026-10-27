@@ -5,7 +5,7 @@ import type { SessionBoard, SessionItem, SessionSection } from '../../types'
 import { fixed } from '../kit'
 import type { Els, View } from '../kit'
 import { showView } from '../pane'
-import { legacyValue, loadBoard, saveBoard } from '../store'
+import { legacyValue, loadBoard, saveBoard, storedBoard } from '../store'
 
 export const SESSION_TOOL = 'mcp__board__session'
 
@@ -106,6 +106,10 @@ const emptyBoard = (sessionId: string): SessionBoard => ({
 const SHAPE = 'session-1'
 const board = atom({ plugin: 'board', key: 'session' } as const, emptyBoard(''), { shape: SHAPE })
 const PREFIX = 'session'
+
+/** The board another session saved, from the store as `storedValues` read it. */
+export const storedSessionBoard = (held: Record<string, unknown>, sessionId: string) =>
+  storedBoard<SessionBoard>(held, PREFIX, SHAPE, sessionId)
 
 // session.start fires once per process, not after /clear or /resume, so every entry point re-checks the session
 async function syncBoard($: EngineInterface) {

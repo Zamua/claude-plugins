@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { engine, HOME, open, start } from './engine'
-import { TREE, withTree } from './work-fixtures'
+import { herdrHost, sessionBoard, sessionRecord, storeFile, TREE, withLive, withTree } from './work-fixtures'
 
 const NOW = Date.parse('2026-10-27T14:00:00Z')
 const TOOL = 'mcp__board__work'
@@ -72,4 +72,86 @@ test('a change that names an unknown Item, edits another source, loops, or orpha
   await $.tool.call({ tool: TOOL, remove: ['scope'] })
   expect(fileOf(w.files).items.map(i => i.id)).not.toContain('scope')
   expect(fileOf(w.files).items).toHaveLength(TREE.items.length - 1)
+})
+
+// The session the tests run as, `s1`, sits in the herdr pane w4:p1
+const SELF = { id: 'w4:p1', label: 'coordinator', harnessId: 's1' }
+const SELF_ID = 'session:herdr:default/w4:p1'
+const NEW_ID = 'session:herdr:default/w9:p1'
+
+test('start opens a session for an Item through herdr, briefed and linked under it with this session coordinating', async ($, on) => {
+  const created = { id: 'w9:p1', label: 'scope-the-split', harnessId: 'h-new' }
+  const w = withLive(TREE, herdrHost([SELF], created), sessionRecord(9, 'h-new', 'zamua-9', NOW))
+  engine(on, w, NOW)
+  await start($)
+
+  const started = await $.tool.call({ tool: TOOL, start: [{ item: 'scope', brief: 'Split the scope doc in two.' }] })
+  expect(started.result).toBe(`Work updated. Started ${NEW_ID} (scope-the-split, message zamua-9) for file:scope.`)
+  expect(w.runs).toContainEqual(['herdr', '--session', 'default', 'workspace', 'create', '--cwd', HOME, '--label', 'scope-the-split', '--no-focus'])
+  expect(w.runs).toContainEqual([
+    'herdr', '--session', 'default', 'agent', 'start', 'scope-the-split', '--kind', 'claude', '--pane', 'w9:p1', '--timeout', '60000', '--', '--model', 'opus',
+  ])
+  expect(w.runs).toContainEqual(['herdr', '--session', 'default', 'agent', 'prompt', 'scope-the-split', 'Split the scope doc in two.'])
+  expect(fileOf(w.files).links).toEqual([
+    { child: NEW_ID, parent: 'file:scope', at: '2026-10-27T14:00:00.000Z' },
+    { child: NEW_ID, parent: SELF_ID, at: '2026-10-27T14:00:00.000Z' },
+  ])
+
+  const ui = await open($, 'work')
+  await ui.press({ key: 'wtoggle-file:pay' })
+  expect(await ui.find({ key: 'wmark-file:scope' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a second start for an Item with a running session is refused, naming it, unless asked again', async ($, on) => {
+  const running = { id: 'w9:p1', label: 'scope-the-split', harnessId: 'h-new' }
+  const links = [{ child: NEW_ID, parent: 'file:scope', at: '2026-10-27T13:00:00Z' }]
+  const again = { id: 'w10:p1', label: 'scope-the-split-2', harnessId: 'h-again' }
+  const w = withLive({ ...TREE, links }, herdrHost([SELF, running], again), sessionRecord(9, 'h-new', 'zamua-9', NOW))
+  engine(on, w, NOW)
+  await start($)
+  const before = w.files[WORK_FILE]
+
+  const refused = await $.tool.call({ tool: TOOL, start: [{ item: 'scope', brief: 'Again.' }] })
+  expect(refused.deny).toBe('file:scope already has a running session, scope-the-split, message zamua-9. Message it instead, or pass again: true to start another.')
+  expect(w.files[WORK_FILE]).toBe(before)
+  expect(w.runs.some(argv => argv.includes('create'))).toBe(false)
+
+  const second = await $.tool.call({ tool: TOOL, start: [{ item: 'scope', brief: 'Again.', again: true }] })
+  expect(second.result).toContain('Started session:herdr:default/w10:p1 (scope-the-split-2) for file:scope.')
+})
+
+test('a read gives each session its state, message name, and the goal and summary from its session board', async ($, on) => {
+  const links = [{ child: SELF_ID, parent: 'file:hostit', at: '2026-10-27T13:00:00Z' }]
+  const files = {
+    ...sessionRecord(4, 's1', 'zamua-4', NOW),
+    ...storeFile(sessionBoard('s1', 'Keep hostit healthy', 'Site list drafted\nWaiting on Hasan')),
+  }
+  engine(on, withLive({ ...TREE, links }, herdrHost([SELF]), files), NOW)
+  await start($)
+
+  const read = String((await $.tool.call({ tool: TOOL })).result)
+  expect(read).toContain(
+    [
+      '  file:hostit #6 [Project, next] hostit site list',
+      `    ${SELF_ID} [idle] coordinator, message zamua-4`,
+      '      goal: Keep hostit healthy',
+      '      summary: Site list drafted Waiting on Hasan',
+    ].join('\n'),
+  )
+})
+
+test('attach puts this session under an Item, keeping the Coordinator it already has', async ($, on) => {
+  const links = [{ child: SELF_ID, parent: 'session:herdr:default/w1:p1', at: '2026-10-27T13:00:00Z' }]
+  const w = withLive({ ...TREE, links }, herdrHost([SELF, { id: 'w1:p1', label: 'root', harnessId: 'h-root' }]))
+  engine(on, w, NOW)
+  await start($)
+
+  expect((await $.tool.call({ tool: TOOL, attach: 'hostit' })).result).toBe('Work updated.')
+  expect(fileOf(w.files).links).toEqual([
+    { child: SELF_ID, parent: 'session:herdr:default/w1:p1', at: '2026-10-27T13:00:00Z' },
+    { child: SELF_ID, parent: 'file:hostit', at: '2026-10-27T14:00:00.000Z' },
+  ])
+  const unknown = await $.tool.call({ tool: TOOL, link: [{ child: 'hostit', parent: SELF_ID }] })
+  expect(unknown.deny).toBe(`Only a session can sit under the session ${SELF_ID}.`)
 })

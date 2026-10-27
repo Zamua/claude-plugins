@@ -5,7 +5,7 @@ import type { CiState, PrBoard, PrFacts, TrackedPr } from '../../types'
 import { ago, messageOf, prMark, prRow, span, stamp } from '../kit'
 import type { Els, View } from '../kit'
 import { showView } from '../pane'
-import { legacyValue, loadBoard, saveBoard } from '../store'
+import { legacyValue, loadBoard, saveBoard, storedBoard } from '../store'
 
 export const PRS_TOOL = 'mcp__board__prs'
 
@@ -135,6 +135,18 @@ const emptyBoard = (sessionId: string): PrBoard => ({
 const SHAPE = 'prs-1'
 const board = atom({ plugin: 'board', key: 'prs' } as const, emptyBoard(''), { shape: SHAPE })
 const PREFIX = 'prs'
+
+/** Every pull request on any session's saved prs board, once each, from the store as `storedValues` read it. */
+export function storedPrs(held: Record<string, unknown>): TrackedPr[] {
+  const out = new Map<string, TrackedPr>()
+  for (const key of Object.keys(held)) {
+    if (!key.startsWith(`${PREFIX}:`)) continue
+    const saved = storedBoard<PrBoard>(held, PREFIX, SHAPE, key.slice(PREFIX.length + 1))
+    for (const p of saved?.prs ?? []) if (!out.has(p.key)) out.set(p.key, p)
+  }
+
+  return [...out.values()]
+}
 
 // session.start fires once per process, not after /clear or /resume, so every entry point re-checks the session
 async function syncBoard($: EngineInterface) {
@@ -367,7 +379,7 @@ function stacksOf(prs: readonly TrackedPr[]): Stack[] {
 }
 
 /** What a pull request waits on the person for, one line each; none once it merged or closed. */
-function needsOf(p: TrackedPr): Need[] {
+export function needsOf(p: TrackedPr): Need[] {
   if (p.error) return [{ text: `could not be read: ${p.error}` }]
   const f = p.facts
   if (!f || f.state !== 'OPEN') return []
@@ -491,6 +503,13 @@ async function readCache($: EngineInterface, path: string): Promise<Cache> {
     // Another session may be mid-write; what it wrote is fetched again rather than waited for
     return { prs: {} }
   }
+}
+
+/** The facts every session has cached, by pull request key. */
+export async function cachedFacts($: EngineInterface): Promise<Map<string, PrFacts>> {
+  const cache = await readCache($, await cachePath($))
+
+  return new Map(Object.entries(cache.prs).flatMap(([key, one]) => (one.facts ? [[key, one.facts] as const] : [])))
 }
 
 /** Reads the file again just before writing, so what other sessions wrote meanwhile stays. */
