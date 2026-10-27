@@ -515,11 +515,12 @@ async function readCache($: EngineInterface, path: string): Promise<Cache> {
   }
 }
 
-/** The facts every session has cached, by pull request key. */
-export async function cachedFacts($: EngineInterface): Promise<Map<string, PrFacts>> {
+/** The facts every session has cached, by pull request key, and the GitHub login they were read as. */
+export async function cachedFacts($: EngineInterface): Promise<{ facts: Map<string, PrFacts>; viewer: string }> {
   const cache = await readCache($, await cachePath($))
+  const facts = new Map(Object.entries(cache.prs).flatMap(([key, one]) => (one.facts ? [[key, one.facts] as const] : [])))
 
-  return new Map(Object.entries(cache.prs).flatMap(([key, one]) => (one.facts ? [[key, one.facts] as const] : [])))
+  return { facts, viewer: cache.viewer ?? '' }
 }
 
 /** Reads the file again just before writing, so what other sessions wrote meanwhile stays. */
