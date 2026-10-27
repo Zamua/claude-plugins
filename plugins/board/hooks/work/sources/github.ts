@@ -1,19 +1,16 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { TrackedPr } from '../../../types'
-import { cachedFacts, needsOf, storedPrs } from '../../views/prs'
+import { cachedFacts, needsOf, needsYou, storedPrs } from '../../views/prs'
 import type { Artifact, Status } from '../model'
 
-/**
- * The person's own pull request needs them when the prs view says so. Someone else's, which a session only watches,
- * needs them only for a review thread waiting on them.
- */
+/** Needs the person by the prs view's rule; someone else's open pull request is otherwise watched. */
 function statusOf(p: TrackedPr, viewer: string): Status {
   const f = p.facts
   if (!f) return 'next'
-  const isOwn = !viewer || f.author.toLowerCase() === viewer.toLowerCase()
-  if (isOwn ? needsOf(p).length > 0 : f.state === 'OPEN' && f.waiting > 0) return 'needs'
+  if (needsYou(p, viewer)) return 'needs'
   if (f.state !== 'OPEN') return 'done'
+  const isOwn = !viewer || f.author.toLowerCase() === viewer.toLowerCase()
   if (!isOwn) return 'watching'
 
   return f.isDraft ? 'flight' : 'waiting'

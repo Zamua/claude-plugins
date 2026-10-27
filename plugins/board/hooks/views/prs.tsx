@@ -72,6 +72,8 @@ const INPUT_SCHEMA = {
 const OPENS_PR = /\bgh\s+(pr\s+create|stack\s+submit)\b/
 const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g
 const REF = /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/)?([\w.-]+)\/([\w.-]+)(?:\/pull\/|#)(\d+)/
+// The widest state word, so the titles line up
+const STATE_WIDTH = 8
 const CI_WORDS: Record<CiState, string> = { pass: 'passing', fail: 'failing', pending: 'running', none: 'not run' }
 const FAILED_RUNS = ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']
 
@@ -430,15 +432,32 @@ export function needsOf(p: TrackedPr): Need[] {
   return out
 }
 
-const needsYou = (p: TrackedPr) => needsOf(p).length > 0
+/**
+ * The person's own pull request needs them for anything `needsOf` finds. Someone else's, which a session only
+ * watches, needs them only for a review thread waiting on them: its CI and conflicts are its author's to fix.
+ */
+export function needsYou(p: TrackedPr, viewer: string): boolean {
+  const f = p.facts
+  if (p.error || !f) return Boolean(p.error)
+  const isOwn = !viewer || f.author.toLowerCase() === viewer.toLowerCase()
+
+  return isOwn ? needsOf(p).length > 0 : f.state === 'OPEN' && f.waiting > 0
+}
 
 function stateOf(p: TrackedPr): Word {
   const f = p.facts
   if (!f) return { text: '', isDim: true }
   if (f.state === 'MERGED') return { text: 'merged', color: 'merged' }
   if (f.state === 'CLOSED') return { text: 'closed', isDim: true }
+  if (f.isDraft) return { text: 'draft', isDim: true }
+  if (isConflicted(f)) return { text: 'conflict', color: 'error' }
+  if (f.ci === 'fail') return { text: 'CI fail', color: 'error' }
+  if (f.ci === 'pending') return { text: 'CI run', color: 'warning' }
+  if (f.mergeState === 'BEHIND') return { text: 'behind', color: 'warning' }
+  const review = reviewOf(f)
+  if (review === 'CHANGES_REQUESTED') return { text: 'changes', color: 'error' }
 
-  return f.isDraft ? { text: 'draft', isDim: true } : { text: 'ready', color: 'suggestion' }
+  return review === 'APPROVED' ? { text: 'ready', color: 'success' } : { text: 'review', color: 'suggestion' }
 }
 
 /** CI and mergeability as one dot: red when it cannot merge as it stands, yellow while CI runs. */
@@ -701,7 +720,7 @@ function chainOf(group: Stack, p: TrackedPr): keyof typeof CHAIN_GLYPHS {
  * its number, a dot for CI and mergeability, its state and its title. A layer based on something other than the row
  * above names its base.
  */
-function prRows(els: Els, group: Stack, hasChains: boolean) {
+function prRows(els: Els, group: Stack, hasChains: boolean, viewer: string) {
   const { Box, Text } = els
 
   return group.prs.map((p, at) => {
@@ -716,10 +735,10 @@ function prRows(els: Els, group: Stack, hasChains: boolean) {
       url: p.url,
       ...(hasChains && { chain: CHAIN_GLYPHS[chainOf(group, p)] }),
       ...(mark && { mark }),
-      isFlagged: needsYou(p),
+      isFlagged: needsYou(p, viewer),
       dot: healthOf(p),
       columns: [
-        <Box key={`state-${p.key}`} width={6} flexShrink={0}>
+        <Box key={`state-${p.key}`} width={STATE_WIDTH} flexShrink={0}>
           <Text color={state.color} dimColor={state.isDim}>
             {state.text}
           </Text>
@@ -731,7 +750,7 @@ function prRows(els: Els, group: Stack, hasChains: boolean) {
   })
 }
 
-function prsBox(els: Els, groups: Stack[]) {
+function prsBox(els: Els, groups: Stack[], viewer: string) {
   const { Box, Text } = els
   const hasChains = groups.some(group => group.chains.some(run => run.length > 1))
 
@@ -748,7 +767,7 @@ function prsBox(els: Els, groups: Stack[]) {
                 {landed && <Text color="merged">merged</Text>}
               </Box>
             )}
-            {prRows(els, group, hasChains)}
+            {prRows(els, group, hasChains, viewer)}
           </Box>
         )
       })}
@@ -840,7 +859,11 @@ export function prsView($: EngineInterface): View {
       void refresh($)
     },
     isAvailable: async () => (await read($, board)).prs.length > 0,
-    needs: async () => (await read($, board)).prs.filter(needsYou).length,
+    needs: async () => {
+      const b = await read($, board)
+
+      return b.prs.filter(p => needsYou(p, b.viewer)).length
+    },
     opensAtStart: async () => (await read($, board)).prs.length > 0,
     clear: async () => {
       const applied = await change($, current => ({ board: emptyBoard(current.sessionId), added: [] }))
@@ -863,7 +886,7 @@ export function prsView($: EngineInterface): View {
       return (
         <Box key="prs-view" flexDirection="column">
           {stamp(els, checkedLine(b, now), Boolean(b.error))}
-          {prsBox(els, groupsOf(b.prs))}
+          {prsBox(els, groupsOf(b.prs), b.viewer)}
         </Box>
       )
     },

@@ -20,6 +20,7 @@ type Pr = {
   failing: string[]
   threads: { isResolved: boolean; by: string }[]
   approvals?: string[]
+  author?: string
 }
 
 const pr = (over: Partial<Pr>): Pr => ({
@@ -48,7 +49,7 @@ function asGraphql(p: Pr) {
     headRefName: p.headRefName,
     baseRefName: p.baseRefName,
     headRefOid: 'abc123',
-    author: { login: 'octo' },
+    author: { login: p.author ?? 'octo' },
     commits: {
       nodes: [
         {
@@ -198,6 +199,41 @@ test('a pull request approved in a repo that requires no review still gets its c
 
   const ui = await open($, 'prs')
   expect(await ui.find({ key: 'mark-acme/api#6050', text: '✓' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the state word says what stops a pull request merging, and ready only once it can', async ($, on) => {
+  const prs: Record<number, Pr> = {
+    6001: pr({ isDraft: false, approvals: ['mert'], reviewDecision: 'APPROVED' }),
+    6002: pr({ isDraft: false, reviewDecision: 'APPROVED', rollup: 'FAILURE', failing: ['build'] }),
+    6003: pr({ isDraft: false, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }),
+    6004: pr({ isDraft: false }),
+    6005: pr({ isDraft: true, rollup: 'FAILURE', failing: ['build'] }),
+  }
+  engine(on, gh(prs), NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: Object.keys(prs).map(n => ({ pr: `https://github.com/acme/api/pull/${n}` })) })
+
+  const ui = await open($, 'prs')
+  const word = async (n: number) => (await ui.find({ key: `state-acme/api#${n}` }))?.text
+  expect(await Promise.all([6001, 6002, 6003, 6004, 6005].map(word))).toEqual(['ready', 'CI fail', 'conflict', 'review', 'draft'])
+  await ui.unmount()
+})
+
+test("someone else's pull request is flagged only for a thread waiting on you, your own for anything", async ($, on) => {
+  const prs: Record<number, Pr> = {
+    6011: pr({ isDraft: false, rollup: 'FAILURE', failing: ['build'] }),
+    6012: pr({ isDraft: false, author: 'rojen', rollup: 'FAILURE', failing: ['build'] }),
+    6013: pr({ isDraft: false, author: 'rojen', threads: [{ isResolved: false, by: 'rojen' }] }),
+  }
+  engine(on, gh(prs), NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: Object.keys(prs).map(n => ({ pr: `https://github.com/acme/api/pull/${n}` })) })
+
+  const ui = await open($, 'prs')
+  const flagged = async (n: number) => (await ui.find({ key: `flag-acme/api#${n}` }))?.text === '!'
+  expect(await Promise.all([6011, 6012, 6013].map(flagged))).toEqual([true, false, true])
+  expect(await ui.find({ key: 'tab-prs', text: 'prs 2' })).toBeDefined()
   await ui.unmount()
 })
 
