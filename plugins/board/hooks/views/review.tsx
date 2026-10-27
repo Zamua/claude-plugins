@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, RenderNode } from 'claude-code'
 
-import { ago, fixed, link, prMark, prRow, refreshJson, section } from '../kit'
+import { ago, fixed, link, prMark, prRow, refreshJson, section, stamp } from '../kit'
 import type { Els, JsonFile, SectionSpec, View } from '../kit'
 
 // The poller records every review here; the worker running one is the session it records
@@ -572,25 +572,16 @@ function pickBar($: EngineInterface, els: Els) {
   )
 }
 
-function footer(els: Els, b: Board, now: number) {
-  const { Text } = els
-  if (notice) {
-    return (
-      <Text key="footer" color="yellow" wrap="wrap">
-        {notice}
-      </Text>
-    )
-  }
-  const at = Date.parse(b.updated_at ?? '')
-  const updated = Number.isNaN(at) ? '' : `Updated ${ago(now - at)}.`
+function freshness(b: Board | undefined, now: number) {
+  const at = Date.parse(b?.updated_at ?? '')
   const checkedAt = Date.parse(factsFile.value?.updated_at ?? '')
-  const checked = Number.isNaN(checkedAt) ? '' : ` GitHub checked ${ago(now - checkedAt)}.`
 
-  return (
-    <Text key="footer" dimColor wrap="wrap">
-      {updated + checked}
-    </Text>
-  )
+  return [
+    Number.isNaN(at) ? '' : `Updated ${ago(now - at)}`,
+    Number.isNaN(checkedAt) ? '' : `GitHub checked ${ago(now - checkedAt)}`,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 export async function reviewStart($: EngineInterface) {
@@ -650,7 +641,8 @@ export function reviewView($: EngineInterface): View {
       const inView = stack ? comments.filter(c => stackOf(c, prs, stacks) === stack.id) : comments
       const toDecide = inView.filter(c => c.status !== 'posted' && c.status !== 'dropped')
       const posted = inView.filter(c => c.status === 'posted').sort((x, y) => x.n - y.n)
-      const children: RenderNode[] = [header(els, b, review, stack, inView)]
+      const fresh = freshness(b, now)
+      const children: RenderNode[] = [...(fresh ? [stamp(els, fresh)] : []), header(els, b, review, stack, inView)]
       if (stacked) children.push(stackTabs($, els, stacks, stack))
       children.push(prList($, els, b, stack ? [stack] : stacks, stacked && !stack))
       for (const severity of SEVERITIES) {
@@ -669,7 +661,13 @@ export function reviewView($: EngineInterface): View {
       if (!stack && Array.isArray(b.report) && b.report.length > 0) children.push(reportBox($, els, b.report))
       const picking = pickBar($, els)
       if (picking) children.push(picking)
-      children.push(footer(els, b, now))
+      if (notice) {
+        children.push(
+          <Text key="notice" color="yellow" wrap="wrap">
+            {notice}
+          </Text>,
+        )
+      }
 
       return (
         <Box key="review" flexDirection="column">
