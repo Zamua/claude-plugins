@@ -13,6 +13,15 @@ export function setPaneWidth(columns: number) {
   width = columns
 }
 
+let focused = false
+
+/** Whether the person had given the pane the keyboard when it was last drawn. */
+export const paneFocused = () => focused
+
+export function setPaneFocused(isFocused: boolean) {
+  focused = isFocused
+}
+
 const selected = atom({ plugin: 'board', key: 'selected' } as const, '')
 const isDismissed = atom({ plugin: 'board', key: 'isDismissed' } as const, false)
 

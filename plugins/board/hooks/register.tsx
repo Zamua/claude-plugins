@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { messageOf } from './kit'
 import type { View } from './kit'
-import { PANE, paneWidth, setPaneWidth, showView, TITLE } from './pane'
+import { PANE, paneWidth, setPaneFocused, setPaneWidth, showView, TITLE } from './pane'
 import { exportPng, PLAIN_ELS } from './png'
 import { fileBoard, fileStart, fileView } from './views/file'
 import type { FileBoard, FileBoardSpec, LinkPair } from './views/file'
@@ -262,6 +262,7 @@ export const register: Register = on => {
     const els = $.ui.resolve(e)
     const { Box, Button, Text } = els
     setPaneWidth(e.props.bodyColumns)
+    setPaneFocused(e.props.isFocused)
     const list = await listed($)
     const current = await shown($, list)
     const counts = await Promise.all(list.map(v => v.needs()))
