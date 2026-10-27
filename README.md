@@ -34,8 +34,10 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   with a row of buttons to switch between them, each showing how many items wait
   on you. The session board Claude keeps current, the pull requests this session
   raised with GitHub's live state, the pr-review-board review this session runs,
-  and any board another process writes as JSON, named in
-  `~/.config/board/boards.json`. `/board` toggles the pane, `/board <name>` opens
+  one tree of everything you work on from your goals down to the sessions and
+  pull requests doing it, where a root session starts and coordinates the
+  others, and any board another process writes as JSON, such as a rollout, named
+  in `~/.config/board/boards.json`. `/board` toggles the pane, `/board <name>` opens
   it on one board, `/board <name> clear` empties one.
 
 ## License

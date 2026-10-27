@@ -5,7 +5,7 @@ import { board, CONFIG_FILE, engine, HOME, json, open, PANE, start, world } from
 const NOW = Date.parse('2026-10-16T14:00:00Z')
 const TOOL = 'mcp__board__session'
 const WORK_FILE = `${HOME}/boards/work.json`
-const CONFIG = { boards: [{ id: 'work', path: '~/boards/work.json', layout: 'groups' }] }
+const CONFIG = { boards: [{ id: 'work', path: '~/boards/work.json', layout: 'sections' }] }
 const WORK = {
   updated_at: '2026-10-16T13:55:00Z',
   items: [
