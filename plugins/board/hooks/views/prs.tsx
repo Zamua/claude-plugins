@@ -72,8 +72,11 @@ const INPUT_SCHEMA = {
 const OPENS_PR = /\bgh\s+(pr\s+create|stack\s+submit)\b/
 const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g
 const REF = /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/)?([\w.-]+)\/([\w.-]+)(?:\/pull\/|#)(\d+)/
-// The widest state word, so the titles line up
+// The widest state word, so the titles line up, and the most an author's login takes
 const STATE_WIDTH = 8
+const MAX_AUTHOR = 12
+const cutTo = (text: string, room: number) => ([...text].length <= room ? text : `${[...text].slice(0, room - 1).join('')}…`)
+
 const CI_WORDS: Record<CiState, string> = { pass: 'passing', fail: 'failing', pending: 'running', none: 'not run' }
 const FAILED_RUNS = ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']
 
@@ -500,6 +503,7 @@ function describe(b: PrBoard, now: number): string {
       const ci = p.facts?.state === 'OPEN' && p.facts.ci !== 'fail' ? `CI ${CI_WORDS[p.facts.ci]}` : ''
       const status = [
         stateOf(p).text || 'checking GitHub',
+        p.facts?.author ? `by ${p.facts.author}` : '',
         below ? `on #${below.number}` : '',
         ci,
         ...needsOf(p).map(need => (need.href ? `${need.text} <${need.href}>` : need.text)),
@@ -720,7 +724,7 @@ function chainOf(group: Stack, p: TrackedPr): keyof typeof CHAIN_GLYPHS {
  * its number, a dot for CI and mergeability, its state and its title. A layer based on something other than the row
  * above names its base.
  */
-function prRows(els: Els, group: Stack, hasChains: boolean, viewer: string) {
+function prRows(els: Els, group: Stack, hasChains: boolean, viewer: string, authorWidth: number) {
   const { Box, Text } = els
 
   return group.prs.map((p, at) => {
@@ -743,6 +747,13 @@ function prRows(els: Els, group: Stack, hasChains: boolean, viewer: string) {
             {state.text}
           </Text>
         </Box>,
+        ...(authorWidth > 0
+          ? [
+              <Box key={`author-${p.key}`} width={authorWidth} flexShrink={0}>
+                <Text dimColor>{cutTo(p.facts?.author ?? '', authorWidth)}</Text>
+              </Box>,
+            ]
+          : []),
       ],
       ...(named && { on: named.number }),
       title: p.facts?.title ?? `${p.owner}/${p.repo}`,
@@ -753,6 +764,8 @@ function prRows(els: Els, group: Stack, hasChains: boolean, viewer: string) {
 function prsBox(els: Els, groups: Stack[], viewer: string) {
   const { Box, Text } = els
   const hasChains = groups.some(group => group.chains.some(run => run.length > 1))
+  const authors = groups.flatMap(group => group.prs.map(p => [...(p.facts?.author ?? '')].length))
+  const authorWidth = Math.min(MAX_AUTHOR, Math.max(0, ...authors))
 
   return (
     <Box key="prs" flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
@@ -767,7 +780,7 @@ function prsBox(els: Els, groups: Stack[], viewer: string) {
                 {landed && <Text color="merged">merged</Text>}
               </Box>
             )}
-            {prRows(els, group, hasChains, viewer)}
+            {prRows(els, group, hasChains, viewer, authorWidth)}
           </Box>
         )
       })}
