@@ -168,7 +168,8 @@ its line shows the date and the parent shows the sum of both sessions' active ti
 1. **Given** an Item due in under two hours, **When** the view draws, **Then** its date shows in red
    as a countdown.
 2. **Given** a Period configured as a date range, **When** the person filters by it, **Then** only
-   Items whose dates fall in that range, and their ancestors, are drawn.
+   Items whose dates fall in that range, the undated Items under them, and their ancestors are drawn,
+   with every Responsibility.
 
 ---
 

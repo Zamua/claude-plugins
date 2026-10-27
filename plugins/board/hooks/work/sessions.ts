@@ -4,10 +4,10 @@ import { messageOf } from '../kit'
 import { storedValues } from '../store'
 import { storedSessionBoard } from '../views/session'
 import { readSource } from './cache'
-import { claudeArgs, claudeInfo } from './harnesses/claude'
+import { claudeArgs, claudeInfo, claudeTime, recordItems } from './harnesses/claude'
 import type { HarnessInfo } from './harnesses/claude'
 import { focusHerdr, listHerdr, startHerdr } from './hosts/herdr'
-import type { Artifact, HostSession, HostStart, Item, Session, SourceAnswer } from './model'
+import type { Artifact, HostSession, HostStart, Item, PastTime, Session, SourceAnswer } from './model'
 import { readBoards } from './sources/boards'
 import { readArtifacts } from './sources/github'
 import { LINEAR_FRESH_MS, readLinear } from './sources/linear'
@@ -25,11 +25,19 @@ export type LiveConfig = {
 }
 
 /** Everything the tree shows that the local file does not hold. */
-export type Live = { items: Item[]; sessions: Session[]; artifacts: Artifact[]; errors: string[]; at: number }
+export type Live = {
+  items: Item[]
+  sessions: Session[]
+  artifacts: Artifact[]
+  /** The time of Sessions no Host lists any more, by the Item they last sat under. */
+  past: PastTime[]
+  errors: string[]
+  at: number
+}
 
 const FRESH_MS = 15_000
 
-let live: Live = { items: [], sessions: [], artifacts: [], errors: [], at: 0 }
+let live: Live = { items: [], sessions: [], artifacts: [], past: [], errors: [], at: 0 }
 
 export const liveNow = () => live
 
@@ -39,8 +47,17 @@ async function listHost($: EngineInterface, host: string): Promise<{ sessions: H
   return { sessions: [], error: `boards.json names a host nothing reads: ${host}.` }
 }
 
-async function harnessInfo($: EngineInterface, harness: string, ids: string[]): Promise<Map<string, HarnessInfo>> {
-  return harness === 'claude' ? claudeInfo($, ids) : new Map()
+async function harnessInfo(
+  $: EngineInterface,
+  harness: string,
+  ids: string[],
+): Promise<{ info: Map<string, HarnessInfo>; past: PastTime[] }> {
+  if (harness !== 'claude') return { info: new Map(), past: [] }
+  const info = await claudeInfo($, ids)
+  const time = await claudeTime($, ids)
+  for (const [id, activeMs] of time.active) info.set(id, { ...info.get(id), activeMs })
+
+  return { info, past: time.past }
 }
 
 async function asked(source: string, ask: () => Promise<SourceAnswer>): Promise<SourceAnswer> {
@@ -95,9 +112,11 @@ export async function refreshLive($: EngineInterface, config: LiveConfig, force 
   }
   const held = listed.length > 0 || config.sources?.github !== undefined ? await storedValues($, 'board') : {}
   const sessions: Session[] = []
+  const past: PastTime[] = []
   for (const harness of new Set(listed.flatMap(one => (one.harness ? [one.harness] : [])))) {
     const mine = listed.filter(one => one.harness === harness)
-    const info = await harnessInfo($, harness, mine.flatMap(one => (one.harnessId ? [one.harnessId] : [])))
+    const { info, past: ended } = await harnessInfo($, harness, mine.flatMap(one => (one.harnessId ? [one.harnessId] : [])))
+    past.push(...ended)
     for (const one of mine) {
       const board = one.harnessId ? storedSessionBoard(held, one.harnessId) : undefined
       sessions.push({
@@ -110,10 +129,20 @@ export async function refreshLive($: EngineInterface, config: LiveConfig, force 
   }
   sessions.push(...listed.filter(one => !one.harness))
   const artifacts = config.sources?.github !== undefined ? await readArtifacts($, held) : []
-  const before = JSON.stringify([live.items, live.sessions, live.artifacts, live.errors])
-  live = { items, sessions, artifacts, errors, at: now }
+  const before = JSON.stringify([live.items, live.sessions, live.artifacts, live.past, live.errors])
+  live = { items, sessions, artifacts, past, errors, at: now }
 
-  return JSON.stringify([items, sessions, artifacts, errors]) !== before
+  return JSON.stringify([items, sessions, artifacts, past, errors]) !== before
+}
+
+/** Tells each Harness the Item its agents sit under, by Session id, so their time stays there once they finish. */
+export async function rememberItems($: EngineInterface, sessionItem: ReadonlyMap<string, string>) {
+  const claude = new Map<string, string>()
+  for (const session of live.sessions) {
+    const item = sessionItem.get(session.id)
+    if (item && session.harness === 'claude' && session.harnessId) claude.set(session.harnessId, item)
+  }
+  if (claude.size > 0) await recordItems($, claude)
 }
 
 /** The Session this one runs as, found by its own agent id among what the Hosts list. */

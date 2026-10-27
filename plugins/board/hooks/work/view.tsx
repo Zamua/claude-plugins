@@ -1,11 +1,11 @@
-import type { Color, EngineInterface, RenderNode } from 'claude-code'
+import type { Color, EngineInterface, On, RenderNode } from 'claude-code'
 
-import { ago, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, spans, stamp } from '../kit'
+import { ago, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, span, spans, stamp } from '../kit'
 import type { Els, Part, View } from '../kit'
-import { paneWidth, selectView } from '../pane'
-import { buildTree, mergeItems, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
+import { PANE, paneFocused, paneWidth, selectView } from '../pane'
+import { buildTree, inPeriod, mergeItems, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
 import type { Artifact, Node, Period, Session, SessionState, Status, Tree } from './model'
-import { focusSession, liveNow, refreshLive } from './sessions'
+import { focusSession, liveNow, refreshLive, rememberItems } from './sessions'
 import type { Live } from './sessions'
 import { isVersion2, itemsAndLinks } from './sources/file'
 import type { LocalFile, LocalState } from './sources/file'
@@ -70,6 +70,10 @@ let pressedFor = ''
 // The session whose own Item the view has opened down to, once
 let placedFor = ''
 let drawnAt = 0
+// The Period the view is cut to, by name; empty shows every Item
+let period = ''
+let isPeriodOpen = false
+let wasFocused = false
 
 export function configureWork(
   spec: WorkSpec | undefined,
@@ -102,7 +106,52 @@ export function workTree(file: unknown, live: Live = liveNow()): { tree?: Tree; 
 
   const all = mergeItems(items, live.items)
 
-  return { tree: buildTree(all, links, live.sessions, live.artifacts, typeof root === 'string' ? root : undefined) }
+  return { tree: buildTree(all, links, live.sessions, live.artifacts, typeof root === 'string' ? root : undefined, live.past) }
+}
+
+function periodsOf(spec: WorkSpec): Period[] {
+  return (Array.isArray(spec.periods) ? spec.periods : []).filter(
+    one => one && typeof one.name === 'string' && typeof one.start === 'string' && typeof one.end === 'string',
+  )
+}
+
+/** Cuts the view to the Period named, or to every Item for `all`; a name no Period has comes back as why. */
+export function choosePeriod(name: string): string | undefined {
+  const periods = board ? periodsOf(board.spec) : []
+  if (name.toLowerCase() === 'all') {
+    period = ''
+    return undefined
+  }
+  const found = periods.find(one => one.name.toLowerCase() === name.toLowerCase())
+  if (!found) {
+    return periods.length > 0
+      ? `No period ${name}. Periods: ${periods.map(one => one.name).join(', ')}, or all.`
+      : 'boards.json names no periods for the work board.'
+  }
+  period = found.name
+
+  return undefined
+}
+
+/** Folds the open Period list on a press or a focus move anywhere but the list and its box, as a click off it. */
+function foldPeriods($: EngineInterface, element: string | undefined) {
+  if (!isPeriodOpen || (element !== undefined && element.startsWith('wper'))) return
+  isPeriodOpen = false
+  $.ui.invalidate('ui.render')
+}
+
+export function workViewHooks(on: On) {
+  on('ui.press', { requestId: PANE }, async ($, e, next) => {
+    foldPeriods($, e.element)
+
+    return next(e)
+  })
+
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    foldPeriods($, e.element)
+
+    return next(e)
+  })
 }
 
 export async function workRefresh($: EngineInterface, force = false) {
@@ -110,6 +159,10 @@ export async function workRefresh($: EngineInterface, force = false) {
   const fileChanged = await refreshJson($, board.state, board.path)
   const isShown = force || (await $.clock.now()) - drawnAt < SHOWN_MS
   const liveChanged = isShown && (await refreshLive($, board.spec, force))
+  if (liveChanged) {
+    const tree = workTree(board.state.value).tree
+    if (tree) await rememberItems($, tree.sessionItem)
+  }
   if (fileChanged || liveChanged) $.ui.invalidate('ui.render')
 }
 
@@ -218,7 +271,8 @@ function toggle($: EngineInterface, set: Set<string>, key: string) {
   }
 }
 
-type Ctx = { els: Els; now: number; tree: Tree; self?: Session; columns: number }
+/** `shows` holds the Items a chosen Period draws; absent, every Item draws. */
+type Ctx = { els: Els; now: number; tree: Tree; self?: Session; columns: number; shows?: Set<string> }
 
 const counted = (n: number, noun: string) => (n === 0 ? '' : `${n} ${noun}${n === 1 ? '' : 's'}`)
 
@@ -239,7 +293,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       return tree ? needsTotal(tree) : 0
     },
     render: async els => {
-      const { Box, Text } = els
+      const { Box, Button, Text } = els
       const sessionId = await $.session.id()
       forSession(sessionId)
       const now = await $.clock.now()
@@ -260,15 +314,43 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         openPath(tree, self.item)
         placedFor = sessionId
       }
+      const periods = periodsOf(w.spec)
+      const chosen = periods.find(one => one.name === period)
+      // A click outside the pane takes the keyboard back from it, which folds the Period list too
+      if (wasFocused && !paneFocused()) isPeriodOpen = false
+      wasFocused = paneFocused()
       // One cell spare, so a row that fits exactly does not reach the pane's edge
-      const ctx: Ctx = { els, now, tree, columns: paneWidth() - 1, ...(self.session && { self: self.session }) }
+      const ctx: Ctx = {
+        els,
+        now,
+        tree,
+        columns: paneWidth() - 1,
+        ...(self.session && { self: self.session }),
+        ...(chosen && { shows: inPeriod(tree, chosen) }),
+      }
       const at = Date.parse((w.state.value as LocalFile).updated_at ?? '')
       const fresh = readError ?? (Number.isNaN(at) ? '' : `Updated ${ago(now - at)}`)
       const notes = [...w.warnings, ...tree.warnings, ...liveNow().errors]
       const root = rootOf(w.state.value, tree)
-      const head = root ? (
+      const shown = (nodes: Node[]) => (ctx.shows ? nodes.filter(n => ctx.shows?.has(n.item.id)) : nodes)
+      const outcomes = shown(tree.outcomes)
+      const responsibilities = shown(tree.responsibilities)
+      const inbox = shown(tree.inbox)
+      const box =
+        periods.length > 0 ? (
+          <Button
+            key="wperiod"
+            label={`Period: ${chosen?.name ?? 'all'} ${isPeriodOpen ? '▴' : '▾'}`}
+            onPress={() => {
+              isPeriodOpen = !isPeriodOpen
+              $.ui.invalidate('ui.render')
+            }}
+          />
+        ) : undefined
+      const head = root || box ? (
         <Box key="whead" flexDirection="row" columnGap={1} paddingX={1}>
-          {rootMark($, w, els, root, 'wroot')}
+          {root && rootMark($, w, els, root, 'wroot')}
+          {box}
           <Box key="stamp" flexGrow={1} justifyContent="flex-end">
             <Text color={readError ? 'error' : undefined} dimColor={!readError || undefined}>
               {fresh}
@@ -282,25 +364,33 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       return (
         <Box key="work-view" flexDirection="column">
           {head}
-          {tree.outcomes.length + tree.responsibilities.length === 0 && (
+          {outcomes.length + responsibilities.length + inbox.length === 0 && (
             <Text dimColor wrap="wrap">
-              Nothing tracked yet. Claude adds work here with {WORK_TOOL}.
+              {chosen ? `Nothing dated in ${chosen.name}.` : `Nothing tracked yet. Claude adds work here with ${WORK_TOOL}.`}
             </Text>
           )}
-          {tree.outcomes.length > 0 && (
+          {outcomes.length > 0 && (
             <Box key="outcomes" flexDirection="column">
               <Text dimColor bold>
                 Outcomes
               </Text>
-              {level(ctx, 'top-outcomes', tree.outcomes)}
+              {level(ctx, 'top-outcomes', outcomes)}
             </Box>
           )}
-          {tree.responsibilities.length > 0 && (
+          {responsibilities.length > 0 && (
             <Box key="responsibilities" flexDirection="column" marginTop={1}>
               <Text dimColor bold>
                 Responsibilities
               </Text>
-              {level(ctx, 'top-responsibilities', tree.responsibilities)}
+              {level(ctx, 'top-responsibilities', responsibilities)}
+            </Box>
+          )}
+          {inbox.length > 0 && (
+            <Box key="inbox" flexDirection="column" marginTop={1}>
+              <Text dimColor bold>
+                Inbox
+              </Text>
+              {level(ctx, 'top-inbox', inbox)}
             </Box>
           )}
           {unplaced(ctx, tree)}
@@ -314,14 +404,51 @@ export function workView($: EngineInterface, w: WorkBoard): View {
               {note}
             </Text>
           ))}
+          {isPeriodOpen && periods.length > 0 && periodList(els, periods, root)}
         </Box>
       )
     },
   }
 
+  /**
+   * The Periods to cut the view to, in a list over the rows below the box, under its left edge. Every line is padded
+   * to the list's width, since cells it leaves blank show the rows beneath.
+   */
+  function periodList(els: Els, periods: Period[], root: { session?: Session } | undefined) {
+    const { Box, Button, Text } = els
+    const options = [{ name: '', label: 'all' }, ...periods.map(one => ({ name: one.name, label: one.name }))]
+    const inner = Math.max(...options.map(one => [...one.label].length)) + 2
+    // The root mark draws as `⌂ label` and a cell parts it from the box
+    const before = root ? 2 + [...(root.session?.label ?? 'root')].length + 1 : 0
+
+    return (
+      <Box key="wperiod-list" position="absolute" top={1} left={before} flexDirection="column" borderStyle="round" borderColor="inactive">
+        {options.map(one => {
+          const isOn = one.name === period
+
+          return (
+            <Button
+              key={`wper-${one.name || 'all'}`}
+              plain
+              onPress={() => {
+                period = one.name
+                isPeriodOpen = false
+                $.ui.invalidate('ui.render')
+              }}
+            >
+              <Text color={isOn ? 'claude' : undefined}>{` ${isOn ? '●' : '○'} `}</Text>
+              <Text>{one.label.padEnd(inner)}</Text>
+            </Button>
+          )
+        })}
+      </Box>
+    )
+  }
+
   /** One level's open lines, then its finished ones folded behind a count. */
-  function level(ctx: Ctx, key: string, nodes: Node[]): RenderNode[] {
+  function level(ctx: Ctx, key: string, all: Node[]): RenderNode[] {
     const { Box, Button } = ctx.els
+    const nodes = ctx.shows ? all.filter(n => ctx.shows?.has(n.item.id)) : all
     const open = nodes.filter(n => n.shown !== 'done')
     const done = nodes.filter(n => n.shown === 'done')
     const out = open.flatMap(n => lines(ctx, n))
@@ -375,7 +502,9 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       ...(item.ref !== undefined ? [{ text: `#${item.ref}`, dimColor: true }] : []),
       ...(item.progress !== undefined ? [{ text: `${item.progress}%`, dimColor: true }] : []),
     ]
-    const room = ctx.columns - node.depth * 2 - (hasMark ? 2 : 0)
+    const asker = node.depth === 0 && item.origin?.type === 'asked' && item.origin.by ? `from ${item.origin.by}` : ''
+    const aside = [asker, node.activeMs >= 60_000 ? span(node.activeMs) : ''].filter(Boolean).join(' · ')
+    const room = ctx.columns - node.depth * 2 - (hasMark ? 2 : 0) - (aside ? [...aside].length + 1 : 0)
     const content = spans(ctx.els, fitLine(parts, { text: item.title, dimColor: quiet }, room))
 
     return (
@@ -387,7 +516,8 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         ) : (
           <Text>{content}</Text>
         )}
-        {hasMark && <Box key={`wgap-${item.id}`} flexGrow={1} />}
+        {(hasMark || aside) && <Box key={`wgap-${item.id}`} flexGrow={1} />}
+        {aside && fixed(ctx.els, `waside-${item.id}`, <Text dimColor>{hasMark ? `${aside} ` : aside}</Text>)}
         {hasMark && sessionMark(ctx, item.id, node.sessions)}
       </Box>
     )
