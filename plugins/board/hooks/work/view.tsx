@@ -1,7 +1,7 @@
 import type { Color, EngineInterface, RenderNode } from 'claude-code'
 
-import { ago, dueOf, fixed, link, openUrl, refreshJson, sourceLabel, stamp } from '../kit'
-import type { Els, View } from '../kit'
+import { ago, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, spans, stamp } from '../kit'
+import type { Els, Part, View } from '../kit'
 import { paneWidth, selectView } from '../pane'
 import { buildTree, mergeItems, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
 import type { Artifact, Node, Period, Session, SessionState, Status, Tree } from './model'
@@ -170,7 +170,7 @@ function rootMark($: EngineInterface, w: WorkBoard, els: Els, root: { session?: 
 }
 
 /** Switches the pane to the work view with the path down to `id` open. */
-async function openWorkAt($: EngineInterface, id: string) {
+export async function openWorkAt($: EngineInterface, id: string) {
   const w = board
   const tree = w && workTree(w.state.value).tree
   if (!w || !tree) return
@@ -220,33 +220,8 @@ function toggle($: EngineInterface, set: Set<string>, key: string) {
 
 type Ctx = { els: Els; now: number; tree: Tree; self?: Session; columns: number }
 
-type Part = { text: string; color?: Color; dimColor?: boolean; bold?: boolean }
-
 const counted = (n: number, noun: string) => (n === 0 ? '' : `${n} ${noun}${n === 1 ? '' : 's'}`)
 
-/**
- * `parts`, then `title` cut to fit, joined by single spaces into at most `room` cells. A Button cannot cut its own
- * text at the pane's edge, so a whole row can be one only once it is cut to fit.
- */
-function fitLine(parts: Part[], title: Part, room: number): Part[] {
-  const used = parts.reduce((n, part) => n + [...part.text].length + 1, 0)
-  const left = Math.max(1, room - used)
-  const chars = [...title.text]
-  const text = chars.length <= left ? title.text : `${chars.slice(0, left - 1).join('')}…`
-
-  return [...parts, { ...title, text }]
-}
-
-function spans(els: Els, parts: Part[]): RenderNode[] {
-  const { Text } = els
-
-  return parts.flatMap((part, at) => [
-    ...(at > 0 ? [' '] : []),
-    <Text color={part.color} dimColor={part.dimColor || undefined} bold={part.bold || undefined}>
-      {part.text}
-    </Text>,
-  ])
-}
 
 export function workView($: EngineInterface, w: WorkBoard): View {
   const treeNow = () => workTree(w.state.value).tree

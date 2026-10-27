@@ -9,6 +9,8 @@ import { fileBoard, fileStart, fileView } from './views/file'
 import type { FileBoard, FileBoardSpec, LinkPair } from './views/file'
 import { prsHooks, prsStart, prsSync, prsView } from './views/prs'
 import { reviewStart, reviewSync, reviewView } from './views/review'
+import { rolloutBoard, rolloutStart, rolloutView } from './views/rollout'
+import type { RolloutBoard, RolloutSpec } from './views/rollout'
 import { sessionHooks, sessionStart, sessionSync, sessionView } from './views/session'
 import { markWorkActive } from './work/cache'
 import { migrateFile, reportText } from './work/migrate'
@@ -29,6 +31,7 @@ const seenSession = atom({ plugin: 'board', key: 'sessionId' } as const, '')
 type Config = { boards?: unknown[]; link_labels?: Record<string, string>; link_pairs?: LinkPair[] }
 
 let fileBoards: FileBoard[] = []
+let rolloutBoards: RolloutBoard[] = []
 
 const isSpec = (one: unknown): one is FileBoardSpec =>
   typeof one === 'object' &&
@@ -58,6 +61,7 @@ function viewsOf($: EngineInterface): View[] {
     prsView($),
     reviewView($),
     ...(work ? [workView($, work)] : []),
+    ...rolloutBoards.map(board => rolloutView($, board)),
     ...fileBoards.map(board => fileView($, board)),
   ]
 }
@@ -118,10 +122,13 @@ export const register: Register = on => {
     }
     const taken = new Set(BUILT_IN)
     fileBoards = []
+    rolloutBoards = []
     let work: WorkSpec | undefined
     for (const spec of Array.isArray(config.boards) ? config.boards : []) {
       if (!isSpec(spec) || taken.has(spec.id)) continue
-      if ((spec as { layout?: string }).layout === 'model') {
+      if ((spec as { layout?: string }).layout === 'rollout') {
+        rolloutBoards.push(rolloutBoard(spec as RolloutSpec, home, shared.labels))
+      } else if ((spec as { layout?: string }).layout === 'model') {
         // One work model per person; a second model board is ignored rather than merged
         if (work) continue
         work = spec as unknown as WorkSpec
@@ -135,6 +142,7 @@ export const register: Register = on => {
     await prsStart($)
     await reviewStart($)
     for (const board of fileBoards) await fileStart($, board)
+    for (const board of rolloutBoards) await rolloutStart($, board)
     if (work) {
       await workToolStart($)
       await workStart($)
