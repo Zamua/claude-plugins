@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, On } from 'claude-code'
+import type { EngineInterface, On, RenderNode } from 'claude-code'
 
 import type { SessionBoard, SessionItem, SessionSection } from '../../types'
 import { fixed } from '../kit'
@@ -414,7 +414,8 @@ export async function sessionSync($: EngineInterface) {
   await syncBoard($)
 }
 
-export function sessionView($: EngineInterface): View {
+/** `crumbs` draws the line above the board that says where this session sits, when it sits anywhere. */
+export function sessionView($: EngineInterface, crumbs?: (els: Els) => Promise<RenderNode | undefined>): View {
   return {
     id: 'session',
     title: 'session',
@@ -432,8 +433,14 @@ export function sessionView($: EngineInterface): View {
     render: async els => {
       const { Box, Text, Markdown } = els
       const b = await read($, board)
+      const crumb = crumbs ? await crumbs(els) : undefined
       if (!hasContent(b)) {
-        return <Text dimColor>Nothing tracked yet. Claude fills this in as the session goes.</Text>
+        return (
+          <Box key="session-view" flexDirection="column" gap={1}>
+            {crumb}
+            <Text dimColor>Nothing tracked yet. Claude fills this in as the session goes.</Text>
+          </Box>
+        )
       }
       if (pressedFor !== b.sessionId) {
         expanded.clear()
@@ -451,6 +458,7 @@ export function sessionView($: EngineInterface): View {
 
       return (
         <Box key="session-view" flexDirection="column" gap={1}>
+          {crumb}
           {(b.goal !== '' || b.summary !== '') && (
             <Box key="about" flexDirection="column">
               {b.goal !== '' && <Text bold>{b.goal}</Text>}

@@ -13,7 +13,7 @@ import { sessionHooks, sessionStart, sessionSync, sessionView } from './views/se
 import { markWorkActive } from './work/cache'
 import { migrateFile, reportText } from './work/migrate'
 import { workHooks, workToolStart } from './work/tool'
-import { configureWork, currentWork, workRefresh, workStart, workView } from './work/view'
+import { configureWork, currentWork, workBreadcrumb, workRefresh, workStart, workView } from './work/view'
 import type { WorkSpec } from './work/view'
 
 const CONFIG_PATH = '.config/board/boards.json'
@@ -55,7 +55,7 @@ function viewsOf($: EngineInterface): View[] {
   const work = currentWork()
 
   return [
-    sessionView($),
+    sessionView($, work ? els => workBreadcrumb($, els) : undefined),
     prsView($),
     reviewView($),
     ...(work ? [workView($, work)] : []),
@@ -149,7 +149,7 @@ export const register: Register = on => {
     $.clock.every(30_000, () => $.ui.invalidate('ui.render'))
     await sync($)
     const views = viewsOf($)
-    for (const id of START_ORDER) {
+    for (const id of [...(work ? [work.id] : []), ...START_ORDER]) {
       const v = views.find(one => one.id === id)
       if (v && (await v.opensAtStart?.())) {
         await showView($, v.id)

@@ -47,6 +47,7 @@ the Item in the Inbox.
 | `address` | string | the Host's own locator, opaque to the core, passed back to focus it |
 | `harnessId` | string? | the Harness's id for the agent there now, from the Host |
 | `label` | string | the name the Host shows, e.g. a workspace label; aliases are matched against it |
+| `group` | string? | the Host's name for the set it runs in, e.g. a herdr session; matched like the label |
 | `state` | `waiting` \| `done` \| `working` \| `idle` | mapped by the Host from its own words, most in need of a look first |
 | `item` | ItemId? | the Item it serves: a Link, else the alias match |
 | `coordinator` | SessionId? | the Session that started it, or a Link |

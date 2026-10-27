@@ -6,7 +6,7 @@ import type { Item, ItemLink, Link, Node, Origin, Shape, Status, Tree } from './
 import { liveNow, refreshLive, selfSession, startSession } from './sessions'
 import { isLocal, itemsAndLinks, localId, readLocalNow, writeLocal } from './sources/file'
 import type { LocalFile, LocalItem } from './sources/file'
-import { currentWork, WORK_TOOL, workTree } from './view'
+import { currentWork, START_ENV, WORK_TOOL, workTree } from './view'
 import type { WorkBoard } from './view'
 
 const DESCRIPTION = `Read and change the work view of the board pane: one tree of everything the person works on, from their goals down to tasks, with responsibilities such as on-call or tooling beside them. Items nest to any depth; each has a kind (the person's own name for its level, such as Project or Task) and a status: needs (needs the person), flight (in flight), waiting, next, watching, done.
@@ -17,6 +17,7 @@ const DESCRIPTION = `Read and change the work view of the board pane: one tree o
 - link / unlink: set or clear a hand-set parent for any Item, Session or pull request, which wins over the parent its source gives. A session parent makes it that session's Coordinator; a Session keeps one Item parent and one Coordinator.
 - attach: put this session under an Item.
 - start: start a new session for an Item with a brief, as this session's child. It is refused when the Item already has a running session, naming it, so message that one instead, or pass again: true for another.
+- root: true makes this session the root session, the one the person talks to; every breadcrumb and work view then starts with a mark that brings it to the front. root: false clears it.
 - aliases: identifiers a session's workspace name or a pull request's title or branch may carry, such as an issue key, so they attach to the Item without a link.
 A read lists each session under its Item with its state, the name to message it by, and the goal and summary from its session board.
 Only Items whose ids start with file: (or have no prefix) can be added, updated or removed; Items from other sources can only be linked. File changes apply together, or none do; a started session stays started. Keep titles to one short line.`
@@ -54,6 +55,7 @@ const INPUT_SCHEMA = {
     },
     unlink: { type: 'array', items: { type: 'string' } },
     attach: { type: 'string', description: 'The Item id to put this session under.' },
+    root: { type: 'boolean', description: 'Make this session the root session, or clear the root with false.' },
     start: {
       type: 'array',
       items: {
@@ -92,6 +94,7 @@ type Input = {
   unlink?: string[]
   attach?: string
   start?: Start[]
+  root?: boolean
 }
 
 type Applied = { file: LocalFile; added: string[] } | { error: string }
@@ -220,6 +223,7 @@ export function workHooks(on: On) {
       !input.link?.length &&
       !input.unlink?.length &&
       input.attach === undefined &&
+      input.root === undefined &&
       !input.start?.length
     let current: LocalFile
     try {
@@ -230,7 +234,8 @@ export function workHooks(on: On) {
     if (isRead) {
       await refreshLive($, w.spec, true)
       const { tree } = workTree(current)
-      return { result: tree ? treeText(tree) : 'The work board is empty.' }
+      const root = typeof current.root === 'string' ? current.root : undefined
+      return { result: tree ? treeText(tree, root) : 'The work board is empty.' }
     }
 
     return change($, w, current, input)
@@ -253,8 +258,10 @@ async function cwdOf($: EngineInterface, w: WorkBoard, asked: string | undefined
 async function change($: EngineInterface, w: WorkBoard, current: LocalFile, input: Input) {
   const now = new Date(await $.clock.now()).toISOString()
   const starts = input.start ?? []
-  const self = input.attach !== undefined || starts.length > 0 ? await selfSession($, w.spec) : undefined
+  const needsSelf = input.attach !== undefined || input.root === true || starts.length > 0
+  const self = needsSelf ? await selfSession($, w.spec) : undefined
   if (input.attach !== undefined && !self) return { deny: 'No host lists this session, so it cannot be attached.' }
+  if (input.root === true && !self) return { deny: 'No host lists this session, so it cannot be the root.' }
   const attach = input.attach !== undefined && self ? [{ child: self.id, parent: input.attach }] : []
   const applied = applyChange(current, { ...input, link: [...(input.link ?? []), ...attach] }, now)
   if ('error' in applied) return { deny: applied.error }
@@ -274,6 +281,11 @@ async function change($: EngineInterface, w: WorkBoard, current: LocalFile, inpu
   }
 
   let file = applied.file
+  if (input.root === true && self) file = { ...file, root: self.id }
+  if (input.root === false) {
+    const { root: _cleared, ...rest } = file
+    file = rest as LocalFile
+  }
   const started: string[] = []
   const failed: string[] = []
   const taken = new Set(liveNow().sessions.map(one => one.label))
@@ -282,7 +294,13 @@ async function change($: EngineInterface, w: WorkBoard, current: LocalFile, inpu
     const label = one.label?.trim() || labelFor(item, taken)
     taken.add(label)
     const cwd = await cwdOf($, w, one.cwd)
-    const out = await startSession($, w.spec, { label, cwd, brief: one.brief, ...(self && { near: self.address }) })
+    const out = await startSession($, w.spec, {
+      label,
+      cwd,
+      brief: one.brief,
+      env: { [START_ENV]: item.id },
+      ...(self && { near: self.address }),
+    })
     if (!out.id) {
       failed.push(out.error ?? `${label} did not start.`)
       continue
