@@ -233,6 +233,8 @@ test("someone else's pull request is flagged only for a thread waiting on you, y
   const ui = await open($, 'prs')
   const flagged = async (n: number) => (await ui.find({ key: `flag-acme/api#${n}` }))?.text === '!'
   expect(await Promise.all([6011, 6012, 6013].map(flagged))).toEqual([true, false, true])
+  expect(await ui.find({ key: 'prrow-acme/api#6012', text: /CI fail\s*rojen\s*A change$/ })).toBeDefined()
+  expect(await ui.find({ key: 'author-acme/api#6011', text: 'octo' })).toBeDefined()
   expect(await ui.find({ key: 'tab-prs', text: 'prs 2' })).toBeDefined()
   await ui.unmount()
 })
