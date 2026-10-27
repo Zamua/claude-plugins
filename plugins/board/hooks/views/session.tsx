@@ -290,12 +290,14 @@ function itemRow($: EngineInterface, els: Els, item: SessionItem, idWidth: numbe
     )
   }
 
+  // A Button wraps its own text, so the mark is the control and a Text beside it holds the line
   return (
     <Box key={`item-${item.id}`} flexDirection="row" columnGap={1}>
       {id}
-      <Button key={`open-${item.id}`} plain dimColor={quiet} onPress={toggle($, expanded, item.id)}>
-        <Text wrap="truncate-end">{`${mark(item)} ${plainOf(item.text)}`}</Text>
-      </Button>
+      <Button key={`open-${item.id}`} label={mark(item)} plain dimColor onPress={toggle($, expanded, item.id)} />
+      <Text dimColor={quiet} wrap="truncate-end">
+        {plainOf(item.text)}
+      </Text>
     </Box>
   )
 }
