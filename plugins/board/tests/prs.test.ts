@@ -161,6 +161,35 @@ test('a pull request based on another tracked one sits above it in one stack', a
   await ui.unmount()
 })
 
+test('each git stack in a named group draws as one run, bottom first, marked ╭ │ ╰, with lone pull requests after', async ($, on) => {
+  const url = (n: number) => `https://github.com/acme/api/pull/${n}`
+  engine(
+    on,
+    gh({
+      8111: pr({ title: 'pays a payout', headRefName: 'pay' }),
+      8117: pr({ title: 'settles a payout', headRefName: 'settle', baseRefName: 'pay' }),
+      8118: pr({ title: 'sweeps payouts', headRefName: 'sweep', baseRefName: 'settle' }),
+      8139: pr({ title: 'funds push-to-card', headRefName: 'fund' }),
+      8145: pr({ title: 'sweeps draws', headRefName: 'draws', baseRefName: 'fund' }),
+      8042: pr({ title: 'adds card calls', state: 'MERGED', headRefName: 'calls' }),
+      8047: pr({ title: 'adds the draw', headRefName: 'draw' }),
+    }),
+    NOW,
+  )
+  await start($)
+  const order = [8111, 8139, 8042, 8047, 8117, 8145, 8118]
+  await $.tool.call({ tool: TOOL, add: order.map(n => ({ pr: url(n), stack: 'Push to card' })) })
+
+  const ui = await open($, 'prs')
+  const rows = (await ui.find({ key: 'prs' }))?.text ?? ''
+  const drawn = [...rows.matchAll(/#(\d{4})/g)].map(m => Number(m[1]))
+  expect(drawn).toEqual([8111, 8117, 8118, 8139, 8145, 8042, 8047])
+  const glyph = async (n: number) => (await ui.find({ key: `chain-acme/api#${n}` }))?.text ?? ''
+  expect(await Promise.all(drawn.map(glyph))).toEqual(['╭', '│', '╰', '╭', '╰', '', ''])
+  expect(rows).not.toContain('on #')
+  await ui.unmount()
+})
+
 test('a refresh says when a tracked pull request merged or its CI failed', async ($, on) => {
   const github = { 6047: pr({}), 6050: pr({ rollup: 'PENDING' }) }
   const w = gh(github)

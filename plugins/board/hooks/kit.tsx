@@ -231,6 +231,8 @@ export type PrRowSpec = {
   url?: string
   /** The rule hung under a stack heading. */
   tree?: 'mid' | 'last'
+  /** Where it sits in its git stack, one glyph wide; empty for a pull request on no stack. */
+  chain?: string
   /** The first column: one glyph for approval, or for merged and closed. */
   mark?: { glyph: string; color: Color }
   /** The second column: a warning mark while it waits on the person. */
@@ -254,6 +256,11 @@ export function prRow(els: Els, spec: PrRowSpec) {
   return (
     <Box key={`prrow-${id}`} flexDirection="row" columnGap={1}>
       {spec.tree && fixed(els, `tree-${id}`, <Text dimColor>{spec.tree === 'last' ? '└' : '├'}</Text>)}
+      {spec.chain !== undefined && (
+        <Box key={`chain-${id}`} width={1} flexShrink={0}>
+          {spec.chain !== '' && <Text dimColor>{spec.chain}</Text>}
+        </Box>
+      )}
       <Box key={`mark-${id}`} width={1} flexShrink={0}>
         {spec.mark && <Text color={spec.mark.color}>{spec.mark.glyph}</Text>}
       </Box>
