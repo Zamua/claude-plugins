@@ -86,7 +86,7 @@ US6. Each story ends with a live check and a version bump, so each ships alone.
 - [X] T023 [P] [US3] Implement `plugins/board/hooks/work/sources/github.ts`: read every stored prs board from the plugin store and the facts in `~/.cache/board/github.json`, producing Artifacts with title, branch and facts; no network calls
 - [X] T024 [US3] Extend `plugins/board/hooks/work/tool.tsx` per `contracts/work-tool.md`: `attach` finds the calling session's address by matching `$.session.id()` to a Host session's `harnessId` (research R10); `link` accepts Session and Artifact children and Session parents, keeping one Item Link and one Coordinator Link per Session; `start` refuses an Item with a running Session unless `again`, calls the Host's `startSession`, then writes both Links; the read adds one line per Session with state and message name, and its goal and summary from the stored session board; update the tool's description and input schema to match
 - [X] T025 [US3] Draw Sessions and Artifacts in `plugins/board/hooks/work/view.tsx`: a Session line shows its label and state and focuses it on press through its Host's `focusSession`; a Coordinator's Sessions draw beneath it; an Item with sessions gets a one-glyph session mark (●) colored by the most urgent session state, which focuses the most recently active session (spec FR-021); an Artifact line uses `prRow` from `plugins/board/hooks/kit.tsx`; Unplaced draws last
-- [ ] T026 [US3] Live check and ship: confirm at least 90% of open workspaces attach with no hand link (SC-003); from this session, start a session for one Item with a short brief and confirm it appears under the Item with this session as Coordinator and gets the brief; message it by the name the read gives; close its workspace; attach the CRB architecture session to its Responsibility by hand; bump the version, commit and push
+- [X] T026 [US3] Live check and ship: confirm at least 90% of open workspaces attach with no hand link (SC-003); from this session, start a session for one Item with a short brief and confirm it appears under the Item with this session as Coordinator and gets the brief; message it by the name the read gives; close its workspace; attach the CRB architecture session to its Responsibility by hand; bump the version, commit and push
 
 **Checkpoint**: one session can start, track and reach the others.
 
@@ -208,5 +208,9 @@ the next story.
   its commit (Constitution, Mod Constraints).
 - The validator lets `$` reach only function declarations and wants each atom read in its own file;
   keep each view's atoms in that view's file.
+- T026, measured 2026-10-27 on 0.3.0: a started session came up under its Item with its Coordinator and
+  message name in about 30 seconds, got its brief, and answered a message by that name. Only 5 of 26
+  running sessions attached (SC-003 not met): most of the board's Items carry no aliases, Linear Items
+  arrive with US2, and on-call, review and side-project sessions have no Item to sit under yet.
 - The memory note on the work board (`~/.claude/projects/-Users-zamua/memory/work-board.md`) needs
   updating once US3 and US4 ship.
