@@ -32,7 +32,7 @@ test('a title too long for the pane is cut to fit, so its whole row stays one pr
 
   const ui = await open($, 'work')
   const text = (await ui.find({ key: 'wtoggle-file:long' }))?.text ?? ''
-  expect(text).toMatch(/^› next  Project A project whose title runs on .*…$/)
+  expect(text).toMatch(/^▸ next  Project A project whose title runs on .*…$/)
   expect([...text].length).toBeLessThanOrEqual(59)
   await ui.press({ key: 'wtoggle-file:long' })
   expect(await ui.find({ type: 'Markdown', text: 'More.' })).toBeDefined()

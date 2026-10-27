@@ -369,7 +369,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       node.artifacts.length > 0 ||
       Boolean(item.detail) ||
       item.links.length > 0
-    const glyph = !hasMore ? '·' : isOpen ? '▾' : node.children.length > 0 ? '▸' : '›'
+    const glyph = !hasMore ? '·' : isOpen ? '▾' : '▸'
     const due = item.target ? dueOf(item.target, item.targetLabel, ctx.now) : undefined
     const showKind = node.depth === 0 || node.children.length > 0
     const hasMark = node.sessions.length > 0
