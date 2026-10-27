@@ -290,6 +290,8 @@ async function change($: EngineInterface, w: WorkBoard, current: LocalFile, inpu
   const started: string[] = []
   const failed: string[] = []
   const taken = new Set(liveNow().sessions.map(one => one.label))
+  // A session started from one on another config would read a different tree than the one it was started in
+  const config = await $.env.get('BOARD_CONFIG')
   for (const one of starts) {
     const { item } = tree.byId.get(qualify(one.item)) as Node
     const label = one.label?.trim() || labelFor(item, taken)
@@ -299,7 +301,7 @@ async function change($: EngineInterface, w: WorkBoard, current: LocalFile, inpu
       label,
       cwd,
       brief: one.brief,
-      env: { [START_ENV]: item.id },
+      env: { [START_ENV]: item.id, ...(config && { BOARD_CONFIG: config }) },
       ...(self && { near: self.address }),
     })
     if (!out.id) {
