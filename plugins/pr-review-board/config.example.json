@@ -11,6 +11,7 @@
   "reviews_root": "",
   "workspace_root": "",
   "herdr_session": "reviews",
+  "herdr_workspace": "",
   "agent_kind": "claude",
   "agent_cmd": [
     "claude"

@@ -2,8 +2,10 @@
 # pr-review-board runtime adapter: herdr (https://herdr.dev), verified on 0.9.5.
 #
 # Every review runs inside ONE shared herdr session (config `herdr_session`).
-# Each review gets its OWN workspace, labelled with the review slug, holding one
-# pane: the review agent.
+# Each review gets its own tab, labelled with the review slug, holding one pane:
+# the review agent. With `herdr_workspace` set, every review's tab sits in the one
+# workspace of that label, made the first time; otherwise each review gets a
+# workspace of its own.
 #
 # Review identity for status and reap is the herdr AGENT NAME, derived
 # deterministically from the slug, so a pass is re-entrant and cannot produce
@@ -11,7 +13,7 @@
 #
 # herdr's `agent start` attaches an agent to an EXISTING pane already sitting at a
 # shell prompt and derives the executable from `--kind`, so a launch is three
-# calls: `workspace create` (owns cwd and label), `agent start`, then
+# calls: `workspace create` or `tab create` (owns cwd and label), `agent start`, then
 # `agent prompt` for the kickoff. A just-created pane needs a moment to reach its
 # prompt and answers `agent_pane_busy` until it does, so that one error is retried.
 #
@@ -27,6 +29,7 @@
 rt_deps() { printf 'herdr jq uuidgen'; }
 
 _rt_session() { prb_get herdr_session reviews; }
+_rt_shared() { prb_get herdr_workspace ""; }
 _rt_new_sid() { uuidgen | tr 'A-Z' 'a-z'; }
 
 # herdr agent names must match [a-z][a-z0-9_-]{0,31}: 32 chars, leading letter.
@@ -90,16 +93,41 @@ _rt_build_argv() {
   sub="$(prb_get worker_subagent pr-reviewer)"; [ -n "$sub" ] && RT_ARGV+=(--agent "$sub")
 }
 
-# The review's workspace, holding one pane at a shell prompt. Echoes
-# "<workspace_id> <pane_id>".
-_rt_new_workspace() {  # <cwd> <label>
-  local s out ws pane; s="$(_rt_session)"
-  out="$( prb_scrub_env; herdr --session "$s" workspace create --cwd "$1" --label "$2" --no-focus 2>&1 )"
-  ws="$(printf '%s' "$out"   | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)"
+# The review's tab, holding one pane at a shell prompt: in the shared workspace
+# when the config names one, else in a workspace of its own. Echoes
+# "<workspace_id> <tab_id> <pane_id>".
+_rt_new_place() {  # <cwd> <label>
+  local s shared out ws="" tab pane; s="$(_rt_session)"; shared="$(_rt_shared)"
+  [ -n "$shared" ] && ws="$(herdr --session "$s" workspace list 2>/dev/null \
+    | jq -r --arg l "$shared" '[.result.workspaces[]? | select(.label==$l)][0].workspace_id // empty' 2>/dev/null)"
+  if [ -n "$ws" ]; then
+    out="$( prb_scrub_env; herdr --session "$s" tab create --workspace "$ws" --cwd "$1" --label "$2" --no-focus 2>&1 )"
+  else
+    out="$( prb_scrub_env; herdr --session "$s" workspace create --cwd "$1" --label "${shared:-$2}" --no-focus 2>&1 )"
+    ws="$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)"
+  fi
+  tab="$(printf '%s' "$out"  | jq -r '.result.tab.tab_id // empty' 2>/dev/null)"
   pane="$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)"
-  [ -n "$ws" ] && [ -n "$pane" ] || { prb_log "workspace create '$2' failed in $s: $out"; return 1; }
-  printf '%s %s' "$ws" "$pane"
+  [ -n "$ws" ] && [ -n "$tab" ] && [ -n "$pane" ] || { prb_log "could not open '$2' in $s: $out"; return 1; }
+  [ -n "$shared" ] && herdr --session "$s" tab rename "$tab" "$2" >/dev/null 2>&1
+  printf '%s %s %s' "$ws" "$tab" "$pane"
 }
+
+# Closes what a review runs in: its tab in the shared workspace, or its own workspace.
+_rt_close_place() {  # <workspace_id> <tab_id or empty>
+  if [ -n "$2" ]; then herdr --session "$(_rt_session)" tab close "$2" >/dev/null 2>&1
+  else herdr --session "$(_rt_session)" workspace close "$1" >/dev/null 2>&1
+  fi
+}
+
+# Records where a review runs. herdr_tab is kept only for a tab in the shared
+# workspace, so its absence means the review owns its whole workspace.
+_rt_record_place() {  # <key> <workspace_id> <tab_id>
+  prb_review_set_field "$1" herdr_workspace "$2"
+  if [ -n "$(_rt_shared)" ]; then prb_review_set_field "$1" herdr_tab "$3"; else prb_review_set_field "$1" herdr_tab ""; fi
+}
+
+_rt_own_tab() { [ -n "$(_rt_shared)" ] && printf '%s' "$1"; }
 
 # Attach the agent under an EXACT name. Only agent_pane_busy is retried (the pane's
 # shell has not finished coming up); any other error fails immediately. No
@@ -149,7 +177,7 @@ rt_running_count() {
 # Bring a review up. poll.sh has already created the review dir and written the
 # assignment, so both exist before the agent's first turn.
 rt_spawn() {  # <key> <context>
-  local key="$1" context="$2" slug dir name sid ws pane pair
+  local key="$1" context="$2" slug dir name sid ws tab pane place
   rt_ensure_server || return 1
   _rt_build_argv
   slug="$(prb_review_field "$key" slug)"; dir="$(prb_review_field "$key" dir)"
@@ -157,15 +185,15 @@ rt_spawn() {  # <key> <context>
   # cwd is the reviews ROOT, not $dir. Claude prompts for reads outside its cwd, and a
   # background agent cannot answer that, so the assignment, the rules copy and every
   # checkout have to sit inside one cwd. This is why a narrow per-review cwd stalls.
-  pair="$(_rt_new_workspace "$(prb_reviews_root)" "$slug")" || return 1
-  ws="${pair%% *}"; pane="${pair##* }"
+  place="$(_rt_new_place "$(prb_reviews_root)" "$slug")" || return 1
+  read -r ws tab pane <<<"$place"
   if ! _rt_agent_start "$name" "$pane" ${RT_ARGV[@]+"${RT_ARGV[@]}"} --session-id "$sid"; then
-    herdr --session "$(_rt_session)" workspace close "$ws" >/dev/null 2>&1
+    _rt_close_place "$ws" "$(_rt_own_tab "$tab")"
     return 1
   fi
   prb_review_set_field "$key" claude_session "$sid"
   prb_review_set_field "$key" agent_name "$name"
-  prb_review_set_field "$key" herdr_workspace "$ws"
+  _rt_record_place "$key" "$ws" "$tab"
   _rt_prompt "$name" "$context"
   prb_log "spawned $key (session=$(_rt_session) workspace=$ws label=$slug claude=$sid)"
 }
@@ -173,7 +201,7 @@ rt_spawn() {  # <key> <context>
 # Recover a review whose agent died while the review is still ACTIVE. Resume never
 # re-reviews from scratch: the report and the notes are already on disk.
 rt_resume() {  # <key> ; 2 = no saved session
-  local key="$1" sid slug dir name ws pane pair
+  local key="$1" sid slug dir name ws tab pane place
   sid="$(prb_review_field "$key" claude_session)"
   [ -n "$sid" ] || { prb_log "resume $key: no saved session"; return 2; }
   rt_ensure_server || return 1
@@ -181,17 +209,17 @@ rt_resume() {  # <key> ; 2 = no saved session
   slug="$(prb_review_field "$key" slug)"; dir="$(prb_review_field "$key" dir)"
   name="$(_rt_name "$key")"
   prb_review_set_field "$key" agent_name "$name"
-  # Resume builds a fresh workspace, so the one recorded for the dead agent has to go
-  # or every recovery leaves another empty workspace in the session.
-  local old_ws; old_ws="$(prb_review_field "$key" herdr_workspace)"
-  [ -n "$old_ws" ] && herdr --session "$(_rt_session)" workspace close "$old_ws" >/dev/null 2>&1
-  pair="$(_rt_new_workspace "$(prb_reviews_root)" "$slug")" || return 1
-  ws="${pair%% *}"; pane="${pair##* }"
+  # Resume opens a fresh tab, so the place recorded for the dead agent has to go
+  # or every recovery leaves another empty one in the session.
+  local old_ws old_tab; old_ws="$(prb_review_field "$key" herdr_workspace)"; old_tab="$(prb_review_field "$key" herdr_tab)"
+  [ -n "$old_ws$old_tab" ] && _rt_close_place "$old_ws" "$old_tab"
+  place="$(_rt_new_place "$(prb_reviews_root)" "$slug")" || return 1
+  read -r ws tab pane <<<"$place"
   if ! _rt_agent_start "$name" "$pane" ${RT_ARGV[@]+"${RT_ARGV[@]}"} --resume "$sid"; then
-    herdr --session "$(_rt_session)" workspace close "$ws" >/dev/null 2>&1
+    _rt_close_place "$ws" "$(_rt_own_tab "$tab")"
     return 1
   fi
-  prb_review_set_field "$key" herdr_workspace "$ws"
+  _rt_record_place "$key" "$ws" "$tab"
   _rt_prompt "$name" "Resumed. Re-check every pull request and thread for activity since your last pass, and continue. Do not redo finished work."
   prb_log "resumed $key (workspace=$ws claude=$sid)"
 }
@@ -204,22 +232,25 @@ rt_notify() {  # <key> <text>
   _rt_prompt "$name" "$2"
 }
 
-# Keep a live workspace's label in step after a promotion. Cosmetic only: identity
+# Keep a live review's label in step after a promotion. Cosmetic only: identity
 # is the agent name, never the label.
 rt_relabel() {  # <key> <label>
-  local ws; ws="$(prb_review_field "$1" herdr_workspace)"
-  [ -n "$ws" ] || return 0
-  herdr --session "$(_rt_session)" workspace rename "$ws" "$2" >/dev/null 2>&1
+  local ws tab; ws="$(prb_review_field "$1" herdr_workspace)"; tab="$(prb_review_field "$1" herdr_tab)"
+  if [ -n "$tab" ]; then herdr --session "$(_rt_session)" tab rename "$tab" "$2" >/dev/null 2>&1
+  elif [ -n "$ws" ]; then herdr --session "$(_rt_session)" workspace rename "$ws" "$2" >/dev/null 2>&1
+  fi
+  return 0
 }
 
-# Teardown, for the cleanup skill only. Closing the workspace takes the agent pane
-# with it.
+# Teardown, for the cleanup skill only. Closing the tab or workspace takes the agent
+# pane with it.
 rt_close_workspace() {  # <key>
-  local ws s; ws="$(prb_review_field "$1" herdr_workspace)"; s="$(_rt_session)"
-  [ -n "$ws" ] || { prb_log "close $1: no recorded workspace"; return 0; }
-  herdr --session "$s" workspace close "$ws" >/dev/null 2>&1 \
-    && prb_log "closed herdr workspace $ws for $1" \
-    || prb_log "close $1: workspace $ws already gone"
+  local ws tab what; ws="$(prb_review_field "$1" herdr_workspace)"; tab="$(prb_review_field "$1" herdr_tab)"
+  [ -n "$ws$tab" ] || { prb_log "close $1: no recorded workspace"; return 0; }
+  what="workspace $ws"; [ -n "$tab" ] && what="tab $tab"
+  _rt_close_place "$ws" "$tab" \
+    && prb_log "closed herdr $what for $1" \
+    || prb_log "close $1: $what already gone"
 }
 
 rt_list() {
