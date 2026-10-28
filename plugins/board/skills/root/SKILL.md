@@ -100,6 +100,15 @@ places the person's instructions name, adds new asks to the tree and messages th
 something arrives. On such a message, place each ask or leave it in the Inbox, and tell the person
 what came in.
 
+## Promoting an ask
+
+When an ask grows into a whole effort, promote it rather than starting over: `update` it to a
+top-level kind such as Project, an in-flight status and no parent, and it joins the top-level
+Outcomes with its asker kept. Move any Items already about it under it. Ask the person whether it
+gets an area of its own; if so, add it to the workspaces the config names, then start a session
+that coordinates it. An external Item that grows, such as an issue, gets a local Project with the
+issue's key as an alias, and the issue linked under it.
+
 ## Keeping the tree current
 
 - Never restart, close or re-brief a running session unless the person asks. To place a running

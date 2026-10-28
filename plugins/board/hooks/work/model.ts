@@ -244,7 +244,9 @@ export function buildTree(
   }
   for (const node of tops) rollUp(node)
   const ordered = [...tops].sort(byUrgency)
-  const isAsk = (n: Node) => n.item.origin?.type === 'asked' && !parentOf.has(n.item.id)
+  // An ask waits until it is placed or work on it starts, so one promoted to the top stands with the other work
+  const isAsk = (n: Node) =>
+    n.item.origin?.type === 'asked' && !parentOf.has(n.item.id) && (n.item.status === 'next' || n.item.status === 'needs')
 
   return {
     outcomes: ordered.filter(n => n.item.shape === 'outcome' && !isAsk(n)),

@@ -228,3 +228,15 @@ test("an ask's line in a read carries its link", async ($, on) => {
   await $.tool.call({ tool: TOOL, add: [{ title: 'Answer the vendor', kind: 'Task', origin: { type: 'asked', by: 'Dana' }, links: [link] }] })
   expect(String((await $.tool.call({ tool: TOOL })).result)).toContain('[Task, next, asked by Dana] Answer the vendor <https://chat.example.com/t/42>')
 })
+
+test('an ask promoted to a top-level effort leaves the Inbox for the Outcomes, keeping who asked', async ($, on) => {
+  const w = withTree()
+  engine(on, w, NOW)
+  await start($)
+
+  await $.tool.call({ tool: TOOL, add: [{ title: 'Vendor outage', kind: 'Task', origin: { type: 'asked', by: 'Dana' } }] })
+  await $.tool.call({ tool: TOOL, update: [{ id: 'vendor-outage', kind: 'Project', status: 'flight' }] })
+  const read = String((await $.tool.call({ tool: TOOL })).result)
+  expect(read).not.toContain('Inbox:')
+  expect(read).toMatch(/Outcomes:\n(.*\n)*file:vendor-outage #10 \[Project, flight, asked by Dana\] Vendor outage/)
+})
