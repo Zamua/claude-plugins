@@ -68,6 +68,7 @@ const INPUT_SCHEMA = {
           label: { type: 'string', description: 'Its tab or workspace name; by default, from the Item.' },
           cwd: { type: 'string' },
           again: { type: 'boolean', description: 'Start one even though the Item has a running session.' },
+          model: { type: 'string', description: 'The model it runs, over the configured one, such as a lighter one for routine passes.' },
         },
         required: ['item', 'brief'],
       },
@@ -88,7 +89,7 @@ type Fields = {
   links?: ItemLink[]
   aliases?: string[]
 }
-type Start = { item: string; brief: string; label?: string; cwd?: string; again?: boolean }
+type Start = { item: string; brief: string; label?: string; cwd?: string; again?: boolean; model?: string }
 type Input = {
   add?: (Fields & { title: string; kind: string })[]
   update?: (Fields & { id: string })[]
@@ -339,7 +340,7 @@ async function change($: EngineInterface, w: WorkBoard, current: LocalFile, inpu
         .reverse(),
       env: { [START_ENV]: item.id, ...(config && { BOARD_CONFIG: config }) },
       ...(self && { near: self.address }),
-    })
+    }, one.model)
     if (!out.id) {
       failed.push(out.error ?? `${label} did not start.`)
       continue

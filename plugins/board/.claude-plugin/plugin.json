@@ -1,7 +1,7 @@
 {
   "name": "board",
   "description": "One pane beside the chat holding every board, with a row of buttons to switch between them: the session board Claude keeps current, the pull requests this session raised with GitHub's live state, the pr-review-board review this session runs, one tree of everything you work on from your goals down to the sessions and pull requests doing it, where a root session starts and coordinates the others, and any board another process writes as JSON, such as a rollout, named in ~/.config/board/boards.json. Each button shows how many items wait on you. /board toggles the pane, /board <name> opens it on one board.",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "author": {
     "name": "Zamua"
   },
