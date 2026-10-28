@@ -111,17 +111,21 @@ state, the name to message it by, and the goal and summary from its session boar
 - `link`, `unlink`: a hand-set parent for any Item, session or pull request. A session's parent can be another session,
   its Coordinator; a session keeps one Item parent and one Coordinator.
 - `attach`: put this session under an Item.
-- `start`: start a session for an Item with a brief, as this session's child. It opens a herdr workspace named after
-  the Item, starts the harness in it and sends the brief as the first prompt. It is refused when the Item already has
-  a running session, unless `again`.
+- `start`: start a session for an Item with a brief, as this session's child. It opens a herdr tab named after the
+  Item, in its branch's workspace or one of its own, starts the harness in it and sends the brief as the first prompt.
+  `model` runs it on another model than the configured one. It is refused when the Item already has a running
+  session, unless `again`.
 - `root`: make this session the root, the one you talk to. Every breadcrumb and work view then starts with a `⌂` mark
   that brings it to the front.
 - `aliases`: identifiers a workspace label, pull request title or branch may carry, such as an issue key.
 
 The session view starts with where its session sits, such as `⌂ root  Grow funding partners › MM-809  ↗`. The `⌂`
 mark brings the root session to the front, and `↗` opens the work view down to this session. The [`root` skill](skills/root/SKILL.md) tells a root or coordinator
-session how to answer status questions from one tree read, start sessions with a complete brief, and message
-coordinators rather than their workers.
+session how to rank what needs you, answer status, rollup and ETA questions from one tree read, start sessions with a
+complete brief, and expect you to work with any session directly. The [`intake` skill](skills/intake/SKILL.md) is
+one pass of an intake session the root starts: it checks the sources its brief names for new asks and adds them to
+the tree, saying nothing when none came in. A read ends each ask's line with its link, so a pass knows what it already
+added.
 
 ### Config
 

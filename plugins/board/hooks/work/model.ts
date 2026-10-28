@@ -399,7 +399,9 @@ export function treeText(tree: Tree): string {
     const by = node.item.origin?.by ? `, asked by ${node.item.origin.by}` : ''
     const target = node.item.target ? `, target ${node.item.target.slice(0, 10)}` : ''
     const eta = node.eta ? `, eta ${node.eta.slice(0, 10)}${isLate(node) ? ', late' : ''}` : ''
-    lines.push(`${pad}${node.item.id}${ref} [${node.item.kind}, ${node.shown}${needs}${target}${eta}${time}${by}] ${node.item.title}`)
+    // An ask's link is how intake tells it already holds one
+    const asked = node.item.origin?.type === 'asked' && node.item.links[0] ? ` <${node.item.links[0].url}>` : ''
+    lines.push(`${pad}${node.item.id}${ref} [${node.item.kind}, ${node.shown}${needs}${target}${eta}${time}${by}] ${node.item.title}${asked}`)
     for (const session of node.sessions) lines.push(...sessionText(tree, session, `${pad}  `))
     for (const artifact of node.artifacts) lines.push(`${pad}  ${artifact.id} [${artifact.status}] ${artifact.title}`)
     for (const child of node.children) walk(child)

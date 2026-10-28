@@ -168,12 +168,13 @@ export async function startSession(
   $: EngineInterface,
   config: LiveConfig,
   start: Omit<HostStart, 'harness' | 'args'>,
+  model?: string,
 ): Promise<{ id?: string; error?: string }> {
   const host = Object.keys(config.hosts ?? {})[0]
   const harness = Object.keys(config.harnesses ?? {})[0]
   if (!host || !harness) return { error: 'boards.json names no host and harness to start a session with.' }
   if (host !== 'herdr') return { error: `No host ${host} to start a session with.` }
-  const args = harness === 'claude' ? claudeArgs(config.harnesses?.[harness]) : []
+  const args = harness === 'claude' ? claudeArgs(config.harnesses?.[harness], model) : []
   const started = await startHerdr($, { ...start, harness, args }, config.hosts?.[host] as HerdrConfig | undefined)
   if (!started.address) return { error: started.error ?? 'The session did not start.' }
   await refreshLive($, config, true)

@@ -208,3 +208,23 @@ test('a session resumed in another place keeps its place in the tree, and the ne
   await $.tool.call({ tool: TOOL, unlink: [NEW_ID] })
   expect(fileOf(w.files).links).toEqual([])
 })
+
+test('a start can run its session on another model than the configured one', async ($, on) => {
+  const created = { id: 'w9:p1', label: 'scope-the-split', harnessId: 'h-new' }
+  const w = withLive(TREE, herdrHost([SELF], created))
+  engine(on, w, NOW)
+  await start($)
+
+  await $.tool.call({ tool: TOOL, start: [{ item: 'scope', brief: 'Check for new asks.', model: 'sonnet' }] })
+  expect(w.runs.find(argv => argv.includes('agent') && argv.includes('start'))?.slice(-2)).toEqual(['--model', 'sonnet'])
+})
+
+test("an ask's line in a read carries its link", async ($, on) => {
+  const w = withTree()
+  engine(on, w, NOW)
+  await start($)
+
+  const link = { label: 'thread', url: 'https://chat.example.com/t/42' }
+  await $.tool.call({ tool: TOOL, add: [{ title: 'Answer the vendor', kind: 'Task', origin: { type: 'asked', by: 'Dana' }, links: [link] }] })
+  expect(String((await $.tool.call({ tool: TOOL })).result)).toContain('[Task, next, asked by Dana] Answer the vendor <https://chat.example.com/t/42>')
+})

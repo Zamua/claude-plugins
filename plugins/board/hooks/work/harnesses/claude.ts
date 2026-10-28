@@ -50,11 +50,14 @@ export async function claudeInfo($: EngineInterface, harnessIds: string[]): Prom
   return out
 }
 
-/** The arguments Claude Code starts with, from `harnesses.claude.args`. */
-export function claudeArgs(config: unknown): string[] {
-  const args = (config as { args?: unknown } | undefined)?.args
+/** The arguments Claude Code starts with, from `harnesses.claude.args`, with `model` over the one they name. */
+export function claudeArgs(config: unknown, model?: string): string[] {
+  const listed = (config as { args?: unknown } | undefined)?.args
+  const args = Array.isArray(listed) ? listed.filter((one): one is string => typeof one === 'string') : []
+  if (!model) return args
+  const at = args.indexOf('--model')
 
-  return Array.isArray(args) ? args.filter((one): one is string => typeof one === 'string') : []
+  return at >= 0 ? args.map((one, i) => (i === at + 1 ? model : one)) : [...args, '--model', model]
 }
 
 /**
