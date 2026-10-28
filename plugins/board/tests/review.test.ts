@@ -17,7 +17,7 @@ const MANUAL_FILE = `${HOME}/workspace/reviews/.pr-review-board/manual-sess-hand
 const STATE = {
   reviews: {
     'other-1': { status: 'ACTIVE', slug: 'other-1', claude_session: 'sess-other', prs: ['acme/api#1'] },
-    'stack-7472': { status: 'ACTIVE', slug: 'lead-stack-6936', claude_session: SESSION, herdr_workspace: 'wT', prs: ['acme/api#6954', 'acme/api#7472'] },
+    'stack-7472': { status: 'ACTIVE', slug: 'nova-stack-6936', claude_session: SESSION, herdr_workspace: 'wT', prs: ['acme/api#6954', 'acme/api#7472'] },
     'old-9': { status: 'CLEANEDUP', slug: 'old-9', claude_session: SESSION, prs: ['acme/api#9'] },
   },
 }
@@ -25,32 +25,32 @@ const STATE = {
 const BOARD = {
   schema: 2,
   updated_at: '2026-10-21T13:50:00Z',
-  title: 'Lead adapters stack',
+  title: 'Nova adapters stack',
   verdict: 'medium',
-  risk: 'Medium: money movement behind a gate at 0%.',
-  blast_radius: 'From merge, a payment outage stops legacy Lead work.',
+  risk: 'Medium: payments behind a gate at 0%.',
+  blast_radius: 'From merge, a payment outage stops legacy Nova work.',
   prs: [
     { pr: 'acme/api#6954', number: 6954, title: 'Servicing steps aside', url: 'https://github.com/acme/api/pull/6954', risk: 'medium' },
     { pr: 'acme/api#7472', number: 7472, title: 'Bank fix', url: 'https://github.com/acme/api/pull/7472', risk: 'medium' },
   ],
   report: [
-    { id: 'about', title: 'What this change is about', markdown: 'Moves Lead disbursement into **payment**.' },
+    { id: 'about', title: 'What this change is about', markdown: 'Moves Nova disbursement into **payment**.' },
     { id: 'risk', title: 'Risk and blast radius', markdown: 'Medium.' },
   ],
   comments: [
     {
       n: 6, pr: 'acme/api#6954', severity: 'live', confidence: 'proven', status: 'proposed', origin: 'new',
-      summary: 'A payment outage stops legacy Lead work.', body: 'With the gate off, a 503 stops servicing.',
+      summary: 'A payment outage stops legacy Nova work.', body: 'With the gate off, a 503 stops servicing.',
       detail: 'Every legacy handler asks payment first.', origin_note: 'Servicing never called payment.',
-      target: 'DebtFacilityConfig.kt:227', location_url: 'https://github.com/acme/api/blob/a/x.kt#L227',
+      target: 'LedgerSweepConfig.kt:227', location_url: 'https://github.com/acme/api/blob/a/x.kt#L227',
       files: [
         { label: 'PartnerPathOwnership.kt:37-41', url: 'https://github.com/acme/api/blob/a/o.kt#L37-L41' },
-        { label: 'DebtFacilityConfig.kt:227', url: 'https://github.com/acme/api/blob/a/x.kt#L227' },
+        { label: 'LedgerSweepConfig.kt:227', url: 'https://github.com/acme/api/blob/a/x.kt#L227' },
         { label: 'ReviewOutageScratchTest', url: 'file:///reviews/stack/api-6954/ReviewOutageScratchTest.kt', kind: 'test' },
       ],
     },
     { n: 1, pr: 'acme/api#7472', severity: 'medium', confidence: 'proven', status: 'proposed', origin: 'carried', summary: 'The sweep opens a fresh replacement.', body: 'An unanswered replacement.' },
-    { n: 3, pr: 'acme/api#7472', severity: 'low', confidence: 'proven', status: 'posted', summary: 'Loan asks payment to replace legacy funds.', body: 'x', posted_url: 'https://github.com/acme/api/pull/7472#discussion_r1' },
+    { n: 3, pr: 'acme/api#7472', severity: 'low', confidence: 'proven', status: 'posted', summary: 'Order asks payment to replace legacy funds.', body: 'x', posted_url: 'https://github.com/acme/api/pull/7472#discussion_r1' },
     { n: 5, pr: 'acme/api#7472', severity: 'question', confidence: 'unproven', status: 'proposed', origin: 'none', summary: 'Is the description current?', body: 'Is it?' },
   ],
 }
@@ -65,8 +65,8 @@ const STACKED = {
   ],
   stacks: [
     {
-      id: 'lead', title: 'Lead adapters', verdict: 'high', prs: ['acme/api#6954', 'acme/api#7472', 'acme/api#7500'],
-      risk: 'High: the adapters move money.', blast_radius: 'Every Lead loan from merge.',
+      id: 'nova', title: 'Nova adapters', verdict: 'high', prs: ['acme/api#6954', 'acme/api#7472', 'acme/api#7500'],
+      risk: 'High: the adapters move money.', blast_radius: 'Every Nova order from merge.',
     },
   ],
   comments: [
@@ -121,7 +121,7 @@ test('the pane opens on the live review this session recorded, not another sessi
   expect(w.opens[0]).toMatchObject({ id: 'board' })
   const ui = await mount($)
   expect(await ui.find({ key: 'tab-review', text: 'review 3' })).toBeDefined()
-  expect(await ui.find({ key: 'title-row', text: /Lead adapters stack\s*medium/ })).toBeDefined()
+  expect(await ui.find({ key: 'title-row', text: /Nova adapters stack\s*medium/ })).toBeDefined()
   expect(await ui.find({ key: row(6954) })).toBeDefined()
   expect(await ui.find({ key: row(1) })).toBeUndefined()
   await ui.unmount()
@@ -135,7 +135,7 @@ test('a review run by hand is found by the board its skill keys with this sessio
   expect(w.opens[0]).toMatchObject({ id: 'board' })
   const ui = await mount($)
   expect(await ui.find({ key: 'title-row', text: /^By hand/ })).toBeDefined()
-  expect(await ui.find({ key: 'section-live', text: /A payment outage stops legacy Lead work/ })).toBeDefined()
+  expect(await ui.find({ key: 'section-live', text: /A payment outage stops legacy Nova work/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -145,7 +145,7 @@ test('comments sit in bordered sections by severity, live-on-merge first and que
 
   const ui = await mount($)
   expect(await ui.find({ key: 'section-live' })).toMatchObject({ props: { borderStyle: 'round', borderColor: 'error' } })
-  expect(await ui.find({ key: 'section-live', text: /A payment outage stops legacy Lead work/ })).toBeDefined()
+  expect(await ui.find({ key: 'section-live', text: /A payment outage stops legacy Nova work/ })).toBeDefined()
   expect(await ui.find({ key: 'section-medium', text: /The sweep opens a fresh replacement/ })).toBeDefined()
   expect(await ui.find({ key: 'section-question', text: /Is the description current/ })).toBeDefined()
   expect(await ui.find({ key: 'section-live', text: /Is the description current/ })).toBeUndefined()
@@ -178,7 +178,7 @@ test('the report\'s sections stay closed until opened, below the comments to dec
   expect(await ui.find({ key: 'report', text: /What this change is about\s*▸ Risk and blast radius/ })).toBeDefined()
   expect(await ui.find({ key: 'report-md-about' })).toBeUndefined()
   await ui.press({ key: 'report-about' })
-  expect(await ui.find({ key: 'report-md-about' })).toMatchObject({ props: { text: 'Moves Lead disbursement into **payment**.' } })
+  expect(await ui.find({ key: 'report-md-about' })).toMatchObject({ props: { text: 'Moves Nova disbursement into **payment**.' } })
   expect(await ui.find({ key: 'report-md-risk' })).toBeUndefined()
   const order = (await ui.findAll({ type: 'Box' })).map(b => b.key)
   expect(order.indexOf('report')).toBeGreaterThan(order.indexOf('section-question'))
@@ -208,8 +208,8 @@ test('the stack sits under the risk and blast lines, above the comments, and eac
   await start($)
 
   const ui = await mount($)
-  expect(await ui.find({ key: 'summary', text: /Risk\s*Medium: money movement behind a gate at 0%\./ })).toBeDefined()
-  expect(await ui.find({ key: 'summary', text: /Blast\s*From merge, a payment outage stops legacy Lead work\./ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /Risk\s*Medium: payments behind a gate at 0%\./ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /Blast\s*From merge, a payment outage stops legacy Nova work\./ })).toBeDefined()
   const order = (await ui.findAll({ type: 'Box' })).map(b => b.key)
   expect(order.indexOf('prs')).toBeGreaterThan(order.indexOf('summary'))
   expect(order.indexOf('prs')).toBeLessThan(order.indexOf('section-live'))
@@ -261,10 +261,10 @@ test('a posted comment leaves its severity section for Unaddressed, and moves to
 
   const ui = await mount($)
   expect(await ui.find({ key: 'section-low' })).toBeUndefined()
-  expect(await ui.find({ key: 'section-unaddressed', text: /Unaddressed\s*1\s*3\s*#7472\s*comment\s*Loan asks payment to replace legacy funds/ })).toBeDefined()
+  expect(await ui.find({ key: 'section-unaddressed', text: /Unaddressed\s*1\s*3\s*#7472\s*comment\s*Order asks payment to replace legacy funds/ })).toBeDefined()
   expect(await ui.find({ key: 'section-unaddressed', text: /retry drops the lock|Partly fixed/ })).toBeUndefined()
   expect(await ui.find({ key: 'section-addressed', text: /Addressed\s*1\s*8\s*#6954\s*comment\s*The retry drops the lock\.\s*Fixed in abc1234\./ })).toBeDefined()
-  expect(await ui.find({ key: 'title-row', text: /^Lead adapters stack\s*medium$/ })).toBeDefined()
+  expect(await ui.find({ key: 'title-row', text: /^Nova adapters stack\s*medium$/ })).toBeDefined()
   const links = (await ui.findAll({ type: 'Link' })).map(l => l.props.href)
   expect(links).toContain('https://github.com/acme/api/pull/7472#discussion_r1')
   await ui.unmount()
@@ -275,7 +275,7 @@ test('a comment links its anchor, the code it cites, and its scratch test, each 
   await start($)
 
   const ui = await mount($)
-  expect((await ui.find({ key: 'files-6' }))?.text).toMatch(/DebtFacilityConfig\.kt:227\s*PartnerPathOwnership\.kt:37-41\s*test: ReviewOutageScratchTest/)
+  expect((await ui.find({ key: 'files-6' }))?.text).toMatch(/LedgerSweepConfig\.kt:227\s*PartnerPathOwnership\.kt:37-41\s*test: ReviewOutageScratchTest/)
   const links = (await ui.findAll({ type: 'Link' })).map(l => l.props.href)
   expect(links.filter(h => h === 'https://github.com/acme/api/blob/a/x.kt#L227').length).toBe(1)
   expect(links).toContain('file:///reviews/stack/api-6954/ReviewOutageScratchTest.kt')
@@ -313,9 +313,9 @@ test('a stacked board offers All and one button per stack, a pull request in no 
   await start($)
 
   const ui = await mount($)
-  expect(await ui.find({ key: 'stack-tabs', text: /^All\s*·\s*Lead adapters\s*·\s*#8000 Card target$/ })).toBeDefined()
+  expect(await ui.find({ key: 'stack-tabs', text: /^All\s*·\s*Nova adapters\s*·\s*#8000 Card target$/ })).toBeDefined()
   expect(await ui.find({ key: 'stack-tab-all' })).toBeDefined()
-  expect(await ui.find({ key: 'stack-tab-lead' })).toBeDefined()
+  expect(await ui.find({ key: 'stack-tab-nova' })).toBeDefined()
   expect(await ui.find({ key: 'stack-tab-acme/api#8000' })).toBeDefined()
   await ui.unmount()
 })
@@ -324,16 +324,16 @@ test('a stack\'s view heads with the stack\'s own title, verdict, risk and blast
   engine(on, reviewing({ board: STACKED }), NOW)
   await start($)
 
-  const ui = await inStack($, 'lead')
-  expect(await ui.find({ key: 'title-row', text: /Lead adapters\s*high/ })).toBeDefined()
+  const ui = await inStack($, 'nova')
+  expect(await ui.find({ key: 'title-row', text: /Nova adapters\s*high/ })).toBeDefined()
   expect(await ui.find({ key: 'summary', text: /Risk\s*High: the adapters move money\./ })).toBeDefined()
-  expect(await ui.find({ key: 'summary', text: /Blast\s*Every Lead loan from merge\./ })).toBeDefined()
-  expect(await ui.find({ key: 'summary', text: /Lead adapters stack/ })).toBeUndefined()
-  expect(await ui.find({ key: 'prs-heading', text: /^Lead adapters\s*high$/ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /Blast\s*Every Nova order from merge\./ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /Nova adapters stack/ })).toBeUndefined()
+  expect(await ui.find({ key: 'prs-heading', text: /^Nova adapters\s*high$/ })).toBeDefined()
   expect(await ui.find({ key: row(8000) })).toBeUndefined()
   expect(await ui.find({ key: 'comment-6' })).toBeDefined()
   expect(await ui.find({ key: 'comment-7' })).toBeUndefined()
-  expect(await ui.find({ key: 'section-unaddressed', text: /Loan asks payment/ })).toBeDefined()
+  expect(await ui.find({ key: 'section-unaddressed', text: /Order asks payment/ })).toBeDefined()
   expect(await ui.find({ key: 'report' })).toBeUndefined()
 
   await ui.press({ key: 'stack-tab-acme/api#8000' })
@@ -359,10 +359,10 @@ test('pull requests draw as on the prs board: stack glyphs from GitHub, a dot an
   expect((await ui.find({ key: 'dot-acme/api#7472' }))?.children[0]).toMatchObject({ props: { color: 'error' } })
   expect(await ui.find({ key: 'state-acme/api#7500', text: 'CI run' })).toBeDefined()
   expect((await ui.find({ key: 'dot-acme/api#7500' }))?.children[0]).toMatchObject({ props: { color: 'warning' } })
-  expect((await ui.find({ key: 'group-lead' }))?.props.marginTop || 0).toBe(0)
+  expect((await ui.find({ key: 'group-nova' }))?.props.marginTop || 0).toBe(0)
   expect(await ui.find({ key: 'group-acme/api#8000' })).toMatchObject({ props: { marginTop: 1 } })
 
-  await ui.press({ key: 'stack-tab-lead' })
+  await ui.press({ key: 'stack-tab-nova' })
   expect(await ui.find({ key: row(6954), text: /^┌.*#6954/ })).toBeDefined()
   await ui.unmount()
 })
@@ -381,8 +381,8 @@ test('pressing a stack\'s title in All narrows the view to that stack', async ($
   await start($)
 
   const ui = await mount($)
-  await ui.press({ key: 'goto-lead' })
-  expect(await ui.find({ key: 'title-row', text: /^Lead adapters\s*high/ })).toBeDefined()
+  await ui.press({ key: 'goto-nova' })
+  expect(await ui.find({ key: 'title-row', text: /^Nova adapters\s*high/ })).toBeDefined()
   expect(await ui.find({ key: row(8000) })).toBeUndefined()
   await ui.unmount()
 })
@@ -392,9 +392,9 @@ test('All keeps the review\'s own summary, every stack under its heading, every 
   await start($)
 
   const ui = await mount($)
-  expect(await ui.find({ key: 'title-row', text: /Lead adapters stack\s*medium/ })).toBeDefined()
-  expect(await ui.find({ key: 'summary', text: /Risk\s*Medium: money movement behind a gate at 0%\./ })).toBeDefined()
-  expect(await ui.find({ key: 'stack-lead', text: /^Lead adapters\s*high$/ })).toBeDefined()
+  expect(await ui.find({ key: 'title-row', text: /Nova adapters stack\s*medium/ })).toBeDefined()
+  expect(await ui.find({ key: 'summary', text: /Risk\s*Medium: payments behind a gate at 0%\./ })).toBeDefined()
+  expect(await ui.find({ key: 'stack-nova', text: /^Nova adapters\s*high$/ })).toBeDefined()
   expect(await ui.find({ key: row(8000) })).toBeDefined()
   expect(await ui.find({ key: 'comment-6' })).toBeDefined()
   expect(await ui.find({ key: 'comment-7' })).toBeDefined()
@@ -406,7 +406,7 @@ test('a pull request GitHub has approved gets a green check left of its number, 
   engine(on, reviewing({ board: STACKED }), NOW)
   await start($)
 
-  const ui = await inStack($, 'lead')
+  const ui = await inStack($, 'nova')
   expect(await ui.find({ key: 'mark-acme/api#6954', text: '✓' })).toMatchObject({ props: { width: 1 } })
   expect(await ui.find({ key: row(6954), text: /✓.*#6954/ })).toBeDefined()
   expect(await ui.find({ key: 'mark-acme/api#7472' })).toMatchObject({ props: { width: 1 } })
@@ -420,7 +420,7 @@ test('the warning mark means a thread waits on you, as on the prs board, not tha
   engine(on, reviewing({ board, github }), NOW)
   await start($)
 
-  const ui = await inStack($, 'lead')
+  const ui = await inStack($, 'nova')
   expect(await ui.find({ key: 'flag-acme/api#7472', text: '!' })).toMatchObject({ props: { width: 1 } })
   expect(await ui.find({ key: 'flag-acme/api#7500' })).toMatchObject({ props: { width: 1 } })
   expect(await ui.find({ key: row(7500), text: /!/ })).toBeUndefined()
@@ -436,8 +436,8 @@ test('a stack whose posted comments are all addressed, with nothing else waiting
   engine(on, reviewing({ board: settled }), NOW)
   await start($)
 
-  const ui = await inStack($, 'lead')
-  expect(await ui.find({ key: 'title-row', text: /Lead adapters\s*high\s*all addressed/ })).toBeDefined()
+  const ui = await inStack($, 'nova')
+  expect(await ui.find({ key: 'title-row', text: /Nova adapters\s*high\s*all addressed/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -446,7 +446,7 @@ test('open threads the board did not post keep a stack from reading as all addre
   engine(on, reviewing({ board }), NOW)
   await start($)
 
-  const ui = await inStack($, 'lead')
+  const ui = await inStack($, 'nova')
   expect(await ui.find({ key: 'title-row', text: /all addressed/ })).toBeUndefined()
   await ui.unmount()
 })
@@ -460,8 +460,8 @@ test('a thread the operator opened, from github.json, keeps a stack from reading
   engine(on, reviewing({ board: settled, facts }), NOW)
   await start($)
 
-  const ui = await inStack($, 'lead')
-  expect(await ui.find({ key: 'title-row', text: /Lead adapters\s*high/ })).toBeDefined()
+  const ui = await inStack($, 'nova')
+  expect(await ui.find({ key: 'title-row', text: /Nova adapters\s*high/ })).toBeDefined()
   expect(await ui.find({ key: 'title-row', text: /all addressed/ })).toBeUndefined()
   await ui.unmount()
 })
@@ -471,7 +471,7 @@ test('a merged pull request shows a purple diamond and a closed one a red cross 
   engine(on, reviewing({ board: STACKED, github }), NOW)
   await start($)
 
-  const ui = await inStack($, 'lead')
+  const ui = await inStack($, 'nova')
   expect((await ui.find({ key: 'mark-acme/api#6954', text: '◆' }))?.children[0]).toMatchObject({ props: { color: 'merged' } })
   expect((await ui.find({ key: 'mark-acme/api#7472', text: '✕' }))?.children[0]).toMatchObject({ props: { color: 'error' } })
   expect(await ui.find({ key: 'state-acme/api#6954', text: 'merged' })).toBeDefined()
@@ -484,7 +484,7 @@ test('GitHub decides authors, approvals and bases over what the board wrote, and
   engine(on, reviewing({ board, github }), NOW)
   await start($)
 
-  const ui = await inStack($, 'lead')
+  const ui = await inStack($, 'nova')
   expect(await ui.find({ key: 'mark-acme/api#7472', text: '✓' })).toBeUndefined()
   expect(await ui.find({ key: row(7472), text: /#7472.*dee.*Bank fix/ })).toBeDefined()
   expect(await ui.find({ key: row(7472), text: /^├/ })).toBeDefined()
@@ -496,7 +496,7 @@ test('every layer names its author in a column as wide as the longest, and a lay
   engine(on, reviewing({ board: STACKED }), NOW)
   await start($)
 
-  const ui = await inStack($, 'lead')
+  const ui = await inStack($, 'nova')
   expect(await ui.find({ key: row(6954), text: /#6954.*ann.*Servicing steps aside/ })).toBeDefined()
   expect(await ui.find({ key: row(7472), text: /#7472.*ann.*Bank fix/ })).toBeDefined()
   expect(await ui.find({ key: row(7500), text: /#7500.*bo.*on #6954.*Side branch/ })).toBeDefined()

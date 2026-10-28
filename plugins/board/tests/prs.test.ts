@@ -108,7 +108,7 @@ test('each git stack in a named group draws as one run, bottom first, marked ┌
 })
 
 test('a pull request approved in a repo that requires no review still gets its check', async ($, on) => {
-  engine(on, gh({ 6050: pr({ isDraft: false, reviewDecision: null, approvals: ['berkay', 'mert'] }) }), NOW)
+  engine(on, gh({ 6050: pr({ isDraft: false, reviewDecision: null, approvals: ['robin', 'lee'] }) }), NOW)
   await start($)
   await $.tool.call({ tool: TOOL, add: [{ pr: TOP }] })
 
@@ -119,7 +119,7 @@ test('a pull request approved in a repo that requires no review still gets its c
 
 test('the state word says what stops a pull request merging, and ready only once it can', async ($, on) => {
   const prs: Record<number, Pr> = {
-    6001: pr({ isDraft: false, approvals: ['mert'], reviewDecision: 'APPROVED' }),
+    6001: pr({ isDraft: false, approvals: ['lee'], reviewDecision: 'APPROVED' }),
     6002: pr({ isDraft: false, reviewDecision: 'APPROVED', rollup: 'FAILURE', failing: ['build'] }),
     6003: pr({ isDraft: false, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }),
     6004: pr({ isDraft: false }),

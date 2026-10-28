@@ -34,14 +34,14 @@ ok()  { printf 'PASS  %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n      expected %s\n      actual   %s\n' "$1" "$2" "$3"; fail=1; }
 eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1" "$2" "$3"; }
 
-# A genuine two-layer stack: bottom feature/mm-1 -> main, top feature/mm-1-part2 -> feature/mm-1.
+# A genuine two-layer stack: bottom feature/abc-1 -> main, top feature/abc-1-part2 -> feature/abc-1.
 # This is the grouping the design is built for, driven through the real production path.
 echo "== reaction 1: the bottom of the stack =="
-k1="$(_handle_fresh 'acme/api#10' '2026-08-19T10:00:00Z' 'feature/mm-1' 'main' 'main' 'false' 'add the widget' 'https://github.com/acme/api/pull/10' 2>&1 | tail -1)"
+k1="$(_handle_fresh 'acme/api#10' '2026-08-19T10:00:00Z' 'feature/abc-1' 'main' 'main' 'false' 'add the widget' 'https://github.com/acme/api/pull/10' 2>&1 | tail -1)"
 echo "  review key: $k1"
 
 echo "== reaction 2: the layer on top of it =="
-_handle_fresh 'acme/api#11' '2026-08-19T10:01:00Z' 'feature/mm-1-part2' 'feature/mm-1' 'main' 'false' 'wire the widget up' 'https://github.com/acme/api/pull/11' 2>&1 | sed 's/^/  /'
+_handle_fresh 'acme/api#11' '2026-08-19T10:01:00Z' 'feature/abc-1-part2' 'feature/abc-1' 'main' 'false' 'wire the widget up' 'https://github.com/acme/api/pull/11' 2>&1 | sed 's/^/  /'
 
 echo
 echo "== state.json =="

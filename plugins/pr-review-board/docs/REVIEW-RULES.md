@@ -203,7 +203,7 @@ order:
      behavior.
    - Who is affected if it is wrong. Every user, one customer, an internal
      dashboard, a nightly job, or nobody until a flag flips.
-   - Irreversible or stateful surfaces. Money movement, third-party API calls,
+   - Irreversible or stateful surfaces. Payments, third-party API calls,
      schema migrations, backfills, queue or event contract changes, anything that
      writes data you cannot unwrite.
    - Any domain-specific lenses the operator's own instructions add to this list.

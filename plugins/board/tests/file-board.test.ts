@@ -62,7 +62,7 @@ const ONCALL = {
       id: 'reply',
       section: 'needs',
       title: 'Reply on the reserve thread',
-      workspace: 'reserve-loans',
+      workspace: 'reserve-orders',
       source: 'https://acme.slack.com/archives/C2/p2',
       links: [
         { label: 'Ticket 1499', url: `${TICKET_PAGE}1499` },
@@ -80,7 +80,7 @@ const herdr = (argv: readonly string[]) =>
   argv[0] === 'herdr' && argv[2] === 'list'
     ? {
         exitCode: 0,
-        stdout: json({ result: { workspaces: [{ label: 'ac-809-gross', workspace_id: 'w3' }, { label: 'reserve-loans', workspace_id: 'w8' }] } }),
+        stdout: json({ result: { workspaces: [{ label: 'ac-809-gross', workspace_id: 'w3' }, { label: 'reserve-orders', workspace_id: 'w8' }] } }),
         stderr: '',
       }
     : undefined

@@ -21,7 +21,7 @@ export PR_REVIEW_BOARD_STATE="$TD/state.json"
 export PR_REVIEW_BOARD_LOCK="$TD/.poll.lock"
 mkdir -p "$TD/reviews" "$TD/workspace"
 cat > "$PR_REVIEW_BOARD_CONFIG" <<CFG
-{ "source": "github-reactions", "runtime": "herdr", "orgs": ["Zamua"],
+{ "source": "github-reactions", "runtime": "herdr", "orgs": ["acme"],
   "herdr_session": "prbtest",
   "reviews_root": "$TD/reviews", "workspace_root": "$TD/workspace" }
 CFG
