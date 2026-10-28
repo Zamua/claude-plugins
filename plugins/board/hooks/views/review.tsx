@@ -1,13 +1,17 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, RenderNode } from 'claude-code'
 
-import { ago, fixed, link, prMark, prRow, refreshJson, section, stamp } from '../kit'
+import type { TrackedPr } from '../../types'
+import { ago, fixed, link, refreshJson, section, stamp } from '../kit'
 import type { Els, JsonFile, SectionSpec, View } from '../kit'
+import { factsFor, prTable } from './prs'
+import type { GithubFacts } from './prs'
 
 // The poller records every review here; the worker running one is the session it records
 const STATE_PATH = '.config/pr-review-board/state.json'
 const CONFIG_PATH = '.config/pr-review-board/config.json'
 const POLL_MS = 10_000
+const FACTS_MS = 60_000
 
 const SEVERITIES: readonly SectionSpec[] = [
   { id: 'live', title: 'Live on merge', color: 'error' },
@@ -34,19 +38,7 @@ const ORIGIN_TAGS: Record<string, { text: string; color: Color }> = {
   none: { text: 'not a bug', color: 'inactive' },
 }
 
-type Pr = {
-  pr: string
-  number: number
-  url?: string
-  title?: string
-  risk?: string
-  author?: string
-  head?: string
-  base?: string
-  state?: string
-  approved?: boolean
-  other_open_threads?: number
-}
+type Pr = { pr: string; number: number; url?: string; title?: string; other_open_threads?: number }
 type CommentFile = { url?: string; label?: string; kind?: string }
 type Comment = {
   n: number
@@ -81,10 +73,7 @@ type Board = {
   stacks?: NamedStack[]
 }
 type Thread = { url: string; resolved?: boolean; replied?: boolean }
-type Facts = {
-  updated_at?: string
-  prs?: Record<string, { author?: string; head?: string; base?: string; state?: string; approved?: boolean; threads?: Thread[] }>
-}
+type Facts = { prs?: Record<string, { threads?: Thread[] }> }
 type Review = { key: string; slug: string; prs: Pr[]; boardPath: string }
 type Stack = Omit<NamedStack, 'prs'> & { title: string; prs: Pr[] }
 type PollerState = { reviews?: Record<string, { status?: string; slug?: string; claude_session?: string; herdr_workspace?: string; prs?: string[] }> }
@@ -111,8 +100,8 @@ function prOf(c: Comment, prs: readonly Pr[]): { number: number; url?: string } 
 }
 
 /**
- * The board with GitHub's facts laid over its pull requests: author, head, base and approval as GitHub has them, and
- * the threads the operator started that the board did not post, counted while unresolved and unanswered.
+ * The board with the review threads the operator started that it did not post, from the poller's `github.json`,
+ * counted while unresolved and unanswered.
  */
 function withFacts(raw: Board, f: Facts | undefined): Board {
   if (!f || !f.prs || !Array.isArray(raw.prs)) return raw
@@ -122,20 +111,9 @@ function withFacts(raw: Board, f: Facts | undefined): Board {
   return {
     ...raw,
     prs: raw.prs.map(p => {
-      const g = facts[p.pr]
-      if (!g) return p
-      const threads = Array.isArray(g.threads) ? g.threads : []
-      const base = 'base' in g ? g.base || undefined : p.base
+      const threads = Array.isArray(facts[p.pr]?.threads) ? (facts[p.pr]?.threads as Thread[]) : []
 
-      return {
-        ...p,
-        ...((g.author || p.author) && { author: g.author || p.author }),
-        ...((g.head || p.head) && { head: g.head || p.head }),
-        ...((g.state || p.state) && { state: g.state || p.state }),
-        ...(base !== undefined ? { base } : {}),
-        approved: g.approved === true,
-        other_open_threads: threads.filter(t => !posted.has(t.url) && !t.resolved && !t.replied).length,
-      }
+      return { ...p, other_open_threads: threads.filter(t => !posted.has(t.url) && !t.resolved && !t.replied).length }
     }),
   }
 }
@@ -172,9 +150,6 @@ function stackOf(c: Comment, prs: readonly Pr[], stacks: readonly Stack[]) {
 const otherOpen = (prs: readonly Pr[]) =>
   prs.reduce((sum, p) => sum + (Number.isInteger(p.other_open_threads) ? (p.other_open_threads as number) : 0), 0)
 
-const authorWidthOf = (stacks: readonly Stack[]) =>
-  Math.max(0, ...stacks.flatMap(s => s.prs.map(p => (p.author ? p.author.length : 0))))
-
 function labelled(els: Els, key: string, label: string, sentence: string) {
   const { Box, Text } = els
 
@@ -197,6 +172,9 @@ let manualPath = ''
 const file: JsonFile<Board> = {}
 const factsFile: JsonFile<Facts> = {}
 let merged: { raw?: Board | undefined; facts?: Facts | undefined; value?: Board | undefined } = {}
+let github: GithubFacts = { facts: new Map(), viewer: '', checkedAt: 0, error: '' }
+let factsKeys = ''
+let factsAt = 0
 // Comment numbers ticked for the next post, and the comments and report sections shown in full; kept only for this module's life
 const picks = new Set<number>()
 const expanded = new Set<string>()
@@ -260,6 +238,37 @@ export async function reviewRefresh($: EngineInterface) {
   }
   const after = [review?.key, board, readError]
   if (before.some((one, at) => one !== after[at])) $.ui.invalidate('ui.render')
+  if (keysOf(reviewPrs()) !== factsKeys || (await $.clock.now()) - factsAt >= FACTS_MS) await reviewFacts($)
+}
+
+const reviewPrs = () => (board && Array.isArray(board.prs) ? board.prs : (review?.prs ?? []))
+const keysOf = (prs: readonly Pr[]) => prs.map(p => p.pr).join(' ')
+
+/** A pull request of the review as the prs board tracks one, with what GitHub last said of it. */
+function trackedOf(p: Pr): TrackedPr {
+  const [path = '', number = ''] = p.pr.split('#')
+  const [owner = '', repo = ''] = path.split('/')
+  const facts = github.facts.get(p.pr)
+
+  return {
+    key: p.pr,
+    owner,
+    repo,
+    number: p.number || Number(number),
+    url: p.url || `https://github.com/${path}/pull/${number}`,
+    note: '',
+    stack: '',
+    ...(facts && { facts }),
+  }
+}
+
+async function reviewFacts($: EngineInterface) {
+  const prs = reviewPrs()
+  factsKeys = keysOf(prs)
+  factsAt = await $.clock.now()
+  if (prs.length === 0) return
+  github = await factsFor($, prs.map(trackedOf), github.viewer)
+  $.ui.invalidate('ui.render')
 }
 
 function toggler($: EngineInterface, id: string) {
@@ -321,56 +330,13 @@ function stackTabs($: EngineInterface, els: Els, stacks: readonly Stack[], chose
   )
 }
 
-function hasOpenThreads(b: Board, p: Pr) {
-  const prs = Array.isArray(b.prs) ? b.prs : []
-  const unaddressed = commentsOf(b).some(c => c.status === 'posted' && !c.addressed && prOf(c, prs).number === p.number)
-
-  return unaddressed || otherOpen([p]) > 0
-}
-
-/**
- * One quiet line per pull request, hung on a tree rule under its stack's heading when All lists several stacks. The
- * author sits in a column `authorWidth` wide so the titles line up too, and the base shows when it is not the row
- * above.
- */
-function prRows(els: Els, b: Board, stack: Stack, tree: boolean, authorWidth: number) {
-  const { Box, Text } = els
-
-  return stack.prs.map((p, i) => {
-    const below = i > 0 ? stack.prs[i - 1]?.pr : undefined
-    const branch = p.base && p.base !== below ? p.base.split('#')[1] : undefined
-    const mark = prMark(p.state, p.approved === true)
-    const id = String(p.number)
-
-    return prRow(els, {
-      id,
-      number: p.number,
-      ...(p.url && { url: p.url }),
-      ...(tree && { tree: i === stack.prs.length - 1 ? ('last' as const) : ('mid' as const) }),
-      ...(mark && { mark }),
-      isFlagged: hasOpenThreads(b, p),
-      dot: (p.risk && RISK_COLORS[p.risk]) || 'inactive',
-      columns:
-        authorWidth > 0
-          ? [
-              <Box key={`author-${id}`} width={authorWidth} flexShrink={0}>
-                {p.author && <Text color="suggestion">{p.author}</Text>}
-              </Box>,
-            ]
-          : [],
-      ...(branch && { on: branch }),
-      ...(p.title && { title: p.title }),
-    })
-  })
-}
-
 /** A stack's name and its verdict; in All the name is a button that narrows the view to the stack. */
-function stackHeading($: EngineInterface, els: Els, key: string, stack: Stack, pressable: boolean, marginTop: number) {
+function stackHeading($: EngineInterface, els: Els, key: string, stack: Stack, pressable: boolean) {
   const { Box, Text, Button } = els
   const name = <Text bold>{stack.title}</Text>
 
   return (
-    <Box key={key} flexDirection="row" columnGap={1} marginTop={marginTop}>
+    <Box key={key} flexDirection="row" columnGap={1}>
       {pressable ? (
         <Button key={`goto-${stack.id}`} plain onPress={() => update($, stackChoice, () => stack.id)}>
           {name}
@@ -383,25 +349,26 @@ function stackHeading($: EngineInterface, els: Els, key: string, stack: Stack, p
   )
 }
 
-/** The pull requests in view: one stack under its own heading, or, in All, every stack under its own. */
+/**
+ * The pull requests in view, drawn as the prs board draws them: one stack under its own heading, or, in All, every
+ * stack under its own. Each keeps the board's short title.
+ */
 function prList($: EngineInterface, els: Els, b: Board, stacks: readonly Stack[], several: boolean) {
   const { Box } = els
-  const width = authorWidthOf(stacks)
-  const body = several
-    ? stacks.flatMap((s, i) => [
-        stackHeading($, els, `stack-${s.id}`, s, true, i > 0 ? 1 : 0),
-        ...prRows(els, b, s, true, width),
-      ])
-    : stacks.flatMap(s => [stackHeading($, els, 'prs-heading', s, false, 0), ...prRows(els, b, s, false, width)])
+  const titles = new Map((Array.isArray(b.prs) ? b.prs : []).flatMap(p => (p.title ? [[p.pr, p.title] as const] : [])))
+  const groups = stacks.map(s => ({
+    key: several ? `group-${s.id}` : 'prs-group',
+    heading: several ? stackHeading($, els, `stack-${s.id}`, s, true) : stackHeading($, els, 'prs-heading', s, false),
+    prs: s.prs.map(trackedOf),
+  }))
 
   return (
     <Box key="prs" flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
-      {body}
+      {prTable(els, groups, github.viewer, p => titles.get(p.key))}
     </Box>
   )
 }
 
-/** The comment's anchor first, then the code it cites, then the scratch tests that prove it, then the posted comment. */
 function fileLinksOf(els: Els, c: Comment) {
   const out: RenderNode[] = []
   const seen = new Set<string>()
@@ -574,11 +541,10 @@ function pickBar($: EngineInterface, els: Els) {
 
 function freshness(b: Board | undefined, now: number) {
   const at = Date.parse(b?.updated_at ?? '')
-  const checkedAt = Date.parse(factsFile.value?.updated_at ?? '')
 
   return [
     Number.isNaN(at) ? '' : `Updated ${ago(now - at)}`,
-    Number.isNaN(checkedAt) ? '' : `GitHub checked ${ago(now - checkedAt)}`,
+    github.checkedAt > 0 ? `GitHub checked ${ago(now - github.checkedAt)}` : '',
   ]
     .filter(Boolean)
     .join(' · ')

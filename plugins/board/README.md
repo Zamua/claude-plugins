@@ -28,7 +28,8 @@ request is asked about at most once every three minutes however many sessions tr
 A session asks only while someone has used it in the last half hour. Below 1000 GraphQL points left in the hour, or
 after a rate limit error, every session stops asking until the limit resets. A pull request's CI goes by the latest
 run of each workflow and each check, as GitHub's checks list shows it. The Author and Repo boxes above the list narrow it to the ticked
-values.
+values. The review board draws its pull requests the same way, from the same cache, under the review's stacks and with
+its short titles.
 
 ## Commands
 

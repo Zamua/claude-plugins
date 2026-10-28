@@ -3,8 +3,11 @@ import type { Engine } from 'claude-code/testing'
 
 import { board, engine, HOME, json, open, PANE, start, world } from './engine'
 import type { World } from './engine'
+import { ghRun, pr } from './github'
+import type { Pr } from './github'
 
 const NOW = Date.parse('2026-10-21T14:00:00Z')
+const row = (n: number) => `prrow-acme/api#${n}`
 const SESSION = 'sess-mine'
 const STATE_FILE = `${HOME}/.config/pr-review-board/state.json`
 const BOARD_FILE = `${HOME}/workspace/reviews/.pr-review-board/stack-7472/board.json`
@@ -72,8 +75,23 @@ const STACKED = {
   ],
 }
 
+// GitHub's side of the stacked review: 7472 and 7500 both branch off 6954
+const GITHUB: Record<number, Pr> = {
+  6954: pr({ isDraft: false, author: 'ann', headRefName: 'f/6954', reviewDecision: 'APPROVED', approvals: ['zed'] }),
+  7472: pr({ isDraft: false, author: 'ann', headRefName: 'f/7472', baseRefName: 'f/6954', rollup: 'FAILURE', failing: ['build'] }),
+  7500: pr({ isDraft: false, author: 'bo', headRefName: 'f/7500', baseRefName: 'f/6954', rollup: 'PENDING' }),
+  8000: pr({ isDraft: false, author: 'bo', headRefName: 'f/8000' }),
+}
+
 function reviewing(
-  { state = STATE as unknown, board = BOARD as unknown, facts = undefined as unknown, manual = undefined as unknown, session = SESSION } = {},
+  {
+    state = STATE as unknown,
+    board = BOARD as unknown,
+    facts = undefined as unknown,
+    manual = undefined as unknown,
+    session = SESSION,
+    github = GITHUB,
+  } = {},
 ): World {
   const files: Record<string, string> = {}
   if (state) files[STATE_FILE] = json(state)
@@ -81,7 +99,7 @@ function reviewing(
   if (facts) files[FACTS_FILE] = json(facts)
   if (manual) files[MANUAL_FILE] = json(manual)
 
-  return world({ session: { id: session }, env: { HERDR_WORKSPACE_ID: 'wZ' }, files })
+  return world({ session: { id: session }, env: { HERDR_WORKSPACE_ID: 'wZ' }, files, run: ghRun(github) })
 }
 
 const mount = ($: Engine, bodyColumns = 60) =>
@@ -104,8 +122,8 @@ test('the pane opens on the live review this session recorded, not another sessi
   const ui = await mount($)
   expect(await ui.find({ key: 'tab-review', text: 'review 3' })).toBeDefined()
   expect(await ui.find({ key: 'title-row', text: /Lead adapters stack\s*medium/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-6954' })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-1' })).toBeUndefined()
+  expect(await ui.find({ key: row(6954) })).toBeDefined()
+  expect(await ui.find({ key: row(1) })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -312,7 +330,7 @@ test('a stack\'s view heads with the stack\'s own title, verdict, risk and blast
   expect(await ui.find({ key: 'summary', text: /Blast\s*Every Lead loan from merge\./ })).toBeDefined()
   expect(await ui.find({ key: 'summary', text: /Lead adapters stack/ })).toBeUndefined()
   expect(await ui.find({ key: 'prs-heading', text: /^Lead adapters\s*high$/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-8000' })).toBeUndefined()
+  expect(await ui.find({ key: row(8000) })).toBeUndefined()
   expect(await ui.find({ key: 'comment-6' })).toBeDefined()
   expect(await ui.find({ key: 'comment-7' })).toBeUndefined()
   expect(await ui.find({ key: 'section-unaddressed', text: /Loan asks payment/ })).toBeDefined()
@@ -328,21 +346,34 @@ test('a stack\'s view heads with the stack\'s own title, verdict, risk and blast
   await ui.unmount()
 })
 
-test('All hangs each stack\'s pull requests under its heading on a tree rule, and a stack\'s view draws no rule', async ($, on) => {
+test('pull requests draw as on the prs board: stack glyphs from GitHub, a dot and a word for CI, and no risk', async ($, on) => {
   engine(on, reviewing({ board: STACKED }), NOW)
   await start($)
 
   const ui = await mount($)
-  expect(await ui.find({ key: 'prrow-6954', text: /^├.*#6954/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-7472', text: /^├.*#7472/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-7500', text: /^└.*#7500/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-8000', text: /^└.*#8000/ })).toBeDefined()
-  expect((await ui.find({ key: 'stack-lead' }))?.props.marginTop || 0).toBe(0)
-  expect(await ui.find({ key: 'stack-acme/api#8000' })).toMatchObject({ props: { marginTop: 1 } })
+  expect(await ui.find({ key: row(6954), text: /^┌.*#6954/ })).toBeDefined()
+  expect(await ui.find({ key: row(7472), text: /^├.*#7472/ })).toBeDefined()
+  expect(await ui.find({ key: row(7500), text: /^└.*#7500/ })).toBeDefined()
+  expect(await ui.find({ key: row(8000), text: /[┌├└]/ })).toBeUndefined()
+  expect(await ui.find({ key: 'state-acme/api#7472', text: 'CI fail' })).toBeDefined()
+  expect((await ui.find({ key: 'dot-acme/api#7472' }))?.children[0]).toMatchObject({ props: { color: 'error' } })
+  expect(await ui.find({ key: 'state-acme/api#7500', text: 'CI run' })).toBeDefined()
+  expect((await ui.find({ key: 'dot-acme/api#7500' }))?.children[0]).toMatchObject({ props: { color: 'warning' } })
+  expect((await ui.find({ key: 'group-lead' }))?.props.marginTop || 0).toBe(0)
+  expect(await ui.find({ key: 'group-acme/api#8000' })).toMatchObject({ props: { marginTop: 1 } })
 
   await ui.press({ key: 'stack-tab-lead' })
-  expect(await ui.find({ key: 'prrow-6954', text: /[├└]/ })).toBeUndefined()
+  expect(await ui.find({ key: row(6954), text: /^┌.*#6954/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('a pull request both the prs board and the review list is asked of GitHub once', async ($, on) => {
+  const w = reviewing({ board: STACKED })
+  engine(on, w, NOW)
+  await start($)
+
+  await $.tool.call({ tool: 'mcp__board__prs', add: [{ pr: 'acme/api#6954' }] })
+  expect(w.runs.filter(argv => argv.join(' ').includes('pullRequest(number: 6954)'))).toHaveLength(1)
 })
 
 test('pressing a stack\'s title in All narrows the view to that stack', async ($, on) => {
@@ -352,7 +383,7 @@ test('pressing a stack\'s title in All narrows the view to that stack', async ($
   const ui = await mount($)
   await ui.press({ key: 'goto-lead' })
   expect(await ui.find({ key: 'title-row', text: /^Lead adapters\s*high/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-8000' })).toBeUndefined()
+  expect(await ui.find({ key: row(8000) })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -364,36 +395,36 @@ test('All keeps the review\'s own summary, every stack under its heading, every 
   expect(await ui.find({ key: 'title-row', text: /Lead adapters stack\s*medium/ })).toBeDefined()
   expect(await ui.find({ key: 'summary', text: /Risk\s*Medium: money movement behind a gate at 0%\./ })).toBeDefined()
   expect(await ui.find({ key: 'stack-lead', text: /^Lead adapters\s*high$/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-8000' })).toBeDefined()
+  expect(await ui.find({ key: row(8000) })).toBeDefined()
   expect(await ui.find({ key: 'comment-6' })).toBeDefined()
   expect(await ui.find({ key: 'comment-7' })).toBeDefined()
   expect(await ui.find({ key: 'report' })).toBeDefined()
   await ui.unmount()
 })
 
-test('an approved pull request gets a green check left of its number, and one not yet approved keeps the column empty', async ($, on) => {
-  const board = { ...STACKED, prs: STACKED.prs.map(p => (p.number === 6954 ? { ...p, approved: true } : p)) }
-  engine(on, reviewing({ board }), NOW)
+test('a pull request GitHub has approved gets a green check left of its number, and one not yet approved keeps the column empty', async ($, on) => {
+  engine(on, reviewing({ board: STACKED }), NOW)
   await start($)
 
   const ui = await inStack($, 'lead')
-  expect(await ui.find({ key: 'mark-6954', text: '✓' })).toMatchObject({ props: { width: 1 } })
-  expect(await ui.find({ key: 'prrow-6954', text: /✓.*#6954/ })).toBeDefined()
-  expect(await ui.find({ key: 'mark-7472' })).toMatchObject({ props: { width: 1 } })
-  expect(await ui.find({ key: 'prrow-7472', text: /✓/ })).toBeUndefined()
+  expect(await ui.find({ key: 'mark-acme/api#6954', text: '✓' })).toMatchObject({ props: { width: 1 } })
+  expect(await ui.find({ key: row(6954), text: /✓.*#6954/ })).toBeDefined()
+  expect(await ui.find({ key: 'mark-acme/api#7472' })).toMatchObject({ props: { width: 1 } })
+  expect(await ui.find({ key: row(7472), text: /✓/ })).toBeUndefined()
   await ui.unmount()
 })
 
-test('a pull request with open threads from the operator gets a warning mark beside the approval column', async ($, on) => {
+test('the warning mark means a thread waits on you, as on the prs board, not that the operator\'s own threads are open', async ($, on) => {
+  const github = { ...GITHUB, 7472: { ...(GITHUB[7472] as Pr), threads: [{ isResolved: false, by: 'ann' }] } }
   const board = { ...STACKED, prs: STACKED.prs.map(p => (p.number === 7500 ? { ...p, other_open_threads: 2 } : p)) }
-  engine(on, reviewing({ board }), NOW)
+  engine(on, reviewing({ board, github }), NOW)
   await start($)
 
   const ui = await inStack($, 'lead')
-  expect(await ui.find({ key: 'flag-7472', text: '!' })).toMatchObject({ props: { width: 1 } })
-  expect(await ui.find({ key: 'flag-7500', text: '!' })).toMatchObject({ props: { width: 1 } })
-  expect(await ui.find({ key: 'flag-6954' })).toMatchObject({ props: { width: 1 } })
-  expect(await ui.find({ key: 'prrow-6954', text: /!/ })).toBeUndefined()
+  expect(await ui.find({ key: 'flag-acme/api#7472', text: '!' })).toMatchObject({ props: { width: 1 } })
+  expect(await ui.find({ key: 'flag-acme/api#7500' })).toMatchObject({ props: { width: 1 } })
+  expect(await ui.find({ key: row(7500), text: /!/ })).toBeUndefined()
+  expect(await ui.find({ key: row(6954), text: /!/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -420,56 +451,44 @@ test('open threads the board did not post keep a stack from reading as all addre
   await ui.unmount()
 })
 
-test('a merged pull request shows a purple diamond and a closed one a red cross where the approval check sits', async ($, on) => {
-  const facts = {
-    updated_at: '2026-10-21T13:58:00Z',
-    prs: {
-      'acme/api#6954': { state: 'MERGED', approved: true, author: 'ann', threads: [] },
-      'acme/api#7472': { state: 'CLOSED', approved: false, author: 'ann', threads: [] },
-      'acme/api#7500': { state: 'OPEN', approved: true, author: 'bo', threads: [] },
-    },
+test('a thread the operator opened, from github.json, keeps a stack from reading as all addressed while it waits', async ($, on) => {
+  const settled = {
+    ...STACKED,
+    comments: [{ n: 8, pr: 'acme/api#6954', severity: 'low', confidence: 'proven', status: 'posted', addressed: true, summary: 'x', body: 'x', posted_url: 'https://github.com/acme/api/pull/6954#discussion_r8' }],
   }
-  engine(on, reviewing({ board: STACKED, facts }), NOW)
+  const facts = { prs: { 'acme/api#7472': { threads: [{ url: 'https://github.com/acme/api/pull/7472#discussion_r9', resolved: false, replied: false }] } } }
+  engine(on, reviewing({ board: settled, facts }), NOW)
   await start($)
 
   const ui = await inStack($, 'lead')
-  expect((await ui.find({ key: 'mark-6954', text: '◆' }))?.children[0]).toMatchObject({ props: { color: 'merged' } })
-  expect((await ui.find({ key: 'mark-7472', text: '✕' }))?.children[0]).toMatchObject({ props: { color: 'error' } })
-  expect((await ui.find({ key: 'mark-7500', text: '✓' }))?.children[0]).toMatchObject({ props: { color: 'success' } })
+  expect(await ui.find({ key: 'title-row', text: /Lead adapters\s*high/ })).toBeDefined()
+  expect(await ui.find({ key: 'title-row', text: /all addressed/ })).toBeUndefined()
   await ui.unmount()
 })
 
-test('github.json beside the board decides approvals, authors, bases and waiting threads', async ($, on) => {
-  const board = { ...STACKED, prs: STACKED.prs.map(p => (p.number === 7472 ? { ...p, approved: true, author: 'stale' } : p)) }
-  const facts = {
-    updated_at: '2026-10-21T13:58:00Z',
-    prs: {
-      'acme/api#6954': { approved: true, author: 'ann', head: 'aaa', base: null, threads: [{ url: 'https://github.com/acme/api/pull/6954#discussion_r50', resolved: false, replied: false }] },
-      'acme/api#7472': {
-        approved: false,
-        author: 'dee',
-        head: 'bbb',
-        base: 'acme/api#6954',
-        threads: [
-          { url: 'https://github.com/acme/api/pull/7472#discussion_r1', resolved: false, replied: false },
-          { url: 'https://github.com/acme/api/pull/7472#discussion_r2', resolved: true, replied: false },
-          { url: 'https://github.com/acme/api/pull/7472#discussion_r3', resolved: false, replied: true },
-        ],
-      },
-      'acme/api#7500': { approved: false, author: 'bo', head: 'ccc', base: 'acme/api#7472', threads: [] },
-    },
-  }
-  engine(on, reviewing({ board: { ...board, comments: board.comments.map(c => (c.n === 3 ? { ...c, addressed: true } : c)) }, facts }), NOW)
+test('a merged pull request shows a purple diamond and a closed one a red cross where the approval check sits', async ($, on) => {
+  const github = { ...GITHUB, 6954: { ...(GITHUB[6954] as Pr), state: 'MERGED' as const }, 7472: { ...(GITHUB[7472] as Pr), state: 'CLOSED' as const } }
+  engine(on, reviewing({ board: STACKED, github }), NOW)
   await start($)
 
   const ui = await inStack($, 'lead')
-  expect(await ui.find({ key: 'mark-6954', text: '✓' })).toBeDefined()
-  expect(await ui.find({ key: 'mark-7472', text: '✓' })).toBeUndefined()
-  expect(await ui.find({ key: 'prrow-7472', text: /#7472.*dee/ })).toBeDefined()
-  expect(await ui.find({ key: 'flag-6954', text: '!' })).toBeDefined()
-  expect(await ui.find({ key: 'flag-7472', text: '!' })).toBeUndefined()
-  expect(await ui.find({ key: 'prrow-7500', text: /on #/ })).toBeUndefined()
-  expect(await ui.find({ key: 'stamp', text: 'Updated 10m ago · GitHub checked 2m ago' })).toBeDefined()
+  expect((await ui.find({ key: 'mark-acme/api#6954', text: '◆' }))?.children[0]).toMatchObject({ props: { color: 'merged' } })
+  expect((await ui.find({ key: 'mark-acme/api#7472', text: '✕' }))?.children[0]).toMatchObject({ props: { color: 'error' } })
+  expect(await ui.find({ key: 'state-acme/api#6954', text: 'merged' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('GitHub decides authors, approvals and bases over what the board wrote, and the stamp says when it was checked', async ($, on) => {
+  const board = { ...STACKED, prs: STACKED.prs.map(p => (p.number === 7472 ? { ...p, approved: true, author: 'stale', base: undefined } : p)) }
+  const github = { ...GITHUB, 7472: { ...(GITHUB[7472] as Pr), author: 'dee' } }
+  engine(on, reviewing({ board, github }), NOW)
+  await start($)
+
+  const ui = await inStack($, 'lead')
+  expect(await ui.find({ key: 'mark-acme/api#7472', text: '✓' })).toBeUndefined()
+  expect(await ui.find({ key: row(7472), text: /#7472.*dee.*Bank fix/ })).toBeDefined()
+  expect(await ui.find({ key: row(7472), text: /^├/ })).toBeDefined()
+  expect(await ui.find({ key: 'stamp', text: 'Updated 10m ago · GitHub checked just now' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -478,31 +497,31 @@ test('every layer names its author in a column as wide as the longest, and a lay
   await start($)
 
   const ui = await inStack($, 'lead')
-  expect(await ui.find({ key: 'prrow-6954', text: /#6954.*ann.*Servicing steps aside/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-7472', text: /#7472.*ann.*Bank fix/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-7500', text: /#7500.*bo.*on #6954.*Side branch/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-7472', text: /on #/ })).toBeUndefined()
-  expect(await ui.find({ key: 'author-6954' })).toMatchObject({ props: { width: 3 } })
-  expect(await ui.find({ key: 'author-7500' })).toMatchObject({ props: { width: 3 } })
+  expect(await ui.find({ key: row(6954), text: /#6954.*ann.*Servicing steps aside/ })).toBeDefined()
+  expect(await ui.find({ key: row(7472), text: /#7472.*ann.*Bank fix/ })).toBeDefined()
+  expect(await ui.find({ key: row(7500), text: /#7500.*bo.*on #6954.*Side branch/ })).toBeDefined()
+  expect(await ui.find({ key: row(7472), text: /on #/ })).toBeUndefined()
+  expect(await ui.find({ key: 'author-acme/api#6954' })).toMatchObject({ props: { width: 3 } })
+  expect(await ui.find({ key: 'author-acme/api#7500' })).toMatchObject({ props: { width: 3 } })
 
   await ui.press({ key: 'stack-tab-all' })
-  expect(await ui.find({ key: 'prrow-8000', text: /#8000.*bo.*Card target/ })).toBeDefined()
-  expect(await ui.find({ key: 'author-8000' })).toMatchObject({ props: { width: 3 } })
+  expect(await ui.find({ key: row(8000), text: /#8000.*bo.*Card target/ })).toBeDefined()
+  expect(await ui.find({ key: 'author-acme/api#8000' })).toMatchObject({ props: { width: 3 } })
   await ui.unmount()
 })
 
-test('a narrow pane keeps each pull request\'s number, risk and base whole and leaves the title to give way', async ($, on) => {
+test('a narrow pane keeps each pull request\'s number, dot and base whole and leaves the title to give way', async ($, on) => {
   engine(on, reviewing({ board: STACKED }), NOW)
   await start($)
 
   const ui = await mount($, 30)
   for (const n of [6954, 7472, 8000]) {
-    expect(await ui.find({ key: `prnum-${n}` })).toMatchObject({ type: 'Box', props: { flexShrink: 0 }, text: `#${n}` })
-    expect(await ui.find({ key: `dot-${n}` })).toMatchObject({ props: { flexShrink: 0 } })
+    expect(await ui.find({ key: `prnum-acme/api#${n}` })).toMatchObject({ type: 'Box', props: { flexShrink: 0 }, text: `#${n}` })
+    expect(await ui.find({ key: `dot-acme/api#${n}` })).toMatchObject({ props: { flexShrink: 0 } })
   }
-  expect(await ui.find({ key: 'base-7500' })).toMatchObject({ props: { flexShrink: 0 }, text: 'on #6954' })
-  const row = await ui.find({ key: 'prrow-6954' })
-  const title = row?.children.at(-1) as { props: Record<string, unknown> }
+  expect(await ui.find({ key: 'base-acme/api#7500' })).toMatchObject({ props: { flexShrink: 0 }, text: 'on #6954' })
+  const line = await ui.find({ key: row(6954) })
+  const title = line?.children.at(-1) as { props: Record<string, unknown> }
   expect(title.props).toMatchObject({ wrap: 'truncate-end' })
   expect(title.props.flexShrink).toBeUndefined()
   await ui.unmount()
@@ -514,7 +533,7 @@ test('a review with no board yet lists its pull requests from the poller\'s stat
 
   const ui = await mount($)
   expect(await ui.find({ text: /No board yet for stack-7472/ })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-6954' })).toBeDefined()
-  expect(await ui.find({ key: 'prrow-7472' })).toBeDefined()
+  expect(await ui.find({ key: row(6954) })).toBeDefined()
+  expect(await ui.find({ key: row(7472) })).toBeDefined()
   await ui.unmount()
 })
