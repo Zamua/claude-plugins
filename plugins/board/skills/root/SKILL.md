@@ -94,11 +94,11 @@ preferences the person states as they come up.
 
 ## Intake
 
-When the person's instructions name the places new asks arrive, start one intake session for
-them, under a Responsibility such as Intake, with `model` set to a lighter one. Its brief names
-each source, how to notify the person, and to run `/loop 5m /board:intake`. It adds new asks to
-the Inbox and messages the root only when something arrives. On such a message, place each ask
-or leave it in the Inbox, and tell the person what came in.
+Intake runs the `intake` skill on a schedule the person sets up, such as
+`claude -p "/board:intake since <time>"` every few minutes on a lighter model. It checks the
+places the person's instructions name, adds new asks to the tree and messages the root only when
+something arrives. On such a message, place each ask or leave it in the Inbox, and tell the person
+what came in.
 
 ## Keeping the tree current
 
