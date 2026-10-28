@@ -69,8 +69,9 @@ Inbox
 - **Status** is one scale for everything: needs you, in flight, waiting, next, watching, done. A folded Item counts
   what needs you beneath it, so one deep in the tree shows at the top.
 - **Sessions** sit under the Item they serve, with their state on the right: waiting on you, working, idle or done.
-  Pressing one brings its herdr workspace to the front. A session attaches by itself when its workspace label carries
-  an Item's id or alias, such as `mm-809-crb-gross-funding` for MM-809; Claude links the rest by hand.
+  Pressing one brings its herdr tab to the front. A session attaches by itself when its tab or workspace label
+  carries an Item's id or alias, such as `abc-12-split-the-scope` for ABC-12; Claude links the rest by hand. A link
+  follows the agent, so a session resumed in another tab keeps its place.
 - **Pull requests** from every session's prs board sit under the Item whose id or alias their title or branch
   carries, such as `MM-809 adds …` or `feature/mm-809`.
 - **Dates**: a target date shows on its line, yellow inside a day and red inside two hours or once past.
@@ -138,15 +139,18 @@ The `work` entry in `~/.config/board/boards.json` takes `layout: "model"`:
     "github": {},
     "boards": { "oncall": "on-call" }
   },
-  "hosts": { "herdr": { "cwd": "~" } },
+  "hosts": { "herdr": { "cwd": "~", "session": "work", "workspaces": { "thesis": "thesis", "teaching": "teaching" } } },
   "harnesses": { "claude": { "args": ["--model", "opus[1m]"] } },
   "periods": [{ "name": "Q4 2026-27", "start": "2026-11-01", "end": "2027-01-31" }]
 }
 ```
 
 A Source left out of `sources` is off; with none, the view runs on the local file alone. `under` places a Source's
-Item under one of yours, by id. `hosts` says where started sessions run and from which directory, and `harnesses`
-which agent starts in them and with what arguments. `periods` are named date ranges, the end date included. A key
+Item under one of yours, by id. `hosts` says where started sessions run, and `harnesses` which agent starts in them
+and with what arguments. `hosts.herdr` takes `cwd`, the directory sessions start in; `session`, the herdr session
+they run in, by default the starting session's own; and `workspaces`, a workspace label by Item id. A session started
+for an Item opens as a tab in the workspace its nearest such ancestor names, made the first time, and otherwise in a
+workspace of its own. `periods` are named date ranges, the end date included. A key
 nothing reads draws one warning line in the view.
 
 The local file:

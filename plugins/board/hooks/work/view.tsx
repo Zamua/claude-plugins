@@ -3,11 +3,11 @@ import type { Color, EngineInterface, On, RenderNode } from 'claude-code'
 import { ago, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, span, spans } from '../kit'
 import type { Els, Part, View } from '../kit'
 import { PANE, paneFocused, paneWidth, selectView } from '../pane'
-import { buildTree, inPeriod, mergeItems, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
+import { buildTree, followSessions, inPeriod, mergeItems, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
 import type { Artifact, Node, Period, Session, SessionState, Status, Tree } from './model'
 import { focusSession, liveNow, refreshLive, rememberItems } from './sessions'
 import type { Live } from './sessions'
-import { isVersion2, itemsAndLinks } from './sources/file'
+import { agentsOf, isVersion2, itemsAndLinks } from './sources/file'
 import type { LocalFile, LocalState } from './sources/file'
 
 export const WORK_TOOL = 'mcp__board__work'
@@ -101,12 +101,12 @@ export const currentWork = () => board
 export function workTree(file: unknown, live: Live = liveNow()): { tree?: Tree; error?: string } {
   if (file === undefined) return {}
   if (!isVersion2(file)) return { error: 'This board is in the old format. Run /board work migrate to move it into the work model.' }
-  const { items, links } = itemsAndLinks(file as LocalFile)
-  const root = (file as LocalFile).root
-
+  const local = file as LocalFile
+  const { items, links: held } = itemsAndLinks(local)
+  const { links, root } = followSessions(held, typeof local.root === 'string' ? local.root : undefined, agentsOf(local), live.sessions)
   const all = mergeItems(items, live.items)
 
-  return { tree: buildTree(all, links, live.sessions, live.artifacts, typeof root === 'string' ? root : undefined, live.past) }
+  return { tree: buildTree(all, links, live.sessions, live.artifacts, root, live.past) }
 }
 
 function periodsOf(spec: WorkSpec): Period[] {
@@ -183,9 +183,9 @@ const openPath = (tree: Tree, id: string) => {
 }
 
 /** The root session the local file names, with the Session a Host lists for it while it runs. */
-function rootOf(file: unknown, tree: Tree): { id: string; session?: Session } | undefined {
-  const id = (file as LocalFile | undefined)?.root
-  if (typeof id !== 'string') return undefined
+function rootOf(tree: Tree): { id: string; session?: Session } | undefined {
+  const id = tree.root
+  if (id === undefined) return undefined
   const session = tree.sessions.get(id)
 
   return session ? { id, session } : { id }
@@ -244,7 +244,7 @@ export async function workBreadcrumb($: EngineInterface, els: Els): Promise<Rend
   const tree = workTree(w.state.value).tree
   if (!tree) return undefined
   const { item } = await selfOf($, tree)
-  const root = rootOf(w.state.value, tree)
+  const root = rootOf(tree)
   if (!item && !root) return undefined
   const { Box, Button, Text } = els
   const path = item ? pathTo(tree, item) : []
@@ -331,7 +331,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       const at = Date.parse((w.state.value as LocalFile).updated_at ?? '')
       const fresh = readError ?? (Number.isNaN(at) ? '' : `Updated ${ago(now - at)}`)
       const notes = [...w.warnings, ...tree.warnings, ...liveNow().errors]
-      const root = rootOf(w.state.value, tree)
+      const root = rootOf(tree)
       const shown = (nodes: Node[]) => (ctx.shows ? nodes.filter(n => ctx.shows?.has(n.item.id)) : nodes)
       const outcomes = shown(tree.outcomes)
       const responsibilities = shown(tree.responsibilities)

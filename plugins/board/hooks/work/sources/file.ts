@@ -1,8 +1,8 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { JsonFile } from '../../kit'
-import { ORIGINS, qualify, URGENCY } from '../model'
-import type { Item, ItemLink, Link, Origin, Shape, Status } from '../model'
+import { followSessions, isSessionId, ORIGINS, qualify, URGENCY } from '../model'
+import type { Item, ItemLink, Link, Origin, Session, Shape, Status } from '../model'
 
 /** One Item as the local file keeps it: ids without the `file:` prefix, and any field another writer added. */
 export type LocalItem = {
@@ -33,6 +33,8 @@ export type LocalFile = {
   next_ref?: number
   items: LocalItem[]
   links: Link[]
+  /** The Harness id of the agent each linked session id last held, so a link follows the agent when it moves. */
+  agents?: Record<string, string>
   [field: string]: unknown
 }
 
@@ -95,6 +97,30 @@ export function itemsAndLinks(file: LocalFile): { items: Item[]; links: Link[] }
   return {
     items: file.items.filter(item => item && typeof item.id === 'string').map(toItem),
     links: (Array.isArray(file.links) ? file.links : []).filter(l => l && l.child && l.parent).map(linkOf),
+  }
+}
+
+export const agentsOf = (file: LocalFile): Record<string, string> =>
+  file.agents && typeof file.agents === 'object' && !Array.isArray(file.agents) ? file.agents : {}
+
+/** The file with its session ids moved to where each agent runs now, and the agent of each one it names noted. */
+export function followFile(file: LocalFile, sessions: Session[]): LocalFile {
+  const before = agentsOf(file)
+  const root = typeof file.root === 'string' ? file.root : undefined
+  const followed = followSessions(file.links, root, before, sessions)
+  const held = new Map(sessions.flatMap(one => (one.harnessId ? [[one.id, one.harnessId] as const] : [])))
+  const agents: Record<string, string> = {}
+  for (const id of [...followed.links.flatMap(link => [link.child, link.parent]), ...(followed.root ? [followed.root] : [])]) {
+    const agent = isSessionId(id) ? (held.get(id) ?? before[id]) : undefined
+    if (agent) agents[id] = agent
+  }
+  const { agents: _old, ...rest } = file
+
+  return {
+    ...rest,
+    links: followed.links,
+    ...(followed.root && { root: followed.root }),
+    ...(Object.keys(agents).length > 0 && { agents }),
   }
 }
 

@@ -1,10 +1,10 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import { messageOf } from '../kit'
-import { buildTree, isSessionId, ORIGINS, qualify, treeText, URGENCY } from './model'
+import { buildTree, isSessionId, ORIGINS, pathTo, qualify, treeText, URGENCY } from './model'
 import type { Item, ItemLink, Link, Node, Origin, Shape, Status, Tree } from './model'
 import { liveNow, refreshLive, selfSession, startSession } from './sessions'
-import { isLocal, itemsAndLinks, localId, readLocalNow, writeLocal } from './sources/file'
+import { followFile, isLocal, itemsAndLinks, localId, readLocalNow, writeLocal } from './sources/file'
 import type { LocalFile, LocalItem } from './sources/file'
 import { currentWork, START_ENV, WORK_TOOL, workTree } from './view'
 import type { WorkBoard } from './view'
@@ -63,7 +63,7 @@ const INPUT_SCHEMA = {
         properties: {
           item: { type: 'string', description: 'The Item id the new session serves.' },
           brief: { type: 'string', description: 'The first prompt the new session gets: what to do, the decisions made, where to stop.' },
-          label: { type: 'string', description: 'Its workspace name; by default, from the Item.' },
+          label: { type: 'string', description: 'Its tab or workspace name; by default, from the Item.' },
           cwd: { type: 'string' },
           again: { type: 'boolean', description: 'Start one even though the Item has a running session.' },
         },
@@ -276,7 +276,8 @@ async function change($: EngineInterface, w: WorkBoard, current: LocalFile, inpu
   const attach = input.attach !== undefined && self ? [{ child: self.id, parent: input.attach }] : []
   if (liveNow().at === 0) await refreshLive($, w.spec, true)
   const others = new Set(liveNow().items.map(item => item.id))
-  const applied = applyChange(current, { ...input, link: [...(input.link ?? []), ...attach] }, now, others)
+  const followed = followFile(current, liveNow().sessions)
+  const applied = applyChange(followed, { ...input, link: [...(input.link ?? []), ...attach] }, now, others)
   if ('error' in applied) return { deny: applied.error }
 
   const tree = workTree(applied.file).tree as Tree
@@ -313,6 +314,9 @@ async function change($: EngineInterface, w: WorkBoard, current: LocalFile, inpu
       label,
       cwd,
       brief: one.brief,
+      within: pathTo(tree, item.id)
+        .map(at => at.id)
+        .reverse(),
       env: { [START_ENV]: item.id, ...(config && { BOARD_CONFIG: config }) },
       ...(self && { near: self.address }),
     })
@@ -326,7 +330,7 @@ async function change($: EngineInterface, w: WorkBoard, current: LocalFile, inpu
     const name = liveNow().sessions.find(s => s.id === id)?.messageName
     started.push(`${id} (${label}${name ? `, message ${name}` : ''}) for ${item.id}`)
   }
-  await writeLocal($, w.state, w.path, file)
+  await writeLocal($, w.state, w.path, followFile(file, liveNow().sessions))
   $.ui.invalidate('ui.render')
 
   const parts = ['Work updated.']

@@ -6,12 +6,25 @@ import type { HostSession, HostStart, SessionState } from '../model'
 type Pane = {
   pane_id: string
   workspace_id: string
+  tab_id?: string
   agent?: string
   agent_status?: string
   agent_session?: { value?: string }
 }
 type Workspace = { workspace_id: string; label: string }
-type Created = { result: { root_pane: { pane_id: string; workspace_id: string } } }
+type Tab = { tab_id: string; label: string; number: number }
+type Created = { result: { root_pane: { pane_id: string }; tab?: { tab_id: string } } }
+
+/** `hosts.herdr` in boards.json. */
+export type HerdrConfig = {
+  /** The herdr session started sessions run in, over the starting session's own. */
+  session?: string
+  /**
+   * The workspace an Item's sessions start in, each as a tab, by Item id. An Item's nearest ancestor that names one
+   * decides; an Item none names starts its sessions in a workspace of their own.
+   */
+  workspaces?: Record<string, string>
+}
 
 const STATES: Record<string, SessionState> = { working: 'working', blocked: 'waiting', done: 'done', idle: 'idle' }
 const START_TIMEOUT_MS = 60_000
@@ -45,12 +58,15 @@ export async function listHerdr($: EngineInterface): Promise<{ sessions: HostSes
       const panes = (JSON.parse(await herdr($, name, ['pane', 'list'])) as { result: { panes: Pane[] } }).result.panes
       const workspaces = (JSON.parse(await herdr($, name, ['workspace', 'list'])) as { result: { workspaces: Workspace[] } })
         .result.workspaces
+      const tabs = (JSON.parse(await herdr($, name, ['tab', 'list'])) as { result: { tabs: Tab[] } }).result.tabs
       const labels = new Map(workspaces.map(w => [w.workspace_id, w.label]))
+      // herdr labels a tab with its number until someone names it
+      const named = new Map(tabs.filter(tab => tab.label !== String(tab.number)).map(tab => [tab.tab_id, tab.label]))
       for (const pane of panes) {
         if (!pane.agent) continue
         sessions.push({
           address: `${name}/${pane.pane_id}`,
-          label: labels.get(pane.workspace_id) ?? pane.workspace_id,
+          label: named.get(pane.tab_id ?? '') ?? labels.get(pane.workspace_id) ?? pane.workspace_id,
           group: name,
           state: STATES[pane.agent_status ?? ''] ?? 'idle',
           harness: pane.agent,
@@ -66,9 +82,11 @@ export async function listHerdr($: EngineInterface): Promise<{ sessions: HostSes
 }
 
 export async function focusHerdr($: EngineInterface, address: string): Promise<string | undefined> {
-  const { session, workspace } = partsOf(address)
+  const { session, pane, workspace } = partsOf(address)
   try {
     await herdr($, session, ['workspace', 'focus', workspace])
+    const tab = (JSON.parse(await herdr($, session, ['pane', 'get', pane])) as { result: { pane: Pane } }).result.pane.tab_id
+    if (tab) await herdr($, session, ['tab', 'focus', tab])
 
     return undefined
   } catch (err) {
@@ -76,23 +94,34 @@ export async function focusHerdr($: EngineInterface, address: string): Promise<s
   }
 }
 
-/** A new workspace beside the starting session, an agent in its first pane, then the brief as its first prompt. */
-export async function startHerdr($: EngineInterface, start: HostStart): Promise<{ address?: string; error?: string }> {
-  const session = start.near ? partsOf(start.near).session : 'default'
+/**
+ * A tab in the workspace the Item's branch names, made if missing, or else a workspace of its own; then an agent in
+ * its first pane, and the brief as its first prompt.
+ */
+export async function startHerdr(
+  $: EngineInterface,
+  start: HostStart,
+  config: HerdrConfig = {},
+): Promise<{ address?: string; error?: string }> {
+  const session = config.session ?? (start.near ? partsOf(start.near).session : 'default')
+  const area = start.within.map(id => config.workspaces?.[id]).find(Boolean)
+  const env = Object.entries(start.env ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`])
+  const opened = (out: string) => (JSON.parse(out) as Created).result
   try {
-    const created = JSON.parse(
-      await herdr($, session, [
-        'workspace',
-        'create',
-        '--cwd',
-        start.cwd,
-        '--label',
-        start.label,
-        '--no-focus',
-        ...Object.entries(start.env ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`]),
-      ]),
-    ) as Created
-    const pane = created.result.root_pane.pane_id
+    const workspaces = area
+      ? (JSON.parse(await herdr($, session, ['workspace', 'list'])) as { result: { workspaces: Workspace[] } }).result.workspaces
+      : []
+    const holder = workspaces.find(one => one.label === area)
+    let pane: string
+    if (holder) {
+      const args = ['tab', 'create', '--workspace', holder.workspace_id, '--cwd', start.cwd, '--label', start.label, '--no-focus']
+      pane = opened(await herdr($, session, [...args, ...env])).root_pane.pane_id
+    } else {
+      const args = ['workspace', 'create', '--cwd', start.cwd, '--label', area ?? start.label, '--no-focus']
+      const created = opened(await herdr($, session, [...args, ...env]))
+      pane = created.root_pane.pane_id
+      if (area && created.tab) await herdr($, session, ['tab', 'rename', created.tab.tab_id, start.label])
+    }
     await herdr(
       $,
       session,
