@@ -98,14 +98,23 @@ cmd_plan() {
   done < <(_c_worktrees "$key")
   printf '  delete    %s   (scratch tests, anything left behind)\n' "$dir"
   printf '  delete    %s   (board, assignment, cached diffs, rules copy)\n' "$(prb_meta_dir "$key")"
-  local ws; ws="$(prb_review_field "$key" herdr_workspace)"
-  if [ -n "$ws" ] && [ "$ws" = "${HERDR_WORKSPACE_ID:-}" ]; then
-    printf '  close     herdr workspace %s   SKIPPED: it is the one you are running in\n' "$ws"
+  local ws tab; ws="$(prb_review_field "$key" herdr_workspace)"; tab="$(prb_review_field "$key" herdr_tab)"
+  if _c_is_caller "$ws" "$tab"; then
+    printf '  close     herdr %s   SKIPPED: it is the one you are running in\n' "$(_c_place "$ws" "$tab")"
   else
-    printf '  close     herdr workspace %s   (last; it takes every pane with it)\n' "${ws:-none}"
+    printf '  close     herdr %s   (last; it takes every pane with it)\n' "$(_c_place "${ws:-none}" "$tab")"
   fi
   printf '\nNothing above has happened yet. Run: cleanup.sh apply %s --yes\n' "$key"
 }
+
+# A review in the shared workspace owns only its tab, so only a caller in that tab
+# would be killed by closing it.
+_c_is_caller() {  # <workspace_id> <tab_id>
+  if [ -n "$2" ]; then [ "$2" = "${HERDR_TAB_ID:-}" ]
+  else [ -n "$1" ] && [ "$1" = "${HERDR_WORKSPACE_ID:-}" ]
+  fi
+}
+_c_place() { if [ -n "$2" ]; then printf 'tab %s' "$2"; else printf 'workspace %s' "$1"; fi; }
 
 cmd_apply() {
   local key="" yes=0 a
@@ -160,9 +169,9 @@ cmd_apply() {
   # caller is one of those panes, closing it kills this process, so that case is
   # refused rather than obeyed: everything above is already done, and one leftover
   # workspace the operator closes by hand beats a teardown that cannot finish.
-  local ws; ws="$(prb_review_field "$key" herdr_workspace)"
-  if [ -n "$ws" ] && [ "$ws" = "${HERDR_WORKSPACE_ID:-}" ]; then
-    prb_log "workspace $ws is the one you are running in, so it is left open; close it with 'herdr workspace close $ws' once you are done"
+  local ws tab; ws="$(prb_review_field "$key" herdr_workspace)"; tab="$(prb_review_field "$key" herdr_tab)"
+  if _c_is_caller "$ws" "$tab"; then
+    prb_log "$(_c_place "$ws" "$tab") is the one you are running in, so it is left open; close it with 'herdr $(_c_place "$ws" "$tab" | sed 's/ / close /')' once you are done"
   else
     rt_close_workspace "$key"
   fi

@@ -130,8 +130,10 @@ the report's grouping note says what it added and why.
 
 ## Layout
 
-One herdr workspace per review, labelled with the slug, holding one pane: the review
-agent. Nothing is opened per pull request, because the report already covers every
+One herdr tab per review, labelled with the slug, holding one pane: the review agent.
+With `herdr_workspace` set, every review's tab sits in that one workspace, so reviews
+gather in one place in the herdr sidebar; otherwise each tab has a workspace of its
+own. Teardown closes the tab, or the review's own workspace. Nothing is opened per pull request, because the report already covers every
 pull request in scope and the set can grow while the review is live. The review
 itself is one file, `board.json` in the review's metadata directory, and the board
 plugin's review view draws it beside the agent. The agent prints the headline and the

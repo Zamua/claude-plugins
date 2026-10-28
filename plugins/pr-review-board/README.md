@@ -3,7 +3,7 @@
 React to a pull request with 👀 and a background Claude reviews it.
 
 A local poller watches GitHub for reactions **you** added in the last few minutes,
-then spawns one review agent per changeset in its own herdr workspace. The agent
+then spawns one review agent per changeset in its own herdr tab. The agent
 writes the whole review to a board, drawn beside it in the review view of the
 [board](../board/) plugin's pane: a
 plain-English report linked to every pull request and every line it calls out, and
@@ -13,7 +13,7 @@ pull request only when you tell it to.
 ```
 you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
                                   │
-                                  ├─ new herdr workspace, one review agent
+                                  ├─ new herdr tab, one review agent
                                   ├─ clones + worktrees the PR head
                                   ├─ reviews it, proves bugs with failing tests
                                   ├─ writes its board as it goes, shown in /board review
@@ -63,6 +63,7 @@ set:
 | `reviews_root` | `~/workspace/reviews` | where review directories live |
 | `workspace_root` | `~/workspace` | where canonical clones live |
 | `herdr_session` | `reviews` | the shared herdr session reviews run in; created on demand |
+| `herdr_workspace` | `""` | a workspace label every review opens a tab in, made the first time; empty gives each review a workspace of its own |
 | `source` | `github-reactions` | the trigger adapter, `scripts/adapters/source-<name>.sh` |
 | `runtime` | `herdr` | `stub` records what would happen and launches nothing |
 | `agent_kind` | `claude` | the herdr agent kind, which also names the executable |
