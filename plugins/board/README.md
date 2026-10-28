@@ -27,7 +27,7 @@ The prs board shares what it fetches from GitHub with every session through `~/.
 request is asked about at most once every three minutes however many sessions track it, and a merged one never again.
 A session asks only while someone has used it in the last half hour. Below 1000 GraphQL points left in the hour, or
 after a rate limit error, every session stops asking until the limit resets. A pull request's CI goes by the latest
-run of each check, as GitHub's checks list shows it. The Author and Repo boxes above the list narrow it to the ticked
+run of each workflow and each check, as GitHub's checks list shows it. The Author and Repo boxes above the list narrow it to the ticked
 values.
 
 ## Commands

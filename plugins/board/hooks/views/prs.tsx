@@ -83,7 +83,8 @@ const FAILED_RUNS = ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'ST
 const PR_FIELDS = `title state isDraft mergeable mergeStateStatus reviewDecision
   headRefName baseRefName headRefOid author { login }
   commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes {
-    __typename ... on CheckRun { name status conclusion startedAt completedAt } ... on StatusContext { context state createdAt } } } } } } }
+    __typename ... on CheckRun { name status conclusion startedAt completedAt
+      checkSuite { workflowRun { runNumber event workflow { databaseId } } } } ... on StatusContext { context state createdAt } } } } } } }
   reviewThreads(first: 100) { nodes { isResolved comments(last: 1) { nodes { author { login } url } } } }
   latestReviews(first: 20) { nodes { author { login } state } }`
 
@@ -107,7 +108,9 @@ type GqlCheck = {
   context?: string
   state?: string
   createdAt?: string
+  checkSuite?: { workflowRun: WorkflowRun | null } | null
 }
+type WorkflowRun = { runNumber: number; event: string; workflow: { databaseId: number } }
 type GqlPr = {
   title: string
   state: PrFacts['state']
@@ -267,17 +270,25 @@ const NOT_CI = new Set(['Graphite / mergeability_check'])
 // A run not started yet is the newest of its check
 const startOf = (check: GqlCheck) =>
   check.startedAt ?? (check.status === 'COMPLETED' ? check.completedAt : undefined) ?? check.createdAt ?? '\uffff'
+const workflowOf = (run: WorkflowRun) => `${run.workflow.databaseId} ${run.event}`
 
 /**
- * CI as GitHub's checks list shows it, by the latest run of each check. The commit's rollup state counts every run,
- * so one a newer run replaced, such as a run cancelled by its workflow's concurrency group, keeps it failed.
+ * CI as GitHub's checks list shows it, by the latest run of each workflow and the latest run of each check. The
+ * commit's rollup state counts every run, so a run a newer one replaced keeps it failed: a workflow run its
+ * concurrency group cancelled leaves cancelled jobs the newer run has not reached yet.
  */
 function ciOf(rollup: GqlPr['commits']['nodes'][number]['commit']['statusCheckRollup']) {
   if (!rollup) return { ci: 'none' as CiState, failing: [] }
+  const newest = new Map<string, number>()
+  for (const check of rollup.contexts.nodes) {
+    const run = check.checkSuite?.workflowRun
+    if (run) newest.set(workflowOf(run), Math.max(newest.get(workflowOf(run)) ?? 0, run.runNumber))
+  }
   const latest = new Map<string, GqlCheck>()
   for (const check of rollup.contexts.nodes) {
     const name = check.name ?? check.context ?? 'a check'
-    if (NOT_CI.has(name)) continue
+    const run = check.checkSuite?.workflowRun
+    if (NOT_CI.has(name) || (run && run.runNumber < (newest.get(workflowOf(run)) ?? 0))) continue
     const seen = latest.get(name)
     if (!seen || startOf(check) >= startOf(seen)) latest.set(name, check)
   }
@@ -552,7 +563,7 @@ type Cached = { facts?: PrFacts; at: number; v?: number }
 
 // Raised when facts are derived from GitHub differently: an entry a session on an older board wrote is fetched again
 // rather than shown
-const FACTS_VERSION = 2
+const FACTS_VERSION = 3
 type Cache = { prs: Record<string, Cached>; viewer?: string; pausedUntil?: number; pauseReason?: string }
 type Budget = { remaining: number; resetAt: string }
 
