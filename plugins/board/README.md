@@ -123,8 +123,8 @@ The session view starts with where its session sits, such as `⌂ root  Grow the
 mark brings the root session to the front, and `↗` opens the work view down to this session. The [`root` skill](skills/root/SKILL.md) tells a root or coordinator
 session how to rank what needs you, answer status, rollup and ETA questions from one tree read, start sessions with a
 complete brief, and expect you to work with any session directly. The [`intake` skill](skills/intake/SKILL.md) is
-one pass of an intake session the root starts: it checks the sources its brief names for new asks and adds them to
-the tree, saying nothing when none came in. A read ends each ask's line with its link, so a pass knows what it already
+one intake pass, run on a schedule such as `claude -p "/board:intake since <time>"`: it checks the sources your
+instructions name for new asks and adds them to the tree, saying nothing when none came in. A read ends each ask's line with its link, so a pass knows what it already
 added.
 
 ### Config
