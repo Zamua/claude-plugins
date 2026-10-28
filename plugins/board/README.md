@@ -74,7 +74,9 @@ Inbox
   follows the agent, so a session resumed in another tab keeps its place.
 - **Pull requests** from every session's prs board sit under the Item whose id or alias their title or branch
   carries, such as `MM-809 adds …` or `feature/mm-809`.
-- **Dates**: a target date shows on its line, yellow inside a day and red inside two hours or once past.
+- **Dates**: a target date shows on its line, yellow inside a day and red inside two hours or once past. An ETA,
+  when whoever works an Item expects it done, shows beside it; a parent shows the latest ETA beneath it, in red once
+  it falls after the parent's target. Any Item takes an ETA, whatever its Source.
 - **Time** on the right of a line is the active time of every session under it, finished ones included: a session's
   transcript from first entry to last, with every gap over five minutes cut out.
 - **Periods**, such as quarters, cut the view to the Items dated in one, the undated work under them and their
@@ -104,7 +106,8 @@ a hand link wins over the parent its Source gives.
 `mcp__board__work` is the work tool. With no fields it reads the tree, each session listed under its Item with its
 state, the name to message it by, and the goal and summary from its session board. Its fields:
 
-- `add`, `update`, `remove`: local Items. Mark finished work `done` rather than removing it.
+- `add`, `update`, `remove`: local Items. Mark finished work `done` rather than removing it. `update` also sets the
+  `eta` of an Item another Source holds.
 - `link`, `unlink`: a hand-set parent for any Item, session or pull request. A session's parent can be another session,
   its Coordinator; a session keeps one Item parent and one Coordinator.
 - `attach`: put this session under an Item.

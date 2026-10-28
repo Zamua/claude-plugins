@@ -1,13 +1,13 @@
 import type { Color, EngineInterface, On, RenderNode } from 'claude-code'
 
-import { ago, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, span, spans } from '../kit'
+import { ago, dayOf, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, span, spans } from '../kit'
 import type { Els, Part, View } from '../kit'
 import { PANE, paneFocused, paneWidth, selectView } from '../pane'
-import { buildTree, followSessions, inPeriod, mergeItems, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
+import { buildTree, followSessions, inPeriod, isLate, mergeItems, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
 import type { Artifact, Node, Period, Session, SessionState, Status, Tree } from './model'
 import { focusSession, liveNow, refreshLive, rememberItems } from './sessions'
 import type { Live } from './sessions'
-import { agentsOf, isVersion2, itemsAndLinks } from './sources/file'
+import { agentsOf, isVersion2, itemsAndLinks, withEtas } from './sources/file'
 import type { LocalFile, LocalState } from './sources/file'
 
 export const WORK_TOOL = 'mcp__board__work'
@@ -104,7 +104,7 @@ export function workTree(file: unknown, live: Live = liveNow()): { tree?: Tree; 
   const local = file as LocalFile
   const { items, links: held } = itemsAndLinks(local)
   const { links, root } = followSessions(held, typeof local.root === 'string' ? local.root : undefined, agentsOf(local), live.sessions)
-  const all = mergeItems(items, live.items)
+  const all = withEtas(mergeItems(items, live.items), local)
 
   return { tree: buildTree(all, links, live.sessions, live.artifacts, root, live.past) }
 }
@@ -489,6 +489,8 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       item.links.length > 0
     const glyph = !hasMore ? '·' : isOpen ? '▾' : '▸'
     const due = item.target ? dueOf(item.target, item.targetLabel, ctx.now) : undefined
+    const etaAt = node.eta ? Date.parse(node.eta) : NaN
+    const eta = Number.isNaN(etaAt) ? undefined : `eta ${dayOf(etaAt)}`
     const showKind = node.depth === 0 || node.children.length > 0
     const hasMark = node.sessions.length > 0
     const parts: Part[] = [
@@ -496,6 +498,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       { text: tag.tag.padEnd(TAG_WIDTH), color: tag.color, dimColor: quiet },
       ...(node.needsCount > 0 ? [{ text: String(node.needsCount), color: 'warning' as const, bold: true }] : []),
       ...(due ? [due.color ? { text: due.text, color: due.color } : { text: due.text, dimColor: true }] : []),
+      ...(eta ? [isLate(node) ? { text: eta, color: 'red' as const } : { text: eta, dimColor: true }] : []),
       ...(showKind ? [{ text: item.kind, dimColor: true }] : []),
       ...(item.ref !== undefined ? [{ text: `#${item.ref}`, dimColor: true }] : []),
       ...(item.progress !== undefined ? [{ text: `${item.progress}%`, dimColor: true }] : []),

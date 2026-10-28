@@ -43,6 +43,13 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export type Due = { text: string; color?: Color }
 
+/** A date as its weekday and month-day, such as `Fri 10-30`. */
+export function dayOf(at: number): string {
+  const d = new Date(at)
+
+  return `${DAYS[d.getUTCDay()]} ${d.toISOString().slice(5, 10)}`
+}
+
 /** A deadline as a countdown inside a day, red inside two hours, and as a weekday and date beyond. */
 export function dueOf(due: unknown, label: unknown, now: number): Due | undefined {
   if (typeof due !== 'string') return undefined
@@ -53,9 +60,7 @@ export function dueOf(due: unknown, label: unknown, now: number): Due | undefine
   if (ms < 0) return { text: `${prefix}overdue`, color: 'red' }
   if (ms < 2 * 3600e3) return { text: `${prefix}in ${span(ms)}`, color: 'red' }
   if (ms < 24 * 3600e3) return { text: `${prefix}in ${span(ms)}`, color: 'yellow' }
-  const d = new Date(at)
-
-  return { text: `${prefix}${DAYS[d.getUTCDay()]} ${d.toISOString().slice(5, 10)}` }
+  return { text: `${prefix}${dayOf(at)}` }
 }
 
 export async function openUrl($: EngineInterface, url: string): Promise<string | undefined> {

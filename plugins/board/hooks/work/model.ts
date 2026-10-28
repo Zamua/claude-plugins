@@ -26,6 +26,8 @@ export type Item = {
   aliases: string[]
   target?: string
   targetLabel?: string
+  /** When whoever works it expects it done. */
+  eta?: string
   started?: string
   finished?: string
   progress?: number
@@ -121,6 +123,8 @@ export type Node = {
   needsCount: number
   /** The active time of every Session in the subtree, finished ones included. */
   activeMs: number
+  /** The latest ETA in the subtree. */
+  eta?: string
 }
 
 export type Tree = {
@@ -206,7 +210,17 @@ export function buildTree(
 
   const nodes = new Map<string, Node>()
   for (const item of items) {
-    nodes.set(item.id, { item, children: [], sessions: [], artifacts: [], depth: 0, shown: item.status, needsCount: 0, activeMs: 0 })
+    nodes.set(item.id, {
+      item,
+      children: [],
+      sessions: [],
+      artifacts: [],
+      depth: 0,
+      shown: item.status,
+      needsCount: 0,
+      activeMs: 0,
+      ...(item.eta && { eta: item.eta }),
+    })
   }
   const tops: Node[] = []
   for (const item of items) {
@@ -321,7 +335,15 @@ function rollUp(node: Node) {
   node.needsCount =
     artifactNeeds + node.children.reduce((sum, c) => sum + c.needsCount + (c.item.status === 'needs' ? 1 : 0), 0)
   node.activeMs += node.children.reduce((sum, c) => sum + c.activeMs, 0)
+  const latest = [node.eta, ...node.children.map(c => c.eta)]
+    .filter((eta): eta is string => eta !== undefined && !Number.isNaN(Date.parse(eta)))
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0]
+  if (latest) node.eta = latest
 }
+
+/** True when the ETA under an Item falls after its target. */
+export const isLate = (node: Node) =>
+  node.eta !== undefined && node.item.target !== undefined && Date.parse(node.eta) > Date.parse(node.item.target)
 
 const DAY_MS = 24 * 3600e3
 
@@ -375,7 +397,9 @@ export function treeText(tree: Tree): string {
     const pad = '  '.repeat(node.depth)
     const time = node.activeMs >= 60_000 ? `, ${Math.round(node.activeMs / 60_000)}m spent` : ''
     const by = node.item.origin?.by ? `, asked by ${node.item.origin.by}` : ''
-    lines.push(`${pad}${node.item.id}${ref} [${node.item.kind}, ${node.shown}${needs}${time}${by}] ${node.item.title}`)
+    const target = node.item.target ? `, target ${node.item.target.slice(0, 10)}` : ''
+    const eta = node.eta ? `, eta ${node.eta.slice(0, 10)}${isLate(node) ? ', late' : ''}` : ''
+    lines.push(`${pad}${node.item.id}${ref} [${node.item.kind}, ${node.shown}${needs}${target}${eta}${time}${by}] ${node.item.title}`)
     for (const session of node.sessions) lines.push(...sessionText(tree, session, `${pad}  `))
     for (const artifact of node.artifacts) lines.push(`${pad}  ${artifact.id} [${artifact.status}] ${artifact.title}`)
     for (const child of node.children) walk(child)

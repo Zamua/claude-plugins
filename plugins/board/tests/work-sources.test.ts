@@ -169,3 +169,15 @@ test("another board's items sit under the local Item named for it, its archive l
   expect(read).toContain('board:oncall:dp-sweep [Task, done] Double DP sweep')
   expect(read).not.toContain('An old shift item')
 })
+
+test('an Item another Source holds takes an ETA, and nothing else of it can change', async ($, on) => {
+  const { w } = linearWorld()
+  engine(on, w, NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL })
+
+  expect((await $.tool.call({ tool: TOOL, update: [{ id: 'linear:MM-4', eta: '2026-11-02' }] })).result).toBe('Work updated.')
+  expect(String((await $.tool.call({ tool: TOOL })).result)).toContain('linear:MM-4 [Issue, next, eta 2026-11-02] Write the runbook')
+  const refused = await $.tool.call({ tool: TOOL, update: [{ id: 'linear:MM-4', eta: '2026-11-03', status: 'done' }] })
+  expect(refused.deny).toContain('only link and eta can change it')
+})
