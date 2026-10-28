@@ -223,19 +223,31 @@ test('the state word says what stops a pull request merging, and ready only once
   await ui.unmount()
 })
 
-test('CI goes by the latest run of each check, as GitHub lists them, not by a run a newer one replaced', async ($, on) => {
-  const run = (name: string, conclusion: string | null, startedAt: string) => ({
+test('CI goes by the latest run of each workflow and check, as GitHub lists them, not by a run a newer one replaced', async ($, on) => {
+  const run = (name: string, conclusion: string | null, startedAt: string, runNumber = 1) => ({
     __typename: 'CheckRun',
     name,
     status: conclusion ? 'COMPLETED' : 'IN_PROGRESS',
     conclusion,
     startedAt,
+    checkSuite: { workflowRun: { runNumber, event: 'pull_request', workflow: { databaseId: 7 } } },
   })
   const prs: Record<number, Pr> = {
     6011: pr({ isDraft: false, rollup: 'FAILURE', checks: [run('ktlint', 'CANCELLED', '2026-10-27T11:25:00Z'), run('ktlint', 'SUCCESS', '2026-10-27T11:29:00Z')] }),
     6012: pr({ isDraft: false, rollup: 'FAILURE', checks: [run('build', 'SUCCESS', '2026-10-27T11:00:00Z'), run('build', 'FAILURE', '2026-10-27T11:30:00Z')] }),
     6013: pr({ isDraft: false, rollup: 'FAILURE', checks: [run('build', 'FAILURE', '2026-10-27T11:00:00Z'), run('build', null, '2026-10-27T11:30:00Z')] }),
     6014: pr({ isDraft: false, rollup: 'PENDING', checks: [run('build', 'SUCCESS', '2026-10-27T11:00:00Z'), run('Graphite / mergeability_check', null, '2026-10-27T10:00:00Z')] }),
+    // The cancelled run's later jobs are ones the newer run has not reached yet
+    6015: pr({
+      isDraft: false,
+      rollup: 'FAILURE',
+      checks: [
+        run('build', 'CANCELLED', '2026-10-27T11:00:00Z', 40),
+        run('docker', 'CANCELLED', '2026-10-27T11:00:00Z', 40),
+        run('summary', 'FAILURE', '2026-10-27T11:01:00Z', 40),
+        run('build', null, '2026-10-27T11:00:00Z', 41),
+      ],
+    }),
   }
   engine(on, gh(prs), NOW)
   await start($)
@@ -243,7 +255,7 @@ test('CI goes by the latest run of each check, as GitHub lists them, not by a ru
 
   const ui = await open($, 'prs')
   const word = async (n: number) => (await ui.find({ key: `state-acme/api#${n}` }))?.text
-  expect(await Promise.all([6011, 6012, 6013, 6014].map(word))).toEqual(['review', 'CI fail', 'CI run', 'review'])
+  expect(await Promise.all([6011, 6012, 6013, 6014, 6015].map(word))).toEqual(['review', 'CI fail', 'CI run', 'review', 'CI run'])
   await ui.unmount()
 })
 
