@@ -27,7 +27,7 @@ const gh = () => ({ exitCode: 1, stdout: '', stderr: 'offline' })
 test('a session whose old session-board board is in its store file gets it back whole, ids and all', async ($, on) => {
   const w = world({
     files: {
-      [`${STORE}/session-board_zamua-abc.json`]: json({
+      [`${STORE}/session-board_example-abc.json`]: json({
         'board:s1': oldSession([
           { id: 'n1', section: 'next', text: 'Run tests' },
           { id: 'q2', section: 'questions', text: 'Backfill?', isDone: true },
@@ -61,7 +61,7 @@ test('a board rebuilt since keeps its items and takes in only the old ones it la
       },
     },
     files: {
-      [`${STORE}/session-board_zamua-abc.json`]: json({
+      [`${STORE}/session-board_example-abc.json`]: json({
         'board:s1': oldSession([
           { id: 'n1', section: 'next', text: 'run tests ' },
           { id: 'd2', section: 'decisions', text: 'Use the reader endpoint' },
@@ -82,7 +82,7 @@ test('a board rebuilt since keeps its items and takes in only the old ones it la
 test('the old board is taken in once, so an item removed afterwards stays removed', async ($, on) => {
   const w = world({
     files: {
-      [`${STORE}/session-board_zamua-abc.json`]: json({
+      [`${STORE}/session-board_example-abc.json`]: json({
         'board:s1': oldSession([{ id: 'n1', section: 'next', text: 'Run tests' }]),
       }),
     },
@@ -112,7 +112,7 @@ test('pull requests the old my-pr-board board tracked join the board, and a note
       },
     },
     files: {
-      [`${STORE}/my-pr-board_zamua-def.json`]: json({
+      [`${STORE}/my-pr-board_example-def.json`]: json({
         'board:s1': {
           shape: 'prs-1',
           value: { sessionId: 's1', prs: [tracked(1, 'Rebase first'), tracked(2, 'Waiting on CI')], viewer: 'octo', checkedAt: 0, error: '' },

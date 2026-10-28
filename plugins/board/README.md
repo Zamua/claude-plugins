@@ -55,12 +55,12 @@ the Unplaced sessions and pull requests last.
 ```
 [ Period: all ▾ ]                              Updated 2m ago
 Outcomes
-▸ you   1 Fri 10-31 Objective 40% Grow funding partners   12h
+▸ you   1 Fri 10-31 Objective 40% Grow the partner network 9h
 ▸ next  Project Thread release notes                     2h ●
 Responsibilities
 ▸ now   Responsibility On-call                           5h ●
 Inbox
-· next  Task Answer the vendor                     from Hasan
+· next  Task Answer the vendor                      from Dana
 ▸ Unplaced 3 sessions · 1 pull request
 ```
 
@@ -73,7 +73,7 @@ Inbox
   carries an Item's id or alias, such as `abc-12-split-the-scope` for ABC-12; Claude links the rest by hand. A link
   follows the agent, so a session resumed in another tab keeps its place.
 - **Pull requests** from every session's prs board sit under the Item whose id or alias their title or branch
-  carries, such as `MM-809 adds …` or `feature/mm-809`.
+  carries, such as `ABC-809 adds …` or `feature/abc-809`.
 - **Dates**: a target date shows on its line, yellow inside a day and red inside two hours or once past. An ETA,
   when whoever works an Item expects it done, shows beside it; a parent shows the latest ETA beneath it, in red once
   it falls after the parent's target. Any Item takes an ETA, whatever its Source.
@@ -119,7 +119,7 @@ state, the name to message it by, and the goal and summary from its session boar
   that brings it to the front.
 - `aliases`: identifiers a workspace label, pull request title or branch may carry, such as an issue key.
 
-The session view starts with where its session sits, such as `⌂ root  Grow funding partners › MM-809  ↗`. The `⌂`
+The session view starts with where its session sits, such as `⌂ root  Grow the partner network › ABC-809  ↗`. The `⌂`
 mark brings the root session to the front, and `↗` opens the work view down to this session. The [`root` skill](skills/root/SKILL.md) tells a root or coordinator
 session how to rank what needs you, answer status, rollup and ETA questions from one tree read, start sessions with a
 complete brief, and expect you to work with any session directly. The [`intake` skill](skills/intake/SKILL.md) is
@@ -137,10 +137,10 @@ The `work` entry in `~/.config/board/boards.json` takes `layout: "model"`:
   "layout": "model",
   "path": "~/workspace/work-board/board.json",
   "sources": {
-    "rhythms": { "follow": ["OBJ-2228"], "kinds": { "objective": "Objective", "key_result": "Key result" } },
+    "rhythms": { "follow": ["OBJ-12"], "kinds": { "objective": "Objective", "key_result": "Key result" } },
     "linear": {
-      "team": "MM",
-      "projects": [{ "name": "CRB Funding - Money Movement", "under": "rhythms:KR-6204" }],
+      "team": "ABC",
+      "projects": [{ "name": "Partner Onboarding", "under": "rhythms:KR-34" }],
       "kinds": { "project": "Project", "issue": "Task" }
     },
     "github": {},
@@ -200,7 +200,7 @@ points at another file.
   ],
   "link_labels": { "dashboard.example.com": "Dashboard" },
   "link_pairs": [
-    { "first": "https://dash.example.com/loan/", "second": "https://dash.example.com/contract/", "label": "contract" }
+    { "first": "https://dash.example.com/order/", "second": "https://dash.example.com/contract/", "label": "contract" }
   ]
 }
 ```
@@ -247,7 +247,7 @@ right edge. Pressing an item shows its owner, note, detail and links, and `work`
 ```json
 {
   "updated_at": "2026-10-27T17:50:00Z",
-  "title": "CRB rollout",
+  "title": "Partner rollout",
   "envs": ["staging", "prod"],
   "sections": [
     {
@@ -255,16 +255,16 @@ right edge. Pressing an item shows its owner, note, detail and links, and `work`
       "title": "Gates, in flip order",
       "items": [
         {
-          "id": "g-crb",
-          "title": "release.loan_service.crb_funding",
+          "id": "g-partner",
+          "title": "release.order_service.partner_onboarding",
           "status": "todo",
-          "owner": "Zamua",
+          "owner": "Dana",
           "note": "Umbrella flag",
           "env": { "staging": "on", "prod": "off" },
           "after": ["g-routing"],
           "detail": "markdown",
           "links": [{ "label": "Gate", "url": "url" }],
-          "work": "file:crb"
+          "work": "file:partner"
         }
       ]
     }

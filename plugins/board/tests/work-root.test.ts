@@ -14,12 +14,12 @@ const at = '2026-10-27T13:00:00Z'
 
 test('a session matches an Item by the name of the herdr session it runs in', async ($, on) => {
   const review = { id: 'review', title: 'Code review', kind: 'Responsibility', shape: 'responsibility', aliases: ['reviews'] }
-  const panes = [{ id: 'w2:p1', label: 'cherry-pos-8308', harnessId: 'h-r' }]
+  const panes = [{ id: 'w2:p1', label: 'acme-api-8308', harnessId: 'h-r' }]
   engine(on, withLive({ ...TREE, items: [...TREE.items, review] }, herdrHost(panes, undefined, 'reviews')), NOW)
   await start($)
 
   const read = String((await $.tool.call({ tool: TOOL })).result)
-  expect(read).toMatch(/file:review \[Responsibility, next\] Code review\n\s+session:herdr:reviews\/w2:p1 \[idle\] cherry-pos-8308/)
+  expect(read).toMatch(/file:review \[Responsibility, next\] Code review\n\s+session:herdr:reviews\/w2:p1 \[idle\] acme-api-8308/)
 })
 
 test('an attached session shows its path on one line above its board, and pressing it opens the work view there', async ($, on) => {
