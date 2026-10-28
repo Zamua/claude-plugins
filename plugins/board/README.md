@@ -82,7 +82,9 @@ Inbox
 - **Periods**, such as quarters, cut the view to the Items dated in one, the undated work under them and their
   ancestors. Responsibilities and the Inbox show in every Period. Pick one in the Period box or with
   `/board work <period>`.
-- **Inbox**: an ask with no parent waits here, with who asked, until it is placed under an Item.
+- **Inbox**: an ask with no parent waits here, with who asked, until it is placed under an Item or work on it starts.
+  One that grows into a whole effort is promoted where it stands: give it a Project's kind and an in-flight status,
+  and it joins the top-level Outcomes with its asker still shown.
 - Pressing an Item opens its children, its detail and its links. The view re-reads its file every 15 seconds, and
   lists sessions only while someone looks at it.
 
