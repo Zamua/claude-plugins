@@ -154,19 +154,20 @@ title of two or three words, its own risk, its `author`'s GitHub login, and `bas
 the pull request it is stacked on, as `owner/repo#N`, left out for one based on the
 default branch.
 
-The poller keeps the facts GitHub holds current on its own. Each pass it writes
-`github.json` beside the board, and the pane lays it over `prs` when drawing: each
-pull request's `author`, `head` and `base`, whether the operator's account approves
-it, its state, and the review threads that account started. Left of the number the
-pane draws a purple diamond on a merged pull request, a red cross on one closed
-unmerged, and a green check on an approved open one, and beside that a warning mark while a
-thread waits on the author: a posted comment of the board's own not yet `addressed`,
-or another thread from the operator's account, from another session or another
-reviewer under their login, still unresolved with no reply from anyone else. A stack
-with anything waiting does not read as all addressed. You do not maintain these. Run
-`poll.sh facts <key>` when you need them fresher than the next pass, and write
-`author`, `base`, `state`, `approved` and `other_open_threads` on the board only for a review
-with no poller, where `github.json` never appears.
+The pane draws each pull request as the board plugin's prs view does, from the
+GitHub cache that view shares: where it sits in its git stack, a purple diamond once
+merged, a red cross once closed unmerged, a green check once approved, a warning mark
+while a thread waits on the operator, then its number, a dot and a word for CI and
+mergeability, its author and the board's short title. GitHub's author, base and state
+win over the board's. You do not maintain these.
+
+The poller writes `github.json` beside the board each pass with the review threads
+the operator's account started. A posted comment of the board's own not yet
+`addressed`, or another thread from that account, from another session or another
+reviewer under their login, still unresolved with no reply from anyone else, keeps a
+stack from reading as all addressed. Run `poll.sh facts <key>` when you need them
+fresher than the next pass, and write `other_open_threads` on the board only for a
+review with no poller, where `github.json` never appears.
 
 `stacks` groups them, one entry per stack: an `id`, a `title` of a few words, and its
 `prs` bottom first. A stack is what `poll.sh stack` returns, so a layer that branches

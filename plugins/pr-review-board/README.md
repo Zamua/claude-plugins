@@ -122,12 +122,11 @@ which opens by itself in the review's session and `/board review` opens anywhere
 
 - the verdict, the risk and the blast radius, one sentence each
 - one button per stack beside All, each stack heading with its own verdict, risk and
-  blast radius and listing its pull requests, linked, with their authors and risk,
-  a purple diamond beside each merged one, a green check beside each one you
-  approved, and a warning mark beside each one
-  with a thread from your account still waiting on its author. The poller reads
-  those from GitHub every pass into `github.json` beside the board, so they follow
-  an approval or a reply within one pass, without the worker
+  blast radius and listing its pull requests as the board's prs view lists them:
+  linked, with their git stack, approval, CI, state and author, and a warning mark
+  beside each one with a thread waiting on you. The board reads those from GitHub
+  through the cache its prs view shares, so a pull request both show is asked
+  about once
 - the proposed comments by severity, each marked `new`, `carried over` or `not a
   bug`, linked to its code and the scratch test that proves it, and opening in place
   to the exact text it would post and the finding behind it

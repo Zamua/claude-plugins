@@ -1,101 +1,13 @@
 import { expect, test } from 'claude-code/testing'
 
 import { board, engine, HOME, open, PANE, start, world } from './engine'
+import { gh, pr } from './github'
+import type { Pr } from './github'
 
 const TOOL = 'mcp__board__prs'
 const NOW = Date.parse('2026-10-25T12:00:00Z')
 const BOTTOM = 'https://github.com/acme/api/pull/6047'
 const TOP = 'https://github.com/acme/api/pull/6050'
-
-type Pr = {
-  title: string
-  state: 'OPEN' | 'MERGED' | 'CLOSED'
-  isDraft: boolean
-  mergeable: string
-  mergeStateStatus: string
-  reviewDecision: string | null
-  headRefName: string
-  baseRefName: string
-  rollup: string
-  failing: string[]
-  threads: { isResolved: boolean; by: string }[]
-  approvals?: string[]
-  author?: string
-  checks?: Record<string, unknown>[]
-}
-
-const pr = (over: Partial<Pr>): Pr => ({
-  title: 'A change',
-  state: 'OPEN',
-  isDraft: true,
-  mergeable: 'MERGEABLE',
-  mergeStateStatus: 'CLEAN',
-  reviewDecision: 'REVIEW_REQUIRED',
-  headRefName: 'feature/x',
-  baseRefName: 'main',
-  rollup: 'SUCCESS',
-  failing: [],
-  threads: [],
-  ...over,
-})
-
-function asGraphql(p: Pr) {
-  return {
-    title: p.title,
-    state: p.state,
-    isDraft: p.isDraft,
-    mergeable: p.mergeable,
-    mergeStateStatus: p.mergeStateStatus,
-    reviewDecision: p.reviewDecision,
-    headRefName: p.headRefName,
-    baseRefName: p.baseRefName,
-    headRefOid: 'abc123',
-    author: { login: p.author ?? 'octo' },
-    commits: {
-      nodes: [
-        {
-          commit: {
-            statusCheckRollup: {
-              state: p.rollup,
-              contexts: {
-                nodes: p.checks ?? [
-                  ...p.failing.map(name => ({ __typename: 'CheckRun', name, status: 'COMPLETED', conclusion: 'FAILURE' })),
-                  p.rollup === 'PENDING'
-                    ? { __typename: 'CheckRun', name: 'lint', status: 'IN_PROGRESS', conclusion: null }
-                    : { __typename: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS' },
-                ],
-              },
-            },
-          },
-        },
-      ],
-    },
-    reviewThreads: {
-      nodes: p.threads.map((t, at) => ({
-        isResolved: t.isResolved,
-        comments: { nodes: [{ author: { login: t.by }, url: `https://github.com/t/${at}` }] },
-      })),
-    },
-    latestReviews: { nodes: (p.approvals ?? []).map(login => ({ author: { login }, state: 'APPROVED' })) },
-  }
-}
-
-/** A world whose gh answers GitHub's GraphQL from `github`, keyed by pull request number. */
-function gh(github: Record<number, Pr>, budget?: { remaining: number; resetAt: string }) {
-  return world({
-    run: argv => {
-      if (argv[0] !== 'gh') return undefined
-      const query = argv[argv.length - 1] ?? ''
-      const data: Record<string, unknown> = { viewer: { login: 'octo' }, ...(budget && { rateLimit: budget }) }
-      for (const [, alias, number] of query.matchAll(/(p\d+): repository\([^)]*\) \{ pullRequest\(number: (\d+)\)/g)) {
-        const found = github[Number(number)]
-        data[alias as string] = { pullRequest: found ? asGraphql(found) : null }
-      }
-
-      return { exitCode: 0, stdout: JSON.stringify({ data }), stderr: '' }
-    },
-  })
-}
 
 test('a pull request opened with gh pr create joins the board with its GitHub state', async ($, on) => {
   const w = gh({

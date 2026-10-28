@@ -639,7 +639,7 @@ async function fetchBatch($: EngineInterface, prs: readonly TrackedPr[], viewer:
  * no longer changes, so it keeps the facts it has. A batch GitHub fails leaves its pull requests as they were and says
  * so in `error`, and while the rate limit runs low no session asks at all.
  */
-async function fetchFacts($: EngineInterface, b: PrBoard) {
+async function fetchFacts($: EngineInterface, b: { prs: readonly TrackedPr[]; viewer: string }, mayAsk = true) {
   const path = await cachePath($)
   const cache = await readCache($, path)
   const now = await $.clock.now()
@@ -655,7 +655,7 @@ async function fetchFacts($: EngineInterface, b: PrBoard) {
   }
   const due = b.prs.filter(p => !found.has(p.key) && p.facts?.state !== 'MERGED')
   const viewer = cache.viewer || b.viewer
-  if (due.length === 0) return { viewer, found, error: '', checkedAt: oldest }
+  if (due.length === 0 || !mayAsk) return { viewer, found, error: '', checkedAt: oldest }
   if ((cache.pausedUntil ?? 0) > now) {
     const error = `${cache.pauseReason ?? 'rate limit low'}, retrying in ${span(cache.pausedUntil as number - now)}`
 
@@ -746,72 +746,117 @@ function refresh($: EngineInterface): Promise<void> {
   return queue
 }
 
+export type GithubFacts = { facts: Map<string, PrFacts>; viewer: string; checkedAt: number; error: string }
+
+/**
+ * GitHub's facts for pull requests another view lists, through this board's cache and queue, so a pull request both
+ * show is asked about once. GitHub is asked only while the session is in use; the facts `prs` carry stand in for any
+ * it does not give.
+ */
+export function factsFor($: EngineInterface, prs: readonly TrackedPr[], viewer: string): Promise<GithubFacts> {
+  const known = new Map(prs.flatMap(p => (p.facts ? [[p.key, p.facts] as const] : [])))
+  const asked = queue.then(async (): Promise<GithubFacts> => {
+    try {
+      const mayAsk = (await $.clock.now()) - lastActive <= IDLE_MS
+      const got = await fetchFacts($, { prs, viewer }, mayAsk)
+      for (const [key, facts] of got.found) if (facts) known.set(key, facts)
+
+      return { facts: known, viewer: got.viewer, checkedAt: got.checkedAt, error: got.error }
+    } catch (err) {
+      return { facts: known, viewer, checkedAt: 0, error: messageOf(err) }
+    }
+  })
+  queue = asked.then(() => undefined)
+
+  return asked
+}
+
 const CHAIN_GLYPHS = { first: '┌', mid: '├', last: '└', none: '' } as const
 
-function chainOf(group: Stack, p: TrackedPr): keyof typeof CHAIN_GLYPHS {
-  const run = group.chains.find(one => one.includes(p)) ?? [p]
+function chainOf(chains: readonly TrackedPr[][], p: TrackedPr): keyof typeof CHAIN_GLYPHS {
+  const run = chains.find(one => one.includes(p)) ?? [p]
   const at = run.indexOf(p)
   if (run.length < 2) return 'none'
 
   return at === 0 ? 'first' : at === run.length - 1 ? 'last' : 'mid'
 }
 
+/** Pull requests under one heading; `chains` as `chainsOf` gives them, worked out from `prs` when left out. */
+export type PrGroup = { key: string; heading?: RenderNode; prs: readonly TrackedPr[]; chains?: TrackedPr[][] }
+
 /**
- * One line per pull request: where it sits in its git stack, a check once approved, a mark while it needs the person,
- * its number, a dot for CI and mergeability, its state and its title. A layer based on something other than the row
- * above names its base.
+ * Each group under its heading, one line per pull request: where it sits in its git stack, a check once approved, a
+ * mark while it needs the person, its number, a dot for CI and mergeability, its state, its author and its title. A
+ * layer based on something other than the row above names its base. The columns line up across groups. `titleOf`
+ * gives a view's own short title in place of GitHub's.
  */
-function prRows(els: Els, group: Stack, hasChains: boolean, viewer: string, authorWidth: number) {
+export function prTable(
+  els: Els,
+  groups: readonly PrGroup[],
+  viewer: string,
+  titleOf: (p: TrackedPr) => string | undefined = () => undefined,
+): RenderNode[] {
   const { Box, Text } = els
+  const laid = groups.map(group => {
+    const chains = group.chains ?? chainsOf([...group.prs])
 
-  return group.prs.map((p, at) => {
-    const below = belowOf(p, group.prs)
-    const named = below && group.prs[at - 1] !== below ? below : undefined
-    const state = stateOf(p)
-    const mark = prMark(p.facts?.state, p.facts ? reviewOf(p.facts) === 'APPROVED' : false)
-
-    return prRow(els, {
-      id: p.key,
-      number: p.number,
-      url: p.url,
-      ...(hasChains && { chain: CHAIN_GLYPHS[chainOf(group, p)] }),
-      ...(mark && { mark }),
-      isFlagged: needsYou(p, viewer),
-      dot: healthOf(p),
-      columns: [
-        <Box key={`state-${p.key}`} width={STATE_WIDTH} flexShrink={0}>
-          <Text color={state.color} dimColor={state.isDim}>
-            {state.text}
-          </Text>
-        </Box>,
-        ...(authorWidth > 0
-          ? [
-              <Box key={`author-${p.key}`} width={authorWidth} flexShrink={0}>
-                <Text dimColor>{cutTo(p.facts?.author ?? '', authorWidth)}</Text>
-              </Box>,
-            ]
-          : []),
-      ],
-      ...(named && { on: named.number }),
-      title: p.facts?.title ?? `${p.owner}/${p.repo}`,
-    })
+    return { group, chains, prs: chains.flat() }
   })
+  const hasChains = laid.some(one => one.chains.some(run => run.length > 1))
+  const authors = laid.flatMap(one => one.prs.map(p => [...(p.facts?.author ?? '')].length))
+  const authorWidth = Math.min(MAX_AUTHOR, Math.max(0, ...authors))
+
+  return laid.map(({ group, chains, prs }, at) => (
+    <Box key={group.key} flexDirection="column" marginTop={at > 0 ? 1 : 0}>
+      {group.heading}
+      {prs.map((p, row) => {
+        const below = belowOf(p, prs)
+        const named = below && prs[row - 1] !== below ? below : undefined
+        const state = stateOf(p)
+        const mark = prMark(p.facts?.state, p.facts ? reviewOf(p.facts) === 'APPROVED' : false)
+
+        return prRow(els, {
+          id: p.key,
+          number: p.number,
+          url: p.url,
+          ...(hasChains && { chain: CHAIN_GLYPHS[chainOf(chains, p)] }),
+          ...(mark && { mark }),
+          isFlagged: needsYou(p, viewer),
+          dot: healthOf(p),
+          columns: [
+            <Box key={`state-${p.key}`} width={STATE_WIDTH} flexShrink={0}>
+              <Text color={state.color} dimColor={state.isDim}>
+                {state.text}
+              </Text>
+            </Box>,
+            ...(authorWidth > 0
+              ? [
+                  <Box key={`author-${p.key}`} width={authorWidth} flexShrink={0}>
+                    <Text dimColor>{cutTo(p.facts?.author ?? '', authorWidth)}</Text>
+                  </Box>,
+                ]
+              : []),
+          ],
+          ...(named && { on: named.number }),
+          title: titleOf(p) || p.facts?.title || `${p.owner}/${p.repo}`,
+        })
+      })}
+    </Box>
+  ))
 }
 
 function prsBox(els: Els, groups: Stack[], viewer: string) {
   const { Box, Text } = els
-  const hasChains = groups.some(group => group.chains.some(run => run.length > 1))
-  const authors = groups.flatMap(group => group.prs.map(p => [...(p.facts?.author ?? '')].length))
-  const authorWidth = Math.min(MAX_AUTHOR, Math.max(0, ...authors))
+  const table = groups.map((group, at) => ({
+    key: `group-${at}`,
+    ...(group.title !== '' && { heading: <Text bold>{group.title}</Text> }),
+    prs: group.prs,
+    chains: group.chains,
+  }))
 
   return (
     <Box key="prs" flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
-      {groups.map((group, at) => (
-        <Box key={`group-${at}`} flexDirection="column" marginTop={at > 0 ? 1 : 0}>
-          {group.title !== '' && <Text bold>{group.title}</Text>}
-          {prRows(els, group, hasChains, viewer, authorWidth)}
-        </Box>
-      ))}
+      {prTable(els, table, viewer)}
     </Box>
   )
 }

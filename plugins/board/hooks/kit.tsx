@@ -229,8 +229,6 @@ export type PrRowSpec = {
   id: string
   number: number
   url?: string
-  /** The rule hung under a stack heading. */
-  tree?: 'mid' | 'last'
   /** Where it sits in its git stack, one glyph wide; empty for a pull request on no stack. */
   chain?: string
   /** The first column: one glyph for approval, or for merged and closed. */
@@ -241,7 +239,7 @@ export type PrRowSpec = {
   /** Columns after the dot that keep their width, such as a state word or an author. */
   columns?: RenderNode[]
   /** The pull request it sits on, when that is not the row above. */
-  on?: number | string
+  on?: number
   title?: string
 }
 
@@ -255,7 +253,6 @@ export function prRow(els: Els, spec: PrRowSpec) {
 
   return (
     <Box key={`prrow-${id}`} flexDirection="row" columnGap={1}>
-      {spec.tree && fixed(els, `tree-${id}`, <Text dimColor>{spec.tree === 'last' ? '└' : '├'}</Text>)}
       {spec.chain !== undefined && (
         <Box key={`chain-${id}`} width={1} flexShrink={0}>
           {spec.chain !== '' && <Text dimColor>{spec.chain}</Text>}
