@@ -112,3 +112,24 @@ test('marking an Item done stamps when it finished, and its first move off next 
   const doc = JSON.parse(w.files[WORK_FILE] ?? '{}').items.find((i: { id: string }) => i.id === 'write-the-doc')
   expect(doc).toMatchObject({ started: '2026-10-27T14:00:00.000Z', finished: '2026-10-27T14:00:00.000Z' })
 })
+
+test('an ETA rolls up to the latest beneath it, and a line whose ETA falls after its target says it is late', async ($, on) => {
+  const w = withPeriods()
+  engine(on, w, NOW)
+  await start($)
+
+  await $.tool.call({ tool: TOOL, update: [{ id: 'fee', eta: '2026-11-25' }, { id: 'scope', eta: '2026-11-10' }] })
+  const read = String((await $.tool.call({ tool: TOOL })).result)
+  expect(read).toContain('file:pay [Project, needs, 1 need you, eta 2026-11-25] Payments rework')
+  expect(read).toContain('file:gross [Workstream, needs, 1 need you, target 2026-11-20, eta 2026-11-25, late] Gross funding')
+
+  const ui = await open($, 'work')
+  await ui.press({ key: 'wtoggle-file:pay' })
+  const colorOf = async (text: string) => (await ui.findAll({ type: 'Text' })).filter(el => el.text === text).map(el => el.props.color)
+  // Payments has no target, so its ETA draws plainly; Gross funding's passes its target
+  expect(await colorOf('eta Wed 11-25')).toEqual([undefined, 'red'])
+  await ui.unmount()
+
+  await $.tool.call({ tool: TOOL, update: [{ id: 'fee', eta: '' }] })
+  expect(String((await $.tool.call({ tool: TOOL })).result)).toContain('file:gross [Workstream, needs, 1 need you, target 2026-11-20] Gross funding')
+})

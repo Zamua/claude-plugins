@@ -18,9 +18,10 @@ const DESCRIPTION = `Read and change the work view of the board pane: one tree o
 - attach: put this session under an Item.
 - start: start a new session for an Item with a brief, as this session's child. It is refused when the Item already has a running session, naming it, so message that one instead, or pass again: true for another.
 - root: true makes this session the root session, the one the person talks to; every breadcrumb and work view then starts with a mark that brings it to the front. root: false clears it.
-- aliases: identifiers a session's workspace name or a pull request's title or branch may carry, such as an issue key, so they attach to the Item without a link.
+- aliases: identifiers a session's tab or workspace name or a pull request's title or branch may carry, such as an issue key, so they attach to the Item without a link.
+- eta: when whoever works an Item expects it done, as an ISO date; an empty string clears it. Any Item takes one, whatever its source. A parent shows the latest ETA beneath it, marked late when that falls after its target.
 A read lists each session under its Item with its state, the name to message it by, and the goal and summary from its session board.
-Only Items whose ids start with file: (or have no prefix) can be added, updated or removed; Items from other sources can only be linked. File changes apply together, or none do; a started session stays started. Keep titles to one short line.`
+Only Items whose ids start with file: (or have no prefix) can be added, updated or removed; Items from other sources can only be linked and given an eta. File changes apply together, or none do; a started session stays started. Keep titles to one short line.`
 
 const STATUS_ENUM = [...URGENCY]
 const ITEM_FIELDS = {
@@ -35,6 +36,7 @@ const ITEM_FIELDS = {
     required: ['type'],
   },
   target: { type: 'string', description: 'The deadline, as an ISO date or time.' },
+  eta: { type: 'string', description: 'When it is expected done, as an ISO date; empty clears it.' },
   detail: { type: 'string', description: 'Markdown shown when the Item is pressed open.' },
   aliases: { type: 'array', items: { type: 'string' }, description: 'Identifiers such as an issue key.' },
   links: {
@@ -81,6 +83,7 @@ type Fields = {
   status?: Status
   origin?: Origin
   target?: string
+  eta?: string
   detail?: string
   links?: ItemLink[]
   aliases?: string[]
@@ -131,13 +134,14 @@ function checkFields(fields: Fields): string | undefined {
   if (fields.status !== undefined && !URGENCY.includes(fields.status)) return `No status ${fields.status}.`
   if (fields.shape !== undefined && fields.shape !== 'outcome' && fields.shape !== 'responsibility') return `No shape ${fields.shape}.`
   if (fields.origin !== undefined && !ORIGINS.includes(fields.origin.type)) return `No origin ${fields.origin.type}.`
+  if (fields.eta && Number.isNaN(Date.parse(fields.eta))) return `${fields.eta} is not a date.`
 
   return undefined
 }
 
 const patch = (item: LocalItem, fields: Fields): LocalItem => {
   const next: LocalItem = { ...item }
-  for (const [key, value] of Object.entries(fields)) if (value !== undefined && key !== 'id') next[key] = value
+  for (const [key, value] of Object.entries(fields)) if (value !== undefined && key !== 'id' && key !== 'eta') next[key] = value
   if (fields.parent !== undefined) next.parent = localId(fields.parent)
 
   return next
@@ -164,9 +168,20 @@ export function applyChange(current: LocalFile, input: Input, now: string, other
   const added: string[] = []
   const before = buildTree(itemsAndLinks(current).items, itemsAndLinks(current).links)
 
-  for (const id of [...(input.update ?? []).map(u => u.id), ...(input.remove ?? [])]) {
-    if (!isLocal(id)) return { error: `${id} belongs to another source; only link can change where it sits.` }
+  const etas: Record<string, string> = { ...(current.etas ?? {}) }
+  const isEtaOnly = (one: { id: string }) => Object.entries(one).every(([key, value]) => key === 'id' || key === 'eta' || value === undefined)
+  for (const one of input.update ?? []) {
+    if (!isLocal(one.id) && isEtaOnly(one) && others.has(one.id)) continue
+    if (!isLocal(one.id)) return { error: `${one.id} belongs to another source; only link and eta can change it.` }
+    if (!ids.has(localId(one.id))) return { error: `No Item ${one.id}. Call with no fields to list the ids.` }
+  }
+  for (const id of input.remove ?? []) {
+    if (!isLocal(id)) return { error: `${id} belongs to another source; only link and eta can change it.` }
     if (!ids.has(localId(id))) return { error: `No Item ${id}. Call with no fields to list the ids.` }
+  }
+  const setEta = (id: string, eta: string | undefined) => {
+    if (eta === '') delete etas[id]
+    else if (eta !== undefined) etas[id] = eta
   }
   for (const fields of [...(input.add ?? []), ...(input.update ?? [])]) {
     const wrong = checkFields(fields)
@@ -179,10 +194,13 @@ export function applyChange(current: LocalFile, input: Input, now: string, other
     for (let n = 2; ids.has(id); n++) id = `${slug(one.title)}-${n}`
     ids.add(id)
     items.push(stamped(undefined, patch({ id, title: one.title.trim(), kind: one.kind.trim(), status: 'next', ref: nextRef }, one), now))
+    setEta(qualify(id), one.eta)
     added.push(`file:${id} (#${nextRef})`)
     nextRef += 1
   }
   for (const one of input.update ?? []) {
+    setEta(qualify(one.id), one.eta)
+    if (!isLocal(one.id)) continue
     items = items.map(item => (item.id === localId(one.id) ? stamped(item, patch(item, one), now) : item))
   }
   for (const id of input.remove ?? []) {
@@ -192,12 +210,14 @@ export function applyChange(current: LocalFile, input: Input, now: string, other
     if (hasChildren) return { error: `${id} still has children; move or remove them first.` }
     items = items.filter(item => item.id !== local)
     links = links.filter(link => qualify(link.child) !== qualify(local))
+    delete etas[qualify(local)]
   }
   for (const id of input.unlink ?? []) {
     if (!links.some(link => qualify(link.child) === qualify(id))) return { error: `${id} has no hand-set parent.` }
     links = links.filter(link => qualify(link.child) !== qualify(id))
   }
-  const changed: LocalFile = { ...current, items, links, next_ref: nextRef }
+  const { etas: _held, ...kept } = current
+  const changed: LocalFile = { ...kept, items, links, next_ref: nextRef, ...(Object.keys(etas).length > 0 && { etas }) }
   const known = new Set([...others, ...buildTree(itemsAndLinks(changed).items, []).byId.keys()])
   for (const one of input.link ?? []) {
     const child = qualify(one.child)

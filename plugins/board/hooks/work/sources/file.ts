@@ -35,6 +35,8 @@ export type LocalFile = {
   links: Link[]
   /** The Harness id of the agent each linked session id last held, so a link follows the agent when it moves. */
   agents?: Record<string, string>
+  /** ETAs by Item id, for Items of every Source. */
+  etas?: Record<string, string>
   [field: string]: unknown
 }
 
@@ -100,8 +102,17 @@ export function itemsAndLinks(file: LocalFile): { items: Item[]; links: Link[] }
   }
 }
 
-export const agentsOf = (file: LocalFile): Record<string, string> =>
-  file.agents && typeof file.agents === 'object' && !Array.isArray(file.agents) ? file.agents : {}
+const recordOf = (value: unknown): Record<string, string> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, string>) : {}
+
+export const agentsOf = (file: LocalFile) => recordOf(file.agents)
+
+/** Each Item with the ETA the file holds for it. */
+export function withEtas(items: Item[], file: LocalFile): Item[] {
+  const etas = recordOf(file.etas)
+
+  return items.map(item => (typeof etas[item.id] === 'string' ? { ...item, eta: etas[item.id] } : item))
+}
 
 /** The file with its session ids moved to where each agent runs now, and the agent of each one it names noted. */
 export function followFile(file: LocalFile, sessions: Session[]): LocalFile {
