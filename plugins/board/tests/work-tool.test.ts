@@ -191,3 +191,20 @@ test('attach puts this session under an Item, keeping the Coordinator it already
   const unknown = await $.tool.call({ tool: TOOL, link: [{ child: 'hostit', parent: SELF_ID }] })
   expect(unknown.deny).toBe(`Only a session can sit under the session ${SELF_ID}.`)
 })
+
+test('a session resumed in another place keeps its place in the tree, and the next change moves its links there', async ($, on) => {
+  const w = withLive(TREE, herdrHost([SELF]))
+  engine(on, w, NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, attach: 'hostit', root: true })
+
+  w.run = herdrHost([{ ...SELF, id: 'w9:p1' }])
+  const read = String((await $.tool.call({ tool: TOOL })).result)
+  expect(read).toContain(`Root session: ${NEW_ID} [idle] coordinator`)
+  expect(read).toContain(`  file:hostit #6 [Project, next] hostit site list\n    ${NEW_ID} [idle] coordinator`)
+
+  await $.tool.call({ tool: TOOL, update: [{ id: 'hostit', status: 'flight' }] })
+  expect(fileOf(w.files).links).toEqual([{ child: NEW_ID, parent: 'file:hostit', at: '2026-10-27T14:00:00.000Z' }])
+  await $.tool.call({ tool: TOOL, unlink: [NEW_ID] })
+  expect(fileOf(w.files).links).toEqual([])
+})

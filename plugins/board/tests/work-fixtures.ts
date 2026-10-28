@@ -37,13 +37,24 @@ export const LIVE_CONFIG = {
   ],
 }
 
-/** A pane herdr lists: `agent: ''` is a shell with no agent in it. */
-export type HerdrPane = { id: string; label: string; status?: string; harnessId?: string; agent?: string }
+/**
+ * A pane herdr lists: `agent: ''` is a shell with no agent in it. `label` is its workspace's, and `tab` names the tab
+ * it sits in, which is its workspace's first, unnamed, when left out.
+ */
+export type HerdrPane = {
+  id: string
+  label: string
+  status?: string
+  harnessId?: string
+  agent?: string
+  tab?: { id: string; label: string }
+}
 
 const ran = (stdout: string) => ({ exitCode: 0, stdout, stderr: '' })
 const workspaceOf = (pane: string) => pane.split(':')[0] ?? pane
+const tabOf = (p: HerdrPane) => p.tab ?? { id: `${workspaceOf(p.id)}:t1`, label: '1' }
 
-/** herdr with one running session, named `session`, holding `panes`; creating a workspace adds `created`. */
+/** herdr with one running session, named `session`, holding `panes`; creating a workspace or tab adds `created`. */
 export function herdrHost(panes: HerdrPane[], created?: HerdrPane, session = 'default') {
   let all = panes
 
@@ -57,6 +68,7 @@ export function herdrHost(panes: HerdrPane[], created?: HerdrPane, session = 'de
       const listed = all.map(p => ({
         pane_id: p.id,
         workspace_id: workspaceOf(p.id),
+        tab_id: tabOf(p).id,
         ...(p.agent !== '' && { agent: p.agent ?? 'claude' }),
         agent_status: p.status ?? 'idle',
         ...(p.harnessId && { agent_session: { value: p.harnessId } }),
@@ -66,9 +78,22 @@ export function herdrHost(panes: HerdrPane[], created?: HerdrPane, session = 'de
     if (args === 'workspace list') {
       return ran(json({ result: { workspaces: all.map(p => ({ workspace_id: workspaceOf(p.id), label: p.label })) } }))
     }
-    if (args.startsWith('workspace create') && created) {
+    if (args === 'tab list') {
+      const tabs = [...new Map(all.map(p => [tabOf(p).id, tabOf(p)])).values()]
+      return ran(json({ result: { tabs: tabs.map(t => ({ tab_id: t.id, label: t.label, number: Number(t.id.split(':t')[1]) })) } }))
+    }
+    if (args.startsWith('pane get ')) {
+      const pane = all.find(p => p.id === args.slice('pane get '.length))
+      return ran(json({ result: { pane: pane ? { pane_id: pane.id, tab_id: tabOf(pane).id } : {} } }))
+    }
+    if ((args.startsWith('workspace create') || args.startsWith('tab create')) && created) {
       all = [...all, created]
-      return ran(json({ result: { root_pane: { pane_id: created.id, workspace_id: workspaceOf(created.id) } } }))
+      return ran(json({ result: { root_pane: { pane_id: created.id }, tab: { tab_id: tabOf(created).id } } }))
+    }
+    if (args.startsWith('tab rename ')) {
+      const [, , id = '', ...label] = args.split(' ')
+      all = all.map(p => (tabOf(p).id === id ? { ...p, tab: { id, label: label.join(' ') } } : p))
+      return ran('')
     }
 
     return ran('')

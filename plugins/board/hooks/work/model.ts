@@ -61,6 +61,8 @@ export type HostStart = {
   harness: string
   args: string[]
   brief: string
+  /** The Item the Session serves, then each of its ancestors up to the top. */
+  within: string[]
   near?: string
   /** Set in the new session's environment. */
   env?: Record<string, string>
@@ -151,6 +153,26 @@ const mostUrgent = (statuses: Status[]): Status =>
 export const qualify = (id: string) => (id.includes(':') ? id : `file:${id}`)
 
 export const isSessionId = (id: string) => id.startsWith('session:')
+
+/**
+ * The session ids links and the root name, moved to where each agent runs now. A Session id is the place an agent
+ * ran, so one resumed in another place is found again by the Harness id noted for it in `agents`.
+ */
+export function followSessions(
+  links: Link[],
+  root: string | undefined,
+  agents: Readonly<Record<string, string>>,
+  sessions: Session[],
+): { links: Link[]; root?: string } {
+  const listed = new Set(sessions.map(one => one.id))
+  const byAgent = new Map(sessions.flatMap(one => (one.harnessId ? [[one.harnessId, one.id] as const] : [])))
+  const now = (id: string) => (isSessionId(id) && !listed.has(id) && byAgent.get(agents[id] ?? '')) || id
+
+  return {
+    links: links.map(link => ({ ...link, child: now(link.child), parent: now(link.parent) })),
+    ...(root && { root: now(root) }),
+  }
+}
 
 export function buildTree(
   items: Item[],

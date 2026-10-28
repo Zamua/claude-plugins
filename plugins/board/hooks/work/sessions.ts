@@ -7,6 +7,7 @@ import { readSource } from './cache'
 import { claudeArgs, claudeInfo, claudeTime, recordItems } from './harnesses/claude'
 import type { HarnessInfo } from './harnesses/claude'
 import { focusHerdr, listHerdr, startHerdr } from './hosts/herdr'
+import type { HerdrConfig } from './hosts/herdr'
 import type { Artifact, HostSession, HostStart, Item, PastTime, Session, SourceAnswer } from './model'
 import { readBoards } from './sources/boards'
 import { readArtifacts } from './sources/github'
@@ -173,7 +174,7 @@ export async function startSession(
   if (!host || !harness) return { error: 'boards.json names no host and harness to start a session with.' }
   if (host !== 'herdr') return { error: `No host ${host} to start a session with.` }
   const args = harness === 'claude' ? claudeArgs(config.harnesses?.[harness]) : []
-  const started = await startHerdr($, { ...start, harness, args })
+  const started = await startHerdr($, { ...start, harness, args }, config.hosts?.[host] as HerdrConfig | undefined)
   if (!started.address) return { error: started.error ?? 'The session did not start.' }
   await refreshLive($, config, true)
 
