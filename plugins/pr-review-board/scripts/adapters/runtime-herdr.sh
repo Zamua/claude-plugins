@@ -23,7 +23,7 @@
 # spawn and resume deterministic either way.
 #
 # Contract used by poll.sh and the cleanup skill: rt_deps, rt_status,
-# rt_running_count, rt_spawn, rt_resume (2 = no saved session), rt_notify,
+# rt_running_count, rt_spawn, rt_resume (2 = nothing to resume), rt_notify,
 # rt_relabel, rt_close_workspace, rt_list.
 
 rt_deps() { printf 'herdr jq uuidgen'; }
@@ -31,6 +31,16 @@ rt_deps() { printf 'herdr jq uuidgen'; }
 _rt_session() { prb_get herdr_session reviews; }
 _rt_shared() { prb_get herdr_workspace ""; }
 _rt_new_sid() { uuidgen | tr 'A-Z' 'a-z'; }
+
+# Claude keeps a session's transcript at projects/<encoded cwd>/<uuid>.jsonl under its
+# config dir. Matching any project dir avoids depending on how it encodes the cwd.
+_rt_has_transcript() {  # <claude session uuid>
+  local f
+  for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl; do
+    [ -f "$f" ] && return 0
+  done
+  return 1
+}
 
 # herdr agent names must match [a-z][a-z0-9_-]{0,31}: 32 chars, leading letter.
 _rt_slug_to_name() {  # <slug>
@@ -146,10 +156,16 @@ _rt_agent_start() {  # <name> <pane> <argv...>
   return 1
 }
 
-# Not waited on: a poll pass has no business blocking on a review's first turn.
+# Waits for delivery, not for the turn: a poll pass has no business blocking on a
+# review's first turn. A refused prompt is retried briefly before it counts as lost.
 _rt_prompt() {  # <name> <text>
-  ( prb_scrub_env; herdr --session "$(_rt_session)" agent prompt "$1" "$2" >/dev/null 2>&1 ) \
-    || prb_log "prompt to '$1' failed"
+  local out i=0
+  while [ "$i" -lt 10 ]; do
+    out="$( prb_scrub_env; herdr --session "$(_rt_session)" agent prompt "$1" "$2" 2>&1 )" && return 0
+    i=$(( i + 1 )); sleep 1
+  done
+  prb_log "prompt to '$1' failed: $out"
+  return 1
 }
 
 _rt_agent_alive() { herdr --session "$(_rt_session)" agent list 2>/dev/null | jq -e --arg n "$1" '.result.agents[]? | select(.name==$n)' >/dev/null 2>&1; }
@@ -191,36 +207,45 @@ rt_spawn() {  # <key> <context>
     _rt_close_place "$ws" "$(_rt_own_tab "$tab")"
     return 1
   fi
+  # Claude writes a session's transcript on its first message, so a session whose
+  # kickoff never landed cannot be resumed and must not be recorded.
+  if ! _rt_prompt "$name" "$context"; then
+    _rt_close_place "$ws" "$(_rt_own_tab "$tab")"
+    return 1
+  fi
   prb_review_set_field "$key" claude_session "$sid"
   prb_review_set_field "$key" agent_name "$name"
   _rt_record_place "$key" "$ws" "$tab"
-  _rt_prompt "$name" "$context"
   prb_log "spawned $key (session=$(_rt_session) workspace=$ws label=$slug claude=$sid)"
 }
 
 # Recover a review whose agent died while the review is still ACTIVE. Resume never
 # re-reviews from scratch: the report and the notes are already on disk.
-rt_resume() {  # <key> ; 2 = no saved session
+rt_resume() {  # <key> ; 2 = nothing to resume, so spawn fresh
   local key="$1" sid slug dir name ws tab pane place
   sid="$(prb_review_field "$key" claude_session)"
   [ -n "$sid" ] || { prb_log "resume $key: no saved session"; return 2; }
   rt_ensure_server || return 1
-  _rt_build_argv
-  slug="$(prb_review_field "$key" slug)"; dir="$(prb_review_field "$key" dir)"
-  name="$(_rt_name "$key")"
-  prb_review_set_field "$key" agent_name "$name"
   # Resume opens a fresh tab, so the place recorded for the dead agent has to go
   # or every recovery leaves another empty one in the session.
   local old_ws old_tab; old_ws="$(prb_review_field "$key" herdr_workspace)"; old_tab="$(prb_review_field "$key" herdr_tab)"
   [ -n "$old_ws$old_tab" ] && _rt_close_place "$old_ws" "$old_tab"
+  _rt_has_transcript "$sid" || { prb_log "resume $key: session $sid has no transcript"; return 2; }
+  _rt_build_argv
+  slug="$(prb_review_field "$key" slug)"; dir="$(prb_review_field "$key" dir)"
+  name="$(_rt_name "$key")"
+  prb_review_set_field "$key" agent_name "$name"
   place="$(_rt_new_place "$(prb_reviews_root)" "$slug")" || return 1
   read -r ws tab pane <<<"$place"
   if ! _rt_agent_start "$name" "$pane" ${RT_ARGV[@]+"${RT_ARGV[@]}"} --resume "$sid"; then
     _rt_close_place "$ws" "$(_rt_own_tab "$tab")"
     return 1
   fi
+  if ! _rt_prompt "$name" "Resumed. Re-check every pull request and thread for activity since your last pass, and continue. Do not redo finished work."; then
+    _rt_close_place "$ws" "$(_rt_own_tab "$tab")"
+    return 1
+  fi
   _rt_record_place "$key" "$ws" "$tab"
-  _rt_prompt "$name" "Resumed. Re-check every pull request and thread for activity since your last pass, and continue. Do not redo finished work."
   prb_log "resumed $key (workspace=$ws claude=$sid)"
 }
 

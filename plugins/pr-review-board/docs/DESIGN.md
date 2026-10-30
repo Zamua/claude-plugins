@@ -191,7 +191,9 @@ request opens a fresh review under a new key rather than reviving the old one.
 a pass single-flight, and a lock left by a dead pass is reclaimed. Review identity is
 the herdr agent name, so a pass that overlaps a launch adopts rather than duplicates.
 An `ACTIVE` review whose agent died is resumed with `claude --resume`, which is the
-same decision as a first launch and goes through the same loop.
+same decision as a first launch and goes through the same loop. Claude writes a
+session's transcript on its first message, so a launch counts only once its kickoff
+prompt lands, and a saved session with no transcript is spawned fresh, not resumed.
 
 ## Safety
 
