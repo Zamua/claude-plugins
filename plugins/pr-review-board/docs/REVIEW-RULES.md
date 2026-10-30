@@ -54,22 +54,31 @@ board's grouping note says what was added and why.
    and review thread including bot reviews, and the commit history. Read the
    changed files whole, not just the diff hunks. Do this for every pull request in
    scope, each stack layer included.
-3. **Prove every behavioral finding with a failing test.** For anything that looks
+3. **Check where secrets and personal data travel.** For every log call, published
+   event, stored copy, metric label, error message and outbound client log the
+   change adds or touches, ask what a real payload would put there: tokens,
+   passwords, keys, card or account numbers, government ids, names, addresses,
+   dates of birth. Masking by field name misses a secret inside free text or a raw
+   request body, so check those paths first. A leak is a behavioral finding:
+   prove it with a test that feeds a sample secret in and finds it in the output.
+   When looking for a leak that already happened, count matching log lines and
+   never print them.
+4. **Prove every behavioral finding with a failing test.** For anything that looks
    like a business logic bug, a correctness bug, or similar, write a unit or
    integration test in the review checkout that fails against the pull request's
    code and reproduces the bug. If the test passes, or the behavior cannot be
    reproduced and you are no longer convinced it is a bug, **drop the finding**.
    Never report an unproven behavioral claim.
-4. **Note the rest plainly.** Findings that cannot be proven this way, such as
+5. **Note the rest plainly.** Findings that cannot be proven this way, such as
    naming, structure, missing docs, convention drift, or a risk you cannot
    trigger, are written down as observations with no test.
-5. **Report in simple terms.** Assume the reader is not an expert in the
+6. **Report in simple terms.** Assume the reader is not an expert in the
    subsystem. Say what breaks and why it matters before any code detail.
-6. **Stop and propose.** The review ends with the board: the report and the
+7. **Stop and propose.** The review ends with the board: the report and the
    numbered comments it would post, not with changes. Iterate on the findings and the
    wording with the operator until they agree. Do not start editing the reviewed
    code unless they ask.
-7. **Post only the numbers the operator picks.** See the proposed comments section
+8. **Post only the numbers the operator picks.** See the proposed comments section
    below.
 
 Tests written during a review are scratch evidence. They stay in the review
