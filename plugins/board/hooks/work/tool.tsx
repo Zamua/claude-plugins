@@ -340,6 +340,8 @@ async function change($: EngineInterface, w: WorkBoard, current: LocalFile, inpu
         .reverse(),
       env: { [START_ENV]: item.id, ...(config && { BOARD_CONFIG: config }) },
       ...(self && { near: self.address }),
+      // The root starts each branch's coordinator in a place of its own; any other session keeps its workers beside it
+      ...(self && self.id !== file.root && { beside: self.address }),
     }, one.model)
     if (!out.id) {
       failed.push(out.error ?? `${label} did not start.`)

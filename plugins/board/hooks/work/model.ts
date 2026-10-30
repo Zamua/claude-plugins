@@ -66,6 +66,8 @@ export type HostStart = {
   /** The Item the Session serves, then each of its ancestors up to the top. */
   within: string[]
   near?: string
+  /** The place of the session that started it, when the new one opens beside it, as a coordinator's workers do. */
+  beside?: string
   /** Set in the new session's environment. */
   env?: Record<string, string>
 }

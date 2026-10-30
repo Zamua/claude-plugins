@@ -109,7 +109,7 @@ test('start opens a session for an Item through herdr, briefed and linked under 
   const started = await $.tool.call({ tool: TOOL, start: [{ item: 'scope', brief: 'Split the scope doc in two.' }] })
   expect(started.result).toBe(`Work updated. Started ${NEW_ID} (scope-the-split, message sam-9) for file:scope.`)
   expect(w.runs).toContainEqual([
-    'herdr', '--session', 'default', 'workspace', 'create', '--cwd', HOME, '--label', 'scope-the-split', '--no-focus', '--env', 'BOARD_WORK_ITEM=file:scope',
+    'herdr', '--session', 'default', 'tab', 'create', '--workspace', 'w4', '--cwd', HOME, '--label', 'scope-the-split', '--no-focus', '--env', 'BOARD_WORK_ITEM=file:scope',
   ])
   expect(w.runs).toContainEqual([
     'herdr', '--session', 'default', 'agent', 'start', 'scope-the-split', '--kind', 'claude', '--pane', 'w9:p1', '--timeout', '60000', '--', '--model', 'opus',

@@ -43,9 +43,22 @@ test('the first session of such a branch makes its workspace, named for the bran
   expect(String((await $.tool.call({ tool: TOOL })).result)).toContain('    session:herdr:default/w9:p1 [idle] scope-the-split')
 })
 
-test('an Item outside every named branch still starts its session in a workspace of its own', async ($, on) => {
-  const created: HerdrPane = { id: 'w9:p1', label: 'hostit-site-list', harnessId: 'h-new' }
+test('a coordinator starts a worker for an Item outside every named branch as a tab beside itself', async ($, on) => {
+  const created: HerdrPane = { id: 'w4:p2', label: 'coordinator', harnessId: 'h-new', tab: { id: 'w4:t2', label: 'hostit-site-list' } }
   const w = withAreas(TREE, [SELF], created)
+  engine(on, w, NOW)
+  await start($)
+
+  await $.tool.call({ tool: TOOL, start: [{ item: 'hostit', brief: 'List the sites.' }] })
+  expect(w.runs.find(argv => argv.includes('create'))).toEqual([
+    'herdr', '--session', 'default', 'tab', 'create', '--workspace', 'w4', '--cwd', HOME, '--label', 'hostit-site-list', '--no-focus', '--env', 'BOARD_WORK_ITEM=file:hostit',
+  ])
+  expect(String((await $.tool.call({ tool: TOOL })).result)).toContain('session:herdr:default/w4:p2 [idle] hostit-site-list')
+})
+
+test('the root starts a session for an Item outside every named branch in a workspace of its own', async ($, on) => {
+  const created: HerdrPane = { id: 'w9:p1', label: 'hostit-site-list', harnessId: 'h-new' }
+  const w = withAreas({ ...TREE, root: 'session:herdr:default/w4:p1' }, [SELF], created)
   engine(on, w, NOW)
   await start($)
 
