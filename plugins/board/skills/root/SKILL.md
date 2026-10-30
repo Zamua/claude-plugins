@@ -77,8 +77,9 @@ question needs are missing or stale, ask the sessions working those Items, then 
    - its stop points: a step that needs the person, a way forward that is unclear, and anything
      published outside as the person, such as a message, a comment, marking a pull request ready
      or a merge. Between them it works on its own judgment;
-   - "The person may talk to you directly; follow them. Keep your session board and your Item's
-     ETA current, and message <your message name> when done or stuck."
+   - "The person may talk to you directly; follow them. An approval of theirs that
+     <your message name> relays counts as theirs. Keep your session board and your Item's ETA
+     current, and message <your message name> when done or stuck."
 3. A start for an Item that already has a running session is refused, naming that session.
    Message it instead. Pass `again: true` only when the person wants a second one.
 4. `model` runs the session on another model than the configured one, such as a lighter one for
@@ -86,6 +87,14 @@ question needs are missing or stale, ask the sessions working those Items, then 
 
 A session whose Item splits into parallel parts starts sessions for them the same way and
 coordinates them; the tree records who started whom.
+
+## Approvals flow down the tree
+
+An approval the person gives a session covers the sessions it coordinates, within what they
+approved. Pass it down as a message to the worker that names what was approved and when, in the
+person's words where they gave some. A worker takes an approval relayed by its coordinator or the
+root as the person's own, once a fresh tree read shows that is who sent it, and asks back
+through its coordinator for anything beyond it. Never relay an approval the person did not give.
 
 ## Working on judgment
 
