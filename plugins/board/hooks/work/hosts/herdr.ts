@@ -95,8 +95,8 @@ export async function focusHerdr($: EngineInterface, address: string): Promise<s
 }
 
 /**
- * A tab in the workspace the Item's branch names, made if missing, or else a workspace of its own; then an agent in
- * its first pane, and the brief as its first prompt.
+ * A tab in the workspace the Item's branch names, made if missing, else one beside the session that started it, else a
+ * workspace of its own; then an agent in its first pane, and the brief as its first prompt.
  */
 export async function startHerdr(
   $: EngineInterface,
@@ -111,10 +111,11 @@ export async function startHerdr(
     const workspaces = area
       ? (JSON.parse(await herdr($, session, ['workspace', 'list'])) as { result: { workspaces: Workspace[] } }).result.workspaces
       : []
-    const holder = workspaces.find(one => one.label === area)
+    const beside = !area && start.beside && partsOf(start.beside).session === session ? partsOf(start.beside).workspace : undefined
+    const holder = workspaces.find(one => one.label === area)?.workspace_id ?? beside
     let pane: string
     if (holder) {
-      const args = ['tab', 'create', '--workspace', holder.workspace_id, '--cwd', start.cwd, '--label', start.label, '--no-focus']
+      const args = ['tab', 'create', '--workspace', holder, '--cwd', start.cwd, '--label', start.label, '--no-focus']
       pane = opened(await herdr($, session, [...args, ...env])).root_pane.pane_id
     } else {
       const args = ['workspace', 'create', '--cwd', start.cwd, '--label', area ?? start.label, '--no-focus']

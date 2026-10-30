@@ -158,8 +158,8 @@ A Source left out of `sources` is off; with none, the view runs on the local fil
 Item under one of yours, by id. `hosts` says where started sessions run, and `harnesses` which agent starts in them
 and with what arguments. `hosts.herdr` takes `cwd`, the directory sessions start in; `session`, the herdr session
 they run in, by default the starting session's own; and `workspaces`, a workspace label by Item id. A session started
-for an Item opens as a tab in the workspace its nearest such ancestor names, made the first time, and otherwise in a
-workspace of its own. `periods` are named date ranges, the end date included. A key
+for an Item opens as a tab in the workspace its nearest such ancestor names, made the first time. Otherwise a
+session started by a coordinator opens as a tab beside it, and one started by the root in a workspace of its own. `periods` are named date ranges, the end date included. A key
 nothing reads draws one warning line in the view.
 
 The local file:

@@ -69,7 +69,8 @@ question needs are missing or stale, ask the sessions working those Items, then 
 1. Find the Item the work belongs to. If none fits, add one under the right parent, with
    `aliases` such as an issue key, so the new session and its pull requests attach to it.
 2. Call `start: [{ item, brief }]`. The Host opens it where the person's config places that
-   branch of the tree. The brief is the new session's first prompt, so make it complete:
+   branch of the tree; otherwise a coordinator's workers open beside it, and the root's starts
+   open apart. The brief is the new session's first prompt, so make it complete:
    - the goal, in one line;
    - the decisions already made, and the pointers it needs: issues, documents, repositories,
      pull requests;
