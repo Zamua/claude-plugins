@@ -14,8 +14,8 @@ Three ways to use it:
   forms, when fixing a smell costs a line instead of a refactor.
 - **Self-review of a diff**: check what the diff added or made worse, before the
   commit or the PR. Not the whole repo.
-- **Repo audit**: rate all nine across a codebase, with evidence, and name the
-  worst three.
+- **Repo audit**: rate all nine across a codebase, with evidence, and list every
+  finding with its fix.
 
 ## The nine smells
 
@@ -188,7 +188,9 @@ deferred gets named in the PR or the commit summary, never silently left.
    valid and welcome rating; do not pad.
 4. Every claim carries a `path:line` or a path plus a measurement. No evidence, no
    claim.
-5. End with the worst three, each with the concrete fix in one line.
+5. End with the complete list of findings, most severe first, each with its
+   concrete fix in one line. No top-N cut: every finding that holds up is listed,
+   and a short list is the right answer for clean code.
 6. Verify the top findings yourself before reporting them, especially when a
    subagent did the audit: open the file and confirm the line says what the
    finding claims.
@@ -200,8 +202,8 @@ REPO <name> (<language>, <approx source lines>)
 1. Implicit coupling: notable - <evidence, path:line>
 ...
 9. Errors/validation at the boundary: minor - <evidence>
-Worst 3:
-1. <fix in one line>
+Findings, most severe first:
+1. <smell number> <path:line>: <the problem>. Fix: <one line>
 ```
 
 For several repos, one read-only subagent per repo works well; give each the list
