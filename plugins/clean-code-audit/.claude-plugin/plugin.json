@@ -1,0 +1,15 @@
+{
+  "name": "clean-code-audit",
+  "description": "Check code against nine structural smells: implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, and validation not at the boundary. A guide while implementing, a checklist for self-reviewing a diff, and a method for auditing a repo with path:line evidence and a worst-three list.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Zamua"
+  },
+  "keywords": [
+    "review",
+    "architecture",
+    "code-smells",
+    "refactoring",
+    "audit"
+  ]
+}
