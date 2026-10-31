@@ -31,7 +31,7 @@ test('added Items get the next ref and appear under their parent', async ($, on)
 
   const ui = await open($, 'work')
   await ui.press({ key: 'wtoggle-file:pay' })
-  expect(await ui.find({ key: 'wrow-file:write-the-doc', text: /next\s*#10\s*Write the doc/ })).toBeDefined()
+  expect(await ui.find({ key: 'wrow-file:write-the-doc', text: /next\s*Write the doc/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -84,7 +84,8 @@ test('an ask with no parent waits in the Inbox with who asked, and leaves it onc
   expect(String((await $.tool.call({ tool: TOOL })).result)).toMatch(/Inbox:\nfile:answer-the-vendor #10 \[Task, next, asked by Dana\] Answer the vendor/)
   const ui = await open($, 'work')
   expect(await ui.find({ key: 'inbox', text: /^Inbox/ })).toBeDefined()
-  expect(await ui.find({ key: 'waside-file:answer-the-vendor', text: /^from Dana\s*$/ })).toBeDefined()
+  await ui.press({ key: 'wtoggle-file:answer-the-vendor' })
+  expect(await ui.find({ key: 'wmeta-file:answer-the-vendor', text: 'Task · #10 · from Dana' })).toBeDefined()
   await ui.unmount()
 
   await $.tool.call({ tool: TOOL, update: [{ id: 'answer-the-vendor', parent: 'pay' }] })

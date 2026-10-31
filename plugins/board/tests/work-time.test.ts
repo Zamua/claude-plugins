@@ -46,12 +46,14 @@ test("an Item's time is its sessions' active time, gaps over five minutes cut, s
   await start($)
 
   const ui = await open($, 'work')
-  expect(await ui.find({ key: 'waside-file:pay', text: /^3h\s*$/ })).toBeDefined()
   await ui.press({ key: 'wtoggle-file:pay' })
+  expect(await ui.find({ key: 'wmeta-file:pay', text: /3h spent/ })).toBeDefined()
   await ui.press({ key: 'wtoggle-file:gross' })
-  expect(await ui.find({ key: 'waside-file:gross', text: /^5m\s*$/ })).toBeDefined()
-  expect(await ui.find({ key: 'waside-file:fee', text: /^5m\s*$/ })).toBeDefined()
-  expect(await ui.find({ key: 'waside-file:scope', text: /^3h\s*$/ })).toBeDefined()
+  await ui.press({ key: 'wtoggle-file:fee' })
+  await ui.press({ key: 'wtoggle-file:scope' })
+  expect(await ui.find({ key: 'wmeta-file:gross', text: /5m spent/ })).toBeDefined()
+  expect(await ui.find({ key: 'wmeta-file:fee', text: /5m spent/ })).toBeDefined()
+  expect(await ui.find({ key: 'wmeta-file:scope', text: /3h spent/ })).toBeDefined()
   await ui.unmount()
 
   expect(JSON.parse(w.files[TIME_FILE] ?? '{}').sessions.h1).toMatchObject({ activeMs: 5 * 60_000, item: 'file:fee' })
@@ -124,10 +126,14 @@ test('an ETA rolls up to the latest beneath it, and a line whose ETA falls after
   expect(read).toContain('file:gross [Workstream, needs, 1 need you, target 2026-11-20, eta 2026-11-25, late] Gross funding')
 
   const ui = await open($, 'work')
+  // An ETA a month off stays off the line; Gross funding's passes its target, so its line says late, in red
+  expect(await ui.find({ key: 'wfact-file:pay', text: '1' })).toBeDefined()
   await ui.press({ key: 'wtoggle-file:pay' })
   const colorOf = async (text: string) => (await ui.findAll({ type: 'Text' })).filter(el => el.text === text).map(el => el.props.color)
-  // Payments has no target, so its ETA draws plainly; Gross funding's passes its target
-  expect(await colorOf('eta Wed 11-25')).toEqual([undefined, 'red'])
+  expect(await colorOf('late')).toEqual(['red'])
+  expect(await ui.find({ key: 'wfact-file:gross', text: /^1\s*·\s*late$/ })).toBeDefined()
+  await ui.press({ key: 'wtoggle-file:gross' })
+  expect(await ui.find({ key: 'wmeta-file:gross', text: /target Fri 11-20 · eta Wed 11-25, late/ })).toBeDefined()
   await ui.unmount()
 
   await $.tool.call({ tool: TOOL, update: [{ id: 'fee', eta: '' }] })
