@@ -43,7 +43,7 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   that make code hard to change safely, from implicit coupling and illegal states
   to validation that happens deep inside instead of at the boundary. Use it as a
   set of questions while designing a change, as a checklist when self-reviewing a
-  diff, or to audit a whole repo with path:line evidence and the worst three to fix.
+  diff, or to audit a whole repo with path:line evidence and every fix it calls for.
 
 ## License
 
