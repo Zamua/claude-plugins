@@ -6,11 +6,6 @@
   "description": "Zamua's personal Claude Code plugin marketplace.",
   "plugins": [
     {
-      "name": "agent-board",
-      "source": "./plugins/agent-board",
-      "description": "Issue-board-driven orchestration of local Claude Code worker agents: label an issue (sources: GitHub or Linear) and a local poller spawns a worker in a pane (runtimes: tmux or herdr) that works in a per-issue worktree and opens a draft PR; you review and merge."
-    },
-    {
       "name": "telegram",
       "source": "./plugins/telegram",
       "description": "Telegram forum-topic agent router: multiplex one bot token across concurrent Claude Code conversations, plus opt-in harness-locked Google Antigravity topics in persistent Herdr sessions with dynamic subscription model and effort selection."
