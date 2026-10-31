@@ -11,10 +11,6 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
 
 ## Plugins
 
-- **[agent-board](plugins/agent-board/)**: issue-board-driven orchestration of
-  local Claude Code worker agents. Label an issue (sources: GitHub or Linear)
-  and a local poller spawns a worker in a pane (runtimes: tmux or herdr) that
-  works in a per-issue worktree and opens a draft PR; you review and merge.
 - **[telegram](plugins/telegram/)**: multiplex ONE Telegram bot token across
   MANY concurrent agent conversations, routed by forum topics. Ordinary topics
   use foreground Claude Code with provider routing; fresh topics may instead be
