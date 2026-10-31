@@ -483,11 +483,11 @@ export function workView($: EngineInterface, w: WorkBoard): View {
               {level(ctx, 'top', top)}
             </Box>
           )}
-          {sections.map(section => {
+          {sections.map((section, at) => {
             const key = `sec-${section.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
 
             return (
-              <Box key={`w${key}`} flexDirection="column" marginBottom={1}>
+              <Box key={`w${key}`} flexDirection="column" marginTop={at > 0 ? 1 : 0}>
                 <Text dimColor bold>
                   {section.title}
                 </Text>
