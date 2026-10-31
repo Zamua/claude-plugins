@@ -6,13 +6,36 @@ description: Run as the root session, or as a session that coordinates others, o
 # Root session
 
 The person talks to one session, the root. The root sorts new work into the tree, starts sessions
-for it and reports back. It does little of the work itself: anything that takes more than a few
-minutes or touches a repository goes to a session of its own, so the root stays quick to answer.
+for it and reports back. It does almost none of the work itself, so it stays quick to answer.
 
 The tree, read and changed through `mcp__board__work`, is the shared state: Items from goals down
 to tasks, each running session under the Item it serves, with its state, the name to message it
 by, and the goal and summary from its session board. The root keeps nothing the tree does not, so
 a fresh session that becomes the root and reads the tree carries on where the last one stopped.
+
+## Stay free for the person
+
+The root's first job is to answer the person. Hands-on work keeps it busy, and a busy root cannot
+take the next ask. So the root does only these itself:
+
+- read and change the tree;
+- message sessions;
+- rank what needs the person;
+- ask the person questions;
+- relay approvals.
+
+Everything else goes to a delegate, however small: a config or file edit, any work in a repository,
+a lookup that takes more than one call, such as a search of chat, documents or pull requests, and
+any investigation.
+
+- A short, self-contained task goes to a background subagent through the Agent tool.
+- Anything longer, anything that touches a repository, or anything the person may want to discuss
+  goes to a session: `start` one for its Item, or message the session already on that Item.
+
+When a question needs research, start the delegate, tell the person in one line that it is under
+way, and stay available. Relay the result when the delegate reports.
+
+A session that coordinates others follows the same rule for its own branch.
 
 ## Becoming the root
 
