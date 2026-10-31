@@ -74,11 +74,18 @@ Within a rank, the nearer target goes first. The person's own order wins over th
 1. Read the tree: `mcp__board__work` with no fields.
 2. Lead with what needs the person, ranked as above, then what is in flight, waiting and next.
    For a rollup, go branch by branch, with the progress a Source gives. For one Item, answer from
-   its sessions' summaries and its pull requests. Name Items by title and sessions by label.
+   its sessions' summaries and its pull requests. Name Items by title and sessions by label, as
+   under "Naming sessions".
 3. Message a session only when its summary is stale or does not answer the question, and ask it
    one thing. Ask the session that coordinates a branch rather than the workers under it.
 4. Take message names from the read you just made. A name changes when its session restarts, so
    never reuse one from memory or from a brief.
+
+## Naming sessions
+
+In anything the person reads, name a session by its tab label, adding its workspace label when the
+tab alone is ambiguous, such as `api-tests` in `payments`. A message name is only for messaging a
+session and never appears in what the person reads. Coordinators follow the same rule.
 
 ## ETAs
 
