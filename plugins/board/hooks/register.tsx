@@ -16,8 +16,20 @@ import { markWorkActive } from './work/cache'
 import { migrateFile, reportText } from './work/migrate'
 import { rhythmsHooks } from './work/sources/rhythms'
 import { workHooks, workToolStart } from './work/tool'
-import { choosePeriod, configureWork, currentWork, workBreadcrumb, workRefresh, workStart, workView, workViewHooks } from './work/view'
-import type { WorkSpec } from './work/view'
+import {
+  choosePeriod,
+  configureWork,
+  countPlaced,
+  currentWork,
+  isWithin,
+  placeBoards,
+  workBreadcrumb,
+  workRefresh,
+  workStart,
+  workView,
+  workViewHooks,
+} from './work/view'
+import type { PlacedBoard, WorkSpec } from './work/view'
 
 const CONFIG_PATH = '.config/board/boards.json'
 const BUILT_IN = ['session', 'prs', 'review']
@@ -32,6 +44,8 @@ type Config = { boards?: unknown[]; link_labels?: Record<string, string>; link_p
 
 let fileBoards: FileBoard[] = []
 let rolloutBoards: RolloutBoard[] = []
+// The Item each board that names one belongs to, by board id
+let placedUnder = new Map<string, string>()
 
 const isSpec = (one: unknown): one is FileBoardSpec =>
   typeof one === 'object' &&
@@ -66,11 +80,26 @@ function viewsOf($: EngineInterface): View[] {
   ]
 }
 
-/** The views the switcher lists: those with something to show, and the chosen one whatever it holds. */
+/** What each board placed under an Item waits on the person for, so the line under its Item can say. */
+async function countPlacedBoards($: EngineInterface) {
+  const all = viewsOf($)
+  const counted = await Promise.all(
+    [...placedUnder.keys()].map(async id => [id, (await all.find(v => v.id === id)?.needs()) ?? 0] as const),
+  )
+  countPlaced(new Map(counted))
+}
+
+/**
+ * The views the switcher lists: those with something to show, and the chosen one whatever it holds. A board placed
+ * under an Item shows only in the sessions working under it.
+ */
 async function listed($: EngineInterface): Promise<View[]> {
   const chosen = await read($, selected)
   const out: View[] = []
-  for (const v of viewsOf($)) if (v.id === chosen || (await v.isAvailable())) out.push(v)
+  for (const v of viewsOf($)) {
+    const under = placedUnder.get(v.id)
+    if (v.id === chosen || ((await v.isAvailable()) && (!under || (await isWithin($, under))))) out.push(v)
+  }
 
   return out
 }
@@ -124,9 +153,16 @@ export const register: Register = on => {
     const taken = new Set(BUILT_IN)
     fileBoards = []
     rolloutBoards = []
+    placedUnder = new Map()
+    const placed: PlacedBoard[] = []
     let work: WorkSpec | undefined
     for (const spec of Array.isArray(config.boards) ? config.boards : []) {
       if (!isSpec(spec) || taken.has(spec.id)) continue
+      const under = (spec as { under?: unknown }).under
+      if (typeof under === 'string' && under !== '' && (spec as { layout?: string }).layout !== 'model') {
+        placedUnder.set(spec.id, under)
+        placed.push({ id: spec.id, title: spec.title ?? spec.id, under })
+      }
       if ((spec as { layout?: string }).layout === 'rollout') {
         rolloutBoards.push(rolloutBoard(spec as RolloutSpec, home, shared.labels))
       } else if ((spec as { layout?: string }).layout === 'model') {
@@ -139,6 +175,7 @@ export const register: Register = on => {
       taken.add(spec.id)
     }
     configureWork(work, home, shared.labels, Object.fromEntries(fileBoards.map(one => [one.spec.id, one.path])))
+    placeBoards(placed)
     await sessionStart($)
     await prsStart($)
     await reviewStart($)
@@ -275,6 +312,7 @@ export const register: Register = on => {
     const list = await listed($)
     const current = await shown($, list)
     const counts = await Promise.all(list.map(v => v.needs()))
+    await countPlacedBoards($)
 
     return (
       <Box key="board" flexDirection="column">

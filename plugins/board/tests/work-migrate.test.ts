@@ -58,7 +58,7 @@ test('migrating keeps every group and item, saves the old board beside it, and r
   expect(byId.get('stray')?.parent).toBeUndefined()
 
   const ui = await open($, 'work')
-  expect(await ui.find({ key: 'wrow-file:pay', text: /you\s*1\s*Project\s*Payments rework/ })).toBeDefined()
+  expect(await ui.find({ key: 'wrow-file:pay', text: /you\s*Payments rework\s*1$/ })).toBeDefined()
   expect(await ui.find({ key: 'wrow-file:stray' })).toBeDefined()
   await ui.unmount()
 })

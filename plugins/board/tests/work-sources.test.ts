@@ -113,10 +113,11 @@ test('a followed goal and its key results come from Rhythms, with progress and t
   expect(search?.input).toMatchObject({ type: 'goal', goal_uuids: [OBJ.uuid], include_children: true })
 
   const ui = await open($, 'work')
-  expect(await ui.find({ key: 'wtoggle-rhythms:OBJ-1', text: /Objective 95% Parity with Nova/ })).toBeDefined()
+  expect(await ui.find({ key: 'wtoggle-rhythms:OBJ-1', text: /now\s+Parity with Nova/ })).toBeDefined()
   await ui.press({ key: 'wtoggle-rhythms:OBJ-1' })
+  expect(await ui.find({ key: 'wmeta-rhythms:OBJ-1', text: /^Objective · 95%/ })).toBeDefined()
   expect(await ui.find({ type: 'Markdown', text: /Code complete this week/ })).toBeDefined()
-  expect(await ui.find({ key: 'wrow-rhythms:KR-61', text: /now\s+100% Instant funding/ })).toBeDefined()
+  expect(await ui.find({ key: 'wrow-rhythms:KR-61', text: /now\s+Instant funding/ })).toBeDefined()
   await ui.unmount()
 })
 

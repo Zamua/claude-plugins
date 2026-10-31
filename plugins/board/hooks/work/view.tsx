@@ -3,7 +3,7 @@ import type { Color, EngineInterface, On, RenderNode } from 'claude-code'
 import { ago, dayOf, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, span, spans } from '../kit'
 import type { Els, Part, View } from '../kit'
 import { PANE, paneFocused, paneWidth, selectView } from '../pane'
-import { buildTree, followSessions, inPeriod, isLate, mergeItems, needsTotal, pathTo, qualify, SESSION_STATES } from './model'
+import { buildTree, followSessions, inPeriod, isLate, mergeItems, needsTotal, pathTo, qualify, rank, SESSION_STATES } from './model'
 import type { Artifact, Node, Period, Session, SessionState, Status, Tree } from './model'
 import { focusSession, liveNow, refreshLive, rememberItems } from './sessions'
 import type { Live } from './sessions'
@@ -61,8 +61,18 @@ const SESSION_COLORS: Record<SessionState, Color> = {
   idle: 'inactive',
 }
 const STATE_WIDTH = Math.max(...SESSION_STATES.map(s => s.length))
+const DAY_MS = 24 * 3600e3
+// A date further off than this stays in an Item's detail, off its line
+const SOON_MS = 7 * DAY_MS
+const LEAD_WIDTH = 14
+
+/** A board that belongs to one Item: its tab shows only in the sessions under that Item, and a line under the Item opens it. */
+export type PlacedBoard = { id: string; title: string; under: string }
 
 let board: WorkBoard | undefined
+let placed: PlacedBoard[] = []
+// What each placed board waits on the person for, by board id, as the pane counted it before drawing
+let placedNeeds = new Map<string, number>()
 // What the person pressed open, for the session `pressedFor` names
 const opened = new Set<string>()
 const doneShown = new Set<string>()
@@ -96,6 +106,39 @@ export function configureWork(
 }
 
 export const currentWork = () => board
+
+/** The boards that belong to an Item, each drawn as a line under it. */
+export function placeBoards(boards: PlacedBoard[]) {
+  placed = boards.map(one => ({ ...one, under: qualify(one.under) }))
+}
+
+export function countPlaced(needs: Map<string, number>) {
+  placedNeeds = needs
+}
+
+/**
+ * Whether this session works under `under`: its own Item sits at or below it, or the Item of a session coordinating it,
+ * up the chain, does.
+ */
+export async function isWithin($: EngineInterface, under: string): Promise<boolean> {
+  const w = board
+  if (!w) return false
+  if (liveNow().at === 0) await refreshLive($, w.spec)
+  const tree = workTree(w.state.value).tree
+  if (!tree) return false
+  const target = qualify(under)
+  const self = await selfOf($, tree)
+  const items = self.item ? [self.item] : []
+  const seen = new Set<string>()
+  for (let at = self.session?.id; at && !seen.has(at); at = tree.coordinatorOf.get(at)) {
+    seen.add(at)
+    const up = tree.coordinatorOf.get(at)
+    const item = up ? tree.sessionItem.get(up) : undefined
+    if (item) items.push(item)
+  }
+
+  return items.some(item => pathTo(tree, item).some(one => one.id === target))
+}
 
 /** The tree the local file holds now, with the Sessions and Artifacts last listed, or why there is none. */
 export function workTree(file: unknown, live: Live = liveNow()): { tree?: Tree; error?: string } {
@@ -272,9 +315,59 @@ function toggle($: EngineInterface, set: Set<string>, key: string) {
 }
 
 /** `shows` holds the Items a chosen Period draws; absent, every Item draws. */
-type Ctx = { els: Els; now: number; tree: Tree; self?: Session; columns: number; shows?: Set<string> }
+type Ctx = {
+  els: Els
+  now: number
+  tree: Tree
+  self?: Session
+  columns: number
+  shows?: Set<string>
+  /** What each placed board waits on the person for, by board id. */
+  boardNeeds: Map<string, number>
+}
 
 const counted = (n: number, noun: string) => (n === 0 ? '' : `${n} ${noun}${n === 1 ? '' : 's'}`)
+const widthOf = (parts: Part[]) => parts.reduce((n, part, at) => n + [...part.text].length + (at > 0 ? 1 : 0), 0)
+const cut = (text: string, width: number) => ([...text].length <= width ? text : `${[...text].slice(0, width - 1).join('')}…`)
+
+/** When an Item is due: now for one overdue or running late, else its nearer of target and ETA, if that is in a week. */
+function dueAt(node: Node, now: number): number | undefined {
+  if (node.shown === 'done') return undefined
+  const target = node.item.target ? Date.parse(node.item.target) : NaN
+  if (target < now || isLate(node)) return now
+  const eta = node.eta ? Date.parse(node.eta) : NaN
+  const soonest = Math.min(...[target, eta].filter(at => at >= now))
+
+  return soonest - now <= SOON_MS ? soonest : undefined
+}
+
+/** The one date a line shows, in red when overdue or late, as a countdown inside a day and a weekday inside a week. */
+function dateOf(node: Node, now: number): Part | undefined {
+  const at = dueAt(node, now)
+  if (at === undefined) return undefined
+  const target = node.item.target ? Date.parse(node.item.target) : NaN
+  if (target < now) return { text: 'overdue', color: 'red' }
+  if (at === now && isLate(node)) return { text: 'late', color: 'red' }
+  if (at - now < DAY_MS) return { text: `in ${span(at - now)}`, color: at - now < 2 * 3600e3 ? 'red' : 'yellow' }
+
+  return { text: dayOf(at).split(' ')[0] ?? '', dimColor: true }
+}
+
+/** The top of the tree in the order the person works it: what needs them, then what is due soonest, then by status. */
+function ranked(nodes: Node[], now: number): Node[] {
+  const due = (n: Node) => dueAt(n, now) ?? Infinity
+
+  return [...nodes].sort(
+    (a, b) => Number(b.shown === 'needs') - Number(a.shown === 'needs') || due(a) - due(b) || rank(a.shown) - rank(b.shown),
+  )
+}
+
+/** The session that leads an Item: one attached to it that coordinates others, else the one active last. */
+function leadOf(tree: Tree, node: Node): Session | undefined {
+  const leads = node.sessions.filter(one => (tree.coordinated.get(one.id) ?? []).length > 0)
+
+  return [...(leads.length > 0 ? leads : node.sessions)].sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0))[0]
+}
 
 
 export function workView($: EngineInterface, w: WorkBoard): View {
@@ -325,6 +418,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         now,
         tree,
         columns: paneWidth() - 2,
+        boardNeeds: placedNeeds,
         ...(self.session && { self: self.session }),
         ...(chosen && { shows: inPeriod(tree, chosen) }),
       }
@@ -333,8 +427,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       const notes = [...w.warnings, ...tree.warnings, ...liveNow().errors]
       const root = rootOf(tree)
       const shown = (nodes: Node[]) => (ctx.shows ? nodes.filter(n => ctx.shows?.has(n.item.id)) : nodes)
-      const outcomes = shown(tree.outcomes)
-      const responsibilities = shown(tree.responsibilities)
+      const top = ranked(shown([...tree.outcomes, ...tree.responsibilities]), now)
       const inbox = shown(tree.inbox)
       const box =
         periods.length > 0 ? (
@@ -362,33 +455,22 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       return (
         <Box key="work-view" flexDirection="column" paddingRight={1}>
           {head}
-          {outcomes.length + responsibilities.length + inbox.length === 0 && (
+          {top.length + inbox.length === 0 && (
             <Text dimColor wrap="wrap">
               {chosen ? `Nothing dated in ${chosen.name}.` : `Nothing tracked yet. Claude adds work here with ${WORK_TOOL}.`}
             </Text>
           )}
-          {outcomes.length > 0 && (
-            <Box key="outcomes" flexDirection="column">
-              <Text dimColor bold>
-                Outcomes
-              </Text>
-              {level(ctx, 'top-outcomes', outcomes)}
-            </Box>
-          )}
-          {responsibilities.length > 0 && (
-            <Box key="responsibilities" flexDirection="column" marginTop={1}>
-              <Text dimColor bold>
-                Responsibilities
-              </Text>
-              {level(ctx, 'top-responsibilities', responsibilities)}
-            </Box>
-          )}
           {inbox.length > 0 && (
-            <Box key="inbox" flexDirection="column" marginTop={1}>
+            <Box key="inbox" flexDirection="column" marginBottom={1}>
               <Text dimColor bold>
                 Inbox
               </Text>
               {level(ctx, 'top-inbox', inbox)}
+            </Box>
+          )}
+          {top.length > 0 && (
+            <Box key="top" flexDirection="column">
+              {level(ctx, 'top', top)}
             </Box>
           )}
           {unplaced(ctx, tree)}
@@ -468,6 +550,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
     if (!isOpen) return out
     const more = details(ctx, node)
     if (more) out.push(more)
+    out.push(...placed.filter(one => one.under === item.id).map(one => boardLine(ctx, one, node.depth + 1)))
     out.push(...node.sessions.flatMap(s => sessionLines(ctx, s, node.depth + 1, item.id, new Set())))
     out.push(...node.artifacts.map(a => artifactLine(ctx, a, node.depth + 1)))
     if (node.children.length > 0) out.push(...level(ctx, item.id, node.children))
@@ -475,53 +558,81 @@ export function workView($: EngineInterface, w: WorkBoard): View {
     return out
   }
 
-  /** One line per Item, pressed anywhere to open or fold it; its sessions' mark sits apart at the right edge. */
+  /**
+   * One line per Item, pressed anywhere to open or fold it: its status, its title, then at its right edge how many
+   * things need the person and when it is due, and a way to its session. A top-level Item's way is the session that
+   * leads it, by label; a deeper one's is a mark. The cells between the title and the right edge are written as spaces,
+   * since a row that shrinks otherwise keeps the old row's letters there.
+   */
   function row(ctx: Ctx, node: Node, isOpen: boolean) {
     const { Box, Text, Button } = ctx.els
     const { item } = node
     const tag = TAGS[node.shown]
     const quiet = node.shown === 'done'
-    const hasMore =
-      node.children.length > 0 ||
-      node.sessions.length > 0 ||
-      node.artifacts.length > 0 ||
-      Boolean(item.detail) ||
-      item.links.length > 0
-    const glyph = !hasMore ? '·' : isOpen ? '▾' : '▸'
-    const due = item.target ? dueOf(item.target, item.targetLabel, ctx.now) : undefined
-    const etaAt = node.eta ? Date.parse(node.eta) : NaN
-    const eta = Number.isNaN(etaAt) ? undefined : `eta ${dayOf(etaAt)}`
-    const showKind = node.depth === 0 || node.children.length > 0
-    const hasMark = node.sessions.length > 0
     const parts: Part[] = [
-      { text: glyph, dimColor: true },
-      { text: tag.tag.padEnd(TAG_WIDTH), color: tag.color, dimColor: quiet },
-      ...(node.needsCount > 0 ? [{ text: String(node.needsCount), color: 'warning' as const, bold: true }] : []),
-      ...(due ? [due.color ? { text: due.text, color: due.color } : { text: due.text, dimColor: true }] : []),
-      ...(eta ? [isLate(node) ? { text: eta, color: 'red' as const } : { text: eta, dimColor: true }] : []),
-      ...(showKind ? [{ text: item.kind, dimColor: true }] : []),
-      ...(item.ref !== undefined ? [{ text: `#${item.ref}`, dimColor: true }] : []),
-      ...(item.progress !== undefined ? [{ text: `${item.progress}%`, dimColor: true }] : []),
+      { text: isOpen ? '▾' : '▸', dimColor: true },
+      node.shown === 'needs' ? { text: tag.tag.padEnd(TAG_WIDTH), color: tag.color } : { text: tag.tag.padEnd(TAG_WIDTH), dimColor: true },
     ]
-    const asker = node.depth === 0 && item.origin?.type === 'asked' && item.origin.by ? `from ${item.origin.by}` : ''
-    const aside = [asker, node.activeMs >= 60_000 ? span(node.activeMs) : ''].filter(Boolean).join(' · ')
-    // A line with an aside keeps the mark's cell even without a mark, so asides line up in one column and marks in the next
-    const hasEnd = hasMark || aside !== ''
-    const room = ctx.columns - node.depth * 2 - (hasEnd ? 2 : 0) - (aside ? [...aside].length + 1 : 0)
-    const content = spans(ctx.els, fitLine(parts, { text: item.title, dimColor: quiet }, room))
+    const when = dateOf(node, ctx.now)
+    const fact: Part[] = [
+      ...(node.needsCount > 0 ? [{ text: String(node.needsCount), color: 'warning' as const, bold: true }] : []),
+      ...(node.needsCount > 0 && when ? [{ text: '·', dimColor: true }] : []),
+      ...(when ? [when] : []),
+    ]
+    const lead = node.depth === 0 ? leadOf(ctx.tree, node) : undefined
+    const hasMark = !lead && node.sessions.length > 0
+    const leadText = lead ? `→ ${cut(lead.label, LEAD_WIDTH)}` : ''
+    const ends = [widthOf(fact), [...leadText].length, hasMark ? 1 : 0].filter(n => n > 0)
+    const endWidth = ends.reduce((n, one) => n + one, 0) + Math.max(0, ends.length - 1)
+    const room = ctx.columns - node.depth * 2
+    const line = fitLine(parts, { text: item.title, dimColor: quiet }, room - endWidth - (endWidth > 0 ? 1 : 0))
+    const pad = Math.max(endWidth > 0 ? 1 : 0, room - widthOf(line) - endWidth)
 
     return (
       <Box key={`wrow-${item.id}`} flexDirection="row" paddingLeft={node.depth * 2}>
-        {hasMore ? (
-          <Button key={`wtoggle-${item.id}`} plain onPress={toggle($, opened, item.id)}>
-            {content}
-          </Button>
-        ) : (
-          <Text>{content}</Text>
+        <Button key={`wtoggle-${item.id}`} plain onPress={toggle($, opened, item.id)}>
+          {spans(ctx.els, line)}
+        </Button>
+        {pad > 0 && fixed(ctx.els, `wpad-${item.id}`, <Text>{' '.repeat(pad)}</Text>)}
+        {fact.length > 0 && (
+          <Box key={`wfact-${item.id}`} flexDirection="row" columnGap={1} flexShrink={0}>
+            {fact.map(part => (
+              <Text color={part.color} dimColor={part.dimColor || undefined} bold={part.bold || undefined}>
+                {part.text}
+              </Text>
+            ))}
+          </Box>
         )}
-        {hasEnd && <Box key={`wgap-${item.id}`} flexGrow={1} />}
-        {aside && fixed(ctx.els, `waside-${item.id}`, <Text dimColor>{`${aside} `}</Text>)}
-        {hasMark ? sessionMark(ctx, item.id, node.sessions) : hasEnd && fixed(ctx.els, `wnomark-${item.id}`, <Text> </Text>)}
+        {fact.length > 0 && (lead || hasMark) && fixed(ctx.els, `wfactgap-${item.id}`, <Text> </Text>)}
+        {lead &&
+          fixed(
+            ctx.els,
+            `wleadbox-${item.id}`,
+            <Button key={`wlead-${item.id}`} plain onPress={() => focus(lead)}>
+              <Text color={SESSION_COLORS[lead.state]}>→</Text>
+              <Text dimColor>{leadText.slice(1)}</Text>
+            </Button>,
+          )}
+        {hasMark && sessionMark(ctx, item.id, node.sessions)}
+      </Box>
+    )
+  }
+
+  /** A line under its Item for a board that belongs to it, with what it waits on the person for; pressing it opens it. */
+  function boardLine(ctx: Ctx, one: PlacedBoard, depth: number) {
+    const { Box, Button, Text } = ctx.els
+    const count = ctx.boardNeeds.get(one.id) ?? 0
+
+    return (
+      <Box key={`wboard-${one.id}`} flexDirection="row" paddingLeft={depth * 2}>
+        <Button key={`wboardopen-${one.id}`} plain onPress={() => selectView($, one.id)}>
+          <Text color="suggestion">{`▤ ${one.title}`}</Text>
+          {count > 0 && (
+            <Text color="warning" bold>
+              {` ${count}`}
+            </Text>
+          )}
+        </Button>
       </Box>
     )
   }
@@ -627,8 +738,9 @@ export function workView($: EngineInterface, w: WorkBoard): View {
   }
 
   /**
-   * What a pressed-open Item shows above its children, behind a rule down its left: who owns it, its detail dim, then
-   * its links in the link color, so what can be pressed stands apart from what is read.
+   * What a pressed-open Item shows above its children, behind a rule down its left: its kind, number, dates, time spent
+   * and asker, who owns it, its detail dim, then its links in the link color, so what can be pressed stands apart from
+   * what is read.
    */
   function details(ctx: Ctx, node: Node): RenderNode | undefined {
     const { Box, Button, Markdown, Text } = ctx.els
@@ -647,7 +759,19 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         {spans(ctx.els, fitLine([{ text: '↗', color: 'suggestion' }], { text: link.label || sourceLabel(link.url, w.labels), color: 'suggestion' }, room))}
       </Button>
     ))
-    if (!item.detail && !item.owner && buttons.length === 0) return undefined
+    const target = item.target ? Date.parse(item.target) : NaN
+    const eta = node.eta ? Date.parse(node.eta) : NaN
+    const meta = [
+      item.kind,
+      item.ref !== undefined ? `#${item.ref}` : '',
+      item.progress !== undefined ? `${item.progress}%` : '',
+      Number.isNaN(target) ? '' : `${item.targetLabel ?? 'target'} ${dayOf(target)}`,
+      Number.isNaN(eta) ? '' : `eta ${dayOf(eta)}${isLate(node) ? ', late' : ''}`,
+      node.activeMs >= 60_000 ? `${span(node.activeMs)} spent` : '',
+      item.origin?.type === 'asked' && item.origin.by ? `from ${item.origin.by}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
 
     return (
       <Box
@@ -659,6 +783,11 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         borderStyle="quote"
         borderColor="inactive"
       >
+        <Box key={`wmeta-${item.id}`}>
+          <Text dimColor wrap="wrap">
+            {meta}
+          </Text>
+        </Box>
         {item.owner && <Text dimColor>{item.owner}</Text>}
         {item.detail && <Markdown key={`wdetail-${item.id}`} dimColor text={item.detail} />}
         {buttons.length > 0 && (

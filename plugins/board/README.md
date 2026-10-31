@@ -49,18 +49,18 @@ it, it stays closed until you open it again.
 ## The work view
 
 One tree of Items, from your goals down to tasks. An Item either ends, an Outcome such as a project or a task, or
-never does, a Responsibility such as on-call or code review. Outcomes come first, Responsibilities after them, and
-the Unplaced sessions and pull requests last.
+never does, a Responsibility such as on-call or code review, which never shows an ETA or goes done. New asks wait in
+the Inbox at the top, then the rest sort into one list: what needs you, then what is due soonest, then in flight,
+waiting and next. The Unplaced sessions and pull requests come last.
 
 ```
 [ Period: all ▾ ]                              Updated 2m ago
-Outcomes
-▸ you   1 Fri 10-31 Objective 40% Grow the partner network 9h
-▸ next  Project Thread release notes                     2h ●
-Responsibilities
-▸ now   Responsibility On-call                           5h ●
 Inbox
-· next  Task Answer the vendor                      from Dana
+▸ next  Answer the vendor
+
+▸ you   Grow the partner network        1 · Fri  → partners
+▸ now   On-call                                  → on-call
+▸ next  Thread release notes                      → notes
 ▸ Unplaced 3 sessions · 1 pull request
 ```
 
@@ -68,24 +68,29 @@ Inbox
   and Experiment. The core names none of them.
 - **Status** is one scale for everything: needs you, in flight, waiting, next, watching, done. A folded Item counts
   what needs you beneath it, so one deep in the tree shows at the top.
+- **A line** shows the status, the title, and at its right edge how many things need you and when it is due, then
+  the way to its session. Only what needs you and what is late take color.
 - **Sessions** sit under the Item they serve, with their state on the right: waiting on you, working, idle or done.
-  Pressing one brings its herdr tab to the front. A session attaches by itself when its tab or workspace label
+  Pressing one brings its herdr tab to the front. A top-level line ends in the label of the session leading it, the
+  one that coordinates the others, and pressing it brings that session to the front; a deeper line ends in a mark. A session attaches by itself when its tab or workspace label
   carries an Item's id or alias, such as `abc-12-split-the-scope` for ABC-12; Claude links the rest by hand. A link
   follows the agent, so a session resumed in another tab keeps its place.
 - **Pull requests** from every session's prs board sit under the Item whose id or alias their title or branch
   carries, such as `ABC-809 adds …` or `feature/abc-809`.
-- **Dates**: a target date shows on its line, yellow inside a day and red inside two hours or once past. An ETA,
-  when whoever works an Item expects it done, shows beside it; a parent shows the latest ETA beneath it, in red once
-  it falls after the parent's target. Any Item takes an ETA, whatever its Source.
-- **Time** on the right of a line is the active time of every session under it, finished ones included: a session's
-  transcript from first entry to last, with every gap over five minutes cut out.
+- **Dates**: a line shows the nearer of its target and ETA once it is inside a week, as a weekday, a countdown inside
+  a day in yellow, red inside two hours, and `overdue` or `late` in red. An ETA is when whoever works an Item expects
+  it done; a parent takes the latest ETA beneath it and is late once that falls after its target. Any Item takes an
+  ETA, whatever its Source.
+- **Time** spent is the active time of every session under an Item, finished ones included: a session's transcript
+  from first entry to last, with every gap over five minutes cut out.
 - **Periods**, such as quarters, cut the view to the Items dated in one, the undated work under them and their
   ancestors. Responsibilities and the Inbox show in every Period. Pick one in the Period box or with
   `/board work <period>`.
 - **Inbox**: an ask with no parent waits here, with who asked, until it is placed under an Item or work on it starts.
   One that grows into a whole effort is promoted where it stands: give it a Project's kind and an in-flight status,
-  and it joins the top-level Outcomes with its asker still shown.
-- Pressing an Item opens its children, its detail and its links. The view re-reads its file every 15 seconds, and
+  and it joins the list with its asker still kept.
+- Pressing an Item opens its kind, number, progress, dates, time spent and asker, then its children, its detail, its
+  links and any board placed under it. The view re-reads its file every 15 seconds, and
   lists sessions only while someone looks at it.
 
 ### Sources
@@ -198,7 +203,7 @@ points at another file.
       "stale_text": "The monitor may be stuck.",
       "titles": { "done": "Done today" }
     },
-    { "id": "rollout", "path": "~/boards/rollout.json", "layout": "rollout" }
+    { "id": "rollout", "path": "~/boards/rollout.json", "layout": "rollout", "under": "launch" }
   ],
   "link_labels": { "dashboard.example.com": "Dashboard" },
   "link_pairs": [
@@ -209,6 +214,8 @@ points at another file.
 
 - `layout`: left out, a board draws one colored box per status. `rollout` draws a rollout, below; `model` is the
   work view.
+- `under`: the work view Item a board belongs to. Its tab shows only in the sessions working under that Item, or
+  coordinated by one that is, and a line under the Item opens it from anywhere. Left out, every session has the tab.
 - `stale_minutes`: a board not updated for this long says so in red.
 - `titles`: section titles by status, over the defaults.
 - `link_labels`: short names for links by host, over the built-in ones for Slack,

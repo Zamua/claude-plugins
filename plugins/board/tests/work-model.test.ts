@@ -10,7 +10,8 @@ test('a needs-you Item deep in the tree counts on its top line and stays folded 
   await start($)
 
   const ui = await open($, 'work')
-  expect(await ui.find({ key: 'wtoggle-file:pay', text: '▸ you   1 Project Payments rework' })).toBeDefined()
+  expect(await ui.find({ key: 'wtoggle-file:pay', text: '▸ you   Payments rework' })).toBeDefined()
+  expect(await ui.find({ key: 'wfact-file:pay', text: '1' })).toBeDefined()
   expect(await ui.find({ key: 'wrow-file:fee' })).toBeUndefined()
   expect(await ui.find({ key: 'tab-work', text: 'work 1' })).toBeDefined()
 
@@ -18,7 +19,7 @@ test('a needs-you Item deep in the tree counts on its top line and stays folded 
   expect(await ui.find({ key: 'wrow-file:gross' })).toBeDefined()
   expect(await ui.find({ key: 'wrow-file:fee' })).toBeUndefined()
   await ui.press({ key: 'wtoggle-file:gross' })
-  expect(await ui.find({ key: 'wrow-file:fee', text: /you\s*#3\s*Settle the fee account/ })).toBeDefined()
+  expect(await ui.find({ key: 'wrow-file:fee', text: /you\s*Settle the fee account/ })).toBeDefined()
 
   await ui.press({ key: 'wtoggle-file:pay' })
   expect(await ui.find({ key: 'wrow-file:gross' })).toBeUndefined()
@@ -32,25 +33,25 @@ test('a title too long for the pane is cut to fit, so its whole row stays one pr
 
   const ui = await open($, 'work')
   const text = (await ui.find({ key: 'wtoggle-file:long' }))?.text ?? ''
-  expect(text).toMatch(/^▸ next  Project A project whose title runs on .*…$/)
-  expect([...text].length).toBeLessThanOrEqual(59)
+  expect(text).toMatch(/^▸ next  A project whose title runs on .*…$/)
+  expect([...text].length).toBeLessThanOrEqual(58)
   await ui.press({ key: 'wtoggle-file:long' })
   expect(await ui.find({ type: 'Markdown', text: 'More.' })).toBeDefined()
   await ui.unmount()
 })
 
-test('a leaf opens to its detail, and Responsibilities draw after the Outcomes', async ($, on) => {
+test('a pressed Item opens to its kind, number and detail, and ongoing work sorts into the one list after what needs the person', async ($, on) => {
   engine(on, withTree(), NOW)
   await start($)
 
   const ui = await open($, 'work')
   await ui.press({ key: 'wtoggle-file:pay' })
   await ui.press({ key: 'wtoggle-file:scope' })
+  expect(await ui.find({ key: 'wmeta-file:scope', text: 'Task · #4' })).toBeDefined()
   expect(await ui.find({ type: 'Markdown', text: 'Against **main**.' })).toBeDefined()
 
-  expect(await ui.find({ key: 'outcomes', text: /^Outcomes.*Payments rework/ })).toBeDefined()
-  expect(await ui.find({ key: 'responsibilities', text: /^Responsibilities.*Tooling/ })).toBeDefined()
-  expect(await ui.find({ key: 'responsibilities', text: /Payments/ })).toBeUndefined()
+  expect(await ui.find({ key: 'top', text: /Payments rework.*Tooling/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^(Outcomes|Responsibilities)$/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -60,8 +61,8 @@ test('an Outcome whose work is all done folds behind a done count, and the fresh
 
   const ui = await open($, 'work')
   expect(await ui.find({ key: 'wrow-file:old' })).toBeUndefined()
-  expect(await ui.find({ key: 'wdone-top-outcomes' })).toMatchObject({ props: { label: '✓ 1 done' } })
-  await ui.press({ key: 'wdone-top-outcomes' })
+  expect(await ui.find({ key: 'wdone-top' })).toMatchObject({ props: { label: '✓ 1 done' } })
+  await ui.press({ key: 'wdone-top' })
   expect(await ui.find({ key: 'wrow-file:old', text: /done/ })).toBeDefined()
   expect(await ui.find({ key: 'stamp', text: 'Updated 5m ago' })).toBeDefined()
   await ui.unmount()
