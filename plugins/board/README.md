@@ -55,12 +55,13 @@ waiting and next. The Unplaced sessions and pull requests come last.
 
 ```
 [ Period: all ▾ ]                              Updated 2m ago
+
 Inbox
 ▸ next  Answer the vendor
 
-▸ you   Grow the partner network        1 · Fri  → partners
-▸ now   On-call                                  → on-call
-▸ next  Thread release notes                      → notes
+▸ you   Grow the partner net…  1 Fri     → partners
+▸ now   On-call                          → on-call
+▸ next  Thread release notes             → notes
 ▸ Unplaced 3 sessions · 1 pull request
 ```
 
@@ -68,8 +69,9 @@ Inbox
   and Experiment. The core names none of them.
 - **Status** is one scale for everything: needs you, in flight, waiting, next, watching, done. A folded Item counts
   what needs you beneath it, so one deep in the tree shows at the top.
-- **A line** shows the status, the title, and at its right edge how many things need you and when it is due, then
-  the way to its session. Only what needs you and what is late take color.
+- **A line** shows the status and the title, cut to fit, then fixed columns at its right edge: how many things need
+  you, when it is due, and the way to its session. The columns sit in the same place on every line, nested ones
+  included. Only what needs you and what is late take color.
 - **Sessions** sit under the Item they serve, with their state on the right: waiting on you, working, idle or done.
   Pressing one brings its herdr tab to the front. A top-level line ends in the label of the session leading it, the
   one that coordinates the others, and pressing it brings that session to the front; a deeper line ends in a mark. A session attaches by itself when its tab or workspace label
@@ -96,8 +98,9 @@ Inbox
 - **Inbox**: an ask with no parent waits here, with who asked, until it is placed under an Item or work on it starts.
   One that grows into a whole effort is promoted where it stands: give it a Project's kind and an in-flight status,
   and it joins the list with its asker still kept.
-- Pressing an Item opens its kind, number, progress, dates, time spent and asker, then its children, its detail, its
-  links and any board placed under it. The view re-reads its file every 15 seconds, and
+- Pressing an Item opens its links, any board placed under it, its sessions by label and state, its pull requests
+  and its children. Its detail and the rest stay behind its links and in the tool's read. The view re-reads its file
+  every 15 seconds, and
   lists sessions only while someone looks at it.
 
 ### Sources

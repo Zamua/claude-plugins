@@ -101,7 +101,7 @@ function rhythmsWorld() {
   })
 }
 
-test('a followed goal and its key results come from Rhythms, with progress and the configured Kind names', async ($, on) => {
+test('a followed goal and its key results come from Rhythms, with the configured Kind names', async ($, on) => {
   const w = rhythmsWorld()
   engine(on, w, NOW)
   await start($)
@@ -115,8 +115,6 @@ test('a followed goal and its key results come from Rhythms, with progress and t
   const ui = await open($, 'work')
   expect(await ui.find({ key: 'wtoggle-rhythms:OBJ-1', text: /now\s+Parity with Nova/ })).toBeDefined()
   await ui.press({ key: 'wtoggle-rhythms:OBJ-1' })
-  expect(await ui.find({ key: 'wmeta-rhythms:OBJ-1', text: /^Objective · 95%/ })).toBeDefined()
-  expect(await ui.find({ type: 'Markdown', text: /Code complete this week/ })).toBeDefined()
   expect(await ui.find({ key: 'wrow-rhythms:KR-61', text: /now\s+Instant funding/ })).toBeDefined()
   await ui.unmount()
 })

@@ -65,6 +65,11 @@ const DAY_MS = 24 * 3600e3
 // A date further off than this stays in an Item's detail, off its line
 const SOON_MS = 7 * DAY_MS
 const LEAD_WIDTH = 14
+// A line's right side is fixed columns, so every count, date and session sits at the same place on every line
+const COUNT_WIDTH = 2
+const DATE_WIDTH = 'overdue'.length
+const WAY_WIDTH = 2 + LEAD_WIDTH
+const COLUMNS_WIDTH = 1 + COUNT_WIDTH + 1 + DATE_WIDTH + 1 + WAY_WIDTH
 
 /** A board that belongs to one Item: its tab shows only in the sessions under that Item, and a line under the Item opens it. */
 export type PlacedBoard = { id: string; title: string; under: string }
@@ -446,7 +451,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
           />
         ) : undefined
       const head = (root || box || fresh !== '') && (
-        <Box key="whead" flexDirection="row" columnGap={1} paddingLeft={1}>
+        <Box key="whead" flexDirection="row" columnGap={1} paddingLeft={1} marginBottom={1}>
           {root && rootMark($, w, els, root, 'wroot')}
           {box}
           <Box key="stamp" flexGrow={1} justifyContent="flex-end">
@@ -576,10 +581,10 @@ export function workView($: EngineInterface, w: WorkBoard): View {
   }
 
   /**
-   * One line per Item, pressed anywhere to open or fold it: its status, its title, then at its right edge how many
-   * things need the person and when it is due, and a way to its session. A top-level Item's way is the session that
-   * leads it, by label; a deeper one's is a mark. The cells between the title and the right edge are written as spaces,
-   * since a row that shrinks otherwise keeps the old row's letters there.
+   * One line per Item, pressed anywhere to open or fold it: its status, its title cut to the room left, then fixed
+   * columns pinned to the right edge at every depth: how many things need the person, when it is due, and a way to its
+   * session. A top-level Item's way is the session that leads it, by label; a deeper one's is a mark. Every cell is
+   * written, as spaces where a column is empty, since a row that shrinks otherwise keeps the old row's letters there.
    */
   function row(ctx: Ctx, node: Node, isOpen: boolean) {
     const { Box, Text, Button } = ctx.els
@@ -591,19 +596,14 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       node.shown === 'needs' ? { text: tag.tag.padEnd(TAG_WIDTH), color: tag.color } : { text: tag.tag.padEnd(TAG_WIDTH), dimColor: true },
     ]
     const when = dateOf(node, ctx.now)
-    const fact: Part[] = [
-      ...(node.needsCount > 0 ? [{ text: String(node.needsCount), color: 'warning' as const, bold: true }] : []),
-      ...(node.needsCount > 0 && when ? [{ text: '·', dimColor: true }] : []),
-      ...(when ? [when] : []),
-    ]
+    const count = node.needsCount > 0 ? String(node.needsCount) : ''
     const lead = node.depth === 0 ? leadOf(ctx.tree, node) : undefined
     const hasMark = !lead && node.sessions.length > 0
     const leadText = lead ? `→ ${cut(lead.label, LEAD_WIDTH)}` : ''
-    const ends = [widthOf(fact), [...leadText].length, hasMark ? 1 : 0].filter(n => n > 0)
-    const endWidth = ends.reduce((n, one) => n + one, 0) + Math.max(0, ends.length - 1)
-    const room = ctx.columns - node.depth * 2
-    const line = fitLine(parts, { text: item.title, dimColor: quiet }, room - endWidth - (endWidth > 0 ? 1 : 0))
-    const pad = Math.max(endWidth > 0 ? 1 : 0, room - widthOf(line) - endWidth)
+    const room = ctx.columns - node.depth * 2 - COLUMNS_WIDTH
+    const line = fitLine(parts, { text: item.title, dimColor: quiet }, room)
+    const pad = Math.max(0, room - widthOf(line))
+    const wayPad = WAY_WIDTH - (lead ? [...leadText].length : hasMark ? 1 : 0)
 
     return (
       <Box key={`wrow-${item.id}`} flexDirection="row" paddingLeft={node.depth * 2}>
@@ -611,16 +611,14 @@ export function workView($: EngineInterface, w: WorkBoard): View {
           {spans(ctx.els, line)}
         </Button>
         {pad > 0 && fixed(ctx.els, `wpad-${item.id}`, <Text>{' '.repeat(pad)}</Text>)}
-        {fact.length > 0 && (
-          <Box key={`wfact-${item.id}`} flexDirection="row" columnGap={1} flexShrink={0}>
-            {fact.map(part => (
-              <Text color={part.color} dimColor={part.dimColor || undefined} bold={part.bold || undefined}>
-                {part.text}
-              </Text>
-            ))}
-          </Box>
-        )}
-        {fact.length > 0 && (lead || hasMark) && fixed(ctx.els, `wfactgap-${item.id}`, <Text> </Text>)}
+        <Box key={`wfact-${item.id}`} flexDirection="row" flexShrink={0}>
+          <Text color="warning" bold>
+            {` ${count.padStart(COUNT_WIDTH)} `}
+          </Text>
+          <Text color={when?.color} dimColor={when?.dimColor || undefined}>
+            {`${(when?.text ?? '').padEnd(DATE_WIDTH)} `}
+          </Text>
+        </Box>
         {lead &&
           fixed(
             ctx.els,
@@ -631,6 +629,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
             </Button>,
           )}
         {hasMark && sessionMark(ctx, item.id, node.sessions)}
+        {wayPad > 0 && fixed(ctx.els, `wwaypad-${item.id}`, <Text>{' '.repeat(wayPad)}</Text>)}
       </Box>
     )
   }
@@ -689,7 +688,7 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       ...(ctx.self?.id === session.id ? [{ text: 'here', color: 'claude' as const, bold: true }] : []),
       { text: session.state.padEnd(STATE_WIDTH), color: SESSION_COLORS[session.state], dimColor: session.state === 'idle' },
     ]
-    const title = session.summary ? `${session.label}: ${session.summary.split('\n')[0]}` : session.label
+    const title = session.label
     const room = ctx.columns - depth * 2 - 2
     const out: RenderNode[] = [
       <Box key={`wsess-${at}`} flexDirection="row" columnGap={1} paddingLeft={depth * 2}>
@@ -754,16 +753,12 @@ export function workView($: EngineInterface, w: WorkBoard): View {
     )
   }
 
-  /**
-   * What a pressed-open Item shows above its children, behind a rule down its left: its kind, number, dates, time spent
-   * and asker, who owns it, its detail dim, then its links in the link color, so what can be pressed stands apart from
-   * what is read.
-   */
+  /** What a pressed-open Item shows above its children: only its links, one a line, since its details live behind them. */
   function details(ctx: Ctx, node: Node): RenderNode | undefined {
-    const { Box, Button, Markdown, Text } = ctx.els
+    const { Box, Button } = ctx.els
     const { item } = node
-    // The block's indent, its rule and the space after it
-    const room = ctx.columns - (node.depth * 2 + 2) - 2
+    if (item.links.length === 0) return undefined
+    const room = ctx.columns - (node.depth * 2 + 2)
     const buttons: RenderNode[] = item.links.map((link, i) => (
       <Button
         key={`wlink-${item.id}-${i}`}
@@ -776,42 +771,10 @@ export function workView($: EngineInterface, w: WorkBoard): View {
         {spans(ctx.els, fitLine([{ text: '↗', color: 'suggestion' }], { text: link.label || sourceLabel(link.url, w.labels), color: 'suggestion' }, room))}
       </Button>
     ))
-    const target = item.target ? Date.parse(item.target) : NaN
-    const eta = node.eta ? Date.parse(node.eta) : NaN
-    const meta = [
-      item.kind,
-      item.ref !== undefined ? `#${item.ref}` : '',
-      item.progress !== undefined ? `${item.progress}%` : '',
-      Number.isNaN(target) ? '' : `${item.targetLabel ?? 'target'} ${dayOf(target)}`,
-      Number.isNaN(eta) ? '' : `eta ${dayOf(eta)}${isLate(node) ? ', late' : ''}`,
-      node.activeMs >= 60_000 ? `${span(node.activeMs)} spent` : '',
-      item.origin?.type === 'asked' && item.origin.by ? `from ${item.origin.by}` : '',
-    ]
-      .filter(Boolean)
-      .join(' · ')
 
     return (
-      <Box
-        key={`wmore-${item.id}`}
-        flexDirection="column"
-        rowGap={item.detail && buttons.length > 0 ? 1 : 0}
-        marginLeft={node.depth * 2 + 2}
-        paddingLeft={1}
-        borderStyle="quote"
-        borderColor="inactive"
-      >
-        <Box key={`wmeta-${item.id}`}>
-          <Text dimColor wrap="wrap">
-            {meta}
-          </Text>
-        </Box>
-        {item.owner && <Text dimColor>{item.owner}</Text>}
-        {item.detail && <Markdown key={`wdetail-${item.id}`} dimColor text={item.detail} />}
-        {buttons.length > 0 && (
-          <Box key={`wlinks-${item.id}`} flexDirection="column">
-            {buttons}
-          </Box>
-        )}
+      <Box key={`wmore-${item.id}`} flexDirection="column" marginLeft={node.depth * 2 + 2}>
+        {buttons}
       </Box>
     )
   }

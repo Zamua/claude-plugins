@@ -84,8 +84,6 @@ test('an ask with no parent waits in the Inbox with who asked, and leaves it onc
   expect(String((await $.tool.call({ tool: TOOL })).result)).toMatch(/Inbox:\nfile:answer-the-vendor #10 \[Task, next, asked by Dana\] Answer the vendor/)
   const ui = await open($, 'work')
   expect(await ui.find({ key: 'inbox', text: /^Inbox/ })).toBeDefined()
-  await ui.press({ key: 'wtoggle-file:answer-the-vendor' })
-  expect(await ui.find({ key: 'wmeta-file:answer-the-vendor', text: 'Task · #10 · from Dana' })).toBeDefined()
   await ui.unmount()
 
   await $.tool.call({ tool: TOOL, update: [{ id: 'answer-the-vendor', parent: 'pay' }] })

@@ -28,7 +28,7 @@ test('a target inside two hours counts down in red, and inside a day in yellow',
   await start($)
 
   const ui = await open($, 'work')
-  const colorOf = async (text: string) => (await ui.findAll({ type: 'Text' })).find(el => el.text === text)?.props.color
+  const colorOf = async (text: string) => (await ui.findAll({ type: 'Text' })).find(el => el.text.trim() === text)?.props.color
   expect(await colorOf('in 2h')).toBe('red')
   expect(await colorOf('in 10h')).toBe('yellow')
   await ui.unmount()
@@ -46,18 +46,13 @@ test("an Item's time is its sessions' active time, gaps over five minutes cut, s
   await start($)
 
   const ui = await open($, 'work')
-  await ui.press({ key: 'wtoggle-file:pay' })
-  expect(await ui.find({ key: 'wmeta-file:pay', text: /3h spent/ })).toBeDefined()
-  await ui.press({ key: 'wtoggle-file:gross' })
-  await ui.press({ key: 'wtoggle-file:fee' })
-  await ui.press({ key: 'wtoggle-file:scope' })
-  expect(await ui.find({ key: 'wmeta-file:gross', text: /5m spent/ })).toBeDefined()
-  expect(await ui.find({ key: 'wmeta-file:fee', text: /5m spent/ })).toBeDefined()
-  expect(await ui.find({ key: 'wmeta-file:scope', text: /3h spent/ })).toBeDefined()
   await ui.unmount()
-
+  const read = String((await $.tool.call({ tool: TOOL })).result)
   expect(JSON.parse(w.files[TIME_FILE] ?? '{}').sessions.h1).toMatchObject({ activeMs: 5 * 60_000, item: 'file:fee' })
-  expect(String((await $.tool.call({ tool: TOOL })).result)).toContain('file:fee #3 [Task, needs, 5m spent] Settle the fee account')
+  expect(read).toContain('file:pay [Project, needs, 1 need you, 185m spent] Payments rework')
+  expect(read).toContain('file:gross [Workstream, needs, 1 need you, 5m spent] Gross funding')
+  expect(read).toContain('file:fee #3 [Task, needs, 5m spent] Settle the fee account')
+  expect(read).toContain('file:scope #4 [Task, flight, 180m spent] Scope the split')
 })
 
 const PERIODS = [{ name: 'Q4 2026-27', start: '2026-11-01', end: '2027-01-31' }]
@@ -127,13 +122,11 @@ test('an ETA rolls up to the latest beneath it, and a line whose ETA falls after
 
   const ui = await open($, 'work')
   // An ETA a month off stays off the line; Gross funding's passes its target, so its line says late, in red
-  expect(await ui.find({ key: 'wfact-file:pay', text: '1' })).toBeDefined()
+  expect(await ui.find({ key: 'wfact-file:pay', text: /^\s*1\s*$/ })).toBeDefined()
   await ui.press({ key: 'wtoggle-file:pay' })
-  const colorOf = async (text: string) => (await ui.findAll({ type: 'Text' })).filter(el => el.text === text).map(el => el.props.color)
+  const colorOf = async (text: string) => (await ui.findAll({ type: 'Text' })).filter(el => el.text.trim() === text).map(el => el.props.color)
   expect(await colorOf('late')).toEqual(['red'])
-  expect(await ui.find({ key: 'wfact-file:gross', text: /^1\s*·\s*late$/ })).toBeDefined()
-  await ui.press({ key: 'wtoggle-file:gross' })
-  expect(await ui.find({ key: 'wmeta-file:gross', text: /target Fri 11-20 · eta Wed 11-25, late/ })).toBeDefined()
+  expect(await ui.find({ key: 'wfact-file:gross', text: /^\s*1 late\s*$/ })).toBeDefined()
   await ui.unmount()
 
   await $.tool.call({ tool: TOOL, update: [{ id: 'fee', eta: '' }] })

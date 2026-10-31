@@ -31,7 +31,7 @@ test('an attached session shows its path on one line above its board, and pressi
   expect(await ui.find({ key: 'crumbs', text: /Payments rework › Gross funding › Settle the fee account/ })).toBeDefined()
   expect(await ui.find({ key: 'crumbroot' })).toBeUndefined()
   await ui.press({ key: 'crumbopen' })
-  expect(await ui.find({ key: 'wrow-file:fee', text: /Settle the fee account/ })).toBeDefined()
+  expect(await ui.find({ key: 'wrow-file:fee', text: /Settle the fee/ })).toBeDefined()
   await ui.unmount()
 })
 

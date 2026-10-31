@@ -6,7 +6,7 @@ import { herdrHost, LIVE_CONFIG, TREE, withLive, withTree, WORK_FILE } from './w
 const NOW = Date.parse('2026-10-27T14:00:00Z')
 const session = (pane: string) => `session:herdr:default/${pane}`
 
-test('a long title gives way so it never touches its date, and its row fills the pane to the edge', async ($, on) => {
+test('a long title is cut to its column, short of the date column, and its row fills the pane to the edge', async ($, on) => {
   const items = [
     {
       id: 'long',
@@ -21,7 +21,7 @@ test('a long title gives way so it never touches its date, and its row fills the
 
   const ui = await open($, 'work')
   const text = (await ui.find({ key: 'wrow-file:long' }))?.text ?? ''
-  expect(text).toMatch(/^▸ next  A project whose title runs on .*… +in 2h$/)
+  expect(text).toMatch(/^▸ next  A project whose title.*… +in 2h +$/)
   // The pane is 60 columns; the view keeps two clear
   expect([...text].length).toBe(58)
   await ui.unmount()
@@ -47,6 +47,37 @@ test('a top-level Item ends in the label of the session leading it, which brings
 
   await ui.press({ key: 'wlead-file:pay' })
   expect(w.runs).toContainEqual(['herdr', '--session', 'default', 'workspace', 'focus', 'w1'])
+  await ui.unmount()
+})
+
+test('counts, dates and the way to a session sit in the same columns on every row, nested ones included', async ($, on) => {
+  const items = [
+    ...TREE.items,
+    { id: 'soon', title: 'Soon', kind: 'Task', status: 'next', target: new Date(NOW + 90 * 60_000).toISOString() },
+  ]
+  const links = [
+    { child: session('w1:p1'), parent: 'file:pay', at: '2026-10-27T13:00:00Z' },
+    { child: session('w2:p1'), parent: 'file:scope', at: '2026-10-27T13:00:00Z' },
+    { child: session('w2:p1'), parent: session('w1:p1'), at: '2026-10-27T13:00:00Z' },
+  ]
+  const host = herdrHost([
+    { id: 'w1:p1', label: 'pay-lead', status: 'working', harnessId: 'h-lead' },
+    { id: 'w2:p1', label: 'pay-worker', harnessId: 'h-worker' },
+  ])
+  engine(on, withLive({ ...TREE, items, links }, host), NOW)
+  await start($)
+
+  const ui = await open($, 'work')
+  await ui.press({ key: 'wtoggle-file:pay' })
+  const rowOf = async (id: string, depth: number) => ' '.repeat(depth * 2) + ((await ui.find({ key: `wrow-file:${id}` }))?.text ?? '')
+  const pay = [...(await rowOf('pay', 0))]
+  const soon = [...(await rowOf('soon', 0))]
+  const scope = [...(await rowOf('scope', 1))]
+  for (const row of [pay, soon, scope]) expect(row.length).toBe(58)
+  expect(scope.indexOf('●')).toBe(pay.indexOf('→'))
+  const date = soon.join('').indexOf('in 2h')
+  expect(date + 'overdue '.length).toBe(pay.indexOf('→'))
+  expect(pay[date - 2]).toBe('1')
   await ui.unmount()
 })
 
