@@ -171,11 +171,22 @@ test('CI goes by the latest run of each workflow and check, as GitHub lists them
   await ui.unmount()
 })
 
-test("someone else's pull request is flagged only for a thread waiting on you, your own for anything", async ($, on) => {
+test("someone else's pull request is flagged only for a reply in a thread you are in, your own for anything", async ($, on) => {
   const prs: Record<number, Pr> = {
     6011: pr({ isDraft: false, rollup: 'FAILURE', failing: ['build'] }),
     6012: pr({ isDraft: false, author: 'rojen', rollup: 'FAILURE', failing: ['build'] }),
-    6013: pr({ isDraft: false, author: 'rojen', threads: [{ isResolved: false, by: 'rojen' }] }),
+    6013: pr({ isDraft: false, author: 'rojen', threads: [{ isResolved: false, opener: 'octo', by: 'rojen' }] }),
+    6014: pr({
+      isDraft: false,
+      author: 'rojen',
+      approvals: ['octo'],
+      threads: [
+        { isResolved: false, by: 'berkay' },
+        { isResolved: false, by: 'cursor' },
+        { isResolved: false, opener: 'berkay', by: 'rojen' },
+        { isResolved: false, by: 'octo' },
+      ],
+    }),
   }
   engine(on, gh(prs), NOW)
   await start($)
@@ -183,7 +194,7 @@ test("someone else's pull request is flagged only for a thread waiting on you, y
 
   const ui = await open($, 'prs')
   const flagged = async (n: number) => (await ui.find({ key: `flag-acme/api#${n}` }))?.text === '!'
-  expect(await Promise.all([6011, 6012, 6013].map(flagged))).toEqual([true, false, true])
+  expect(await Promise.all([6011, 6012, 6013, 6014].map(flagged))).toEqual([true, false, true, false])
   expect(await ui.find({ key: 'prrow-acme/api#6012', text: /CI fail\s*rojen\s*A change$/ })).toBeDefined()
   expect(await ui.find({ key: 'author-acme/api#6011', text: 'octo' })).toBeDefined()
   expect(await ui.find({ key: 'tab-prs', text: 'prs 2' })).toBeDefined()

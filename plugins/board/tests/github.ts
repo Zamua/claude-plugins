@@ -12,7 +12,8 @@ export type Pr = {
   baseRefName: string
   rollup: string
   failing: string[]
-  threads: { isResolved: boolean; by: string }[]
+  /** `by` wrote the thread's last comment; `opener`, when given, opened it. */
+  threads: { isResolved: boolean; by: string; opener?: string }[]
   approvals?: string[]
   author?: string
   checks?: Record<string, unknown>[]
@@ -67,7 +68,9 @@ function asGraphql(p: Pr) {
     reviewThreads: {
       nodes: p.threads.map((t, at) => ({
         isResolved: t.isResolved,
-        comments: { nodes: [{ author: { login: t.by }, url: `https://github.com/t/${at}` }] },
+        comments: {
+          nodes: [...(t.opener ? [t.opener] : []), t.by].map(login => ({ author: { login }, url: `https://github.com/t/${at}` })),
+        },
       })),
     },
     latestReviews: { nodes: (p.approvals ?? []).map(login => ({ author: { login }, state: 'APPROVED' })) },

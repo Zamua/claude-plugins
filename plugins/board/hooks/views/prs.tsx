@@ -85,7 +85,7 @@ const PR_FIELDS = `title state isDraft mergeable mergeStateStatus reviewDecision
   commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes {
     __typename ... on CheckRun { name status conclusion startedAt completedAt
       checkSuite { workflowRun { runNumber event workflow { databaseId } } } } ... on StatusContext { context state createdAt } } } } } } }
-  reviewThreads(first: 100) { nodes { isResolved comments(last: 1) { nodes { author { login } url } } } }
+  reviewThreads(first: 100) { nodes { isResolved comments(last: 50) { nodes { author { login } url } } } }
   latestReviews(first: 20) { nodes { author { login } state } }`
 
 type Ref = Pick<TrackedPr, 'key' | 'owner' | 'repo' | 'number' | 'url'>
@@ -308,10 +308,18 @@ function ciOf(rollup: GqlPr['commits']['nodes'][number]['commit']['statusCheckRo
   return { ci, failing }
 }
 
+/**
+ * An open thread whose last comment is someone else's waits on the pull request's author. On someone else's pull
+ * request it waits on the viewer only when they commented in it; the rest are between its author and other reviewers.
+ */
 function factsOf(pr: GqlPr, viewer: string): PrFacts {
+  const author = pr.author?.login ?? ''
+  const isOwn = !viewer || author.toLowerCase() === viewer.toLowerCase()
   const waiting = pr.reviewThreads.nodes
     .filter(thread => !thread.isResolved)
-    .map(thread => thread.comments.nodes[0])
+    .map(thread => thread.comments.nodes)
+    .filter(comments => isOwn || comments.some(comment => comment.author?.login === viewer))
+    .map(comments => comments.at(-1))
     .filter(last => last && last.author?.login !== viewer)
   const reviewers = (state: string) =>
     pr.latestReviews.nodes
@@ -328,7 +336,7 @@ function factsOf(pr: GqlPr, viewer: string): PrFacts {
     approvedBy: reviewers('APPROVED'),
     changesRequestedBy: reviewers('CHANGES_REQUESTED'),
     ...ciOf(pr.commits.nodes[0]?.commit.statusCheckRollup ?? null),
-    author: pr.author?.login ?? '',
+    author,
     head: pr.headRefName,
     base: pr.baseRefName,
     headSha: pr.headRefOid,

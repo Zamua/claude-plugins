@@ -415,7 +415,7 @@ test('a pull request GitHub has approved gets a green check left of its number, 
 })
 
 test('the warning mark means a thread waits on you, as on the prs board, not that the operator\'s own threads are open', async ($, on) => {
-  const github = { ...GITHUB, 7472: { ...(GITHUB[7472] as Pr), threads: [{ isResolved: false, by: 'ann' }] } }
+  const github = { ...GITHUB, 7472: { ...(GITHUB[7472] as Pr), threads: [{ isResolved: false, opener: 'octo', by: 'ann' }] } }
   const board = { ...STACKED, prs: STACKED.prs.map(p => (p.number === 7500 ? { ...p, other_open_threads: 2 } : p)) }
   engine(on, reviewing({ board, github }), NOW)
   await start($)
