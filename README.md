@@ -39,6 +39,11 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   others, and any board another process writes as JSON, such as a rollout, named
   in `~/.config/board/boards.json`. `/board` toggles the pane, `/board <name>` opens
   it on one board, `/board <name> clear` empties one.
+- **[clean-code-audit](plugins/clean-code-audit/)**: nine structural smells
+  that make code hard to change safely, from implicit coupling and illegal states
+  to validation that happens deep inside instead of at the boundary. Use it as a
+  set of questions while designing a change, as a checklist when self-reviewing a
+  diff, or to audit a whole repo with path:line evidence and the worst three to fix.
 
 ## License
 
