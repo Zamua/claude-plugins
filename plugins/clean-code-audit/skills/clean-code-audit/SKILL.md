@@ -1,10 +1,10 @@
 ---
-description: Check code against nine structural smells (implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary). Use while designing or implementing a change, for a self-review of a diff before committing or opening a PR, when asked to audit a repo, or when the user triggers /clean-code-audit. Every finding needs a path:line.
+description: Check code against ten smells (implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary, change-detector tests). Use while designing or implementing a change, for a self-review of a diff before committing or opening a PR, when asked to audit a repo, or when the user triggers /clean-code-audit. Every finding needs a path:line.
 ---
 
 # clean-code-audit
 
-Nine smells that make a codebase hard to change safely. This is about structure,
+Ten smells that make a codebase hard to change safely. This is about structure,
 not style and not bugs: formatting, naming taste and lint rules are out of scope.
 A bug found along the way is reported separately (see "Bugs are not smells").
 
@@ -14,10 +14,10 @@ Three ways to use it:
   forms, when fixing a smell costs a line instead of a refactor.
 - **Self-review of a diff**: check what the diff added or made worse, before the
   commit or the PR. Not the whole repo.
-- **Repo audit**: rate all nine across a codebase, with evidence, and list every
+- **Repo audit**: rate all ten across a codebase, with evidence, and list every
   finding with its fix.
 
-## The nine smells
+## The ten smells
 
 For each: what it is, how to find it, what the fix looks like, and what does not count.
 
@@ -155,9 +155,35 @@ like `as T` on parsed JSON, and errors swallowed where nothing can handle them.
   enforcing its own invariants (that is the domain's job, not duplicate
   validation).
 
+### 10. Change-detector tests
+
+A test that fails whenever the implementation changes, even when the behaviour did
+not. It restates the code instead of checking what the code is for, so it goes red
+on every refactor and almost never on a bug, and people learn to update it without
+reading it. Then a red test stops meaning anything.
+
+- **Find it**: mocks or spies asserting exact calls, call counts or call order on
+  collaborators no caller can observe; a test that mirrors the function under test
+  step by step; snapshots or golden files of incidental output (field order,
+  whitespace, formatting, generated ids, timestamps) that no consumer depends on;
+  assertions on private fields, internal helpers or intermediate state; tests that
+  are rewritten, not extended, in every commit that refactors the code they cover
+  (`git log --follow` on both files).
+- **Fix**: assert the outcome through the public API: the return value, the
+  stored result read back through its port, the response a client receives. Prefer
+  a fake that holds state over a mock that verifies calls. Pin only what a caller,
+  a user or stored data depends on.
+- **Not it**: pinning a real contract. A wire format or stored row that other code
+  or older clients read; a call to an external system when the call is the
+  behaviour (a payment sent once with this idempotency key, a notification sent);
+  golden output whose exact form is the product (a rendered document, a CLI's
+  documented output). Characterization tests written before a refactor are fine
+  when they pin observable behaviour, and become change detectors only when they
+  pin internals.
+
 ## Before you write it
 
-The cheap moment to avoid all nine is before the code exists. While designing a
+The cheap moment to avoid all ten is before the code exists. While designing a
 change, answer these:
 
 1. Where does untrusted input enter, and what typed value does it become there?
@@ -170,10 +196,12 @@ change, answer these:
 6. Does any domain or use-case code now import a framework, vendor, or transport
    type, or call a cache, metric or logger inline?
 7. Does the file I am adding to already do several unrelated things?
+8. Would the test I am writing still pass after a refactor that keeps the
+   behaviour? If not, it pins the implementation.
 
 ## Self-review of a diff
 
-Run through the nine against the diff, not the codebase. Report only what the
+Run through the ten against the diff, not the codebase. Report only what the
 diff introduces or worsens; a pre-existing smell the diff touches gets one line
 at most, and is not a reason to grow the change. Fix what is cheap now. Anything
 deferred gets named in the PR or the commit summary, never silently left.
@@ -181,7 +209,7 @@ deferred gets named in the PR or the commit summary, never silently left.
 ## Repo audit
 
 1. Read the repo's own docs first (CLAUDE.md, README, architecture notes). Judge
-   against the nine and against the design the repo says it follows. Drift from
+   against the ten and against the design the repo says it follows. Drift from
    its own stated design is a finding.
 2. Skip generated and vendored code, build output, lockfiles and fixtures.
 3. Rate each smell: **clean**, **minor**, **notable**, **severe**. Clean is a
@@ -202,6 +230,7 @@ REPO <name> (<language>, <approx source lines>)
 1. Implicit coupling: notable - <evidence, path:line>
 ...
 9. Errors/validation at the boundary: minor - <evidence>
+10. Change-detector tests: clean
 Findings, most severe first:
 1. <smell number> <path:line>: <the problem>. Fix: <one line>
 ```
