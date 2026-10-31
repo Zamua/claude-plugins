@@ -86,6 +86,13 @@ Inbox
 - **Periods**, such as quarters, cut the view to the Items dated in one, the undated work under them and their
   ancestors. Responsibilities and the Inbox show in every Period. Pick one in the Period box or with
   `/board work <period>`.
+- **Sections** group the top level under names you choose, such as Goals, Side projects and Misc, each its own ranked
+  list with its own done count. The tool's `sections` names them in order, and `section` puts a top-level Item of any
+  Source in one; an Item put in none shows in the last, and an empty section is left out. With no sections the top
+  level is one list.
+- **Hidden**: the tool's `hide` leaves any Item, session or pull request out of the tree, with whatever sits under it,
+  such as a pull request a Source attaches that is not yours to act on. `unhide` brings it back, and a read lists
+  what is hidden.
 - **Inbox**: an ask with no parent waits here, with who asked, until it is placed under an Item or work on it starts.
   One that grows into a whole effort is promoted where it stands: give it a Project's kind and an in-flight status,
   and it joins the list with its asker still kept.

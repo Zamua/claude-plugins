@@ -4,7 +4,7 @@ import { messageOf } from '../kit'
 import { buildTree, isSessionId, ORIGINS, pathTo, qualify, treeText, URGENCY } from './model'
 import type { Item, ItemLink, Link, Node, Origin, Shape, Status, Tree } from './model'
 import { liveNow, refreshLive, selfSession, startSession } from './sessions'
-import { followFile, isLocal, itemsAndLinks, localId, readLocalNow, writeLocal } from './sources/file'
+import { followFile, hiddenOf, isLocal, itemsAndLinks, localId, readLocalNow, sectionMapOf, sectionNamesOf, writeLocal } from './sources/file'
 import type { LocalFile, LocalItem } from './sources/file'
 import { currentWork, START_ENV, WORK_TOOL, workTree } from './view'
 import type { WorkBoard } from './view'
@@ -20,8 +20,10 @@ const DESCRIPTION = `Read and change the work view of the board pane: one tree o
 - root: true makes this session the root session, the one the person talks to; every breadcrumb and work view then starts with a mark that brings it to the front. root: false clears it.
 - aliases: identifiers a session's tab or workspace name or a pull request's title or branch may carry, such as an issue key, so they attach to the Item without a link.
 - eta: when whoever works an Item expects it done, as an ISO date; an empty string clears it. Any Item takes one, whatever its source. A parent shows the latest ETA beneath it, marked late when that falls after its target.
+- sections: the names of the view's sections, in order, replacing the list; an empty list leaves one unsectioned list. section on add or update puts a top-level Item of any source in one by name; an empty string clears it. A top-level Item in no section shows in the last.
+- hide / unhide: leave any Item, Session or pull request out of the tree, with whatever sits under it, or bring it back. A read lists what is hidden.
 A read lists each session under its Item with its state, the name to message it by, and the goal and summary from its session board.
-Only Items whose ids start with file: (or have no prefix) can be added, updated or removed; Items from other sources can only be linked and given an eta. File changes apply together, or none do; a started session stays started. Keep titles to one short line.`
+Only Items whose ids start with file: (or have no prefix) can be added, updated or removed; Items from other sources can only be linked, hidden, given an eta and put in a section. File changes apply together, or none do; a started session stays started. Keep titles to one short line.`
 
 const STATUS_ENUM = [...URGENCY]
 const ITEM_FIELDS = {
@@ -37,6 +39,7 @@ const ITEM_FIELDS = {
   },
   target: { type: 'string', description: 'The deadline, as an ISO date or time.' },
   eta: { type: 'string', description: 'When it is expected done, as an ISO date; empty clears it.' },
+  section: { type: 'string', description: 'The section a top-level Item shows in, by name; empty clears it.' },
   detail: { type: 'string', description: 'Markdown shown when the Item is pressed open.' },
   aliases: { type: 'array', items: { type: 'string' }, description: 'Identifiers such as an issue key.' },
   links: {
@@ -56,6 +59,9 @@ const INPUT_SCHEMA = {
       items: { type: 'object', properties: { child: { type: 'string' }, parent: { type: 'string' } }, required: ['child', 'parent'] },
     },
     unlink: { type: 'array', items: { type: 'string' } },
+    sections: { type: 'array', items: { type: 'string' }, description: "The view's section names, in order." },
+    hide: { type: 'array', items: { type: 'string' }, description: 'Ids to leave out of the tree.' },
+    unhide: { type: 'array', items: { type: 'string' } },
     attach: { type: 'string', description: 'The Item id to put this session under.' },
     root: { type: 'boolean', description: 'Make this session the root session, or clear the root with false.' },
     start: {
@@ -85,6 +91,7 @@ type Fields = {
   origin?: Origin
   target?: string
   eta?: string
+  section?: string
   detail?: string
   links?: ItemLink[]
   aliases?: string[]
@@ -96,6 +103,9 @@ type Input = {
   remove?: string[]
   link?: { child: string; parent: string }[]
   unlink?: string[]
+  sections?: string[]
+  hide?: string[]
+  unhide?: string[]
   attach?: string
   start?: Start[]
   root?: boolean
@@ -140,9 +150,12 @@ function checkFields(fields: Fields): string | undefined {
   return undefined
 }
 
+/** Fields the file keeps beside the Items rather than in them, so an Item of any Source takes them. */
+const OVERLAY = ['id', 'eta', 'section']
+
 const patch = (item: LocalItem, fields: Fields): LocalItem => {
   const next: LocalItem = { ...item }
-  for (const [key, value] of Object.entries(fields)) if (value !== undefined && key !== 'id' && key !== 'eta') next[key] = value
+  for (const [key, value] of Object.entries(fields)) if (value !== undefined && !OVERLAY.includes(key)) next[key] = value
   if (fields.parent !== undefined) next.parent = localId(fields.parent)
 
   return next
@@ -170,24 +183,43 @@ export function applyChange(current: LocalFile, input: Input, now: string, other
   const before = buildTree(itemsAndLinks(current).items, itemsAndLinks(current).links)
 
   const etas: Record<string, string> = { ...(current.etas ?? {}) }
-  const isEtaOnly = (one: { id: string }) => Object.entries(one).every(([key, value]) => key === 'id' || key === 'eta' || value === undefined)
+  const sectionOf: Record<string, string> = { ...sectionMapOf(current) }
+  const titles = input.sections ? input.sections.map(title => title.trim()) : sectionNamesOf(current)
+  if (titles.some(title => title === '') || new Set(titles).size !== titles.length) {
+    return { error: 'Each section needs a name of its own.' }
+  }
+  const hidden = hiddenOf(current)
+  const isOverlayOnly = (one: { id: string }) =>
+    Object.entries(one).every(([key, value]) => OVERLAY.includes(key) || value === undefined)
+  const notOurs = (id: string) => `${id} belongs to another source; only link, hide, eta and section can change it.`
   for (const one of input.update ?? []) {
-    if (!isLocal(one.id) && isEtaOnly(one) && others.has(one.id)) continue
-    if (!isLocal(one.id)) return { error: `${one.id} belongs to another source; only link and eta can change it.` }
+    if (!isLocal(one.id) && isOverlayOnly(one) && others.has(one.id)) continue
+    if (!isLocal(one.id)) return { error: notOurs(one.id) }
     if (!ids.has(localId(one.id))) return { error: `No Item ${one.id}. Call with no fields to list the ids.` }
   }
   for (const id of input.remove ?? []) {
-    if (!isLocal(id)) return { error: `${id} belongs to another source; only link and eta can change it.` }
+    if (!isLocal(id)) return { error: notOurs(id) }
     if (!ids.has(localId(id))) return { error: `No Item ${id}. Call with no fields to list the ids.` }
   }
-  const setEta = (id: string, eta: string | undefined) => {
-    if (eta === '') delete etas[id]
-    else if (eta !== undefined) etas[id] = eta
+  const setOverlay = (id: string, fields: Fields) => {
+    if (fields.eta === '') delete etas[id]
+    else if (fields.eta !== undefined) etas[id] = fields.eta
+    if (fields.section === '') delete sectionOf[id]
+    else if (fields.section !== undefined) sectionOf[id] = fields.section.trim()
   }
   for (const fields of [...(input.add ?? []), ...(input.update ?? [])]) {
     const wrong = checkFields(fields)
     if (wrong) return { error: wrong }
+    const section = fields.section?.trim()
+    if (section && !titles.includes(section)) {
+      const named = titles.length > 0 ? `The sections are ${titles.join(', ')}` : 'There are no sections yet'
+      return { error: `No section ${section}. ${named}; set them with sections.` }
+    }
   }
+  for (const id of input.unhide ?? []) {
+    if (!hidden.delete(qualify(id))) return { error: `${id} is not hidden.` }
+  }
+  for (const id of input.hide ?? []) hidden.add(qualify(id))
 
   for (const one of input.add ?? []) {
     if (!one.title?.trim() || !one.kind?.trim()) return { error: 'Each added Item needs a title and a kind.' }
@@ -195,12 +227,12 @@ export function applyChange(current: LocalFile, input: Input, now: string, other
     for (let n = 2; ids.has(id); n++) id = `${slug(one.title)}-${n}`
     ids.add(id)
     items.push(stamped(undefined, patch({ id, title: one.title.trim(), kind: one.kind.trim(), status: 'next', ref: nextRef }, one), now))
-    setEta(qualify(id), one.eta)
+    setOverlay(qualify(id), one)
     added.push(`file:${id} (#${nextRef})`)
     nextRef += 1
   }
   for (const one of input.update ?? []) {
-    setEta(qualify(one.id), one.eta)
+    setOverlay(qualify(one.id), one)
     if (!isLocal(one.id)) continue
     items = items.map(item => (item.id === localId(one.id) ? stamped(item, patch(item, one), now) : item))
   }
@@ -212,13 +244,23 @@ export function applyChange(current: LocalFile, input: Input, now: string, other
     items = items.filter(item => item.id !== local)
     links = links.filter(link => qualify(link.child) !== qualify(local))
     delete etas[qualify(local)]
+    delete sectionOf[qualify(local)]
   }
   for (const id of input.unlink ?? []) {
     if (!links.some(link => qualify(link.child) === qualify(id))) return { error: `${id} has no hand-set parent.` }
     links = links.filter(link => qualify(link.child) !== qualify(id))
   }
-  const { etas: _held, ...kept } = current
-  const changed: LocalFile = { ...kept, items, links, next_ref: nextRef, ...(Object.keys(etas).length > 0 && { etas }) }
+  const { etas: _etas, sections: _sections, section_of: _sectionOf, hidden: _hidden, ...kept } = current
+  const changed: LocalFile = {
+    ...kept,
+    items,
+    links,
+    next_ref: nextRef,
+    ...(Object.keys(etas).length > 0 && { etas }),
+    ...(titles.length > 0 && { sections: titles }),
+    ...(Object.keys(sectionOf).length > 0 && { section_of: sectionOf }),
+    ...(hidden.size > 0 && { hidden: [...hidden] }),
+  }
   const known = new Set([...others, ...buildTree(itemsAndLinks(changed).items, []).byId.keys()])
   for (const one of input.link ?? []) {
     const child = qualify(one.child)
@@ -255,6 +297,9 @@ export function workHooks(on: On) {
       !input.remove?.length &&
       !input.link?.length &&
       !input.unlink?.length &&
+      input.sections === undefined &&
+      !input.hide?.length &&
+      !input.unhide?.length &&
       input.attach === undefined &&
       input.root === undefined &&
       !input.start?.length

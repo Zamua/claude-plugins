@@ -180,5 +180,5 @@ test('an Item another Source holds takes an ETA, and nothing else of it can chan
   expect((await $.tool.call({ tool: TOOL, update: [{ id: 'linear:ABC-4', eta: '2026-11-02' }] })).result).toBe('Work updated.')
   expect(String((await $.tool.call({ tool: TOOL })).result)).toContain('linear:ABC-4 [Issue, next, eta 2026-11-02] Write the runbook')
   const refused = await $.tool.call({ tool: TOOL, update: [{ id: 'linear:ABC-4', eta: '2026-11-03', status: 'done' }] })
-  expect(refused.deny).toContain('only link and eta can change it')
+  expect(refused.deny).toContain('only link, hide, eta and section can change it')
 })

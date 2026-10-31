@@ -37,6 +37,12 @@ export type LocalFile = {
   agents?: Record<string, string>
   /** ETAs by Item id, for Items of every Source. */
   etas?: Record<string, string>
+  /** The names of the view's sections, in order. */
+  sections?: string[]
+  /** The section of each top-level Item put in one, by Item id, for Items of every Source. */
+  section_of?: Record<string, string>
+  /** Ids of any Source left out of the tree. */
+  hidden?: string[]
   [field: string]: unknown
 }
 
@@ -106,6 +112,13 @@ const recordOf = (value: unknown): Record<string, string> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, string>) : {}
 
 export const agentsOf = (file: LocalFile) => recordOf(file.agents)
+
+const namesOf = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((one): one is string => typeof one === 'string') : []
+
+export const sectionNamesOf = (file: LocalFile) => namesOf(file.sections)
+export const sectionMapOf = (file: LocalFile) => recordOf(file.section_of)
+export const hiddenOf = (file: LocalFile) => new Set(namesOf(file.hidden))
 
 /** Each Item with the ETA the file holds for it. */
 export function withEtas(items: Item[], file: LocalFile): Item[] {

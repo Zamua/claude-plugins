@@ -3,11 +3,11 @@ import type { Color, EngineInterface, On, RenderNode } from 'claude-code'
 import { ago, dayOf, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, span, spans } from '../kit'
 import type { Els, Part, View } from '../kit'
 import { PANE, paneFocused, paneWidth, selectView } from '../pane'
-import { buildTree, followSessions, inPeriod, isLate, mergeItems, needsTotal, pathTo, qualify, rank, SESSION_STATES } from './model'
+import { buildTree, followSessions, inPeriod, isLate, mergeItems, needsTotal, pathTo, qualify, rank, sectionsOf, SESSION_STATES } from './model'
 import type { Artifact, Node, Period, Session, SessionState, Status, Tree } from './model'
 import { focusSession, liveNow, refreshLive, rememberItems } from './sessions'
 import type { Live } from './sessions'
-import { agentsOf, isVersion2, itemsAndLinks, withEtas } from './sources/file'
+import { agentsOf, hiddenOf, isVersion2, itemsAndLinks, sectionMapOf, sectionNamesOf, withEtas } from './sources/file'
 import type { LocalFile, LocalState } from './sources/file'
 
 export const WORK_TOOL = 'mcp__board__work'
@@ -148,8 +148,10 @@ export function workTree(file: unknown, live: Live = liveNow()): { tree?: Tree; 
   const { items, links: held } = itemsAndLinks(local)
   const { links, root } = followSessions(held, typeof local.root === 'string' ? local.root : undefined, agentsOf(local), live.sessions)
   const all = withEtas(mergeItems(items, live.items), local)
+  const tree = buildTree(all, links, live.sessions, live.artifacts, root, live.past, hiddenOf(local))
+  const titles = sectionNamesOf(local)
 
-  return { tree: buildTree(all, links, live.sessions, live.artifacts, root, live.past) }
+  return { tree: titles.length > 0 ? { ...tree, sections: sectionsOf(tree, titles, sectionMapOf(local)) } : tree }
 }
 
 function periodsOf(spec: WorkSpec): Period[] {
@@ -428,6 +430,9 @@ export function workView($: EngineInterface, w: WorkBoard): View {
       const root = rootOf(tree)
       const shown = (nodes: Node[]) => (ctx.shows ? nodes.filter(n => ctx.shows?.has(n.item.id)) : nodes)
       const top = ranked(shown([...tree.outcomes, ...tree.responsibilities]), now)
+      const sections = (tree.sections ?? [])
+        .map(section => ({ title: section.title, nodes: ranked(shown(section.nodes), now) }))
+        .filter(section => section.nodes.length > 0)
       const inbox = shown(tree.inbox)
       const box =
         periods.length > 0 ? (
@@ -468,11 +473,23 @@ export function workView($: EngineInterface, w: WorkBoard): View {
               {level(ctx, 'top-inbox', inbox)}
             </Box>
           )}
-          {top.length > 0 && (
+          {top.length > 0 && !tree.sections && (
             <Box key="top" flexDirection="column">
               {level(ctx, 'top', top)}
             </Box>
           )}
+          {sections.map(section => {
+            const key = `sec-${section.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+
+            return (
+              <Box key={`w${key}`} flexDirection="column" marginBottom={1}>
+                <Text dimColor bold>
+                  {section.title}
+                </Text>
+                {level(ctx, key, section.nodes)}
+              </Box>
+            )
+          })}
           {unplaced(ctx, tree)}
           {w.notice && (
             <Text key="work-notice" color="yellow" wrap="wrap">

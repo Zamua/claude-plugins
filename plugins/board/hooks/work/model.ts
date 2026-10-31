@@ -148,7 +148,13 @@ export type Tree = {
   unplaced: { sessions: Session[]; artifacts: Artifact[] }
   /** The root session's id, which sits above the tree rather than in it. */
   root?: string
+  /** The ids left out of the tree, each with whatever sits under it. */
+  hidden: string[]
+  /** The top-level Items grouped as the person named, when they named any groups. */
+  sections?: Section[]
 }
+
+export type Section = { title: string; nodes: Node[] }
 
 export const rank = (status: Status) => URGENCY.indexOf(status)
 
@@ -181,16 +187,27 @@ export function followSessions(
 }
 
 export function buildTree(
-  items: Item[],
+  all: Item[],
   links: Link[],
   sessions: Session[] = [],
   artifacts: Artifact[] = [],
   root?: string,
   past: PastTime[] = [],
+  hidden: ReadonlySet<string> = new Set(),
 ): Tree {
   const parentOf = new Map<string, string>()
-  for (const item of items) if (item.parent) parentOf.set(item.id, item.parent)
+  for (const item of all) if (item.parent) parentOf.set(item.id, item.parent)
   for (const link of links) if (!isSessionId(link.child)) parentOf.set(link.child, link.parent)
+  const isHidden = (id: string) => {
+    const seen = new Set<string>()
+    for (let at: string | undefined = id; at !== undefined && !seen.has(at); at = parentOf.get(at)) {
+      if (hidden.has(at)) return true
+      seen.add(at)
+    }
+
+    return false
+  }
+  const items = all.filter(item => !isHidden(item.id))
   const known = new Map(items.map(item => [item.id, item]))
   const warnings: string[] = []
   const cycles: string[] = []
@@ -238,7 +255,13 @@ export function buildTree(
     }
   }
   for (const node of tops) setDepth(node, 0)
-  const placed = place(nodes, links, sessions, artifacts, root)
+  const placed = place(
+    nodes,
+    links,
+    sessions.filter(one => !hidden.has(one.id)),
+    artifacts.filter(one => !hidden.has(one.id)),
+    root,
+  )
   for (const node of nodes.values()) node.activeMs = node.sessions.reduce((sum, s) => sum + (s.activeMs ?? 0), 0)
   for (const one of past) {
     const node = nodes.get(one.item)
@@ -259,7 +282,21 @@ export function buildTree(
     cycles,
     ...placed,
     ...(root && { root }),
+    hidden: [...hidden],
   }
+}
+
+/** The top level in the named groups, each Item in the one it was put in, or else in the last. */
+export function sectionsOf(tree: Tree, titles: readonly string[], sectionOf: Readonly<Record<string, string>>): Section[] {
+  const tops = [...tree.outcomes, ...tree.responsibilities].sort(byUrgency)
+  const last = titles[titles.length - 1]
+  const titleOf = (node: Node) => {
+    const put = sectionOf[node.item.id]
+
+    return put !== undefined && titles.includes(put) ? put : last
+  }
+
+  return titles.map(title => ({ title, nodes: tops.filter(node => titleOf(node) === title) }))
 }
 
 function setDepth(node: Node, depth: number) {
@@ -410,14 +447,19 @@ export function treeText(tree: Tree): string {
     for (const artifact of node.artifacts) lines.push(`${pad}  ${artifact.id} [${artifact.status}] ${artifact.title}`)
     for (const child of node.children) walk(child)
   }
-  if (tree.outcomes.length > 0) lines.push('Outcomes:')
-  for (const node of tree.outcomes) walk(node)
-  if (tree.responsibilities.length > 0) lines.push('Responsibilities:')
-  for (const node of tree.responsibilities) walk(node)
+  const groups = tree.sections ?? [
+    { title: 'Outcomes', nodes: tree.outcomes },
+    { title: 'Responsibilities', nodes: tree.responsibilities },
+  ]
+  for (const group of groups) {
+    if (group.nodes.length > 0) lines.push(`${group.title}:`)
+    for (const node of group.nodes) walk(node)
+  }
   if (tree.inbox.length > 0) lines.push('Inbox:')
   for (const node of tree.inbox) walk(node)
   if (tree.unplaced.sessions.length > 0) lines.push('Unplaced sessions:')
   for (const session of tree.unplaced.sessions) lines.push(...sessionText(tree, session, ''))
+  if (tree.hidden.length > 0) lines.push(`Hidden: ${tree.hidden.join(', ')}`)
   for (const warning of tree.warnings) lines.push(`warning: ${warning}`)
 
   return lines.length > 0 ? lines.join('\n') : 'The work board is empty.'
