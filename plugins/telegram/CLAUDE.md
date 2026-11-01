@@ -304,6 +304,15 @@ refusal (no claude of its own). Registered in the group's "/" menu alongside
 the secret verbs (`registerCommands`); any group member may run it, since it
 is not destructive: the conversation resumes.
 
+The one exception is a topic whose bound conversation is missing on disk (see
+"A missing conversation is reported, never replaced" below). There `/relaunch`
+is the way out: it clears `claude_session_id`, persists the registry, and the
+respawn mints a new id and starts a fresh conversation with the kickoff. The
+ack names the missing id and says a new conversation was started, and the
+notice tells the agent it has no earlier history. Nothing is lost that was not
+already gone. The decision and both messages are pure in
+`proxy/domain/topic-conversation.ts` (`planRelaunch`, `spawnConversation`).
+
 ## Reminders (`remind`, `list_reminders`, `cancel_reminder`)
 
 A topic agent's own scheduler (CronCreate) lives in its session and dies with
@@ -751,8 +760,10 @@ there is no agent to relaunch.
   topic (at most once a minute) and spawns nothing: starting a fresh session
   would silently drop the topic's history. Claude Code deletes transcripts older
   than `cleanupPeriodDays` (default 30) at startup, so `~/.claude/settings.json`
-  sets it to 36500. To deliberately restart such a topic, clear its
-  `claude_session_id` in `registry.json` while the proxy is stopped.
+  sets it to 36500. The error ends by pointing the operator at `/relaunch`,
+  which starts a fresh conversation in that topic (see the Relaunch section).
+  Editing `registry.json` while the proxy runs does not work: the registry
+  lives in memory and the next save overwrites the file.
 - **Readable, stable session names.** A topic's tmux session is
   `claude-<slug>-<thread_id>` (e.g. `claude-hostthis-34`), with the numeric thread
   id as a short, collision-proof, stable suffix; the General topic is just
@@ -887,7 +898,8 @@ there is no agent to relaunch.
 - `server.ts` + `package.json`: the thin MCP client (dep: `@modelcontextprotocol/sdk`).
 - `proxy/proxy.ts` + `proxy/package.json`: the daemon (dep: `grammy`).
 - `proxy/domain/`: pure provider-route, harness-lock, Antigravity-topic,
-  OpenCode-topic, inbound-delivery, reminder, and capacity types/transitions.
+  OpenCode-topic, inbound-delivery, reminder, topic-conversation (resume vs.
+  fresh start), and capacity types/transitions.
 - `proxy/adapters/`: Claude launch profiles, bridge model catalog, Codex
   app-server client, OpenCode Go capacity client, official Antigravity catalog,
   persistent Herdr runtimes (`herdr-antigravity-runtime.ts`,
