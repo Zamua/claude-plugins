@@ -4,6 +4,7 @@
   "seq": 44,
   "author": "operator",
   "origin": "app",
+  "kind": null,
   "text": "run the tests",
   "format": "plain",
   "blobs": [
@@ -19,5 +20,7 @@
   "at": "2026-11-01T20:25:37.123Z",
   "client_id": "01JC6Z8Q2V5W9N3K7F4D1B0XAH",
   "delivery": "failed",
-  "failure": "the session could not start"
+  "failure": "the session could not start",
+  "edited_at": null,
+  "reactions": []
 }

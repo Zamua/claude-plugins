@@ -1,0 +1,12 @@
+{
+  "device": {
+    "id": "dev_3a1f",
+    "name": "iPhone",
+    "public_key": "BAaxuTrfzXvBuI7z+aJJzGOkzUtE3RH/e/fBYvFNlxcC4BG5wy9bko1wyliDS11uD0sEYaUzeBPqHCy1QK3MewM=",
+    "apns_env": "sandbox",
+    "enrolled_at": "2026-11-01T20:25:37.123Z",
+    "last_seen": "2026-11-01T20:25:37.123Z"
+  },
+  "server_version": "1.0.0",
+  "contract": "v1"
+}

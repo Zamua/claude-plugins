@@ -64,5 +64,32 @@
       "signature": "MEUCIQD7KyCirgH9WZ/kcrZm1bbBQavEAHXSwL6xJtApSeFbwQIgVtV8zbyJP6xUotR4NpFYzPwjqsDeshIqQ/tv9e0pkHo=",
       "valid": false
     }
+  ],
+  "app_public_key": "BHAmRZPjM8hsJLIM7+OA8dqXmkPyAYtMgc05qrF60hqRXYibWpYo0me/+BLHqtfEbs3dFRCy/3zBmgTPi8Z1m+M=",
+  "app_vectors": [
+    {
+      "name": "message, signed by a Secure Enclave key",
+      "method": "POST",
+      "path": "/v1/topics/general/messages",
+      "client_id": "01JC6Z8Q2V5W9N3K7F4D1B0XAE",
+      "timestamp": 1793570737123,
+      "body": "{\"text\":\"run the tests\"}",
+      "body_sha256": "51b365c654de71c69dac5afdc09dbbf06929ef6137ee7878f32937071d2923a8",
+      "canonical": "v1\nPOST\n/v1/topics/general/messages\n01JC6Z8Q2V5W9N3K7F4D1B0XAE\n51b365c654de71c69dac5afdc09dbbf06929ef6137ee7878f32937071d2923a8\n1793570737123",
+      "signature": "MEQCICngaAcnhUMMSIFjP8D8gjPalbNMyVyEe9Ka5bAtZKEWAiAKUFstoS/m3zzHEqV5JFlEuI09w+n3AdH+QKTFf43/uA==",
+      "valid": true
+    },
+    {
+      "name": "approval, signed by a Secure Enclave key",
+      "method": "POST",
+      "path": "/v1/approvals/ap_7f3c",
+      "client_id": "01JC6Z8Q2V5W9N3K7F4D1B0XAF",
+      "timestamp": 1793570738123,
+      "body": "{\"choice\":\"1\"}",
+      "body_sha256": "1fdabf8803a77604b6ba6cc7384bb1555bd681c3b20e96f93e2980b2590388f0",
+      "canonical": "v1\nPOST\n/v1/approvals/ap_7f3c\n01JC6Z8Q2V5W9N3K7F4D1B0XAF\n1fdabf8803a77604b6ba6cc7384bb1555bd681c3b20e96f93e2980b2590388f0\n1793570738123",
+      "signature": "MEUCIQDC2dxIROG5MY3zqodpxWRWxgXMiqVRROvCbN5VAarYNQIgP7XclfugFg6jbptuIr4v+QR7JYlrvEPKm7gBTB4k1ns=",
+      "valid": true
+    }
   ]
 }

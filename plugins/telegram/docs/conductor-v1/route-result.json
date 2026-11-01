@@ -1,0 +1,8 @@
+{
+  "route": {
+    "provider": "anthropic",
+    "model": "claude-opus-5-5",
+    "effort": "high"
+  },
+  "state": "queued"
+}
