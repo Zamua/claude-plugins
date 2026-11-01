@@ -174,6 +174,7 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_HC_SESSION` | no | `topics` | the hc session for those topics; its core runs as its own launchd agent and the proxy never starts it |
 | `CONDUCTOR_LISTEN` | no | unset | the conductor (`docs/conductor.md`): `store-only` keeps every topic's messages in a SQLite store; `tailnet:<port>` also serves its API on the tailnet |
 | `CONDUCTOR_OPERATOR_LOGIN`, `CONDUCTOR_NODES` | with a listener | unset | the operator's tailnet login and the stable node ids of the devices allowed in; this machine's own node is always refused |
+| `CONDUCTOR_APNS_KEY_FILE`, `CONDUCTOR_APNS_KEY_ID`, `CONDUCTOR_APNS_TEAM_ID`, `CONDUCTOR_APNS_TOPIC` | for push | unset | the APNs `.p8` key's file, its key id, the team id and the app's bundle id; push is off unless all four are set and the listener runs |
 | `TAILSCALE_BIN` | no | `/usr/local/bin/tailscale` | the tailscale CLI the conductor asks about peers and its certificate |
 | `TELEGRAM_TOPICS_UPDATE_RESTART` | no | `on` | moves live topic sessions onto a newly installed Claude Code at their next idle turn boundary (an idle one resumes on its next message; a busy one is restarted once it goes idle) |
 | `TELEGRAM_TOPICS_MODEL` | no | `claude-opus-5-5` | initial model for topics without a persisted route; `/model` selections are persisted per topic |

@@ -44,6 +44,7 @@ import {
   CAPACITY_POLL_MS,
   CONDUCTOR_DIR,
   CONDUCTOR_LISTEN,
+  CONDUCTOR_APNS,
   CONDUCTOR_NODES,
   CONDUCTOR_OPERATOR_LOGIN,
   GROUP_CHAT_ID,
@@ -70,6 +71,7 @@ import { Ledger } from './conductor/ledger'
 import { tailscaleCli } from './conductor/tailscale'
 import { conductorTopics } from './conductor/topic-source'
 import { appDelivery } from './conductor/app-delivery'
+import { startConfiguredPush } from './conductor/push-service'
 import type { MessageKind } from './conductor/domain/message'
 import type { TopicHarnessAdapter } from './harness/topic-harness-adapter'
 import { createLocalgenHarness } from './harness/localgen/localgen-harness'
@@ -346,7 +348,7 @@ const conductor = conductorStore && conductorMode?.listener
       ports: {
         store: conductorStore,
         ledger: new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')),
-        topics: () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf),
+        topics: () => conductorTopicList(),
         notify: text => void sayIn('', 'general', text),
         deliver: appDelivery({
           operatorId: ADMIN_USER_ID,
@@ -366,6 +368,10 @@ const conductor = conductorStore && conductorMode?.listener
       },
     })
   : undefined
+const conductorTopicList = () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf)
+const conductorPush = conductor && conductorStore
+  ? startConfiguredPush(CONDUCTOR_APNS, { store: conductorStore, topics: conductorTopicList, log })
+  : undefined
 if (hcFullDiskAccess) {
   hcFullDiskAccess.check()
   setInterval(() => hcFullDiskAccess.check(), 3_600_000)
@@ -381,6 +387,7 @@ function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
   log('shutting down')
+  conductorPush?.stop()
   conductor?.stop()
   releasePidFile(PID_FILE)
   // Force-exit if the current getUpdates outlasts 2s.

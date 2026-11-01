@@ -76,8 +76,9 @@ compared and one is agreed before it is built. Approvals from the app are not
 trusted until it lands.
 
 **C8, push.** APNs over HTTP/2 with a token from the `.p8` key. Message and
-approval payloads as in `conductor.md`, device tokens from `/v1/devices/push`,
-and tokens Apple reports as invalid dropped. Delivery times are logged for the
+approval payloads as in `conductor.md` (approvals are pushed once C7 creates
+them), device tokens from `PUT /v1/devices/{id}/push`, and tokens Apple reports
+as invalid dropped. Delivery times are logged for the
 comparison with Telegram. Operator step: the `.p8` key (through the secret drop),
 its key id, the team id and the app's bundle id.
 

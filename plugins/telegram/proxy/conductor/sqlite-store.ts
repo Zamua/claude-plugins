@@ -157,6 +157,29 @@ export class ConductorStore {
     return row ? this.deviceFrom(row) : undefined
   }
 
+  /** Devices that have given an APNs token. */
+  pushTargets(): Device[] {
+    return (this.db.query('SELECT * FROM devices WHERE apns_token IS NOT NULL').all() as DeviceRow[]).map(row => this.deviceFrom(row))
+  }
+
+  setPush(id: string, apnsToken: string | null, apnsEnv: Device['apnsEnv']): Device | undefined {
+    this.db.query('UPDATE devices SET apns_token = ?, apns_env = ? WHERE id = ?').run(apnsToken, apnsEnv, id)
+    return this.device(id)
+  }
+
+  /** Forgets a token Apple refused, unless the device has sent a newer one since. */
+  dropPushToken(id: string, apnsToken: string): void {
+    this.db.query('UPDATE devices SET apns_token = NULL WHERE id = ? AND apns_token = ?').run(id, apnsToken)
+  }
+
+  /** Messages in these topics, after each one's read marker, that are not the operator's. */
+  unreadIn(topics: readonly string[]): number {
+    return (this.db
+      .query(`SELECT COUNT(*) AS n FROM messages m LEFT JOIN read_state r ON r.topic = m.topic
+        WHERE m.topic IN (SELECT value FROM json_each(?)) AND m.author != 'operator' AND m.seq > COALESCE(r.seq, 0)`)
+      .get(JSON.stringify(topics)) as { n: number }).n
+  }
+
   touchDevice(id: string, at = new Date().toISOString()): void {
     this.db.query('UPDATE devices SET last_seen = ? WHERE id = ?').run(at, id)
   }
