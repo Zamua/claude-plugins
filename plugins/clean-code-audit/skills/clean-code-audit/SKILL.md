@@ -1,10 +1,10 @@
 ---
-description: Check code against ten smells (implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary, change-detector tests). Use while designing or implementing a change, for a self-review of a diff before committing or opening a PR, when asked to audit a repo, or when the user triggers /clean-code-audit. Every finding needs a path:line.
+description: Check code against eleven smells (implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary, change-detector tests, implicit state machines). Use while designing or implementing a change, for a self-review of a diff before committing or opening a PR, when asked to audit a repo, or when the user triggers /clean-code-audit. Every finding needs a path:line.
 ---
 
 # clean-code-audit
 
-Ten smells that make a codebase hard to change safely. This is about structure,
+Eleven smells that make a codebase hard to change safely. This is about structure,
 not style and not bugs: formatting, naming taste and lint rules are out of scope.
 A bug found along the way is reported separately (see "Bugs are not smells").
 
@@ -14,10 +14,10 @@ Three ways to use it:
   forms, when fixing a smell costs a line instead of a refactor.
 - **Self-review of a diff**: check what the diff added or made worse, before the
   commit or the PR. Not the whole repo.
-- **Repo audit**: rate all ten across a codebase, with evidence, and list every
+- **Repo audit**: rate all eleven across a codebase, with evidence, and list every
   finding with its fix.
 
-## The ten smells
+## The eleven smells
 
 For each: what it is, how to find it, what the fix looks like, and what does not count.
 
@@ -181,9 +181,43 @@ reading it. Then a red test stops meaning anything.
   when they pin observable behaviour, and become change detectors only when they
   pin internals.
 
+### 11. Implicit state machines
+
+Something with a lifecycle (a session, a job, a connection, a sync loop, a retry
+policy, a game round, an order) whose states and transitions are never written
+down. The real state is a combination of flags, nullables, counters and
+timestamps, and the transitions are `if` checks scattered across whichever
+handlers, timers and callbacks happen to run. Nothing answers "what states exist,
+and what can happen next from here", so an illegal move (a retry while paused, a
+second spawn while one is starting, a claim on a released device) is prevented
+only by a guard one handler has and its sibling lacks.
+
+- **Find it**: an entity with two or more of: a `status` or `phase` string,
+  booleans like `pending`, `spawning`, `isOpen`, nullable `...At` or `...Until`
+  timestamps, attempt counters, sentinels (`""`, `0`, a past time) meaning "not
+  yet". Then grep for writes to those fields: the same fields assigned in several
+  handlers, or `if (a && !b)` guards repeated with small differences, are the
+  smell. Also timers and callbacks that change state without checking the
+  current one, tests that set the fields directly to reach a state instead of
+  sending events, and a comment describing the lifecycle in prose that no code
+  enforces.
+- **Fix**: name the states as a union, one variant per state carrying only that
+  state's data, and write one pure transition function, `next(state, event)`,
+  returning the new state and the effects to run. It is the only place the state
+  changes. Every state and event pair is decided: handled, ignored with a reason,
+  or rejected, with an exhaustive switch so a new state or event fails to compile
+  until it is handled. Timers, I/O and sends live in a thin shell that performs
+  the returned effects. Test by feeding event sequences, legal and illegal, and
+  asserting the states and effects that come out.
+- **Not it**: a single boolean with no other state attached. A lifecycle already
+  owned by one explicit transition point, whatever it is called (a reducer, an
+  actor's message handler, a workflow engine's steps). Smell 4 covers the shape of
+  the data; this one covers who may change it and when. The two are usually fixed
+  together.
+
 ## Before you write it
 
-The cheap moment to avoid all ten is before the code exists. While designing a
+The cheap moment to avoid all eleven is before the code exists. While designing a
 change, answer these:
 
 1. Where does untrusted input enter, and what typed value does it become there?
@@ -198,10 +232,12 @@ change, answer these:
 7. Does the file I am adding to already do several unrelated things?
 8. Would the test I am writing still pass after a refactor that keeps the
    behaviour? If not, it pins the implementation.
+9. Does this thing have a lifecycle? Where is the one place its state changes,
+   and what happens to an event that does not fit the current state?
 
 ## Self-review of a diff
 
-Run through the ten against the diff, not the codebase. Report only what the
+Run through the eleven against the diff, not the codebase. Report only what the
 diff introduces or worsens; a pre-existing smell the diff touches gets one line
 at most, and is not a reason to grow the change. Fix what is cheap now. Anything
 deferred gets named in the PR or the commit summary, never silently left.
@@ -209,7 +245,7 @@ deferred gets named in the PR or the commit summary, never silently left.
 ## Repo audit
 
 1. Read the repo's own docs first (CLAUDE.md, README, architecture notes). Judge
-   against the ten and against the design the repo says it follows. Drift from
+   against the eleven and against the design the repo says it follows. Drift from
    its own stated design is a finding.
 2. Skip generated and vendored code, build output, lockfiles and fixtures.
 3. Rate each smell: **clean**, **minor**, **notable**, **severe**. Clean is a
@@ -231,6 +267,7 @@ REPO <name> (<language>, <approx source lines>)
 ...
 9. Errors/validation at the boundary: minor - <evidence>
 10. Change-detector tests: clean
+11. Implicit state machines: notable - <evidence>
 Findings, most severe first:
 1. <smell number> <path:line>: <the problem>. Fix: <one line>
 ```
