@@ -107,11 +107,13 @@ never uses `--keep`.
 
 ## Known gaps
 
-- After an hc update the Full Disk Access grant no longer matches the binary.
-  Topics then run without it until the grant is given again, and nothing
-  detects that yet.
-- An updater or a person that restarts the core with `hc server restart` hands
-  it their own environment and permissions.
+- After an hc update the Full Disk Access grant no longer matches the binary,
+  and an updater or a person that restarts the core with `hc server restart`
+  hands it their own environment and permissions. Topics then run without the
+  grant until it is fixed. The proxy detects it: at boot, after each hc topic
+  launch and hourly it reads a protected folder in a throwaway terminal of the
+  session, and posts in the general topic when access is lost and when it is
+  back (`topics/hc-full-disk-access.ts`).
 
 - The launcher's dialog watcher answers only the development-channel dialog.
   The spawn directory must already be a trusted folder, as on every backend.
