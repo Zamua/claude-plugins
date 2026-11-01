@@ -889,13 +889,14 @@ there is no agent to relaunch.
   guard fired exactly once. Complements (does not replace) the CLAUDE.md
   channel-discipline instruction - the instruction nudges the first reply, the
   hook backstops a miss.
-- **Resilience: retry poll + PID guard + graceful shutdown.** `pollWithRetry`
-  wraps `bot.start` in a backoff retry loop (ported from the single-session
-  server): a rejection of `bot.start()` itself (ETIMEDOUT/ECONNRESET/DNS or a
-  409 from a not-yet-drained old poller) is retried instead of silently killing
-  polling forever (`bot.catch` only catches throws INSIDE update handlers). A
-  PID file (`proxy.pid`) SIGTERMs any stale proxy on boot; the HTTP server (`proxy/http/server.ts`)
-  retries the `Bun.serve` bind while the old instance releases the port; SIGTERM/
+- **Resilience: retry poll + PID guard + graceful shutdown.** The poll loop
+  (`proxy/telegram/polling.ts`) wraps `bot.start` in a backoff retry: a
+  rejection of `bot.start()` itself (ETIMEDOUT/ECONNRESET/DNS or a 409 from a
+  not-yet-drained old poller) is retried instead of silently killing polling
+  forever (`bot.catch` only catches throws INSIDE update handlers). A PID file
+  (`proxy.pid`, `proxy/shared/pid-file.ts`) SIGTERMs any stale proxy on boot;
+  the HTTP server (`proxy/http/server.ts`) retries the `Bun.serve` bind while
+  the old instance releases the port; SIGTERM/
   SIGINT/SIGHUP call `bot.stop()` + remove the pid file. `GET /health` reports
   `polling` + `polling_since` so a monitor can tell "up but deaf" from healthy.
 - **Exfil guard on outbound files.** `handleSend` (`proxy/http/outbound.ts`) runs `assertSendable(f)` before
@@ -942,14 +943,16 @@ there is no agent to relaunch.
   - `proxy/secrets/`: the `/secret` drop (`secret.ts` parses and stores,
     `secret-drop.ts` runs the Telegram exchange).
   - `proxy/telegram/`: the Bot API edge: inbound routing of every group
-    message and button answer, and the "/" menu (`inbound.ts`); message
+    message and button answer, and the "/" menu (`inbound.ts`); the poll
+    loop (`polling.ts`); message
     description, the callback codec, file download, voice transcription,
     locations.
   - `proxy/http/`: the loopback HTTP API: the server and its route table,
     the long-polls and permission relay (`server.ts`), the outbound tools
     (`outbound.ts`), routes, request parsers and responses.
   - `proxy/shared/`: atomic JSON writes (`json-file.ts`: a 0600 temp file
-    renamed into place, used for every state file), the process runner, Herdr
+    renamed into place, used for every state file), the single-instance pid
+    file, the process runner, Herdr
     pane parsing; `domain/` holds the channel envelope, turn meta flags and
     topic slugs.
   - `proxy/contracts/`: tests that run the launch scripts and hooks end to end.

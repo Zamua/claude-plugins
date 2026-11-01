@@ -685,4 +685,13 @@ describe('the proxy, end to end', () => {
     expect(spawns().filter(s => s.session === 'claude-47')).toHaveLength(2)
     expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).toContain('claude-47')
   }, 30_000)
+
+  // Runs last: it stops the proxy.
+  test('SIGTERM stops polling, removes the pid file, and exits cleanly', async () => {
+    const pidFile = join(state, 'proxy.pid')
+    expect(readFileSync(pidFile, 'utf8')).toBe(String(proxy.pid))
+    proxy.kill('SIGTERM')
+    expect(await proxy.exited).toBe(0)
+    expect(existsSync(pidFile)).toBeFalse()
+  }, 10_000)
 })

@@ -28,15 +28,9 @@
  *                               plugin:telegram@zamua)
  */
 
-import {
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  rmSync,
-} from 'fs'
+import { mkdirSync } from 'fs'
 import { join } from 'path'
-import { execFileSync } from 'child_process'
-import { Bot, GrammyError } from 'grammy'
+import { Bot } from 'grammy'
 import { lockRefusal } from './harness/domain/topic-harness'
 import type { LockedHarness, TopicHarness } from './harness/domain/topic-harness'
 import {
@@ -45,11 +39,8 @@ import {
   CAPACITY_POLL_MS,
   GROUP_CHAT_ID,
   INBOX_DIR,
-  MARKETPLACE,
-  MODEL,
   PID_FILE,
   PLUGIN_ROOT,
-  SPAWN_DIR,
   SQUARE_TOPIC,
   STATE_DIR,
   TOKEN,
@@ -67,6 +58,8 @@ import { createUpdateRestarts } from './topics/update-restarts'
 import { registerCommands, registerInbound } from './telegram/inbound'
 import { createHttpServer } from './http/server'
 import { createOutbound } from './http/outbound'
+import { createPolling } from './telegram/polling'
+import { claimPidFile, releasePidFile } from './shared/pid-file'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
 import { loadAndReconcileRegistry } from './topics/registry'
@@ -239,27 +232,7 @@ registerInbound(bot, {
 
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
 
-// Single-instance guard. Telegram allows exactly one getUpdates consumer per
-// token, and Bun.serve wants exclusive ownership of the port. If a previous
-// proxy crashed (SIGKILL, terminal closed) it can survive as an orphan holding
-// both, so every restart would 409 on the token and EADDRINUSE on the port.
-// SIGTERM any stale holder before we claim either. The 409 retry loop + the
-// port-bind retry below cover the brief window while it drains.
-try {
-  const stale = parseInt(readFileSync(PID_FILE, 'utf8'), 10)
-  if (stale > 1 && stale !== process.pid) {
-    process.kill(stale, 0) // throws if the pid is dead - nothing to replace
-    // PID files race with OS PID recycling: verify the holder is actually a
-    // proxy process before SIGTERM, so a recycled pid can't aim the kill at
-    // an unrelated process.
-    const cmd = execFileSync('ps', ['-p', String(stale), '-o', 'args='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-    if (cmd.includes('proxy.ts')) {
-      log(`replacing stale proxy pid=${stale}`)
-      process.kill(stale, 'SIGTERM')
-    }
-  }
-} catch {}
-writeFileSync(PID_FILE, String(process.pid))
+claimPidFile(PID_FILE)
 
 loadAndReconcileRegistry()
 loadConvs()
@@ -271,78 +244,21 @@ if (Number.isFinite(CAPACITY_POLL_MS) && CAPACITY_POLL_MS >= 60_000) {
   setInterval(() => void antigravity.refreshUsage(true).catch(() => {}), CAPACITY_POLL_MS)
 }
 
-// polling liveness for /health. Set on each (re)start of the poll, cleared if
-// polling stops. A monitor can tell "process up but deaf" from this alone.
-let pollingSince: number | null = null
+const polling = createPolling(bot)
 let shuttingDown = false
 
 function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
   log('shutting down')
-  try {
-    if (parseInt(readFileSync(PID_FILE, 'utf8'), 10) === process.pid) rmSync(PID_FILE)
-  } catch {}
-  // bot.stop() signals the poll loop to end; the current getUpdates request may
-  // take up to its long-poll timeout to return. Force-exit after 2s.
+  releasePidFile(PID_FILE)
+  // Force-exit if the current getUpdates outlasts 2s.
   setTimeout(() => process.exit(0), 2000)
-  void Promise.resolve(bot.stop()).finally(() => process.exit(0))
+  void polling.stop().finally(() => process.exit(0))
 }
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 process.on('SIGHUP', shutdown)
-
-// Retry polling with backoff on any error. bot.catch only handles throws inside
-// update handlers; a rejection of bot.start() itself (ETIMEDOUT/ECONNRESET/DNS
-// or a 409 from a not-yet-drained old poller) would otherwise stop polling
-// permanently while the HTTP server stays up - i.e. the whole bridge goes deaf
-// silently. This loop keeps re-polling so a restart self-heals once the stale
-// poller exits.
-async function pollWithRetry(): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await bot.start({
-        onStart: info => {
-          // Do NOT reset `attempt` here. grammy fires onStart AFTER getMe +
-          // deleteWebhook but BEFORE the getUpdates that raises a 409, so
-          // zeroing the counter here would defeat the backoff on every
-          // conflict and busy-loop the API. The backoff resets in the catch,
-          // and only after a stably-up run (see below).
-          pollingSince = Date.now()
-          log(
-            `polling as @${info.username}; group ${GROUP_CHAT_ID}; spawn dir ${SPAWN_DIR}; ` +
-            `marketplace ${MARKETPLACE}; default ultracode off; model ${MODEL || '(account default)'}`,
-          )
-        },
-      })
-      return // bot.stop() was called - clean exit from the loop
-    } catch (err) {
-      if (shuttingDown) return
-      // bot.stop() mid-setup rejects with grammy's "Aborted delay" - expected.
-      if (err instanceof Error && err.message === 'Aborted delay') return
-      // Reset the backoff counter only if polling had been stably up for a
-      // while (a genuine long-healthy run that then hit a transient error), so
-      // recovery is fast. Under a sustained 409 (a stale poller / the other
-      // bridge holding the token), polling never gets stably up, so `attempt`
-      // keeps climbing to the give-up threshold instead of resetting each cycle.
-      const wasStablyUp = pollingSince != null && Date.now() - pollingSince > 30_000
-      pollingSince = null
-      if (wasStablyUp) attempt = 1
-      const is409 = err instanceof GrammyError && err.error_code === 409
-      if (is409 && attempt >= 8) {
-        log(
-          `409 Conflict persists after ${attempt} attempts - another poller is holding ` +
-            `the bot token (stray proxy or a second session). Polling gives up; /health will report polling=false.`,
-        )
-        return
-      }
-      const delay = Math.min(1000 * attempt, 15000)
-      const detail = is409 ? `409 Conflict (another poller holding the token)` : `polling error: ${err}`
-      log(`${detail}, retrying in ${delay / 1000}s`)
-      await new Promise(r => setTimeout(r, delay))
-    }
-  }
-}
 
 const http = createHttpServer({
   api: bot.api,
@@ -353,10 +269,10 @@ const http = createHttpServer({
   routing: { handleRateLimit, handleCapacity, handleTurnFailed },
   square: { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply },
   reminders: { handleRemind, handleListReminders, handleCancelReminder },
-  pollingSince: () => pollingSince,
+  pollingSince: polling.since,
 })
 await http.serve()
-void pollWithRetry()
+void polling.run()
 void registerCommands(bot.api)
 for (const harness of HARNESSES) {
   if (harness.reconcile) setInterval(() => void harness.reconcile?.(), 2_000).unref()
