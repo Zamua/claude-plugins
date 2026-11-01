@@ -44,6 +44,8 @@ import {
   CAPACITY_POLL_MS,
   CONDUCTOR_DIR,
   CONDUCTOR_LISTEN,
+  CONDUCTOR_NODES,
+  CONDUCTOR_OPERATOR_LOGIN,
   GROUP_CHAT_ID,
   HC_BIN,
   HC_SESSION,
@@ -54,6 +56,7 @@ import {
   SENT_MESSAGES_FILE,
   SQUARE_TOPIC,
   STATE_DIR,
+  TAILSCALE_BIN,
   TOKEN,
   UPDATE_RESTART,
   UPDATE_SWEEP_MS,
@@ -62,6 +65,10 @@ import {
 import { log, noticeFailed, reason } from './log'
 import { mirroredChat, recordingOperatorTurns } from './conductor/mirror'
 import { ConductorStore } from './conductor/sqlite-store'
+import { listenMode, startConductor } from './conductor/conductor'
+import { Ledger } from './conductor/ledger'
+import { tailscaleCli } from './conductor/tailscale'
+import { conductorTopics } from './conductor/topic-source'
 import type { MessageKind } from './conductor/domain/message'
 import type { TopicHarnessAdapter } from './harness/topic-harness-adapter'
 import { createLocalgenHarness } from './harness/localgen/localgen-harness'
@@ -325,6 +332,26 @@ loadConvs()
 resumePendingPanes()
 void refreshProviderCapacity()
 void antigravity.refreshUsage(false).catch(() => {})
+// The conductor's listener, when CONDUCTOR_LISTEN asks for one (docs/conductor.md).
+const conductorMode = CONDUCTOR_LISTEN ? listenMode(CONDUCTOR_LISTEN) : undefined
+if (CONDUCTOR_LISTEN && !conductorMode) log(`CONDUCTOR_LISTEN="${CONDUCTOR_LISTEN}" is neither store-only nor tailnet:<port>; no listener`)
+const conductor = conductorStore && conductorMode?.listener
+  ? startConductor({
+      mode: conductorMode,
+      dir: CONDUCTOR_DIR,
+      operatorLogin: CONDUCTOR_OPERATOR_LOGIN,
+      allowedNodes: CONDUCTOR_NODES,
+      tailnet: tailscaleCli(TAILSCALE_BIN, log),
+      ports: {
+        store: conductorStore,
+        ledger: new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')),
+        topics: () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf),
+        notify: text => void sayIn('', 'general', text),
+        log,
+        version: '1',
+      },
+    })
+  : undefined
 if (hcFullDiskAccess) {
   hcFullDiskAccess.check()
   setInterval(() => hcFullDiskAccess.check(), 3_600_000)
@@ -340,6 +367,7 @@ function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
   log('shutting down')
+  conductor?.stop()
   releasePidFile(PID_FILE)
   // Force-exit if the current getUpdates outlasts 2s.
   setTimeout(() => process.exit(0), 2000)

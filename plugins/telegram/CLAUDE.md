@@ -188,8 +188,15 @@ than inherit it:
 
 `docs/conductor.md` specifies the proxy's second front end, an API for the
 operator's own apps; `docs/conductor-plan.md` is the build plan, and
-`docs/conductor-v1/` the contract's fixtures. Built so far: the store
-(`proxy/conductor/`). With `CONDUCTOR_LISTEN` set, `mirroredChat` wraps the
+`docs/conductor-v1/` the contract's fixtures. Built so far (`proxy/conductor/`):
+the store, and the listener with identity, enrollment, the reads and the stream.
+`CONDUCTOR_LISTEN=tailnet:<port>` serves the API on this machine's tailnet address
+with its tailnet certificate (`tailscale.ts`); each request is admitted by
+`whois` on its peer address (`domain/identity.ts`: this machine's own node is
+refused first, then any other user, then any node off `CONDUCTOR_NODES`), and
+reads also need an `X-Device` enrolled from that same node. Enrollment is written
+to the hash-chained ledger (`ledger.ts`) and announced in general. With
+`CONDUCTOR_LISTEN` set, `mirroredChat` wraps the
 chat port each service gets, so every message sent to a topic is also kept in
 SQLite (author `agent` for the MCP's `/send`, `proxy` for everything else, with
 `kind` reminder or ask for those services), and `recordingOperatorTurns` wraps

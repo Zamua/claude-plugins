@@ -165,6 +165,14 @@ export const PROXY_URL = `http://localhost:${PORT}`
 // conductor is off and nothing changes.
 export const CONDUCTOR_LISTEN = (process.env.CONDUCTOR_LISTEN ?? '').trim()
 export const CONDUCTOR_DIR = join(STATE_DIR, 'conductor')
+// Who may use the listener: the operator's tailnet login and the stable node ids
+// of their enrolled devices. This machine's own node is refused whatever is here.
+export const CONDUCTOR_OPERATOR_LOGIN = (process.env.CONDUCTOR_OPERATOR_LOGIN ?? '').trim()
+export const CONDUCTOR_NODES: ReadonlySet<string> = new Set(
+  (process.env.CONDUCTOR_NODES ?? '').split(',').map(n => n.trim()).filter(Boolean),
+)
+export const TAILSCALE_BIN = process.env.TAILSCALE_BIN ||
+  (existsSync('/usr/local/bin/tailscale') ? '/usr/local/bin/tailscale' : 'tailscale')
 
 // ---- asks from the phone -----------------------------------------------------
 // POST /ask listens on its own loopback port, the only one mounted on the tailnet.
