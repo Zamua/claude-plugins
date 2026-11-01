@@ -801,7 +801,11 @@ there is no agent to relaunch.
   `claude_session_id` (clearing only the live-session fields) so the next inbound
   message re-spawns and `--resume`s the SAME conversation instead of starting
   fresh. `saveRegistry` persists any topic that has been spawned at least once
-  (has an id), live or not.
+  (has an id), live or not. A registry.json that cannot be parsed is renamed
+  to `registry.json.unreadable-<ms>` and logged before the proxy starts empty
+  (`adapters/registry-file.ts`), since the save that follows boot would
+  otherwise overwrite every `claude_session_id`; to recover, copy the ids back
+  with the proxy stopped.
 - **General topic.** Messages in the General topic carry no `message_thread_id`
   -> topic = `"general"`, and outbound omits `message_thread_id`. Other topics:
   topic == `String(message_thread_id)`, thread id == `Number(topic)`.

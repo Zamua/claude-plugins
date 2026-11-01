@@ -129,6 +129,8 @@ import type { AntigravityUsageWindow } from './application/antigravity-ports'
 import { InvalidReminder, LATE_AFTER_MS, dueReminders, reminderNotice, scheduleReminder } from './domain/reminder'
 import type { ReminderRequest } from './domain/reminder'
 import { JsonReminderRepository } from './adapters/json-reminder-repository'
+import { readRegistryFile, writeRegistryFile } from './adapters/registry-file'
+import type { Registry } from './adapters/registry-file'
 
 // ---- paths -----------------------------------------------------------------
 
@@ -809,19 +811,6 @@ const SPAWN_GRACE_MS = 30_000
 
 // ---- registry --------------------------------------------------------------
 
-type RegistryEntry = {
-  tmux_session: string
-  thread_id: number | null
-  name: string
-  spawned_at: number
-  claude_session_id: string | null
-  route?: TopicRoute | null
-  launch_profile_version?: number | null
-  pending_route?: PendingRouteChange | null
-  exhausted_routes?: TopicRoute[] | null
-  pending_resume_notice?: string | null
-}
-
 function parseRoute(value: unknown): TopicRoute | undefined {
   return topicRouteFromRecord(value)
 }
@@ -843,8 +832,7 @@ function pendingRouteFromRegistry(value: unknown): PendingRouteChange | undefine
 }
 
 function saveRegistry(): void {
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-  const out: Record<string, RegistryEntry> = {}
+  const out: Registry = {}
   for (const [topic, st] of topics) {
     // Persist any topic that has been spawned at least once (has a Claude
     // session id, needed to resume the SAME conversation on the next
@@ -867,21 +855,14 @@ function saveRegistry(): void {
       ...(st.pendingResumeNotice ? { pending_resume_notice: st.pendingResumeNotice } : {}),
     }
   }
-  const tmp = REGISTRY_FILE + '.tmp'
-  writeFileSync(tmp, JSON.stringify(out, null, 2) + '\n')
-  renameSync(tmp, REGISTRY_FILE)
+  writeRegistryFile(REGISTRY_FILE, out)
 }
 
 // Load the registry and RECONCILE against the live tmux sessions: re-adopt
 // entries whose session is still up (so a proxy restart re-adopts live
 // sessions) and forget the rest (dead sessions).
 function loadAndReconcileRegistry(): void {
-  let raw: Record<string, RegistryEntry> = {}
-  try {
-    raw = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8'))
-  } catch {
-    raw = {}
-  }
+  const raw = readRegistryFile(REGISTRY_FILE, log)
   const live = mux.liveSessions()
   for (const [topic, entry] of Object.entries(raw)) {
     const st = getTopic(topic)
