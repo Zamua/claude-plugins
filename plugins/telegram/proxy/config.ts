@@ -171,6 +171,14 @@ export const CONDUCTOR_OPERATOR_LOGIN = (process.env.CONDUCTOR_OPERATOR_LOGIN ??
 export const CONDUCTOR_NODES: ReadonlySet<string> = new Set(
   (process.env.CONDUCTOR_NODES ?? '').split(',').map(n => n.trim()).filter(Boolean),
 )
+// Push through Apple: the `.p8` key's file, its key id, the team id and the app's
+// bundle id. Push is off unless all four are set and the listener runs.
+export const CONDUCTOR_APNS = {
+  keyFile: (process.env.CONDUCTOR_APNS_KEY_FILE ?? '').trim(),
+  keyId: (process.env.CONDUCTOR_APNS_KEY_ID ?? '').trim(),
+  teamId: (process.env.CONDUCTOR_APNS_TEAM_ID ?? '').trim(),
+  topic: (process.env.CONDUCTOR_APNS_TOPIC ?? '').trim(),
+}
 export const TAILSCALE_BIN = process.env.TAILSCALE_BIN ||
   (existsSync('/usr/local/bin/tailscale') ? '/usr/local/bin/tailscale' : 'tailscale')
 

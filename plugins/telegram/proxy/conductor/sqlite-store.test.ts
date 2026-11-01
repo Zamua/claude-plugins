@@ -94,4 +94,28 @@ describe('ConductorStore, for the API', () => {
     s.touchDevice(first.device.id, '2026-11-01T21:00:00.000Z')
     expect(s.device(first.device.id)?.lastSeen).toBe('2026-11-01T21:00:00.000Z')
   })
+
+  test('push targets are the devices with a token; a refused token is dropped only while it is current', () => {
+    const { s } = store()
+    const key = (n: number) => `BK${n}`
+    const a = s.enroll({ name: 'phone', publicKey: key(1), nodeId: 'n1', apnsToken: 'aa', apnsEnv: 'sandbox' }).device
+    s.enroll({ name: 'pad', publicKey: key(2), nodeId: 'n1', apnsToken: null, apnsEnv: null })
+    expect(s.pushTargets().map(d => d.id)).toEqual([a.id])
+    expect(s.setPush(a.id, 'bb', 'production')).toMatchObject({ apnsToken: 'bb', apnsEnv: 'production' })
+    s.dropPushToken(a.id, 'aa')
+    expect(s.device(a.id)?.apnsToken).toBe('bb')
+    s.dropPushToken(a.id, 'bb')
+    expect(s.pushTargets()).toEqual([])
+  })
+
+  test('unread counts other authors\' messages after each listed topic\'s marker', () => {
+    const { s } = store()
+    for (const text of ['a', 'b', 'c']) s.append(say('7', text))
+    s.append({ ...say('7', 'mine'), author: 'operator' })
+    s.append(say('8', 'x'))
+    s.append(say('9', 'hidden'))
+    s.markRead('7', 2)
+    expect(s.unreadIn(['7', '8'])).toBe(2)
+    expect(s.unreadIn([])).toBe(0)
+  })
 })

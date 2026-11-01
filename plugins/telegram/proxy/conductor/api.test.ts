@@ -300,4 +300,25 @@ describe('signed writes', () => {
     expect(await mark(5, 'read-00001')).toEqual({ topic: '42', read_seq: 5 })
     expect(await mark(3, 'read-00002')).toEqual({ topic: '42', read_seq: 5 })
   })
+
+  test('a device sets its own push token with the contract\'s body, signed; never another device\'s', async () => {
+    const d = await setupDevice()
+    const other = await setupDevice()
+    const body = readFileSync(join(import.meta.dir, '..', '..', 'docs', 'conductor-v1', 'device-push-request.json'))
+    const put = (target: string, bytes: Uint8Array, clientId: string) => {
+      const path = `/v1/devices/${target}/push`
+      return fetch(`${base}${path}`, { method: 'PUT', body: bytes as unknown as BodyInit, headers: { 'X-Device': d.device, ...d.key.headers('PUT', path, clientId, bytes) } })
+    }
+    const res = await put(d.device, new Uint8Array(body), 'push-00001')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ id: d.device, apns_token: 'a1b2c3d4e5f6', apns_env: 'production' })
+    expect((await put(other.device, new Uint8Array(body), 'push-00002')).status).toBe(403)
+    expect(store.device(other.device)?.apnsToken).toBeNull()
+    const tokenAlone = new TextEncoder().encode('{"apns_token":"abcd","apns_env":null}')
+    expect((await put(d.device, tokenAlone, 'push-00003')).status).toBe(400)
+    const off = new TextEncoder().encode('{"apns_token":null,"apns_env":null}')
+    expect(await (await put(d.device, off, 'push-00004')).json()).toMatchObject({ apns_token: null })
+    expect(store.pushTargets()).toEqual([])
+  })
 })
+

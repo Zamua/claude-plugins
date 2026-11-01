@@ -62,6 +62,18 @@ function imageMime(bytes: Uint8Array): AppImage['mime'] | undefined {
   return undefined
 }
 
+/** A device's APNs token and the environment it belongs to; no token means no push. */
+function pushFields(body: Record<string, unknown> | null): Pick<Device, 'apnsToken' | 'apnsEnv'> | Response {
+  const apnsToken = body?.apns_token ?? null
+  const apnsEnv = body?.apns_env ?? null
+  if (apnsToken !== null && (typeof apnsToken !== 'string' || !/^[0-9a-fA-F]{1,200}$/.test(apnsToken))) {
+    return fail(400, 'bad_apns_token', 'apns_token must be hex')
+  }
+  if (apnsEnv !== null && apnsEnv !== 'sandbox' && apnsEnv !== 'production') return fail(400, 'bad_apns_env', 'apns_env must be sandbox or production')
+  if (apnsToken !== null && apnsEnv === null) return fail(400, 'bad_apns_env', 'a token needs its apns_env')
+  return { apnsToken, apnsEnv }
+}
+
 export function createConductorApi(ports: ConductorApiPorts) {
   const { store } = ports
   const now = ports.now ?? Date.now
@@ -86,15 +98,11 @@ export function createConductorApi(ports: ConductorApiPorts) {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null
     const publicKey = typeof body?.public_key === 'string' ? body.public_key : ''
     const name = typeof body?.name === 'string' ? body.name.trim() : ''
-    const apnsEnv = body?.apns_env ?? null
-    const apnsToken = body?.apns_token ?? null
     if (!devicePublicKey(publicKey)) return fail(400, 'bad_public_key', 'public_key must be a base64 P-256 uncompressed point')
     if (!name || name.length > 64) return fail(400, 'bad_name', 'name must be 1 to 64 characters')
-    if (apnsEnv !== null && apnsEnv !== 'sandbox' && apnsEnv !== 'production') return fail(400, 'bad_apns_env', 'apns_env must be sandbox or production')
-    if (apnsToken !== null && (typeof apnsToken !== 'string' || !/^[0-9a-fA-F]{1,200}$/.test(apnsToken))) {
-      return fail(400, 'bad_apns_token', 'apns_token must be hex')
-    }
-    const { device, created } = store.enroll({ name, publicKey, nodeId, apnsToken, apnsEnv })
+    const push = pushFields(body)
+    if (push instanceof Response) return push
+    const { device, created } = store.enroll({ name, publicKey, nodeId, ...push })
     if (device.nodeId !== nodeId) return fail(409, 'device_on_another_node', 'this key is enrolled from another node')
     if (created) {
       ports.ledger.append({ kind: 'enroll', device: device.id, node: nodeId, public_key_sha256: sha256Hex(publicKey) })
@@ -102,6 +110,21 @@ export function createConductorApi(ports: ConductorApiPorts) {
       ports.log(`conductor: enrolled device ${device.id} (${name}) from node ${nodeId}`)
     }
     return Response.json(wireDevice(device), { status: created ? 201 : 200 })
+  }
+
+  async function setPush(device: Device, target: string, body: Uint8Array): Promise<Response> {
+    if (target !== device.id) return fail(403, 'not_this_device', 'a device sets only its own push token')
+    let fields: Record<string, unknown> | null
+    try {
+      fields = JSON.parse(new TextDecoder().decode(body))
+    } catch {
+      return fail(400, 'bad_json', 'the body must be JSON')
+    }
+    const push = pushFields(fields)
+    if (push instanceof Response) return push
+    const updated = store.setPush(device.id, push.apnsToken, push.apnsEnv)
+    ports.log(`conductor: ${device.id} ${push.apnsToken ? `set its ${push.apnsEnv} push token` : 'turned push off'}`)
+    return Response.json(wireDevice(updated ?? device))
   }
 
   /**
@@ -251,6 +274,10 @@ export function createConductorApi(ports: ConductorApiPorts) {
       const topic = decodeURIComponent(write[1])
       return signedWrite(req, url, device, (body, signed) =>
         write[2] === 'messages' ? sendMessage(req, topic, device, body, signed) : markRead(topic, body))
+    }
+    const pushPath = url.pathname.match(/^\/v1\/devices\/([^/]+)\/push$/)
+    if (req.method === 'PUT' && pushPath) {
+      return signedWrite(req, url, device, body => setPush(device, decodeURIComponent(pushPath[1]), body))
     }
     if (req.method !== 'GET') return fail(405, 'method_not_allowed', 'not yet served')
     if (url.pathname === '/v1/me') return Response.json({ device: wireDevice(device), server_version: ports.version, contract: 'v1' })

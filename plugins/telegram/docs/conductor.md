@@ -6,9 +6,10 @@ rewrite. The proxy already reaches its chat through `ChatPort`; the conductor
 adds a store, an authenticated API and push, and later lets Telegram go.
 
 Status: contract version 1. Built: the store and mirror, the listener with
-identity, enrollment, the reads and the stream, and signed writes: sending a
-message and read markers (`docs/conductor-plan.md` C1 to C3). Push and the rest
-follow the plan. The golden
+identity, enrollment, the reads and the stream, signed writes (sending a
+message, read markers) and push for messages (`docs/conductor-plan.md` C1 to C3
+and C8). Approval pushes come with approvals (C7), and the rest follows the
+plan. The golden
 fixtures and signing vectors in `conductor-v1/` are part of the contract: the
 server's tests encode them and the app's tests decode them.
 
@@ -180,7 +181,7 @@ All under `/v1`. "Signed" marks a write that needs the device headers.
 | --- | --- | --- |
 | `GET /me` | | the device, the server version |
 | `POST /devices` | enrollment | `public_key`, `name`, `apns_token`, `apns_env`; returns the device |
-| `PUT /devices/{id}/push` | signed | a new APNs token or environment |
+| `PUT /devices/{id}/push` | signed | the device's own `apns_token` (hex, or null for no push) and `apns_env`; returns the device |
 | `GET /topics` | | `{cursor, topics}`: every topic, and the cursor they are current to |
 | `POST /topics` | signed | create: `name` |
 | `PATCH /topics/{id}` | signed | `name`, `pinned`, `muted` |
@@ -188,7 +189,7 @@ All under `/v1`. "Signed" marks a write that needs the device headers.
 | `POST /topics/{id}/messages` | signed | multipart: `text` (at most 64 KB), `client_id`, `reply_to`, `image[]` (JPEG or PNG, at most 10, 20 MB each); returns the message with `delivery: accepted`; a repeated `client_id` returns the first result |
 | `POST /topics/{id}/read` | signed | `seq`; read state is shared by every device |
 | `GET /blobs/{id}?w=` | | a blob's bytes, or a thumbnail at most `w` pixels wide |
-| `GET /approvals?state=open` | | open approvals |
+| `GET /approvals?state=open` | | `{cursor, approvals}`: open approvals |
 | `POST /approvals/{id}` | signed | `choice` |
 | `GET /commands` | | `name`, `description`, `args_hint` |
 | `POST /topics/{id}/commands` | signed | `name`, `args`: `relaunch`, `interrupt`, `usage`, and the rest of the palette |
@@ -260,8 +261,14 @@ pushes: iOS throttles them.
   required), `interruption-level: time-sensitive`, and custom `topic` and
   `approval` (its id).
 - **Reminder:** category `REMINDER`, `time-sensitive`.
-- No push for edits, for the operator's own messages, or for muted topics.
-- Delivery times are logged, to compare with Telegram's before Telegram retires.
+- No push for edits, for the operator's own messages, for ask posts, for topics
+  the app does not list, or for muted topics.
+- Each message is pushed once to every device with a token, whatever later
+  events name it. A token Apple calls dead (410, or 400 `BadDeviceToken`) is
+  dropped; the app sends its current one with `PUT /devices/{id}/push` at launch.
+- Delivery times are logged (`push: <topic>#<seq> -> <device> <status> <ms>`,
+  and how long after the message was stored), to compare with Telegram's before
+  Telegram retires.
 
 ## States and the screen
 

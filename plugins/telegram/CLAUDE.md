@@ -201,7 +201,11 @@ window, a client id whose retry with the same body gets the first answer).
 `POST /v1/topics/{id}/messages` stores the operator's message, writes it to the
 ledger, and `app-delivery.ts` echoes it into Telegram and queues it as an
 operator turn (`origin: app`, the device, the ledger hash) through the
-lifecycle's own `enqueue`, so it is not stored twice. With
+lifecycle's own `enqueue`, so it is not stored twice. Push (`push-service.ts`,
+`apns.ts`, payloads in `domain/push.ts`) sends each new agent or proxy message
+once to every device with an APNs token, over one HTTP/2 session per Apple
+environment with an ES256 token renewed every 50 minutes, and drops tokens Apple
+calls dead; it needs the four `CONDUCTOR_APNS_*` settings and the listener. With
 `CONDUCTOR_LISTEN` set, `mirroredChat` wraps the
 chat port each service gets, so every message sent to a topic is also kept in
 SQLite (author `agent` for the MCP's `/send`, `proxy` for everything else, with
