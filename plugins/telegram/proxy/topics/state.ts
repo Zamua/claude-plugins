@@ -1,5 +1,5 @@
 // Every topic's in-memory state: its inbound queues, its session, its route.
-import { GROUP_CHAT_ID } from '../config'
+import { DEFAULT_TOPIC_ROUTE, GROUP_CHAT_ID } from '../config'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-routing'
 import { topicSlug } from '../shared/domain/topic-slug'
@@ -96,4 +96,9 @@ export function getTopic(topic: string): TopicState {
     topics.set(topic, st)
   }
   return st
+}
+
+/** The route a topic's Claude runs on: its own, or the default for a topic never routed. */
+export function currentRoute(st: TopicState): TopicRoute {
+  return st.route ?? DEFAULT_TOPIC_ROUTE
 }
