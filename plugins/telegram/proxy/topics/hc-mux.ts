@@ -127,6 +127,12 @@ export class HcMux implements MultiplexerPort {
     return this.call('terminal.send', { terminal: terminal.address, text }) !== null
   }
 
+  interrupt(session: string): boolean {
+    const terminal = this.terminals().get(session)
+    if (!terminal || terminal.state !== 'live') return false
+    return this.call('terminal.interrupt', { terminal: terminal.address }) !== null
+  }
+
   kill(session: string): boolean {
     const terminal = this.terminals().get(session)
     if (!terminal) return false

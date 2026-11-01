@@ -9,6 +9,8 @@ export interface MultiplexerPort {
   liveSessions(): Set<string>
   runtime(session: string): AgentRuntime
   prompt(session: string, text: string): boolean
+  /** Presses the agent's stop key (Escape), ending its current turn; false when the session is not there. */
+  interrupt(session: string): boolean
   kill(session: string): boolean
 }
 
@@ -56,6 +58,11 @@ export class TmuxMux implements MultiplexerPort {
     const pasted = spawnSync('tmux', ['paste-buffer', '-d', '-b', buffer, '-t', session], { encoding: 'utf8' })
     if (pasted.status !== 0) return false
     return spawnSync('tmux', ['send-keys', '-t', session, 'Enter'], { encoding: 'utf8' }).status === 0
+  }
+
+  interrupt(session: string): boolean {
+    if (!this.liveSessions().has(session)) return false
+    return spawnSync('tmux', ['send-keys', '-t', session, 'Escape'], { encoding: 'utf8' }).status === 0
   }
 
   kill(session: string): boolean {
@@ -117,6 +124,12 @@ export class HerdrMux implements MultiplexerPort {
       encoding: 'utf8',
       maxBuffer: 1024 * 1024,
     }).status === 0
+  }
+
+  interrupt(session: string): boolean {
+    const paneId = this.panes().get(session)?.paneId
+    if (!paneId) return false
+    return spawnSync(this.bin, ['pane', 'send-keys', paneId, 'esc'], { encoding: 'utf8' }).status === 0
   }
 
   kill(session: string): boolean {

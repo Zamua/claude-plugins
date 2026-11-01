@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from 'crypto'
 import { createConductorApi } from './api'
+import { conductorControl } from './control'
 import type { DeliverAppMessage, TopicSummary } from './api'
 import type { ScreenView } from './wire'
 import type { Peer } from './domain/identity'
@@ -27,6 +28,7 @@ let api: ReturnType<typeof createConductorApi>
 let listed: TopicSummary[]
 let screenOf: (topic: string) => ScreenView | undefined
 let topicsChanged: () => void
+let controlled: string[]
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'conductor-api-'))
@@ -41,6 +43,7 @@ beforeEach(() => {
   ]
   screenOf = () => undefined
   topicsChanged = () => {}
+  controlled = []
   api = createConductorApi({
     store,
     ledger: new Ledger(join(dir, 'ledger.jsonl')),
@@ -49,6 +52,23 @@ beforeEach(() => {
     topics: () => listed,
     screen: async topic => screenOf(topic),
     watchTopics: changed => void (topicsChanged = changed),
+    control: conductorControl({
+      catalog: () => ({ anthropic: [{ id: 'claude-opus-5-5', label: 'Opus 5.5', efforts: ['high', 'xhigh'], defaultEffort: 'xhigh' }], codex: [], 'opencode-go': [] }),
+      capacities: () => [],
+      refreshCapacity: async () => {},
+      usageText: () => 'Provider usage',
+      ultracode: () => false,
+      requestRoute: (topic, choice) => {
+        controlled.push(`route ${topic} ${choice.model.id} ${choice.effort}`)
+        return { outcome: 'applied', route: { provider: choice.provider, model: choice.model.id, effort: choice.effort, ultracode: false } }
+      },
+      routeChangeText: () => 'Now using it.',
+      noAgent: () => undefined,
+      locked: () => undefined,
+      relaunch: async topic => void controlled.push(`relaunch ${topic}`),
+      interrupt: () => false,
+      say: async () => {},
+    }),
     notify: text => notices.push(text),
     deliver: async input => {
       deliveries.push(input)
@@ -396,5 +416,38 @@ describe('signed writes', () => {
     expect(await (await put(d.device, off, 'push-00004')).json()).toMatchObject({ apns_token: null })
     expect(store.pushTargets()).toEqual([])
   })
+
+  test('a route switch and a command are signed, recorded in the ledger first, and answered with their result', async () => {
+    const d = await setupDevice()
+    const act = (method: 'PUT' | 'POST', path: string, body: unknown, clientId: string) => {
+      const bytes = new TextEncoder().encode(JSON.stringify(body))
+      return fetch(`${base}${path}`, { method, body: bytes as unknown as BodyInit, headers: { 'X-Device': d.device, ...d.key.headers(method, path, clientId, bytes) } })
+    }
+    const routed = await act('PUT', '/v1/topics/42/route', { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' }, 'route-00001')
+    expect([routed.status, await routed.json()]).toEqual([200, readJson('route-result.json', { state: 'applied' })])
+    const relaunched = await act('POST', '/v1/topics/42/commands', { name: 'relaunch' }, 'cmd-000001')
+    expect([relaunched.status, (await relaunched.json()).name]).toEqual([200, 'relaunch'])
+    expect((await act('POST', '/v1/topics/nope/commands', { name: 'relaunch' }, 'cmd-000002')).status).toBe(404)
+    expect(controlled).toEqual(['route 42 claude-opus-5-5 high', 'relaunch 42'])
+    const ledger = readFileSync(join(dir, 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+    expect(ledger.map(l => l.kind)).toEqual(['enroll', 'route', 'command'])
+    expect(ledger[1]).toMatchObject({ device: d.device, topic: '42', provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high', method: 'PUT', path: '/v1/topics/42/route', client_id: 'route-00001' })
+    expect(ledger[2]).toMatchObject({ name: 'relaunch', method: 'POST', client_id: 'cmd-000001' })
+    expect(brokenLine(readFileSync(join(dir, 'ledger.jsonl'), 'utf8'))).toBeUndefined()
+    const unsigned = await fetch(`${base}/v1/topics/42/commands`, { method: 'POST', body: '{"name":"relaunch"}', headers: { 'X-Device': d.device } })
+    expect(unsigned.status).toBe(400)
+  })
+
+  test('the palette, the catalog and usage are reads', async () => {
+    const d = await setupDevice()
+    expect(await (await get('/v1/commands', d.device)).json()).toEqual(readJson('commands.json'))
+    expect((await (await get('/v1/routes', d.device)).json()).providers[0].models[0]).toMatchObject({ id: 'claude-opus-5-5', default_effort: 'xhigh' })
+    expect(await (await get('/v1/usage', d.device)).json()).toEqual({ providers: [] })
+  })
 })
+
+function readJson(name: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  const f = JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'docs', 'conductor-v1', name), 'utf8'))
+  return { ...f, ...over }
+}
 

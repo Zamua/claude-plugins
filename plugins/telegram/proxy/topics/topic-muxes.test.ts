@@ -10,6 +10,7 @@ function fake(kind: MultiplexerPort['kind'], live: string[]): MultiplexerPort & 
     liveSessions: () => new Set(sessions),
     runtime: s => (sessions.has(s) ? 'idle' : 'missing'),
     prompt: () => true,
+    interrupt: s => sessions.has(s),
     kill: s => (killed.push(s), sessions.delete(s)),
   }
 }

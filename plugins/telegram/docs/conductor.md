@@ -8,8 +8,9 @@ adds a store, an authenticated API and push, and later lets Telegram go.
 Status: contract version 1. Built: the store and mirror, the listener with
 identity, enrollment, the reads and the stream, signed writes (sending a
 message, read markers), push for messages, the ledger `verify.py` checks, and
-live agent states with screens for hc topics (`docs/conductor-plan.md` C1 to
-C5 and C8). Approval pushes come with approvals (C7), and the rest follows the
+live agent states with screens for hc topics, and the route switch, usage,
+relaunch and interrupt commands (`docs/conductor-plan.md` C1 to C5, C8, and C6
+in part). Approval pushes come with approvals (C7), and the rest follows the
 plan. The golden
 fixtures and signing vectors in `conductor-v1/` are part of the contract: the
 server's tests encode them and the app's tests decode them.
@@ -201,11 +202,11 @@ All under `/v1`. "Signed" marks a write that needs the device headers.
 | `GET /blobs/{id}?w=` | | a blob's bytes, or a thumbnail at most `w` pixels wide |
 | `GET /approvals?state=open` | | `{cursor, approvals}`: open approvals |
 | `POST /approvals/{id}` | signed | `choice` |
-| `GET /commands` | | `name`, `description`, `args_hint` |
-| `POST /topics/{id}/commands` | signed | `name`, `args`: `relaunch`, `interrupt`, `usage`, and the rest of the palette |
-| `GET /routes` | | the model catalog: providers, models, efforts |
-| `GET /usage` | | quota windows and resets |
-| `PUT /topics/{id}/route` | signed | `provider`, `model`, `effort`; returns `applied` or `queued` |
+| `GET /commands` | | `{commands}`: `name`, `description`, `args_hint` |
+| `POST /topics/{id}/commands` | signed | `name`, `args`: `relaunch`, `interrupt`, `usage`; returns `{name, text}` |
+| `GET /routes` | | the model catalog: providers, the models the bridge can run, their efforts and default |
+| `GET /usage` | | quota windows and resets of the providers observed so far |
+| `PUT /topics/{id}/route` | signed | `provider`, `model`, `effort` (default: the model's); returns the route and `applied`, `queued` (after the current turn) or `unchanged` |
 | `GET /secrets` | | names, sizes, dates |
 | `POST /secrets` | signed | `name`, `value`, `replace`, `topic`; returns `path`, `bytes`, `replaced` |
 | `DELETE /secrets/{name}` | signed | remove one |
@@ -257,6 +258,15 @@ state change. The client also pings.
   sending the chosen keys to the terminal.
 - **A permission request** from the channel MCP's permission relay, when it is
   active.
+
+A route switch and a command run through the same routing and lifecycle as
+Telegram's `/model` and `/relaunch`, are written to the ledger before they run,
+and are echoed into the topic as "You (app): ...". A route keeps the topic's
+Ultracode setting where the model supports it, since the app has no control for
+it. Refusals: `400` a provider, model or effort the catalog does not offer;
+`404` an unknown topic or command; `409` the square (no agent), a topic locked
+to another harness (no route or interrupt), a provider at its limit, or an
+interrupt with no agent running; `429` a route change right after another.
 
 An approval resolves as expired when the session leaves `blocked` without an
 answer from the app, for example when the operator answered at the desktop.

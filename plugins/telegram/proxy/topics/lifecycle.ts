@@ -427,6 +427,12 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     ensureSession(topic)
   }
 
+  /** Presses the topic's agent's stop key; false when it is not running. */
+  function interrupt(topic: string): boolean {
+    const agent = topics.get(topic)?.agent
+    return agent?.state === 'running' && muxes.forTopic(topic).interrupt(agent.session)
+  }
+
   return {
     enqueue,
     killSession,
@@ -435,5 +441,6 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     paneInFlight,
     resumePendingPanes,
     relaunch,
+    interrupt,
   }
 }

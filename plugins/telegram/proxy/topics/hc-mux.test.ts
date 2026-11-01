@@ -14,6 +14,7 @@ function fakeCore(terminals: Terminal[], screen = '') {
       case 'terminal.list': return { terminals: terminals.filter(x => x.state === 'live') }
       case 'terminal.read': return t ? { text: screen } : null
       case 'terminal.send': return t ? { started: true } : null
+      case 'terminal.interrupt': return t ? { status: 'idle' } : null
       case 'terminal.kill': if (!t) return null; t.state = 'finished'; return t
       case 'terminal.rm': if (!t || t.state === 'live') return null; terminals.splice(terminals.indexOf(t), 1); return { removed: t.address }
       default: return null
@@ -59,6 +60,14 @@ describe('HcMux', () => {
     expect(mux.kill('claude-a-1')).toBeTrue()
     expect(terminals).toEqual([])
     expect(mux.kill('claude-a-1')).toBeFalse()
+  })
+
+  test('interrupt presses the stop key of the session\'s live terminal only', () => {
+    const { mux, calls } = fakeCore([claude('t1', 'claude-a-1', 'working'), { ...claude('t2', 'claude-b-2'), state: 'finished' }])
+    expect(mux.interrupt('claude-a-1')).toBeTrue()
+    expect(mux.interrupt('claude-b-2')).toBeFalse()
+    expect(mux.interrupt('claude-none')).toBeFalse()
+    expect(calls.filter(([m]) => m === 'terminal.interrupt')).toEqual([['terminal.interrupt', { terminal: 't1' }]])
   })
 
   test('an hc that does not answer reads as no sessions, not a crash', () => {
