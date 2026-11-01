@@ -32,20 +32,15 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
-  renameSync,
   rmSync,
   statSync,
 } from 'fs'
 import { homedir } from 'os'
-import { join, extname, sep } from 'path'
+import { join, extname } from 'path'
 import { spawnSync, execFileSync } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
-import {
-  SECRET_CMD_RE, SecretExists, SecretMissing, advanceSecretFlow, beginSecretFlow, deleteSecret, listSecrets,
-  parseSecretCommand, secretExists, storeSecret,
-} from './secret'
-import type { FlowResult, Pending } from './secret'
+import { SECRET_CMD_RE } from './secret'
 import { permissionNotice } from './adapters/permission-notice'
 import { claudeSpawnEnv } from './adapters/claude-launch'
 import type { ClaudeSpawnSpec } from './adapters/claude-launch'
@@ -110,11 +105,10 @@ import { HerdrOpencodeRuntime } from './adapters/herdr-opencode-runtime'
 import { opencodeTopic, opencodeTopicFromRecord } from './domain/opencode-topic'
 import type { OpencodeTopic } from './domain/opencode-topic'
 import { lockRefusal } from './domain/topic-harness'
-import { RELAUNCH_META, reminderMeta, SECRET_DROP_META } from './domain/turn-meta'
+import { RELAUNCH_META } from './domain/turn-meta'
 import { ROUTE } from './http/routes'
 import {
   BadRequest,
-  parseCancelReminder,
   parseDownload,
   parseEdit,
   parsePermissionRequest,
@@ -132,9 +126,6 @@ import { localgenTopic, localgenTopicFromRecord } from './domain/localgen-topic'
 import type { LocalgenTopic } from './domain/localgen-topic'
 import { antigravityResetPools } from './domain/antigravity-capacity'
 import type { AntigravityUsageWindow } from './application/antigravity-ports'
-import { InvalidReminder, LATE_AFTER_MS, dueReminders, reminderNotice, scheduleReminder } from './domain/reminder'
-import type { ReminderRequest } from './domain/reminder'
-import { JsonReminderRepository } from './adapters/json-reminder-repository'
 import {
   ADMIN_USER_ID,
   ANTIGRAVITY_BIN,
@@ -168,8 +159,6 @@ import {
   PROVIDER_PROXY_BIN,
   PROVIDER_PROXY_URL,
   PROXY_URL,
-  REMINDERS_FILE,
-  SECRETS_DIR,
   SECRETS_USER_ID,
   SPAWN_DIR,
   SQUARE_TOPIC,
@@ -179,7 +168,9 @@ import {
   TOPIC_LAUNCH_PROFILE_VERSION,
   VOICE,
 } from './config'
-import { log } from './log'
+import { log, noticeFailed, reason } from './log'
+import { createReminders } from './reminders/reminders'
+import { createSecretDrop } from './secrets/secret-drop'
 import { mux } from './topics/mux'
 import { PERMISSION_REPLY_RE, pendingPerms, prunePendingPerms, resolvePermission } from './topics/permissions'
 import { loadAndReconcileRegistry, saveRegistry } from './topics/registry'
@@ -192,6 +183,7 @@ import {
   assertSendable,
   chunk,
   threadIdForTopic,
+  threadOf,
   describeMessage,
   MAX_ATTACHMENT_BYTES,
   MAX_CHUNK_LIMIT,
@@ -787,6 +779,20 @@ const { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply, handle
   ensureSession,
   enqueue,
 })
+const { handleRemind, handleListReminders, handleCancelReminder, fireDueReminders } = createReminders({
+  api: bot.api,
+  topicDirectory,
+  harnessLocked,
+  ensureSession,
+  enqueue,
+})
+const { handleSecretDrop, pendingSecretFlow, handleSecretStep } = createSecretDrop({
+  api: bot.api,
+  sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
+  harnessLocked,
+  ensureSession,
+  enqueue,
+})
 
 // Antigravity is a separate harness-bounded context. It shares only the one
 // Telegram Bot API adapter with Claude topics; its session identity, model
@@ -990,296 +996,13 @@ for (const topic of ANTIGRAVITY_ENABLED ? antigravityService.list() : []) {
     .catch(error => log(`Antigravity Herdr migration failed for topic ${topic.topic}: ${error}`))
 }
 
+const sayIn = (chatId: string, topic: string, t: string) =>
+  bot.api.sendMessage(chatId, t, threadOf(topic)).catch(noticeFailed('notice', topic))
+
 bot.catch(err => {
   process.stderr.write(`telegram-topics-proxy: handler error (polling continues): ${err.error}\n`)
 })
 
-// A "/secret <name>" message is stored to SECRETS_DIR and deleted from the
-// chat without ever being enqueued: a topic-Claude's transcript persists every
-// inbound message in plaintext, so the value must not reach one. The ack names
-// the path and the byte count, never the value, and it is the whole notice: a
-// Claude is not woken or told, it reads the file when asked to use it.
-async function handleSecretDrop(
-  chatId: string, topic: string, msgId: number, fromId: string, text: string,
-): Promise<void> {
-  const say = (t: string) =>
-    bot.api.sendMessage(chatId, t, threadOf(topic)).catch(noticeFailed('secret notice', topic))
-  // Delete before validating: a refused name must not leave the value on screen.
-  let deleted = true
-  try {
-    await bot.api.deleteMessage(chatId, msgId)
-  } catch {
-    deleted = false
-  }
-  const undeleted = deleted ? '' : ' Could NOT delete your message; remove it yourself.'
-  if (!SECRETS_USER_ID || fromId !== SECRETS_USER_ID) {
-    log(`secret drop refused from user ${fromId}`)
-    await say(`🔐 refused: not the secrets user.${undeleted}`)
-    return
-  }
-  const cmd = parseSecretCommand(text)
-  if ('error' in cmd) {
-    await say(`🔐 ${cmd.error}.${undeleted}`)
-    return
-  }
-  if (cmd.kind === 'begin') {
-    // A menu tap sends the bare verb, so a bare verb opens the guided flow.
-    await cancelSecretFlow(chatId, fromId, topic)
-    await promptSecret(chatId, topic, fromId, beginSecretFlow(cmd.verb), [])
-    return
-  }
-  if (cmd.kind === 'list') {
-    const entries = listSecrets(SECRETS_DIR)
-    let body = entries.map(e => `${e.name}  ${e.bytes} bytes  ${e.mtime.toISOString().slice(0, 10)}`).join('\n')
-    if (body.length > 3500) body = body.slice(0, 3500) + '\n... truncated'
-    await say(`🔐 ${tilde(SECRETS_DIR)}: ${entries.length} secret(s)\n${body}${undeleted}`)
-    return
-  }
-  if (cmd.kind === 'delete') {
-    await deleteAndAck(chatId, topic, fromId, cmd.name, undeleted)
-    return
-  }
-  await storeAndAck(chatId, topic, fromId, cmd.name, cmd.value, cmd.replace, undeleted)
-}
-
-// ---- guided flow -------------------------------------------------------------
-// A bare /secret or /unsecret opens a prompt exchange (name, then value). The
-// state is keyed by user AND topic and expires, so a stale flow can never
-// swallow an unrelated message. Every message in the exchange is deleted and
-// only the final ack stays.
-
-type PendingFlow = { pending: Pending; prompts: number[]; at: number }
-const pendingSecrets = new Map<string, PendingFlow>()
-const SECRET_FLOW_TTL_MS = 5 * 60_000
-const flowKey = (fromId: string, topic: string) => `${fromId}:${topic}`
-
-function pendingSecretFlow(fromId: string, topic: string): PendingFlow | undefined {
-  const key = flowKey(fromId, topic)
-  const flow = pendingSecrets.get(key)
-  if (!flow) return undefined
-  if (Date.now() - flow.at > SECRET_FLOW_TTL_MS) {
-    pendingSecrets.delete(key)
-    return undefined
-  }
-  return flow
-}
-
-// ForceReply opens the reply box on the phone with the placeholder shown.
-async function promptSecret(
-  chatId: string, topic: string, fromId: string, result: FlowResult, prompts: number[],
-): Promise<void> {
-  if (result.kind !== 'prompt') return
-  const sent = await bot.api
-    .sendMessage(chatId, result.text, {
-      ...threadOf(topic),
-      reply_markup: { force_reply: true, input_field_placeholder: result.placeholder },
-    })
-    .catch(() => null)
-  if (sent) prompts.push(sent.message_id)
-  pendingSecrets.set(flowKey(fromId, topic), { pending: result.next, prompts, at: Date.now() })
-}
-
-async function cancelSecretFlow(chatId: string, fromId: string, topic: string): Promise<void> {
-  const key = flowKey(fromId, topic)
-  const flow = pendingSecrets.get(key)
-  if (!flow) return
-  pendingSecrets.delete(key)
-  await deleteMessages(chatId, flow.prompts)
-}
-
-async function deleteMessages(chatId: string, ids: number[]): Promise<void> {
-  for (const id of ids) await bot.api.deleteMessage(chatId, id).catch(() => {})
-}
-
-// One step of the flow. The user's message is deleted first whatever it holds.
-async function handleSecretStep(
-  chatId: string, topic: string, msgId: number, fromId: string, text: string, flow: PendingFlow,
-): Promise<void> {
-  pendingSecrets.delete(flowKey(fromId, topic))
-  let deleted = true
-  try {
-    await bot.api.deleteMessage(chatId, msgId)
-  } catch {
-    deleted = false
-  }
-  const undeleted = deleted ? '' : ' Could NOT delete your message; remove it yourself.'
-  const r = advanceSecretFlow(flow.pending, text, name => secretExists(SECRETS_DIR, name))
-  if (r.kind === 'prompt') {
-    await promptSecret(chatId, topic, fromId, r, flow.prompts)
-    return
-  }
-  await deleteMessages(chatId, flow.prompts)
-  if (r.kind === 'cancelled') {
-    await sayIn(chatId, topic, `🔐 cancelled.${undeleted}`)
-    return
-  }
-  if (r.kind === 'delete') {
-    await deleteAndAck(chatId, topic, fromId, r.name, undeleted)
-    return
-  }
-  await storeAndAck(chatId, topic, fromId, r.name, r.value, r.replace, undeleted)
-}
-
-async function storeAndAck(
-  chatId: string, topic: string, fromId: string, name: string, value: string, replace: boolean, undeleted: string,
-): Promise<void> {
-  const shown = tilde(join(SECRETS_DIR, name))
-  let stored
-  try {
-    stored = storeSecret(SECRETS_DIR, name, value, replace)
-  } catch (err) {
-    if (err instanceof SecretExists) {
-      log(`secret drop refused: ${shown} exists`)
-      await sayIn(
-        chatId, topic,
-        `🔐 refused: ${shown} exists (${err.bytes} bytes). Resend as /secret ${name} --replace to overwrite it.${undeleted}`,
-      )
-      return
-    }
-    log(`secret drop failed for ${name}: ${err}`)
-    await sayIn(chatId, topic, `🔐 could not store "${name}": ${reason(err)}.${undeleted}`)
-    return
-  }
-  const note = `${stored.replaced ? 'replaced' : 'stored'} ${shown} (${stored.bytes} bytes)`
-  log(`secret drop: ${note}`)
-  await sayIn(chatId, topic, `🔐 ${note}.${undeleted}`)
-  notifyTopic(chatId, topic, fromId, `the operator ${note}. Read the file when a task needs it; the value was deliberately never sent to you.`)
-}
-
-async function deleteAndAck(
-  chatId: string, topic: string, fromId: string, name: string, undeleted: string,
-): Promise<void> {
-  const shown = tilde(join(SECRETS_DIR, name))
-  try {
-    const gone = deleteSecret(SECRETS_DIR, name)
-    log(`secret drop: deleted ${shown}`)
-    await sayIn(chatId, topic, `🔐 deleted ${shown} (${gone.bytes} bytes).${undeleted}`)
-    notifyTopic(chatId, topic, fromId, `the operator deleted the secret ${shown}.`)
-  } catch (err) {
-    const why = err instanceof SecretMissing ? `no such secret: ${shown}` : `could not delete ${shown}: ${reason(err)}`
-    await sayIn(chatId, topic, `🔐 ${why}.${undeleted}`)
-  }
-}
-
-// The topic's Claude learns the path, never the value, through the same queue
-// a message takes (waking it if dormant), so nobody has to tell it. The square
-// has no Claude of its own. secret_drop=1 lets the reply guard accept silence:
-// the proxy already acked in the topic.
-function notifyTopic(chatId: string, topic: string, fromId: string, what: string): void {
-  if ((SQUARE_TOPIC && topic === SQUARE_TOPIC) || harnessLocked(topic)) return
-  ensureSession(topic)
-  enqueue(topic, {
-    content: `SYSTEM NOTICE (not a user message): ${what} No reply is required.`,
-    meta: {
-      chat_id: chatId,
-      user: 'telegram-topics-proxy',
-      user_id: fromId,
-      ts: new Date().toISOString(),
-      ...(topic !== 'general' ? { message_thread_id: topic } : {}),
-      ...SECRET_DROP_META,
-    },
-  })
-}
-
-const threadOf = (topic: string) => (topic === 'general' ? {} : { message_thread_id: Number(topic) })
-// A message meant for the operator that Telegram refused is logged, never dropped silently.
-const noticeFailed = (what: string, topic: string) => (err: unknown) =>
-  log(`${what} not sent in topic ${topic}: ${err instanceof Error ? err.message : String(err)}`)
-const sayIn = (chatId: string, topic: string, t: string) =>
-  bot.api.sendMessage(chatId, t, threadOf(topic)).catch(noticeFailed('notice', topic))
-const tilde = (p: string) => (p.startsWith(homedir() + sep) ? '~' + p.slice(homedir().length) : p)
-const reason = (err: unknown) => (err instanceof Error ? err.message : String(err))
-
-// ---- reminders ----------------------------------------------------------------
-//
-// An agent's own scheduler dies with its session, so reminders live here. At
-// fire time the proxy posts the text itself, which reaches the operator even if
-// the agent cannot start, then wakes the agent for any follow-up it asked for.
-const reminders = loadReminders()
-let firingReminders = false
-
-// An unreadable file must not take the whole bridge down: set it aside, loudly.
-function loadReminders(): JsonReminderRepository {
-  try {
-    return new JsonReminderRepository(REMINDERS_FILE)
-  } catch (err) {
-    const aside = `${REMINDERS_FILE}.unreadable-${Date.now()}`
-    try { renameSync(REMINDERS_FILE, aside) } catch {}
-    log(`reminders: could not load ${REMINDERS_FILE} (${reason(err)}); moved to ${aside}, starting empty`)
-    return new JsonReminderRepository(REMINDERS_FILE)
-  }
-}
-
-async function handleRemind(req: Request): Promise<Response> {
-  const b = (await req.json()) as ReminderRequest
-  const topic = String(b.topic ?? '')
-  // A reminder wakes its topic, and ensureSession would spawn an agent for a
-  // topic that does not exist.
-  if (!topicDirectory().some(e => e.topic === topic)) return new Response(`unknown topic: ${topic}`, { status: 400 })
-  try {
-    const r = scheduleReminder(b, Date.now(), crypto.randomUUID().replace(/-/g, '').slice(0, 8))
-    reminders.add(r)
-    log(`reminder ${r.id} set for topic ${topic} at ${r.atText}`)
-    return json({ id: r.id, at: r.atText })
-  } catch (err) {
-    if (err instanceof InvalidReminder) return new Response(err.message, { status: 400 })
-    throw err
-  }
-}
-
-function handleListReminders(url: URL): Response {
-  const topic = url.searchParams.get('topic') ?? ''
-  const mine = reminders
-    .list()
-    .filter(r => r.topic === topic)
-    .sort((a, b) => a.at - b.at)
-    .map(r => ({ id: r.id, at: r.atText, text: r.text, ...(r.prompt ? { prompt: r.prompt } : {}) }))
-  return json({ reminders: mine })
-}
-
-async function handleCancelReminder(req: Request): Promise<Response> {
-  const { topic, id } = parseCancelReminder(await req.json())
-  const r = reminders.list().find(x => x.id === id)
-  if (!r || r.topic !== topic) return new Response(`no reminder ${id} in this topic`, { status: 404 })
-  reminders.remove(id)
-  log(`reminder ${id} cancelled`)
-  return json({ cancelled: id })
-}
-
-async function fireDueReminders(): Promise<void> {
-  if (firingReminders) return
-  firingReminders = true
-  try {
-    const chatId = String(GROUP_CHAT_ID)
-    const now = Date.now()
-    for (const r of dueReminders(reminders.list(), now)) {
-      try {
-        await bot.api.sendMessage(chatId, `⏰ ${r.text}`, threadOf(r.topic))
-      } catch (err) {
-        log(`reminder ${r.id}: post failed, retrying next tick: ${reason(err)}`)
-        continue
-      }
-      if (!(SQUARE_TOPIC && r.topic === SQUARE_TOPIC) && !harnessLocked(r.topic)) {
-        ensureSession(r.topic)
-        enqueue(r.topic, {
-          content: reminderNotice(r, now),
-          meta: {
-            chat_id: chatId,
-            user: 'telegram-topics-proxy',
-            user_id: '',
-            ts: new Date(now).toISOString(),
-            ...(r.topic !== 'general' ? { message_thread_id: r.topic } : {}),
-            ...reminderMeta(!!r.prompt),
-          },
-        })
-      }
-      reminders.remove(r.id)
-      log(`reminder ${r.id} fired in topic ${r.topic}${now - r.at > LATE_AFTER_MS ? ' (late)' : ''}`)
-    }
-  } finally {
-    firingReminders = false
-  }
-}
 
 // ---- Google Antigravity harness -------------------------------------------
 

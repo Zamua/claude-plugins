@@ -141,3 +141,6 @@ export function describeMessage(msg: any): Described | null {
 export function threadIdForTopic(topic: string): number | undefined {
   return topic === 'general' ? undefined : Number(topic)
 }
+
+/** Send options that put a message in a topic's thread. */
+export const threadOf = (topic: string) => (topic === 'general' ? {} : { message_thread_id: Number(topic) })
