@@ -195,7 +195,13 @@ with its tailnet certificate (`tailscale.ts`); each request is admitted by
 `whois` on its peer address (`domain/identity.ts`: this machine's own node is
 refused first, then any other user, then any node off `CONDUCTOR_NODES`), and
 reads also need an `X-Device` enrolled from that same node. Enrollment is written
-to the hash-chained ledger (`ledger.ts`) and announced in general. With
+to the hash-chained ledger (`ledger.ts`) and announced in general. Writes are
+signed by the device's key (`domain/write-auth.ts`: the canonical bytes, a 120 s
+window, a client id whose retry with the same body gets the first answer).
+`POST /v1/topics/{id}/messages` stores the operator's message, writes it to the
+ledger, and `app-delivery.ts` echoes it into Telegram and queues it as an
+operator turn (`origin: app`, the device, the ledger hash) through the
+lifecycle's own `enqueue`, so it is not stored twice. With
 `CONDUCTOR_LISTEN` set, `mirroredChat` wraps the
 chat port each service gets, so every message sent to a topic is also kept in
 SQLite (author `agent` for the MCP's `/send`, `proxy` for everything else, with

@@ -12,7 +12,7 @@ const fixture = (name: string) =>
 const messageFrom = (f: Record<string, any>): StoredMessage => ({
   id: f.id, topic: f.topic, seq: f.seq, author: f.author, origin: f.origin, kind: f.kind, text: f.text,
   format: f.format, blobs: f.blobs, replyTo: f.reply_to, chatIds: [], at: f.at, editedAt: f.edited_at,
-  reactions: f.reactions,
+  reactions: f.reactions, clientId: f.client_id ?? null, delivery: f.delivery ?? null, failure: f.failure ?? null,
 })
 
 describe('the wire matches the contract fixtures', () => {
@@ -26,7 +26,7 @@ describe('the wire matches the contract fixtures', () => {
   for (const name of ['message-operator.json', 'message-operator-failed.json']) {
     test(name, () => {
       const f = fixture(name)
-      expect(wireMessage(messageFrom(f), { clientId: f.client_id, delivery: f.delivery, ...(f.failure ? { failure: f.failure } : {}) })).toEqual(f)
+      expect(wireMessage(messageFrom(f))).toEqual(f)
     })
   }
 
@@ -50,6 +50,6 @@ describe('the wire matches the contract fixtures', () => {
 
 test('an operator message relayed from Telegram reads as delivered, with no client id', () => {
   const f = fixture('message-operator.json')
-  const relayed = wireMessage({ ...messageFrom(f), origin: 'telegram' })
+  const relayed = wireMessage({ ...messageFrom(f), origin: 'telegram', clientId: null, delivery: null })
   expect(relayed).toMatchObject({ origin: 'telegram', client_id: null, delivery: 'delivered' })
 })

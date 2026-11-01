@@ -31,10 +31,7 @@ export type Device = {
   lastSeen: string | null
 }
 
-/** Delivery of an operator message sent from the app; one relayed from Telegram was already delivered. */
-export type Delivery = { clientId: string | null; delivery: 'accepted' | 'delivered' | 'failed'; failure?: string }
-
-export function wireMessage(m: StoredMessage, delivery?: Delivery): Record<string, unknown> {
+export function wireMessage(m: StoredMessage): Record<string, unknown> {
   const base = {
     id: m.id,
     topic: m.topic,
@@ -51,8 +48,8 @@ export function wireMessage(m: StoredMessage, delivery?: Delivery): Record<strin
     reactions: m.reactions.map(r => ({ emoji: r.emoji })),
   }
   if (m.author !== 'operator') return base
-  const d = delivery ?? { clientId: null, delivery: 'delivered' as const }
-  return { ...base, client_id: d.clientId, delivery: d.delivery, ...(d.failure !== undefined ? { failure: d.failure } : {}) }
+  // An operator message relayed from Telegram was delivered as it arrived.
+  return { ...base, client_id: m.clientId, delivery: m.delivery ?? 'delivered', ...(m.failure !== null ? { failure: m.failure } : {}) }
 }
 
 export function wireTopic(t: TopicView): Record<string, unknown> {

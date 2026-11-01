@@ -8,6 +8,8 @@ export type MessageFormat = 'plain' | 'markdown' | 'markdownv2'
 /** A proxy message that is a reminder firing or an ask's post; null for any other message. */
 export type MessageKind = 'reminder' | 'ask' | null
 export type Reaction = { emoji: string }
+/** An operator message sent from the app: stored, then handed to the topic's agent or not. */
+export type Delivery = 'accepted' | 'delivered' | 'failed'
 
 export type BlobRef = { id: string; mime: string; bytes: number; width: number | null; height: number | null }
 
@@ -24,15 +26,21 @@ export type NewMessage = {
   /** The message's ids in the chat it was relayed through, for cross reference. */
   chatIds?: readonly number[]
   at?: string
+  /** The app's idempotency key, on a message sent from the app. */
+  clientId?: string
+  delivery?: Delivery
 }
 
-export type StoredMessage = Required<Omit<NewMessage, 'replyTo' | 'chatIds'>> & {
+export type StoredMessage = Required<Omit<NewMessage, 'replyTo' | 'chatIds' | 'clientId' | 'delivery'>> & {
   id: string
   seq: number
   replyTo: string | null
   chatIds: readonly number[]
   editedAt: string | null
   reactions: readonly Reaction[]
+  clientId: string | null
+  delivery: Delivery | null
+  failure: string | null
 }
 
 export type StoredEvent = { cursor: number; type: 'message'; message: StoredMessage }

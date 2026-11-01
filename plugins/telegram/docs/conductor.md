@@ -5,9 +5,10 @@ apps (an iOS app first), beside Telegram, over the tailnet only. It is not a
 rewrite. The proxy already reaches its chat through `ChatPort`; the conductor
 adds a store, an authenticated API and push, and later lets Telegram go.
 
-Status: contract version 1. Built: the store and mirror, and the listener with
-identity, enrollment, the reads and the stream (`docs/conductor-plan.md` C1 and
-C2). Signed writes, push and the rest follow the plan. The golden
+Status: contract version 1. Built: the store and mirror, the listener with
+identity, enrollment, the reads and the stream, and signed writes: sending a
+message and read markers (`docs/conductor-plan.md` C1 to C3). Push and the rest
+follow the plan. The golden
 fixtures and signing vectors in `conductor-v1/` are part of the contract: the
 server's tests encode them and the app's tests decode them.
 
@@ -94,8 +95,9 @@ bound to that device, usable only when unlocked, never exported.
   SHA-256 of the exact body bytes (of the empty string when there is no body),
   and the timestamp. A request is refused when the signature does not verify
   or its timestamp is more than 120 s off.
-- **Retries are safe.** An app resends a write with the same client id (and a
-  fresh timestamp and signature) until it gets an answer. A client id the device
+- **Retries are safe.** An app resends a write with the same client id, the
+  identical body bytes (a multipart body keeps its boundary), and a fresh
+  timestamp and signature, until it gets an answer. A client id the device
   used before with the same body SHA-256 returns the first result and does
   nothing new; with a different body it is refused with 409 `client_id_reused`.
   This holds for every signed write.
@@ -110,6 +112,13 @@ SHA-256, the signature, the timestamp, and the kind of act. `verify.py` reads
 it to confirm an operator go that came from the app, so a go is bound to an
 enrolled device's key, and nothing on the conductor's machine can make one.
 Nothing rewrites the ledger.
+
+**An app message is an operator turn.** Its sender was verified (an enrolled
+device's signature, from an allowed node), so the agent receives it as the
+operator's turn, the same as one from Telegram, marked `origin: app` with the
+device and the hash of its ledger entry, which `verify.py` checks against the
+ledger. It is also posted into the Telegram topic as "You (app): ...", and the
+turn carries that post's id, so the agent's reply threads under it.
 
 **What never carries operator authority:** turns the proxy makes itself
 (reminders, notices, square deliveries), and asks, even when an ask is signed.

@@ -47,6 +47,8 @@ export function startConductor(config: {
       hostname: self.ipv4,
       port: config.mode.port,
       tls: { cert: Bun.file(cert.certFile), key: Bun.file(cert.keyFile) },
+      // Ten images of 20 MB and the text.
+      maxRequestBodySize: 210 * 1024 * 1024,
       fetch: api.fetch,
       websocket: api.websocket,
     })
