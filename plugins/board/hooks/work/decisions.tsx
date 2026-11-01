@@ -13,7 +13,7 @@ const DAY_MS = 24 * 3600e3
 const ANSWERED_MS = 7 * DAY_MS
 // A line's right side is fixed columns: the session that asked, as wide as the longest label shown, when it is due,
 // and how long it has waited
-const MAX_WHO = 14
+const MAX_WHO = 10
 const DUE_WIDTH = 'Mon 11-02'.length
 const AGE_WIDTH = 3
 
@@ -150,7 +150,7 @@ export function decisionsView($: EngineInterface): View {
       const groupLines = (group: Group) =>
         group.head
           ? [
-              headLine(els, group.head, now, columns, whoWidth, earliestOf(group.asks.flatMap(withUnder))),
+              headLine(els, group.head, now, columns, whoWidth, earliestOf(group.asks.flatMap(withUnder)), group.asks.flatMap(withUnder).length > 1),
               ...group.asks.flatMap(ask => askLines(ask, 1)),
             ]
           : group.asks.flatMap(ask => askLines(ask, 0))
@@ -210,8 +210,8 @@ export function decisionsView($: EngineInterface): View {
     )
   }
 
-  /** A group's head: the plain Item its asks sit under, dim, with the earliest due among them. */
-  function headLine(els: Els, head: Node, now: number, columns: number, whoWidth: number, due: string | undefined) {
+  /** A group's head: the plain Item its asks sit under, dim, with the earliest due among them when it holds several. */
+  function headLine(els: Els, head: Node, now: number, columns: number, whoWidth: number, due: string | undefined, isSeveral: boolean) {
     const { Box, Text } = els
     const room = columns - (1 + whoWidth + 2 + DUE_WIDTH + 2 + AGE_WIDTH)
     const title = cut(head.item.title, room)
@@ -219,7 +219,7 @@ export function decisionsView($: EngineInterface): View {
     return (
       <Box key={`dgroup-${head.item.id}`} flexDirection="row">
         <Text dimColor>{title.padEnd(room)}</Text>
-        {facts(els, `dgfact-${head.item.id}`, '', whoWidth, due, now, '')}
+        {facts(els, `dgfact-${head.item.id}`, '', whoWidth, isSeveral ? due : undefined, now, '')}
       </Box>
     )
   }
