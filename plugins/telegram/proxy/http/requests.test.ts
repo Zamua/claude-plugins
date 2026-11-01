@@ -53,6 +53,8 @@ describe('proxy HTTP request bodies', () => {
   test('fields with a defined fallback tolerate garbage', () => {
     expect(parseRateLimit({ topic: '42', reset_at: 'soon' })).toEqual({ topic: '42' })
     expect(parseRateLimit({ topic: '42', reset_at: 1_800_000_000 }).resetAt).toBe(1_800_000_000)
+    expect(parseRateLimit({ topic: '42', provider: 'anthropic', model: 'fable' }).ranOn).toEqual({ provider: 'anthropic', model: 'fable' })
+    expect(parseRateLimit({ topic: '42', provider: '', model: '' }).ranOn).toBeUndefined()
     expect(parseSquareReply({ topic: '42', conv: '9', text: ' hi ', reply_token: 'x' }))
       .toEqual({ caller: '42', conv: '9', text: 'hi' })
     expect(parseSquareReply({ topic: 'operator', conv: '9', text: 'hi', reply_token: '15' }).replyToken).toBe(15)

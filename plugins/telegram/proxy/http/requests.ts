@@ -128,10 +128,19 @@ export function parseTurnFailed(body: unknown): TurnFailedRequest {
 }
 
 /** `resetAt` is epoch seconds when the hook could read one from the error. */
-export function parseRateLimit(body: unknown): { topic: string; resetAt?: number } {
+/** A usage limit a topic's Claude hit; `ranOn` is the provider and model that Claude ran as, when its hook says. */
+export type RateLimitReport = { topic: string; resetAt?: number; ranOn?: { provider: string; model: string } }
+
+export function parseRateLimit(body: unknown): RateLimitReport {
   const b = object(body)
   const resetAt = optionalNumber(b, 'reset_at')
-  return { topic: topicKey(b), ...(resetAt !== undefined ? { resetAt } : {}) }
+  const provider = text(b, 'provider', '')
+  const model = text(b, 'model', '')
+  return {
+    topic: topicKey(b),
+    ...(resetAt !== undefined ? { resetAt } : {}),
+    ...(provider && model ? { ranOn: { provider, model } } : {}),
+  }
 }
 
 // The caller of a square call may be a topic or a virtual caller ("operator").

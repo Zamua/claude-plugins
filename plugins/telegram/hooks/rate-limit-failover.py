@@ -113,6 +113,10 @@ def main() -> None:
             # the right time. Absent/garbled means provider probes remain the
             # source of truth, so this is an optimization, never a dependency.
             **({"reset_at": r} if (r := parse_reset(details)) else {}),
+            # The route this Claude runs on, so the proxy can tell a report from a
+            # process a route change already replaced from one from its successor.
+            "provider": os.environ.get("TG_PROVIDER", ""),
+            "model": os.environ.get("TG_MODEL", ""),
         }
     ).encode()
     req = urllib.request.Request(

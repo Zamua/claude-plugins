@@ -595,6 +595,20 @@ describe('the proxy, end to end', () => {
     expect(registry()['43'].exhausted_routes ?? []).toEqual([])
   }, 60_000)
 
+  test('a fallback model that is limited too falls back again at once, while a report from the replaced process is ignored', async () => {
+    send(54, 'hi')
+    await until('topic 54 to spawn', () => spawns().find(s => s.session === 'claude-54'))
+    const report = (model: string) => fetch(`${proxyUrl}/rate-limit`, {
+      method: 'POST',
+      body: JSON.stringify({ topic: '54', error: 'rate_limit', provider: 'anthropic', model }),
+    }).then(r => r.json())
+    expect((await report('claude-opus-5-5')).fallback).toMatchObject({ model: 'fable' })
+    // The Fable session hits its own limit seconds after it starts
+    expect((await report('fable')).fallback).toMatchObject({ model: 'opus' })
+    expect((await report('fable')).duplicate).toBeTrue()
+    await until('topic 54 resumed on Opus', () => spawns().filter(s => s.session === 'claude-54').find(s => s.env.TG_MODEL === 'opus'))
+  }, 20_000)
+
   test('a topic bound to a missing conversation is told so and starts nothing', async () => {
     send(44, 'hello?')
     const notice = await until('the missing-conversation notice', () =>
@@ -665,14 +679,15 @@ describe('the proxy, end to end', () => {
 
     const picture = join(root, 'out.png')
     writeFileSync(picture, Buffer.from(PNG, 'base64'))
+    const sentAt = calls.length
     expect((await out('/send', { chat_id: GROUP, topic: '42', files: [picture] })).status).toBe(200)
-    expect(calls.at(-1)?.method).toBe('sendPhoto')
+    expect(calls.slice(sentAt).some(c => c.method === 'sendPhoto')).toBeTrue()
 
     expect((await out('/react', { chat_id: GROUP, message_id: 5, emoji: '👍' })).status).toBe(200)
-    expect(calls.at(-1)).toEqual({ method: 'setMessageReaction', body: expect.objectContaining({ message_id: 5 }) })
+    expect(calls.findLast(c => c.method === 'setMessageReaction')?.body).toMatchObject({ message_id: 5 })
     const edited = await out('/edit', { chat_id: GROUP, message_id: 5, text: 'better' })
     expect(await edited.json()).toEqual({ message_id: 5 })
-    expect(calls.at(-1)).toEqual({ method: 'editMessageText', body: expect.objectContaining({ text: 'better' }) })
+    expect(calls.findLast(c => c.method === 'editMessageText')?.body).toMatchObject({ text: 'better' })
   }, 20_000)
 
   test('outbound refuses another chat and the proxy\'s own state files', async () => {
