@@ -430,9 +430,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 await mcp.connect(new StdioServerTransport())
 
 // Inbound long-poll. The proxy holds each /poll for ~25s: HTTP 204 means
-// nothing arrived (loop again), HTTP 200 carries one {content, meta} which we
-// inject as a <channel> turn EXACTLY as the official server does at its
-// handleInbound tail. Reconnect with backoff on any proxy error.
+// nothing arrived (loop again), HTTP 200 carries one {content, meta, delivery}
+// which we inject as a <channel> turn EXACTLY as the official server does at
+// its handleInbound tail, then acknowledge on the next poll. Reconnect with
+// backoff on any proxy error.
 let running = true
 
 function shutdown(): void {
@@ -483,9 +484,13 @@ async function inboundLoop(): Promise<void> {
   // Cold-start guard (see FIRST_POLL_DELAY_MS): let the REPL finish booting and
   // process its kickoff turn before we deliver the first spawn-window message.
   if (FIRST_POLL_DELAY_MS > 0) await new Promise(r => setTimeout(r, FIRST_POLL_DELAY_MS))
+  // The delivery last handed to Claude. Every poll names it, so the proxy drops
+  // the message only once it reached Claude and resends it to whoever polls next
+  // otherwise.
+  let ack = ''
   while (running) {
     try {
-      const res = await fetch(`${PROXY}${ROUTE.poll}?topic=${encodeURIComponent(TOPIC)}`, {
+      const res = await fetch(`${PROXY}${ROUTE.poll}?topic=${encodeURIComponent(TOPIC)}&ack=${encodeURIComponent(ack)}`, {
         signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
       })
       if (res.status === 204) {
@@ -493,19 +498,20 @@ async function inboundLoop(): Promise<void> {
         continue
       }
       if (!res.ok) throw new Error(`poll HTTP ${res.status}`)
-      const { content, meta } = (await res.json()) as {
+      const { content, meta, delivery } = (await res.json()) as {
         content: string
         meta: Record<string, string>
+        delivery?: string
       }
       backoff = 500
-      void mcp
-        .notification({
-          method: 'notifications/claude/channel',
-          params: { content, meta },
-        })
-        .catch(err => {
-          process.stderr.write(`telegram-topics: failed to deliver inbound to Claude: ${err}\n`)
-        })
+      try {
+        await mcp.notification({ method: 'notifications/claude/channel', params: { content, meta } })
+      } catch (err) {
+        process.stderr.write(`telegram-topics: failed to deliver inbound to Claude: ${err}\n`)
+        await new Promise(r => setTimeout(r, backoff))
+        continue
+      }
+      ack = delivery ?? ''
     } catch (err) {
       if (!running) break
       if (isAbort(err)) {
