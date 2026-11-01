@@ -95,7 +95,7 @@ import { capacityTransition, nextResetAt, providerCapacity } from './domain/prov
 import type { ProviderCapacity } from './domain/provider-capacity'
 import { environmentFlag } from './domain/env-flag'
 import { launchProfileNeedsRefresh } from './domain/launch-profile'
-import { missingConversationNotice, planRelaunch, spawnConversation } from './domain/topic-conversation'
+import { missingConversationNotice, planRelaunch, spawnConversation, spawnFailureNotice } from './domain/topic-conversation'
 import { AntigravityTopicService } from './application/antigravity-topic-service'
 import { routeLabel as antigravityRouteLabel } from './adapters/antigravity-cli'
 import { HerdrAntigravityRuntime } from './adapters/herdr-antigravity-runtime'
@@ -1423,25 +1423,27 @@ function handleSquareUserMessage(msg: any, text: string): void {
 
 // ---- spawn (single-flight) -------------------------------------------------
 
+// Every message to a topic that cannot start retries ensureSession, so its
+// failure notice is posted at most once a minute per topic and kind.
+const SPAWN_NOTICE_MS = 60_000
+const lastSpawnNotice = new Map<string, number>()
+function postSpawnNotice(kind: 'missing-conversation' | 'spawn-failed', topic: string, text: string): void {
+  const key = `${kind}:${topic}`
+  if (Date.now() - (lastSpawnNotice.get(key) ?? 0) < SPAWN_NOTICE_MS) return
+  lastSpawnNotice.set(key, Date.now())
+  bot.api.sendMessage(String(GROUP_CHAT_ID), text, threadOf(topic))
+    .catch(e => log(`${kind} notice failed for topic ${topic}: ${e}`))
+}
+
+function reportMissingConversation(topic: string, sessionId: string): void {
+  log(`topic ${topic}: claude conversation ${sessionId} not found on disk; not spawning`)
+  postSpawnNotice('missing-conversation', topic, missingConversationNotice(sessionId))
+}
+
 // Ensure a live Claude Code session exists for a topic. Single-flight: the synchronous
 // spawnSync blocks the event loop for the whole launch, so two inbound
 // messages for a brand-new topic cannot spawn two sessions; the spawning
 // flag + the live-session dedup are belt and suspenders.
-const MISSING_CONVERSATION_NOTICE_MS = 60_000
-const lastMissingConversationNotice = new Map<string, number>()
-
-function reportMissingConversation(topic: string, sessionId: string): void {
-  log(`topic ${topic}: claude conversation ${sessionId} not found on disk; not spawning`)
-  const last = lastMissingConversationNotice.get(topic) ?? 0
-  if (Date.now() - last < MISSING_CONVERSATION_NOTICE_MS) return
-  lastMissingConversationNotice.set(topic, Date.now())
-  bot.api.sendMessage(
-    String(GROUP_CHAT_ID),
-    missingConversationNotice(sessionId),
-    threadOf(topic),
-  ).catch(e => log(`missing-conversation notice failed for topic ${topic}: ${e}`))
-}
-
 function ensureSession(topic: string): void {
   // Harness lock: a locked topic must never fall through to the Claude
   // launcher, even if a stale queue/callback reaches this boundary.
@@ -1500,9 +1502,11 @@ function ensureSession(topic: string): void {
   try {
     const label = st.name || topicNames.get(topic) || topic
     st.name = label
+    // The topic is bound to a new conversation only once its launch succeeds: a
+    // failed first launch leaves no transcript, and a binding to it would read
+    // as a missing conversation on every later message.
     const conversation = spawnConversation(st.claudeSessionId, () => crypto.randomUUID())
     const resuming = conversation.resume
-    st.claudeSessionId = conversation.claudeSessionId
     const route = st.route ?? DEFAULT_TOPIC_ROUTE
     st.route = route
     // Name the mux session from the CURRENT label (fresh each spawn, so a
@@ -1529,7 +1533,7 @@ function ensureSession(topic: string): void {
       marketplace: MARKETPLACE,
       route,
       auxiliaryModel,
-      claudeSessionId: st.claudeSessionId ?? '',
+      claudeSessionId: conversation.claudeSessionId,
       resume: resuming,
       settingsPath,
       stopHook: STOP_HOOK,
@@ -1546,6 +1550,7 @@ function ensureSession(topic: string): void {
     if (r.status !== 0) {
       throw new Error(`launcher exit ${r.status}: ${(r.stderr || '').trim()}`)
     }
+    st.claudeSessionId = conversation.claudeSessionId
     st.session = name
     st.spawnedAt = Date.now()
     st.launchProfileVersion = TOPIC_LAUNCH_PROFILE_VERSION
@@ -1559,6 +1564,7 @@ function ensureSession(topic: string): void {
     )
   } catch (e) {
     log(`spawn failed for topic ${topic}: ${e}`)
+    postSpawnNotice('spawn-failed', topic, spawnFailureNotice(reason(e)))
   } finally {
     st.spawning = false
   }

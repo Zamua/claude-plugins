@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { missingConversationNotice, planRelaunch, spawnConversation } from './topic-conversation'
+import { missingConversationNotice, planRelaunch, spawnConversation, spawnFailureNotice } from './topic-conversation'
 
 const mint = () => 'minted-id'
 
@@ -46,5 +46,18 @@ describe('missingConversationNotice', () => {
     const notice = missingConversationNotice('gone-id')
     expect(notice).toContain('gone-id')
     expect(notice).toMatch(/Send \/relaunch to start a fresh conversation in this topic\.$/)
+  })
+})
+
+describe('spawnFailureNotice', () => {
+  test('names the cause and says the message waits for a retry', () => {
+    const notice = spawnFailureNotice('launcher exit 1: herdr pane run failed')
+    expect(notice).toContain('herdr pane run failed')
+    expect(notice).toContain('queued')
+    expect(notice).toContain('/relaunch')
+  })
+
+  test('caps a long cause', () => {
+    expect(spawnFailureNotice('x'.repeat(5000)).length).toBeLessThan(500)
   })
 })
