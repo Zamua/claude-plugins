@@ -15,6 +15,7 @@ import type { RolloutBoard } from './views/rollout'
 import { sessionHooks, sessionStart, sessionSync, sessionView } from './views/session'
 import { markWorkActive } from './work/cache'
 import { migrateFile, reportText } from './work/migrate'
+import { rollupPrsView, rollupReviewsView, rollupStart } from './work/rollup'
 import { rhythmsHooks } from './work/sources/rhythms'
 import { workHooks, workToolStart } from './work/tool'
 import { choosePeriod, configureWork, countPlaced, currentWork, isWithin, placeBoards, workRefresh, workStart } from './work/board'
@@ -54,7 +55,7 @@ function viewsOf($: EngineInterface): View[] {
     sessionView($, work ? els => workBreadcrumb($, els) : undefined),
     prsView($),
     reviewView($),
-    ...(work ? [workView($, work)] : []),
+    ...(work ? [workView($, work), rollupPrsView($), rollupReviewsView($)] : []),
     ...rolloutBoards.map(board => rolloutView($, board)),
     ...fileBoards.map(board => fileView($, board)),
   ]
@@ -141,6 +142,7 @@ export const register: Register = on => {
     if (work) {
       await workToolStart($)
       await workStart($)
+      rollupStart($)
     }
     await $.command.register({
       name: 'board',

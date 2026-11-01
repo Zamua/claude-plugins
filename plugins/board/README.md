@@ -17,6 +17,8 @@ you.
 | `prs` | the pull requests this session raised, each stack bottom first, with GitHub's live state | Claude, through `mcp__board__prs`; `gh pr create` and `gh stack submit` add theirs on their own |
 | `review` | the [pr-review-board](../pr-review-board/) review this session runs | the review agent's `board.json` |
 | `work` | everything you work on as one tree, from your goals down to the sessions and pull requests doing it | Claude, through `mcp__board__work`, plus the trackers it reads |
+| `all prs` | in the root session, every session's pull requests, a tab per work-view section | the work tree and every session's prs board |
+| `all reviews` | in the root session, every pr-review-board review and where it stands, a tab per work-view section | the work tree and pr-review-board's own files |
 | `rollout` | a release's prerequisites, gates and checks, with each one's state per environment | a JSON file another process keeps |
 | any name | a board another process writes as JSON | the file named in the config below |
 
@@ -78,7 +80,8 @@ Inbox
   carries an Item's id or alias, such as `abc-12-split-the-scope` for ABC-12; Claude links the rest by hand. A link
   follows the agent, so a session resumed in another tab keeps its place.
 - **Pull requests** from every session's prs board sit under the Item whose id or alias their title or branch
-  carries, such as `ABC-809 adds …` or `feature/abc-809`.
+  carries, such as `ABC-809 adds …` or `feature/abc-809`, or else under the Item of the session tracking them, the
+  deepest when several do.
 - **Dates**: a line shows the nearer of its target and ETA once it is inside a week, as a weekday, a countdown inside
   a day in yellow, red inside two hours, and `overdue` or `late` in red. An ETA is when whoever works an Item expects
   it done; a parent takes the latest ETA beneath it and is late once that falls after its target. Any Item takes an
@@ -143,6 +146,32 @@ complete brief, and expect you to work with any session directly. The [`intake` 
 one intake pass, run on a schedule such as `claude -p "/board:intake since <time>"`: it checks the sources your
 instructions name for new asks and adds them to the tree, saying nothing when none came in. A read ends each ask's line with its link, so a pass knows what it already
 added.
+
+### The root's rollups
+
+The root session's switcher adds two views drawn from the tree, each with a tab per section, or per Outcomes and
+Responsibilities without sections, and a heading per top-level Item in it. A tab's count is what in it waits on you.
+
+```
+ Goals 2 · Side · Misc
+╭──────────────────────────────────────────────╮
+│ Grow the partner network                     │
+│   ! #7502 ● CI fail me   ABC-809 adds the fee │
+│     #7600 ● review  lee  ABC-809 adds a hook  │
+╰──────────────────────────────────────────────╯
+ ▸ ✓ 14 merged or closed
+```
+
+- `all prs` holds every pull request the tree places, whoever wrote it, each with the prs view's live state and its
+  author; what needs you comes first, and the merged and closed fold behind a count. Open ones placed nowhere get an
+  Unplaced tab. While it is shown it asks GitHub for them through the prs view's shared cache.
+- `all reviews` holds every running [pr-review-board](../pr-review-board/) review and every board a session wrote by
+  hand, read from that plugin's own files: where it stands (comments to pick, waiting on its author, reviewing,
+  posted, approved or merged), its threads nobody answered, its open pull requests of all, and how long since it
+  changed. A review sits in the tab of its session's Item, or else of its first pull request the tree places. Pressing
+  one opens its open pull requests; its mark brings its session to the front.
+- The tabs come from the tree, so the tool's `link`, `hide` and `sections` move a pull request to another tab, leave it
+  out, or rename and reorder the tabs.
 
 ### Config
 

@@ -17,23 +17,37 @@ function statusOf(p: TrackedPr, viewer: string): Status {
   return f.isDraft ? 'flight' : 'waiting'
 }
 
-/** Every pull request some session tracks, with the freshest facts any session cached; no GitHub calls. */
-export async function readArtifacts($: EngineInterface, held: Record<string, unknown>): Promise<Artifact[]> {
-  const fresh = await cachedFacts($)
+export const artifactIdOf = (p: TrackedPr) => `pr:${p.owner}/${p.repo}#${p.number}`
 
-  return storedPrs(held).map(stored => {
-    const facts = fresh.facts.get(stored.key) ?? stored.facts
-    const p = facts ? { ...stored, facts } : stored
-    const status = statusOf(p, fresh.viewer)
+export type Tracked = { pr: TrackedPr; sessions: string[] }
+
+/** Every pull request some session tracks, with the freshest facts any session cached and who tracks it; no GitHub calls. */
+export async function trackedPrs($: EngineInterface, held: Record<string, unknown>): Promise<{ tracked: Tracked[]; viewer: string }> {
+  const fresh = await cachedFacts($)
+  const tracked = storedPrs(held).map(({ pr, sessions }) => {
+    const facts = fresh.facts.get(pr.key) ?? pr.facts
+
+    return { pr: facts ? { ...pr, facts } : pr, sessions }
+  })
+
+  return { tracked, viewer: fresh.viewer }
+}
+
+export async function readArtifacts($: EngineInterface, held: Record<string, unknown>): Promise<Artifact[]> {
+  const { tracked, viewer } = await trackedPrs($, held)
+
+  return tracked.map(({ pr: p, sessions }) => {
+    const status = statusOf(p, viewer)
     const note = status === 'needs' ? needsOf(p)[0]?.text : undefined
 
     return {
-      id: `pr:${p.owner}/${p.repo}#${p.number}`,
+      id: artifactIdOf(p),
       title: p.facts?.title ?? `${p.owner}/${p.repo}#${p.number}`,
       url: p.url,
       branch: p.facts?.head ?? '',
       tag: `#${p.number}`,
       status,
+      trackedBy: sessions,
       ...(note && { note }),
     }
   })

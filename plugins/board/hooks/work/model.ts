@@ -98,6 +98,8 @@ export type Artifact = {
   status: Status
   /** Why it needs the person, when it does. */
   note?: string
+  /** The Harness ids of the agents that track it, so it sits under their Item when nothing else places it. */
+  trackedBy?: string[]
 }
 
 /** A parent set by hand, which wins over the parent a Source gives. */
@@ -324,7 +326,10 @@ function matchItem(nodes: Map<string, Node>, texts: string[]): Node | undefined 
   return best.length === 1 ? best[0] : undefined
 }
 
-/** Puts each Session and Artifact under its Item: a hand Link first, then an alias in its name. */
+/**
+ * Puts each Session and Artifact under its Item: a hand Link first, then an alias in its name, and for an Artifact
+ * last, the Item of an agent that tracks it, the deepest when several do.
+ */
 function place(nodes: Map<string, Node>, links: Link[], sessions: Session[], artifacts: Artifact[], root?: string) {
   const itemLink = new Map<string, string>()
   const coordinatorOf = new Map<string, string>()
@@ -336,6 +341,7 @@ function place(nodes: Map<string, Node>, links: Link[], sessions: Session[], art
   const sessionItem = new Map<string, string>()
   const coordinated = new Map<string, Session[]>()
   const unplaced = { sessions: [] as Session[], artifacts: [] as Artifact[] }
+  const agentItem = new Map<string, Node>()
   for (const session of sessions) {
     const linked = itemLink.get(session.id)
     const node = (linked ? nodes.get(linked) : undefined) ?? matchItem(nodes, [session.label, ...(session.group ? [session.group] : [])])
@@ -344,13 +350,16 @@ function place(nodes: Map<string, Node>, links: Link[], sessions: Session[], art
     if (node) {
       node.sessions.push(session)
       sessionItem.set(session.id, node.item.id)
+      if (session.harnessId) agentItem.set(session.harnessId, node)
     } else if ((!coordinator || !byId.has(coordinator)) && session.id !== root) {
       unplaced.sessions.push(session)
     }
   }
   for (const artifact of artifacts) {
     const linked = itemLink.get(artifact.id)
-    const node = (linked ? nodes.get(linked) : undefined) ?? matchItem(nodes, [artifact.title, artifact.branch])
+    const trackers = (artifact.trackedBy ?? []).flatMap(id => agentItem.get(id) ?? [])
+    const tracker = trackers.reduce<Node | undefined>((best, one) => (!best || one.depth > best.depth ? one : best), undefined)
+    const node = (linked ? nodes.get(linked) : undefined) ?? matchItem(nodes, [artifact.title, artifact.branch]) ?? tracker
     if (node) node.artifacts.push(artifact)
     else if (artifact.status !== 'done') unplaced.artifacts.push(artifact)
   }

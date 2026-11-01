@@ -50,6 +50,8 @@ let placed: PlacedBoard[] = []
 // What each placed board waits on the person for, by board id, as the pane counted it before drawing
 let placedNeeds = new Map<string, number>()
 let drawnAt = 0
+// Each Session's Item as last told to the Harnesses
+let remembered = ''
 // The Period the view is cut to, by name; empty shows every Item
 let period = ''
 
@@ -91,6 +93,23 @@ export const placedNeedsNow = () => placedNeeds
 /** Notes that the view was drawn, which keeps the Session list refreshing while someone looks. */
 export function markDrawn(now: number) {
   drawnAt = now
+}
+
+/** The tree as the work board holds it now; a view drawing from it keeps the sessions listed while it is drawn. */
+export async function workNow($: EngineInterface, isDrawing = false): Promise<Tree | undefined> {
+  const w = board
+  if (!w) return undefined
+  if (isDrawing) drawnAt = await $.clock.now()
+  if (liveNow().at === 0) await refreshLive($, w.spec)
+
+  return workTree(w.state.value).tree
+}
+
+/** Whether this session is the root session the tree names. */
+export async function isRootHere($: EngineInterface, tree: Tree): Promise<boolean> {
+  const root = tree.root ? tree.sessions.get(tree.root) : undefined
+
+  return root?.harnessId !== undefined && root.harnessId === (await $.session.id())
 }
 
 /** The tree the local file holds now, with the Sessions and Artifacts last listed, or why there is none. */
@@ -187,9 +206,12 @@ export async function workRefresh($: EngineInterface, force = false) {
   const fileChanged = await refreshJson($, board.state, board.path)
   const isShown = force || (await $.clock.now()) - drawnAt < SHOWN_MS
   const liveChanged = isShown && (await refreshLive($, board.spec, force))
-  if (liveChanged) {
-    const tree = workTree(board.state.value).tree
-    if (tree) await rememberItems($, tree.sessionItem)
+  // Other views list sessions too, so what was last told to the Harnesses is compared rather than what this refresh saw
+  const tree = isShown ? workTree(board.state.value).tree : undefined
+  const placing = tree ? JSON.stringify([...tree.sessionItem]) : remembered
+  if (tree && placing !== remembered) {
+    remembered = placing
+    await rememberItems($, tree.sessionItem)
   }
   if (fileChanged || liveChanged) $.ui.invalidate('ui.render')
 }

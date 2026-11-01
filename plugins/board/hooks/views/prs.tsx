@@ -93,13 +93,21 @@ const SHAPE = 'prs-1'
 const board = atom({ plugin: 'board', key: 'prs' } as const, emptyBoard(''), { shape: SHAPE })
 const PREFIX = 'prs'
 
-/** Every pull request on any session's saved prs board, once each, from the store as `storedValues` read it. */
-export function storedPrs(held: Record<string, unknown>): TrackedPr[] {
-  const out = new Map<string, TrackedPr>()
+/**
+ * Every pull request on any session's saved prs board, once each, with the sessions whose boards hold it, from the
+ * store as `storedValues` read it.
+ */
+export function storedPrs(held: Record<string, unknown>): { pr: TrackedPr; sessions: string[] }[] {
+  const out = new Map<string, { pr: TrackedPr; sessions: string[] }>()
   for (const key of Object.keys(held)) {
     if (!key.startsWith(`${PREFIX}:`)) continue
-    const saved = storedBoard<PrBoard>(held, PREFIX, SHAPE, key.slice(PREFIX.length + 1))
-    for (const p of saved?.prs ?? []) if (!out.has(p.key)) out.set(p.key, p)
+    const sessionId = key.slice(PREFIX.length + 1)
+    const saved = storedBoard<PrBoard>(held, PREFIX, SHAPE, sessionId)
+    for (const p of saved?.prs ?? []) {
+      const seen = out.get(p.key)
+      if (seen) seen.sessions.push(sessionId)
+      else out.set(p.key, { pr: p, sessions: [sessionId] })
+    }
   }
 
   return [...out.values()]

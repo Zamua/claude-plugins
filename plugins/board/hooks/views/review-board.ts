@@ -37,7 +37,7 @@ export type Board = {
 }
 type Thread = { url: string; resolved?: boolean; replied?: boolean }
 /** The poller's `github.json` beside the board. */
-export type Facts = { prs?: Record<string, { threads?: Thread[] }> }
+export type Facts = { prs?: Record<string, { threads?: Thread[]; state?: string; approved?: boolean }> }
 export type Stack = Omit<NamedStack, 'prs'> & { title: string; prs: Pr[] }
 
 export const SEVERITIES: readonly SectionSpec[] = [
@@ -124,3 +124,69 @@ export function stackOf(c: Comment, prs: readonly Pr[], stacks: readonly Stack[]
 /** Review threads on these pull requests that wait on the author and that the board did not post. */
 export const otherOpen = (prs: readonly Pr[]) =>
   prs.reduce((sum, p) => sum + (Number.isInteger(p.other_open_threads) ? (p.other_open_threads as number) : 0), 0)
+
+/** Where a review stands, most in need of the person first. */
+export const REVIEW_STATES = ['pick', 'waiting', 'reviewing', 'posted', 'approved', 'finished'] as const
+export type ReviewState = (typeof REVIEW_STATES)[number]
+
+/** One review as the rollup lists it. */
+export type ReviewDigest = {
+  key: string
+  title: string
+  /** The agent running it, by its Harness id. */
+  agent: string
+  /** Each pull request, with its state as the poller last read it. */
+  prs: { pr: string; number: number; url: string; title?: string; state?: string }[]
+  updatedAt: number
+  state: ReviewState
+  /** Comments waiting for the person to pick. */
+  toPick: number
+  /** Threads the operator started that nobody answered and nobody resolved. */
+  unanswered: number
+  openPrs: number
+}
+
+/**
+ * Comments to pick come first. Once every pull request merged or closed it is finished; before that, a posted comment
+ * its author has not addressed or an unanswered thread waits on the author, and every open one approved is approved.
+ */
+function reviewStateOf(toPick: number, posted: Comment[], unanswered: number, openPrs: number, isApproved: boolean): ReviewState {
+  if (toPick > 0) return 'pick'
+  if (openPrs === 0) return 'finished'
+  if (posted.some(c => !c.addressed) || unanswered > 0) return 'waiting'
+  if (isApproved) return 'approved'
+
+  return posted.length > 0 ? 'posted' : 'reviewing'
+}
+
+/** A review from its board and the poller's facts; a board not written yet leaves the pull requests the poller lists. */
+export function digestOf(key: string, slug: string, agent: string, listed: Pr[], b: Board | undefined, f: Facts | undefined): ReviewDigest {
+  const prs = b && Array.isArray(b.prs) ? b.prs : listed
+  const facts = f?.prs ?? {}
+  const comments = b ? commentsOf(b) : []
+  const posted = comments.filter(c => c.status === 'posted')
+  const threads = prs.flatMap(p => (Array.isArray(facts[p.pr]?.threads) ? (facts[p.pr]?.threads as Thread[]) : []))
+  const unanswered = threads.filter(t => !t.resolved && !t.replied).length
+  // A pull request the poller has not described yet counts as open
+  const open = prs.filter(p => (facts[p.pr]?.state ?? 'OPEN') === 'OPEN')
+  const isApproved = open.length > 0 && open.every(p => facts[p.pr]?.approved === true)
+  const toPick = comments.filter(isPickable).length
+
+  return {
+    key,
+    title: b?.title || slug,
+    agent,
+    prs: prs.map(p => ({
+      pr: p.pr,
+      number: p.number,
+      url: p.url || `https://github.com/${p.pr.split('#')[0]}/pull/${p.number}`,
+      ...(p.title && { title: p.title }),
+      ...(facts[p.pr]?.state && { state: facts[p.pr]?.state }),
+    })),
+    updatedAt: Date.parse(b?.updated_at ?? ''),
+    state: reviewStateOf(toPick, posted, unanswered, open.length, isApproved),
+    toPick,
+    unanswered,
+    openPrs: open.length,
+  }
+}

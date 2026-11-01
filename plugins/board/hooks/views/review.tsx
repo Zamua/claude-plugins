@@ -5,8 +5,8 @@ import { refreshJson, section, stamp } from '../kit'
 import type { JsonFile, View } from '../kit'
 import { factsFor } from './prs'
 import type { GithubFacts } from './prs'
-import { commentsOf, FOLLOW_UPS, isPickable, prsFromState, SEVERITIES, severityOf, stackOf, stacksOf, withFacts } from './review-board'
-import type { Board, Facts, Pr } from './review-board'
+import { commentsOf, digestOf, FOLLOW_UPS, isPickable, prsFromState, SEVERITIES, severityOf, stackOf, stacksOf, withFacts } from './review-board'
+import type { Board, Facts, Pr, ReviewDigest } from './review-board'
 import { commentRow, followUpRows, freshness, header, pickBar, prList, reportBox, stackTabs, trackedOf } from './review-parts'
 
 // The poller records every review here; the worker running one is the session it records
@@ -16,7 +16,10 @@ const POLL_MS = 10_000
 const FACTS_MS = 60_000
 
 type Review = { key: string; slug: string; prs: Pr[]; boardPath: string }
-type PollerState = { reviews?: Record<string, { status?: string; slug?: string; claude_session?: string; herdr_workspace?: string; prs?: string[] }> }
+type PollerState = {
+  last_poll?: string
+  reviews?: Record<string, { status?: string; slug?: string; claude_session?: string; herdr_workspace?: string; prs?: string[] }>
+}
 
 const stackChoice = atom({ plugin: 'board', key: 'reviewStack' } as const, '')
 
@@ -110,6 +113,53 @@ async function reviewFacts($: EngineInterface) {
   if (prs.length === 0) return
   github = await factsFor($, prs.map(p => trackedOf(p, github)), github.viewer)
   $.ui.invalidate('ui.render')
+}
+
+// Each review's files as last read, by directory, so an unchanged file is not parsed again
+const seenBoards = new Map<string, JsonFile<Board>>()
+const seenFacts = new Map<string, JsonFile<Facts>>()
+
+async function readPair($: EngineInterface, dir: string): Promise<{ board?: Board; facts?: Facts }> {
+  const boardFile = seenBoards.get(dir) ?? {}
+  const factsFile = seenFacts.get(dir) ?? {}
+  seenBoards.set(dir, boardFile)
+  seenFacts.set(dir, factsFile)
+  await refreshJson($, boardFile, `${dir}/board.json`)
+  await refreshJson($, factsFile, `${dir}/github.json`)
+
+  return { ...(boardFile.value && { board: boardFile.value }), ...(factsFile.value && { facts: factsFile.value }) }
+}
+
+/**
+ * Every review the poller runs and every board a session wrote by hand, each with where it stands, read from
+ * pr-review-board's own files, and when the poller last ran.
+ */
+export async function readReviews($: EngineInterface): Promise<{ reviews: ReviewDigest[]; polledAt: number; error?: string }> {
+  const out: ReviewDigest[] = []
+  let polledAt = NaN
+  try {
+    const root = await reviewsRoot($)
+    const meta = `${root}/.pr-review-board`
+    const path = (await $.env.get('PR_REVIEW_BOARD_STATE')) || `${home}/${STATE_PATH}`
+    const state = (await $.fs.exists(path)) ? (JSON.parse(await $.fs.read(path)) as PollerState) : {}
+    polledAt = Date.parse(state.last_poll ?? '')
+    for (const [key, r] of Object.entries(state.reviews ?? {})) {
+      if (!r || r.status !== 'ACTIVE') continue
+      const { board: b, facts } = await readPair($, `${meta}/${key}`)
+      out.push(digestOf(key, r.slug || key, r.claude_session ?? '', prsFromState(r.prs), b, facts))
+    }
+    const manual = (await $.fs.exists(meta))
+      ? (await $.fs.list(meta)).filter(one => one.kind === 'dir' && one.name.startsWith('manual-'))
+      : []
+    for (const one of manual) {
+      const { board: b, facts } = await readPair($, `${meta}/${one.name}`)
+      if (b) out.push(digestOf(one.name, one.name, one.name.slice('manual-'.length), [], b, facts))
+    }
+  } catch (err) {
+    return { reviews: out, polledAt, error: `Could not read the reviews: ${err instanceof Error ? err.message : String(err)}` }
+  }
+
+  return { reviews: out, polledAt }
 }
 
 export async function reviewStart($: EngineInterface) {
