@@ -34,6 +34,7 @@ export const HERDR_LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-herdr-to
 export const OPENCODE_TOPICS_FILE = join(STATE_DIR, 'opencode-topics.json')
 export const LOCALGEN_TOPICS_FILE = join(STATE_DIR, 'localgen-topics.json')
 export const REMINDERS_FILE = join(STATE_DIR, 'reminders.json')
+export const SENT_MESSAGES_FILE = join(STATE_DIR, 'sent-messages.json')
 // The token-bearing .env files. assertSendable refuses to ship these so a
 // prompt-injected topic-Claude cannot exfil the bot token via reply(files:[...]).
 export const ENV_FILES = [join(PLUGIN_ROOT, '.env'), join(STATE_DIR, '.env')]

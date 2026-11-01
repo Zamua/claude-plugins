@@ -89,6 +89,13 @@ export function parseEdit(body: unknown): EditRequest {
   }
 }
 
+export type DeleteRequest = { chatId: string; topic: string; messageId: number }
+
+export function parseDelete(body: unknown): DeleteRequest {
+  const b = object(body)
+  return { chatId: text(b, 'chat_id'), topic: topicKey(b), messageId: integer(b, 'message_id') }
+}
+
 export function parseDownload(body: unknown): { fileId: string } {
   return { fileId: text(object(body), 'file_id') }
 }

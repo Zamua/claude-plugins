@@ -46,6 +46,7 @@ import {
   INBOX_DIR,
   PID_FILE,
   PLUGIN_ROOT,
+  SENT_MESSAGES_FILE,
   SQUARE_TOPIC,
   STATE_DIR,
   TOKEN,
@@ -80,6 +81,7 @@ import { askTarget } from './ask/domain/ask'
 import { JsonAskTopicStore } from './ask/json-ask-topic-store'
 import { createAskServer } from './http/ask-server'
 import { createTopicCreation } from './topics/topic-creation'
+import { JsonSentMessages } from './sent/json-sent-messages'
 import { openOrSetAside } from './shared/state-file'
 import { randomUUID } from 'crypto'
 
@@ -232,6 +234,7 @@ const HARNESSES: readonly TopicHarnessAdapter[] = [antigravityHarness, opencodeH
 const harnessFor = (topic: string) => HARNESSES.find(h => h.owns(topic))
 const harnessOfKind = (kind: LockedHarness) => HARNESSES.find(h => h.kind === kind) as TopicHarnessAdapter
 const createTopic = createTopicCreation({ api: bot.api, harnessOfKind })
+const sentMessages = openOrSetAside('sent messages', SENT_MESSAGES_FILE, () => new JsonSentMessages(SENT_MESSAGES_FILE), log)
 
 // Asks from the phone land in one topic: a configured one, or a dedicated one created on first use.
 const askTopicStore = openOrSetAside('ask', ASK_TOPIC_FILE, () => new JsonAskTopicStore(ASK_TOPIC_FILE), log)
@@ -308,9 +311,11 @@ const http = createHttpServer({
     api: bot.api,
     downloadFile,
     sent: reply => {
-      harnessFor(reply.topic)?.sent(reply.topic, reply.messages)
+      sentMessages.record(reply.topic, reply.ids)
+      harnessFor(reply.topic)?.sent(reply.topic, reply.ids.length)
       ask.replied(reply.topic, reply.replyTo, reply.text)
     },
+    sentMessages,
   }),
   createTopic,
   schedulePanePump,

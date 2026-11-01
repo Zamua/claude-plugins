@@ -167,6 +167,7 @@ export function createHttpServer(ports: HttpPorts) {
       case ROUTE.send: if (post) return outbound.handleSend(req); break
       case ROUTE.react: if (post) return outbound.handleReact(req); break
       case ROUTE.edit: if (post) return outbound.handleEdit(req); break
+      case ROUTE.deleteMessage: if (post) return outbound.handleDelete(req); break
       case ROUTE.download: if (post) return outbound.handleDownload(req); break
       case ROUTE.permissionRequest: if (post) return handlePermissionRequest(req); break
     }
