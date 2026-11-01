@@ -6,8 +6,8 @@ import type { Item, ItemLink, Link, Node, Origin, Shape, Status, Tree } from './
 import { liveNow, refreshLive, selfSession, startSession } from './sessions'
 import { followFile, hiddenOf, isLocal, itemsAndLinks, localId, readLocalNow, sectionMapOf, sectionNamesOf, writeLocal } from './sources/file'
 import type { LocalFile, LocalItem } from './sources/file'
-import { currentWork, START_ENV, WORK_TOOL, workTree } from './view'
-import type { WorkBoard } from './view'
+import { currentWork, START_ENV, WORK_TOOL, workTree } from './board'
+import type { WorkBoard } from './board'
 
 const DESCRIPTION = `Read and change the work view of the board pane: one tree of everything the person works on, from their goals down to tasks, with responsibilities such as on-call or tooling beside them. Items nest to any depth; each has a kind (the person's own name for its level, such as Project or Task) and a status: needs (needs the person), flight (in flight), waiting, next, watching, done.
 - Call with no fields to read the tree with every Item's id.

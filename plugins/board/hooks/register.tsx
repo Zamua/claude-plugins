@@ -17,19 +17,8 @@ import { markWorkActive } from './work/cache'
 import { migrateFile, reportText } from './work/migrate'
 import { rhythmsHooks } from './work/sources/rhythms'
 import { workHooks, workToolStart } from './work/tool'
-import {
-  choosePeriod,
-  configureWork,
-  countPlaced,
-  currentWork,
-  isWithin,
-  placeBoards,
-  workBreadcrumb,
-  workRefresh,
-  workStart,
-  workView,
-  workViewHooks,
-} from './work/view'
+import { choosePeriod, configureWork, countPlaced, currentWork, isWithin, placeBoards, workRefresh, workStart } from './work/board'
+import { workBreadcrumb, workView, workViewHooks } from './work/view'
 
 const CONFIG_PATH = '.config/board/boards.json'
 const BUILT_IN = ['session', 'prs', 'review']
