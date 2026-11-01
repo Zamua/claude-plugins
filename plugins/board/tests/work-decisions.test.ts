@@ -31,14 +31,16 @@ const ASKS = {
   ],
 }
 
-test("the root's decisions view lists every ask, one blocking a session first, then the nearest due, and opens to its options", async ($, on) => {
+test("the root's decisions view groups asks under their top-level Item and parent, the group holding the most urgent first", async ($, on) => {
   const w = withLive(ASKS, herdrHost([ROOT, ASKER]))
   engine(on, w, NOW)
   await start($)
 
   const ui = await open($, 'decisions')
   expect(await ui.find({ key: 'tab-decisions', text: 'decisions 3' })).toBeDefined()
-  expect(await ui.find({ key: 'decisions', text: /Pick the fee route.*Approve the hostit plan.*Settle the fee account/ })).toBeDefined()
+  // The fee route blocks a waiting session, so its group leads; the hostit plan sits right under its top-level Item
+  const grouped = /Updated 5m agoPayments rework\s*Gross funding.*Pick the fee route.*Settle the fee account.*Tooling.*Approve the hostit plan/
+  expect(await ui.find({ key: 'decisions', text: grouped })).toBeDefined()
   expect(await ui.find({ key: 'drow-file:route', text: /^▸ Pick the fee route\s+fee-route\s+2h$/ })).toBeDefined()
   expect(await ui.find({ key: 'drow-file:plan', text: /Approve the hostit plan\s+in 22h/ })).toBeDefined()
 
@@ -72,5 +74,17 @@ test('a session that is not the root has no decisions view', async ($, on) => {
 
   const ui = await open($, 'work')
   expect(await ui.find({ key: 'tab-decisions' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('asks linked under one ask sit beneath it, which shows the earliest due of them', async ($, on) => {
+  const links = [...ASKS.links, { child: 'file:plan', parent: 'file:route', at }]
+  engine(on, withLive({ ...ASKS, links }, herdrHost([ROOT, ASKER])), NOW)
+  await start($)
+
+  const ui = await open($, 'decisions')
+  expect(await ui.find({ key: 'drow-file:route', text: /Pick the fee route\s+fee-route\s+in 22h\s+2h$/ })).toBeDefined()
+  expect(await ui.find({ key: 'decisions', text: /Pick the fee route.*Approve the hostit plan.*Settle the fee account/ })).toBeDefined()
+  expect(await ui.find({ key: 'dpart-file:tooling' })).toBeUndefined()
   await ui.unmount()
 })

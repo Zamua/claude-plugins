@@ -150,16 +150,23 @@ added.
 
 ### Decisions
 
-The root session's `decisions` view lists every Item whose own status is `needs`, from any Source: what blocks a
-session waiting on you first, then the nearest due, then the one waiting longest. A line gives the ask, the session
-that raised it, when it is due and how long it has waited. Pressing one opens its detail, where the options and the
-recommendation live, its links and a way to the session that asked.
+The root session's `decisions` view lists every Item whose own status is `needs`, from any Source, under a heading per
+top-level Item and grouped by the Item they sit under. An ask linked under another ask sits beneath it, so linking
+related asks under one Item or one ask groups them. What blocks a session waiting on you comes first, then the nearest
+due, then the one waiting longest; a group and a heading rank by their most urgent ask, and a group shows its earliest
+due. A line gives the ask, the session that raised it, when it is due and how long it has waited. Pressing one opens
+its detail, where the options and the recommendation live, its links and a way to the session that asked.
 
 ```
                                               Updated 1m ago
-▸ Pick the fee route            fee-route              2h
-▸ Approve the vendor plan       vendor-work    in 22h    
-▸ Settle the fee account
+Grow the partner network
+Monday partner post                          in 10h
+  ▸ Post the partner questions    partners   in 10h      2h
+    ▸ Decide on expired records   partners   in 10h      2h
+  ▸ Reply in the compliance thread partners  Tue 11-03   1h
+
+Refunds
+▸ Send the refund draft           refunds                3d
  ▸ ✓ 2 answered
 ```
 
