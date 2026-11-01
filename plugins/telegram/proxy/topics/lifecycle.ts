@@ -52,6 +52,8 @@ export type TopicLifecyclePorts = {
   turnEnded: (topic: string) => void
   /** The resumed session received its resume notice. */
   noticeDelivered: (topic: string) => void
+  /** A topic's Claude was started under herdr-core. */
+  hcLaunched?: () => void
 }
 
 // Every message to a topic that cannot start retries ensureSession, so its
@@ -105,7 +107,7 @@ type PanePumpState = {
   turn: PaneTurn
 }
 
-export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog, turnEnded, noticeDelivered }: TopicLifecyclePorts) {
+export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog, turnEnded, noticeDelivered, hcLaunched }: TopicLifecyclePorts) {
   const panePumps = new Map<string, PanePumpState>()
   const lastSpawnNotice = new Map<string, number>()
   const lastRelaunch = new Map<string, number>()
@@ -368,6 +370,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
       }
       st.claudeSessionId = conversation.claudeSessionId
       apply(topic, st, { type: 'started', session: name, now: Date.now(), profile: TOPIC_LAUNCH_PROFILE_VERSION })
+      if (spec.muxKind === 'hc') hcLaunched?.()
       log(
         `${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" ` +
         `(claude ${st.claudeSessionId}; ${route.provider}/${route.model}; ${route.effort}; ` +

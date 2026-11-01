@@ -132,6 +132,10 @@ if a[0] == 'ls':
     print(json.dumps({'terminals': [{'address': t['address'], 'state': t['state']} for t in ts]}))
 elif a[0] == 'rm':
     state['terminals'] = [t for t in state['terminals'] if t['address'] != a[1]]; save()
+elif a[0] == 'run' and '--bg' not in a:
+    fda = os.path.join(fake, 'fda')
+    verdict = open(fda).read().strip() if os.path.exists(fda) else 'allowed'
+    print(json.dumps({'address': 'tp', 'state': 'finished', 'output': verdict + '\\n'}))
 elif a[0] == 'run':
     i, labels, name, cmd = 1, {}, None, []
     while i < len(a):
@@ -422,7 +426,7 @@ beforeAll(async () => {
       TELEGRAM_HERDR_BIN: join(home, '.local', 'bin', 'herdr'),
       TELEGRAM_HC_BIN: join(home, '.local', 'bin', 'hc'),
       HC_SOCKET: join(root, 'hc.sock'),
-      TELEGRAM_TOPICS_HC_TOPICS: '61,62,63',
+      TELEGRAM_TOPICS_HC_TOPICS: '61,62,63,64,66',
       TELEGRAM_OPENCODE_BIN: join(home, '.local', 'bin', 'opencode'),
       TELEGRAM_OPENCODE_PROJECT_DIR: join(root, 'oc-project'),
       LOCALGEN_PORT: String(qwenImage.port),
@@ -1096,6 +1100,19 @@ describe('the proxy, end to end', () => {
     expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).not.toContain('claude-moving-63')
     expect(proxyLog()).toContain('moving topic 63 from tmux to hc')
   }, 20_000)
+
+  test('the operator hears in general when the hc core loses Full Disk Access, and when it is back', async () => {
+    const general = (pattern: RegExp) => () =>
+      calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === undefined && pattern.test(c.body.text))
+    writeFileSync(join(home, 'fake', 'fda'), 'denied')
+    send(64, 'first message, a launch under hc')
+    const lost = await until('the loss notice', general(/hc topics lost Full Disk Access/))
+    expect(lost.body.text).toContain('grant Full Disk Access again to')
+    writeFileSync(join(home, 'fake', 'fda'), 'allowed')
+    send(66, 'first message, a launch under hc')
+    await until('the recovery notice', general(/hc topics have Full Disk Access again/))
+    expect(calls.filter(c => c.method === 'sendMessage' && /Full Disk Access/.test(c.body.text ?? ''))).toHaveLength(2)
+  }, 30_000)
 
   // Runs last: it stops the proxy.
   test('SIGTERM stops polling, removes the pid file, and exits cleanly', async () => {

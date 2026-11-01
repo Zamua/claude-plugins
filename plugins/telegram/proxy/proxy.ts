@@ -28,7 +28,7 @@
  *                               plugin:telegram@zamua)
  */
 
-import { mkdirSync } from 'fs'
+import { mkdirSync, realpathSync } from 'fs'
 import { join } from 'path'
 import { Bot } from 'grammy'
 import { lockRefusal } from './harness/domain/topic-harness'
@@ -43,6 +43,9 @@ import {
   BOT_API_ROOT,
   CAPACITY_POLL_MS,
   GROUP_CHAT_ID,
+  HC_BIN,
+  HC_SESSION,
+  HC_TOPICS,
   INBOX_DIR,
   PID_FILE,
   PLUGIN_ROOT,
@@ -60,6 +63,7 @@ import { createLocalgenHarness } from './harness/localgen/localgen-harness'
 import { createOpencodeHarness } from './harness/opencode/opencode-harness'
 import { createAntigravityHarness } from './harness/antigravity/antigravity-harness'
 import { createRouting } from './routing/routing'
+import { createFullDiskAccessWatch, hcFullDiskAccessProbe } from './topics/hc-full-disk-access'
 import { createTopicLifecycle } from './topics/lifecycle'
 import { createUpdateRestarts } from './topics/update-restarts'
 import { createInboundRouter, registerCommands } from './chat/inbound-router'
@@ -128,6 +132,7 @@ const {
   modelCatalog: () => modelCatalog(),
   turnEnded: topic => turnEnded(topic),
   noticeDelivered: topic => noticeDelivered(topic),
+  hcLaunched: () => hcFullDiskAccess?.check(),
 })
 const { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply, handleSquareUserMessage } = createSquare({
   chat,
@@ -226,6 +231,24 @@ const {
 const sayIn = (_chatId: string, topic: string, t: string) =>
   chat.send(topic, { text: t }).catch(noticeFailed('notice', topic))
 
+// The hc core's Full Disk Access is pinned to its binary, so an hc update loses
+// it; the operator hears in general when a probe finds it lost or back.
+const hcFullDiskAccess = HC_TOPICS.size
+  ? createFullDiskAccessWatch({
+      probe: hcFullDiskAccessProbe(HC_BIN, HC_SESSION),
+      notify: text => void sayIn('', 'general', text),
+      log,
+      session: HC_SESSION,
+      binary: () => {
+        try {
+          return realpathSync(HC_BIN)
+        } catch {
+          return HC_BIN
+        }
+      },
+    })
+  : undefined
+
 // ---- harness registry --------------------------------------------------------
 //
 // Each harness that owns a topic instead of a Claude pane answers that topic's
@@ -286,6 +309,10 @@ loadConvs()
 resumePendingPanes()
 void refreshProviderCapacity()
 void antigravity.refreshUsage(false).catch(() => {})
+if (hcFullDiskAccess) {
+  hcFullDiskAccess.check()
+  setInterval(() => hcFullDiskAccess.check(), 3_600_000)
+}
 if (Number.isFinite(CAPACITY_POLL_MS) && CAPACITY_POLL_MS >= 60_000) {
   setInterval(() => void refreshProviderCapacity(), CAPACITY_POLL_MS)
   setInterval(() => void antigravity.refreshUsage(true).catch(() => {}), CAPACITY_POLL_MS)

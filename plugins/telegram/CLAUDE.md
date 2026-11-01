@@ -242,7 +242,9 @@ core:
     no core starts one and the core hands its environment to every terminal.
     For the same reason neither the proxy nor the launcher calls hc while the
     session's socket accepts no connection: the core's launchd agent starts it,
-    with its own Full Disk Access grant.
+    with its own Full Disk Access grant. That grant is pinned to the binary, so
+    the proxy probes it (at boot, after each hc launch, hourly) and posts in
+    general when it is lost or back (`topics/hc-full-disk-access.ts`).
     Claude reports `done` after each turn, which hc's own `if: idle` send
     condition refuses, so `HcMux.prompt` checks the boundary itself.
   - The claude invocation (`PANE_CMD`) is byte-identical for all backends. It
