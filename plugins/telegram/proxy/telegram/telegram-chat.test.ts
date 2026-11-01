@@ -171,3 +171,14 @@ describe('actions', () => {
     ])
   })
 })
+
+test('renaming a topic edits its forum topic; General has its own call', async () => {
+  const { chat, calls } = chatOver({ editForumTopic: true, editGeneralForumTopic: true })
+  await chat.renameTopic('42', 'build')
+  await chat.renameTopic('general', 'Home')
+  expect(calls).toEqual([
+    { method: 'editForumTopic', args: [CHAT, 42, { name: 'build' }] },
+    { method: 'editGeneralForumTopic', args: [CHAT, 'Home'] },
+  ])
+})
+

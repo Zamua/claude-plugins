@@ -67,6 +67,8 @@ export interface ChatPort {
   download(fileRef: string, nameHint?: string): Promise<string | null>
   /** Creates a topic and gives its key. */
   createTopic(name: string): Promise<string>
+  /** Renames a topic, General included. */
+  renameTopic(topic: string, name: string): Promise<void>
   /** The command menu the chat offers its members. */
   setCommands(commands: readonly ChatCommand[]): Promise<void>
   /** A link that opens the message for a reader, when the transport has one. */

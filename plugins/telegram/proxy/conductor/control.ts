@@ -1,16 +1,17 @@
-// The operator's commands from the app: a route switch, relaunch, interrupt
-// and usage. Each runs through the same routing and lifecycle Telegram's
+// The operator's commands from the app: a route switch, relaunch, interrupt,
+// usage, and creating, renaming, pinning and muting topics. Each runs through the same routing and lifecycle Telegram's
 // verbs use, and an act that changes a topic is echoed into it, so Telegram
 // stays the full record.
 import type { ProviderCapacity } from '../routing/domain/provider-capacity'
 import type { ProviderCatalog } from '../routing/provider-catalog'
 import type { RouteChoice, RouteRefusal, RouteRequest } from '../routing/routing'
 import { routeChoice } from './domain/route-choice'
+import { topicName, topicPatch } from './domain/topic-edit'
 import { wireRoutes, wireUsage } from './wire'
 
 export type ControlResult =
   | { ok: Record<string, unknown> }
-  | { refused: { status: 400 | 404 | 409 | 429; code: string; message: string } }
+  | { refused: { status: 400 | 404 | 409 | 429 | 502; code: string; message: string } }
 
 export type ControlPorts = {
   catalog: () => ProviderCatalog
@@ -30,6 +31,12 @@ export type ControlPorts = {
   interrupt: (topic: string) => boolean
   /** Posts into the topic's chat. */
   say: (topic: string, text: string) => Promise<void>
+  /** Creates a Claude topic in the chat and the proxy; gives its id. */
+  createTopic: (name: string) => Promise<string>
+  /** Renames the chat's topic and the proxy's record of it. */
+  renameTopic: (topic: string, name: string) => Promise<void>
+  /** The app's own pin and mute. */
+  setPrefs: (topic: string, prefs: { pinned?: boolean; muted?: boolean }) => void
 }
 
 export const COMMANDS = [
@@ -45,7 +52,33 @@ const REFUSALS: Record<RouteRefusal, { status: 409 | 429; code: string }> = {
 }
 
 export function conductorControl(ports: ControlPorts) {
-  const refuse = (status: 400 | 404 | 409 | 429, code: string, message: string): ControlResult => ({ refused: { status, code, message } })
+  const refuse = (status: 400 | 404 | 409 | 429 | 502, code: string, message: string): ControlResult => ({ refused: { status, code, message } })
+  const why = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+  async function createTopic(body: Record<string, unknown>): Promise<ControlResult> {
+    const name = topicName(body.name)
+    if (typeof name !== 'string') return refuse(400, name.code, name.message)
+    try {
+      return { ok: { id: await ports.createTopic(name) } }
+    } catch (error) {
+      return refuse(502, 'chat_failed', `the chat did not create the topic: ${why(error)}`)
+    }
+  }
+
+  async function patchTopic(topic: string, body: Record<string, unknown>): Promise<ControlResult> {
+    const patch = topicPatch(body)
+    if ('code' in patch) return refuse(400, patch.code, patch.message)
+    if (patch.name !== undefined) {
+      try {
+        await ports.renameTopic(topic, patch.name)
+      } catch (error) {
+        return refuse(502, 'chat_failed', `the chat did not rename the topic: ${why(error)}`)
+      }
+    }
+    const { name: _name, ...prefs } = patch
+    if (Object.keys(prefs).length) ports.setPrefs(topic, prefs)
+    return { ok: {} }
+  }
 
   async function route(topic: string, body: unknown): Promise<ControlResult> {
     const why = ports.noAgent(topic) ?? ports.locked(topic)
@@ -94,6 +127,8 @@ export function conductorControl(ports: ControlPorts) {
     },
     route,
     command,
+    createTopic,
+    patchTopic,
   }
 }
 

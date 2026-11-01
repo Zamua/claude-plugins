@@ -61,6 +61,17 @@ test('the operator\'s messages, ask posts and unlisted topics are not pushed', a
   expect(sent).toEqual([])
 })
 
+test('a muted topic is not pushed, and its unread leaves the badge', async () => {
+  const { store, sent } = setup()
+  store.append(agent('general', 'earlier'))
+  store.setPrefs('general', { muted: true })
+  store.append(agent('general', 'quiet'))
+  store.append(agent('7', 'loud'))
+  await settle()
+  expect(sent.map(s => (s.push.payload.aps as { alert: { body: string } }).alert.body)).toEqual(['earlier', 'loud'])
+  expect((sent[1].push.payload.aps as { badge: number }).badge).toBe(1)
+})
+
 test('a message is pushed once, however many events name it', async () => {
   const { store, sent } = setup()
   const m = store.append(agent('7', 'once'))

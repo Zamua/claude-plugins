@@ -158,7 +158,10 @@ Each has a golden fixture in `conductor-v1/`.
 `title` (the session's own title, when it has one), `pinned` (`general` first),
 `muted`, `state` (`starting`, `idle`, `working`, `blocked`, `stopped`,
 `missing`), `state_since`, `unread`, `read_seq`, `pending_approvals`, `route`
-(`provider`, `model`, `effort`), `last_message` (`preview`, `author`, `at`).
+(`provider`, `model`, `effort`), `last_message` (`preview`, `format` as the
+message was written, `author`, `at`). `pinned` and `muted` are the app's own:
+`general` is pinned until changed, a muted topic gets no pushes and leaves the
+badge.
 
 **Message:** `id`, `topic`, `seq`, `author` (`operator`, `agent`, `proxy`),
 `origin` (`app`, `telegram`, `proxy`), `kind` (`null`, `reminder` or `ask`),
@@ -193,9 +196,9 @@ All under `/v1`. "Signed" marks a write that needs the device headers.
 | `GET /me` | | the device, the server version |
 | `POST /devices` | enrollment | `public_key`, `name`, `apns_token`, `apns_env`; returns the device |
 | `PUT /devices/{id}/push` | signed | the device's own `apns_token` (hex, or null for no push) and `apns_env`; returns the device |
-| `GET /topics` | | `{cursor, topics}`: every topic, and the cursor they are current to |
-| `POST /topics` | signed | create: `name` |
-| `PATCH /topics/{id}` | signed | `name`, `pinned`, `muted` |
+| `GET /topics` | | `{cursor, history_since, topics}`: every topic, the cursor they are current to, and when the kept history begins (older messages are only in Telegram) |
+| `POST /topics` | signed | create: `name`; returns the topic (201) |
+| `PATCH /topics/{id}` | signed | any of `name` (renames the Telegram topic), `pinned`, `muted`; returns the topic |
 | `GET /topics/{id}/messages?before_seq=&limit=` | | `{cursor, messages}`: history, newest first, at most 100 |
 | `POST /topics/{id}/messages` | signed | multipart: `text` (at most 64 KB), `client_id`, `reply_to`, `image[]` (JPEG or PNG, at most 10, 20 MB each); returns the message with `delivery: accepted`; a repeated `client_id` returns the first result |
 | `POST /topics/{id}/read` | signed | `seq`; read state is shared by every device |

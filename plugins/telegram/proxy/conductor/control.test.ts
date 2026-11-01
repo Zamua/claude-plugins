@@ -28,6 +28,9 @@ function setup(over: Partial<ControlPorts> = {}) {
     relaunch: async topic => void relaunched.push(topic),
     interrupt: topic => topic === '42',
     say: async (_topic, text) => void said.push(text),
+    createTopic: async name => (name === 'boom' ? Promise.reject(new Error('Bad Request')) : '501'),
+    renameTopic: async (topic, name) => void said.push(`renamed ${topic} to ${name}`),
+    setPrefs: (topic, prefs) => void said.push(`prefs ${topic} ${JSON.stringify(prefs)}`),
     ...over,
   }
   return { control: conductorControl(ports), said, requested, relaunched, refreshed: () => refreshed }
@@ -92,3 +95,21 @@ test('the reads: the palette, the catalog and the usage windows', async () => {
   expect(await control.usage()).toEqual({ providers: [{ id: 'anthropic', windows: [{ name: '5h', used_percent: 10, resets_at: null }] }] })
   expect(refreshed()).toBe(1)
 })
+
+describe('topics', () => {
+  test('a topic is created by name and its id given; a chat failure is 502', async () => {
+    const { control } = setup()
+    expect(await control.createTopic({ name: ' build ' })).toEqual({ ok: { id: '501' } })
+    expect(await control.createTopic({ name: '' })).toMatchObject({ refused: { status: 400, code: 'bad_name' } })
+    expect(await control.createTopic({ name: 'boom' })).toMatchObject({ refused: { status: 502, code: 'chat_failed' } })
+  })
+
+  test('a patch renames through the chat and sets pin and mute apart from the name', async () => {
+    const { control, said } = setup()
+    expect(await control.patchTopic('42', { name: 'ci', muted: true })).toEqual({ ok: {} })
+    expect(await control.patchTopic('42', { pinned: true })).toEqual({ ok: {} })
+    expect(await control.patchTopic('42', { muted: 1 })).toMatchObject({ refused: { status: 400, code: 'bad_muted' } })
+    expect(said).toEqual(['renamed 42 to ci', 'prefs 42 {"muted":true}', 'prefs 42 {"pinned":true}'])
+  })
+})
+

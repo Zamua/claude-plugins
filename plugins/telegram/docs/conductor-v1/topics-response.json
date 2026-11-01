@@ -1,5 +1,6 @@
 {
   "cursor": 1209,
+  "history_since": "2026-11-01T21:59:51.000Z",
   "topics": [
     {
       "id": "16832",
@@ -20,6 +21,7 @@
       },
       "last_message": {
         "preview": "Running the suite now.",
+        "format": "plain",
         "author": "agent",
         "at": "2026-11-01T20:25:37.123Z"
       }

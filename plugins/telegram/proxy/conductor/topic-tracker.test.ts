@@ -40,3 +40,14 @@ test('a topic appearing later is news; since moves only when the state does', ()
   tracker.refresh()
   expect(tracker.since('7')).toBe('2026-11-01T20:00:01.000Z')
 })
+
+test('what extra reports about a topic is news too', () => {
+  let muted = false
+  const changed: string[] = []
+  const tracker = topicTracker({ topics: () => [topic()], store: { topicChanged: t => (changed.push(t), 1) }, extra: () => ({ muted }) })
+  tracker.refresh()
+  muted = true
+  tracker.refresh()
+  expect(changed).toEqual(['7'])
+})
+

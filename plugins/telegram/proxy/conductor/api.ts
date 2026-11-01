@@ -107,19 +107,20 @@ export function createConductorApi(ports: ConductorApiPorts) {
   const now = ports.now ?? Date.now
   const sockets = new Set<ServerWebSocket<SocketData>>()
   const inFlight = new Map<string, Promise<Response>>()
-  const tracker = topicTracker({ topics: ports.topics, store, now })
+  const tracker = topicTracker({ topics: ports.topics, store, extra: topic => store.prefs(topic), now })
 
   function topicView(t: TopicSummary): TopicView {
     const { last, unread, readSeq } = store.summary(t.id)
+    const prefs = store.prefs(t.id)
     return {
       ...t,
-      pinned: t.id === 'general',
-      muted: false,
+      pinned: prefs.pinned ?? t.id === 'general',
+      muted: prefs.muted ?? false,
       stateSince: tracker.since(t.id),
       unread,
       readSeq,
       pendingApprovals: 0,
-      lastMessage: last ? { preview: last.text.slice(0, 200), author: last.author, at: last.at } : null,
+      lastMessage: last ? { preview: last.text.slice(0, 200), format: last.format, author: last.author, at: last.at } : null,
     }
   }
 
@@ -334,6 +335,23 @@ export function createConductorApi(ports: ConductorApiPorts) {
     return answer(kind === 'route' ? await control.route(topic, fields) : await control.command(topic, fields))
   }
 
+  /** Creating a topic, or changing its name, pin or mute: recorded, done, then answered with the topic as it is now. */
+  async function topicAct(topic: string | undefined, device: Device, body: Uint8Array, write: SignedWrite): Promise<Response> {
+    const control = ports.control
+    if (!control) return fail(503, 'not_available', 'commands are not wired on this server')
+    if (topic !== undefined && !ports.topics().some(t => t.id === topic)) return fail(404, 'not_found', 'no such topic')
+    const fields = jsonBody(body)
+    if (fields instanceof Response) return fields
+    const changes = Object.fromEntries(['name', 'pinned', 'muted'].filter(k => k in fields).map(k => [k, fields[k]]))
+    ports.ledger.append({ kind: 'topic', action: topic === undefined ? 'create' : 'patch', device: device.id, ...(topic === undefined ? {} : { topic }), ...changes, ...signed(write) })
+    const result = topic === undefined ? await control.createTopic(fields) : await control.patchTopic(topic, fields)
+    if ('refused' in result) return answer(result)
+    const id = topic ?? String(result.ok.id)
+    tracker.refresh()
+    const listed = ports.topics().find(t => t.id === id)
+    return listed ? Response.json(wireTopic(topicView(listed)), { status: topic === undefined ? 201 : 200 }) : fail(502, 'not_listed', 'the topic was changed but is not listed')
+  }
+
   async function markRead(topic: string, body: Uint8Array): Promise<Response> {
     let seq: unknown
     try {
@@ -348,7 +366,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
   function topics(): Response {
     const listed = ports.topics().map(topicView)
     listed.sort((a, b) => Number(b.pinned) - Number(a.pinned) || (b.lastMessage?.at ?? '').localeCompare(a.lastMessage?.at ?? ''))
-    return Response.json({ cursor: store.latestCursor(), topics: listed.map(wireTopic) })
+    return Response.json({ cursor: store.latestCursor(), history_since: store.historySince(), topics: listed.map(wireTopic) })
   }
 
   function history(topic: string, url: URL): Response {
@@ -376,9 +394,18 @@ export function createConductorApi(ports: ConductorApiPorts) {
     if (req.method === 'POST' && url.pathname === '/v1/devices') return enroll(req, admission.nodeId)
 
     const device = deviceFor(req, admission.nodeId)
-    if (!device) return fail(401, 'unknown_device', 'X-Device names no device enrolled from this node')
+    if (!device) {
+      ports.log(`conductor: ${req.method} ${url.pathname} 401 unknown_device`)
+      return fail(401, 'unknown_device', 'X-Device names no device enrolled from this node')
+    }
     store.touchDevice(device.id)
+    const started = now()
+    const res = await serve(req, url, device, server)
+    ports.log(`conductor: ${req.method} ${url.pathname} ${res?.status ?? 101} ${device.id} ${now() - started}ms`)
+    return res
+  }
 
+  async function serve(req: Request, url: URL, device: Device, server: Server<SocketData>): Promise<Response | undefined> {
     if (url.pathname === '/v1/stream') {
       return server.upgrade(req, { data: { deviceId: device.id, ready: false, screens: new Set<string>() } })
         ? undefined
@@ -389,6 +416,12 @@ export function createConductorApi(ports: ConductorApiPorts) {
       const topic = decodeURIComponent(write[1])
       return signedWrite(req, url, device, (body, signed) =>
         write[2] === 'messages' ? sendMessage(req, topic, device, body, signed) : markRead(topic, body))
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/topics') return signedWrite(req, url, device, (body, signedBy) => topicAct(undefined, device, body, signedBy))
+    const topicPath = url.pathname.match(/^\/v1\/topics\/([^/]+)$/)
+    if (req.method === 'PATCH' && topicPath) {
+      const topic = decodeURIComponent(topicPath[1])
+      return signedWrite(req, url, device, (body, signedBy) => topicAct(topic, device, body, signedBy))
     }
     const act = url.pathname.match(/^\/v1\/topics\/([^/]+)\/(route|commands)$/)
     if (act && ((act[2] === 'route' && req.method === 'PUT') || (act[2] === 'commands' && req.method === 'POST'))) {
@@ -417,8 +450,10 @@ export function createConductorApi(ports: ConductorApiPorts) {
 
   /** Replays what the client missed and marks it live in one synchronous step, so no event falls between. */
   function hello(socket: ServerWebSocket<SocketData>, since: unknown) {
+    let replayed = 0
     if (since !== undefined) {
       if (!Number.isInteger(since) || (since as number) < 0 || (since as number) > store.latestCursor()) {
+        ports.log(`conductor: stream ${socket.data.deviceId} hello since=${String(since)}: reset`)
         socket.send('{"type":"reset"}')
         return
       }
@@ -426,19 +461,28 @@ export function createConductorApi(ports: ConductorApiPorts) {
       for (let page = store.eventsAfter(cursor, REPLAY_PAGE); page.length; page = store.eventsAfter(cursor, REPLAY_PAGE)) {
         for (const event of page) {
           const wire = wireEvent(event)
-          if (wire) socket.send(JSON.stringify(wire))
+          if (wire) {
+            socket.send(JSON.stringify(wire))
+            replayed++
+          }
         }
         cursor = page[page.length - 1].cursor
       }
     }
     socket.data.ready = true
-    socket.send(JSON.stringify({ type: 'ready', cursor: store.latestCursor() }))
+    const latest = store.latestCursor()
+    ports.log(`conductor: stream ${socket.data.deviceId} hello since=${since ?? 'none'}: replayed ${replayed}, ready at ${latest}`)
+    socket.send(JSON.stringify({ type: 'ready', cursor: latest }))
   }
 
   const websocket: WebSocketHandler<SocketData> = {
-    open: socket => void sockets.add(socket),
-    close(socket) {
+    open(socket) {
+      sockets.add(socket)
+      ports.log(`conductor: stream ${socket.data.deviceId} open (${sockets.size} open)`)
+    },
+    close(socket, code) {
       sockets.delete(socket)
+      ports.log(`conductor: stream ${socket.data.deviceId} closed (${code})`)
       for (const topic of socket.data.screens) unwatch(topic)
     },
     message(socket, raw) {

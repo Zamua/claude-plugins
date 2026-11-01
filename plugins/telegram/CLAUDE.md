@@ -218,8 +218,11 @@ hc CLI, so it cannot start a core) and keeps its snapshot current through
 title and screen (`domain/agent-state.ts`), and `topic-tracker.ts` makes each
 change of state, title, name or route a `topic` event in the store.
 `control.ts` serves the app's commands (route switch, usage, relaunch,
-interrupt) through routing's `requestRoute`, the one path the `/model` picker
-also takes, and the lifecycle; each is a ledger entry before it runs. With
+interrupt, topic create and rename) through routing's `requestRoute`, the one
+path the `/model` picker also takes, the lifecycle and the chat port; each is a
+ledger entry before it runs. Pin and mute are the store's own (`topic_prefs`).
+Every admitted request and the stream's open, hello and close are logged
+(`conductor: ...`). With
 `CONDUCTOR_LISTEN` set, `mirroredChat` wraps the
 chat port each service gets, so every message sent to a topic is also kept in
 SQLite (author `agent` for the MCP's `/send`, `proxy` for everything else, with

@@ -17,6 +17,7 @@
   },
   "last_message": {
     "preview": "Running the suite now.",
+    "format": "plain",
     "author": "agent",
     "at": "2026-11-01T20:25:37.123Z"
   }

@@ -36,11 +36,14 @@ CREATE TABLE IF NOT EXISTS devices (
   apns_token TEXT, apns_env TEXT, enrolled_at TEXT NOT NULL, last_seen TEXT
 );
 CREATE TABLE IF NOT EXISTS read_state (topic TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS topic_prefs (topic TEXT PRIMARY KEY, pinned INTEGER, muted INTEGER);
 CREATE TABLE IF NOT EXISTS writes (
   device TEXT NOT NULL, client_id TEXT NOT NULL, body_sha256 TEXT NOT NULL,
   status INTEGER NOT NULL, response TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (device, client_id)
 );
 `
+
+export type TopicPrefs = { pinned: boolean | null; muted: boolean | null }
 
 type MessageRow = {
   id: string; topic: string; seq: number; author: string; origin: string; kind: string | null; text: string
@@ -116,6 +119,21 @@ export class ConductorStore {
     return this.summary(topic).readSeq
   }
 
+  /** The app's own pin and mute for a topic; null where the operator never set one. */
+  prefs(topic: string): TopicPrefs {
+    const row = this.db.query('SELECT pinned, muted FROM topic_prefs WHERE topic = ?').get(topic) as { pinned: number | null; muted: number | null } | null
+    const flag = (v: number | null | undefined) => (v === null || v === undefined ? null : v === 1)
+    return { pinned: flag(row?.pinned), muted: flag(row?.muted) }
+  }
+
+  setPrefs(topic: string, prefs: { pinned?: boolean; muted?: boolean }): void {
+    const now = this.prefs(topic)
+    const bit = (v: boolean | null) => (v === null ? null : v ? 1 : 0)
+    this.db
+      .query('INSERT INTO topic_prefs (topic, pinned, muted) VALUES (?, ?, ?) ON CONFLICT (topic) DO UPDATE SET pinned = excluded.pinned, muted = excluded.muted')
+      .run(topic, bit(prefs.pinned ?? now.pinned), bit(prefs.muted ?? now.muted))
+  }
+
   /** A device's earlier write under this client id, kept so a retry gets the first answer. */
   earlierWrite(device: string, clientId: string): { bodySha256: string; status: number; response: string } | undefined {
     const row = this.db
@@ -133,6 +151,11 @@ export class ConductorStore {
   /** Called with each event once it is stored. */
   onEvent(listener: (event: StoredEvent) => void): void {
     this.listeners.push(listener)
+  }
+
+  /** When the kept history begins: the oldest message's time, or null before the first. */
+  historySince(): string | null {
+    return (this.db.query('SELECT MIN(at) AS at FROM messages').get() as { at: string | null }).at
   }
 
   latestCursor(): number {
