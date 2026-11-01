@@ -286,7 +286,19 @@ to another harness (no route or interrupt), a provider at its limit, or an
 interrupt with no agent running; `429` a route change right after another.
 
 An approval resolves as expired when the session leaves `blocked` without an
-answer from the app, for example when the operator answered at the desktop.
+answer from the app, for example when the operator answered at the desktop:
+`resolved` is `{choice: null, by: null, at}` (`conductor-v1/approval-expired.json`).
+
+Built so far is the read side. An hc topic's session that reports `blocked`
+opens one approval: its kind and words are the session's own report, and its
+choices are the numbered lines of the dialog on screen (`domain/approval.ts`,
+tested against a real Claude Code permission dialog; the plain "Yes" approves,
+the first "No" denies). A dialog not yet drawn gets a few seconds for its
+choices. A session blocked on a new dialog expires the old approval and opens
+another. Approvals stream as `approval` events, `GET /approvals?state=open`
+lists them, and a topic's `pending_approvals` counts them. Answering
+(`POST /approvals/{id}`) and approval pushes wait for C6b, so that only the
+proxy can press a session's keys.
 
 ## Push
 

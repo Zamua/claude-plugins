@@ -58,3 +58,12 @@ describe('hcRuntime', () => {
     expect(hcRuntime(undefined)).toBe('missing')
   })
 })
+
+test('a blocked terminal carries what it said it waits on', () => {
+  const [t] = parseHcTerminals({ terminals: [{
+    address: 't4', state: 'live', labels: { session: 's' }, reported: true,
+    status: { app: 'claude-code', state: 'blocked', kind: 'permission', msg: 'approve Bash: touch /tmp/x' },
+  }] })
+  expect(t).toMatchObject({ status: 'blocked', blocked: { kind: 'permission', msg: 'approve Bash: touch /tmp/x' } })
+})
+

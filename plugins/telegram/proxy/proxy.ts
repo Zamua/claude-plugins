@@ -70,7 +70,8 @@ import { listenMode, startConductor } from './conductor/conductor'
 import { Ledger } from './conductor/ledger'
 import { tailscaleCli } from './conductor/tailscale'
 import { conductorControl } from './conductor/control'
-import { conductorScreen, conductorTopics } from './conductor/topic-source'
+import { conductorBlocked, conductorScreen, conductorScreenText, conductorTopics } from './conductor/topic-source'
+import { trackApprovals } from './conductor/approvals'
 import type { HcTopics } from './conductor/topic-source'
 import { watchHc } from './conductor/hc-watch'
 import { hcEnvironment, hcSocketPath } from './topics/hc-mux'
@@ -420,6 +421,21 @@ const conductor = conductorStore && conductorMode?.listener
     })
   : undefined
 if (!conductor) hcTopics?.watch.stop()
+// Approvals: read side only until sessions are isolated from each other (C6b).
+const approvalSweep = conductor && conductorStore && hcTopics
+  ? (() => {
+      const approvals = trackApprovals({
+        store: conductorStore,
+        topics: conductorTopicList,
+        blocked: topic => conductorBlocked(topic, hcTopics),
+        screen: topic => conductorScreenText(topic, hcTopics),
+        log,
+      })
+      const check = () => void approvals.check().catch(e => log(`conductor: approvals check failed: ${reason(e)}`))
+      hcTopics.watch.onChange(check)
+      return setInterval(check, 2_000)
+    })()
+  : undefined
 const conductorPush = conductor && conductorStore
   ? startConfiguredPush(CONDUCTOR_APNS, { store: conductorStore, topics: conductorTopicList, log })
   : undefined
@@ -438,6 +454,7 @@ function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
   log('shutting down')
+  clearInterval(approvalSweep)
   conductorPush?.stop()
   conductor?.stop()
   hcTopics?.watch.stop()

@@ -5,6 +5,7 @@ import type { ProviderCapacity } from '../routing/domain/provider-capacity'
 import type { ProviderCatalog } from '../routing/provider-catalog'
 import type { Reminder } from '../reminders/domain/reminder'
 import type { SecretEntry } from '../secrets/secret'
+import type { Approval } from './domain/approval'
 import type { MessageFormat, StoredMessage } from './domain/message'
 import { offered } from './domain/route-choice'
 
@@ -135,5 +136,9 @@ export function wireReminder(r: Reminder): Record<string, unknown> {
 /** Names, sizes and dates: a secret's value never leaves its file. */
 export function wireSecrets(entries: readonly SecretEntry[]): Record<string, unknown> {
   return { secrets: entries.map(e => ({ name: e.name, bytes: e.bytes, updated_at: e.mtime.toISOString() })) }
+}
+
+export function wireApproval(a: Approval): Record<string, unknown> {
+  return { id: a.id, topic: a.topic, kind: a.kind, prompt: a.prompt, choices: a.choices, created_at: a.createdAt, resolved: a.resolved }
 }
 

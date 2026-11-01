@@ -7,7 +7,17 @@ export type HcStatus = 'idle' | 'working' | 'done' | 'blocked' | 'error'
 
 /** A terminal that has not reported a status yet carries none; `title` is what its program last set, when any. */
 export type HcTerminal =
-  | { state: 'live'; address: string; session?: string; status?: HcStatus; foreground?: string; title?: string; cols?: number }
+  | {
+      state: 'live'
+      address: string
+      session?: string
+      status?: HcStatus
+      foreground?: string
+      title?: string
+      cols?: number
+      /** What a blocked program said it waits on: the kind (permission, question, auth) and its message. */
+      blocked?: { kind: string | null; msg: string }
+    }
   | { state: 'finished'; address: string; session?: string }
 
 const STATUSES = new Set<string>(['idle', 'working', 'done', 'blocked', 'error'])
@@ -25,7 +35,10 @@ export function parseHcTerminals(listed: unknown): HcTerminal[] {
     const foreground = typeof t.foreground?.name === 'string' ? { foreground: t.foreground.name as string } : {}
     const title = typeof t.title === 'string' && t.title.trim() ? { title: t.title.trim() as string } : {}
     const cols = Number.isInteger(t.cols) ? { cols: t.cols as number } : {}
-    return [{ state: 'live', address: t.address, ...session, ...status, ...foreground, ...title, ...cols }]
+    const blocked = t.reported && t.status?.state === 'blocked'
+      ? { blocked: { kind: typeof t.status.kind === 'string' ? t.status.kind : null, msg: typeof t.status.msg === 'string' ? t.status.msg : '' } }
+      : {}
+    return [{ state: 'live', address: t.address, ...session, ...status, ...foreground, ...title, ...cols, ...blocked }]
   })
 }
 

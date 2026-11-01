@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import type { StoredMessage } from './domain/message'
-import { wireDevice, wireMessage, wireRoutes, wireScreen, wireTopic, wireUsage } from './wire'
+import { wireApproval, wireDevice, wireMessage, wireRoutes, wireScreen, wireTopic, wireUsage } from './wire'
 
 const fixture = (name: string) =>
   JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'docs', 'conductor-v1', name), 'utf8'))
@@ -92,4 +92,11 @@ test('topics-tree.json: one root, every other topic under a listed parent, no cy
     }
   }
 })
+
+for (const name of ['approval-open.json', 'approval-resolved.json']) {
+  test(name, () => {
+    const f = fixture(name)
+    expect(wireApproval({ id: f.id, topic: f.topic, kind: f.kind, prompt: f.prompt, choices: f.choices, createdAt: f.created_at, resolved: f.resolved })).toEqual(f)
+  })
+}
 

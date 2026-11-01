@@ -226,7 +226,10 @@ session tree (`topics/domain/session-tree.ts`: general the root, an
 agent-created topic under its creator's) is recorded at creation in the
 registry's `session` field and served as `parent_id`, `spawned_by` and
 `spawned_at`.
-Every admitted request and the stream's open, hello and close are logged
+`approvals.ts` opens an approval while an hc topic's session is blocked on a
+dialog (choices parsed from its screen by `domain/approval.ts`) and expires it
+when the session moves on; nothing answers one yet. Every admitted request and
+the stream's open, hello and close are logged
 (`conductor: ...`). With
 `CONDUCTOR_LISTEN` set, `mirroredChat` wraps the
 chat port each service gets, so every message sent to a topic is also kept in

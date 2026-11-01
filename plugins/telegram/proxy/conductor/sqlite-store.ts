@@ -5,6 +5,7 @@ import { Database } from 'bun:sqlite'
 import { createHash, randomUUID } from 'crypto'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import type { Approval, Resolution } from './domain/approval'
 import type { BlobRef, NewMessage, StoredEvent, StoredMessage } from './domain/message'
 import type { Device } from './wire'
 
@@ -37,6 +38,10 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 CREATE TABLE IF NOT EXISTS read_state (topic TEXT PRIMARY KEY, seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS topic_prefs (topic TEXT PRIMARY KEY, pinned INTEGER, muted INTEGER);
+CREATE TABLE IF NOT EXISTS approvals (
+  id TEXT PRIMARY KEY, topic TEXT NOT NULL, kind TEXT NOT NULL, prompt TEXT NOT NULL,
+  choices TEXT NOT NULL, created_at TEXT NOT NULL, resolved TEXT
+);
 CREATE TABLE IF NOT EXISTS writes (
   device TEXT NOT NULL, client_id TEXT NOT NULL, body_sha256 TEXT NOT NULL,
   status INTEGER NOT NULL, response TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (device, client_id)
@@ -44,6 +49,13 @@ CREATE TABLE IF NOT EXISTS writes (
 `
 
 export type TopicPrefs = { pinned: boolean | null; muted: boolean | null }
+
+type ApprovalRow = { id: string; topic: string; kind: Approval['kind']; prompt: string; choices: string; created_at: string; resolved: string | null }
+
+const approvalFrom = (row: ApprovalRow): Approval => ({
+  id: row.id, topic: row.topic, kind: row.kind, prompt: row.prompt, choices: JSON.parse(row.choices),
+  createdAt: row.created_at, resolved: row.resolved ? JSON.parse(row.resolved) : null,
+})
 
 type MessageRow = {
   id: string; topic: string; seq: number; author: string; origin: string; kind: string | null; text: string
@@ -89,6 +101,41 @@ export class ConductorStore {
     })()
     for (const listener of this.listeners) listener(stored)
     return stored.message
+  }
+
+  /** Opens an approval for a blocked session and announces it. */
+  openApproval(input: Pick<Approval, 'topic' | 'kind' | 'prompt' | 'choices'>, at = new Date().toISOString()): Approval {
+    const id = `ap_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    this.db
+      .query('INSERT INTO approvals (id, topic, kind, prompt, choices, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, input.topic, input.kind, input.prompt, JSON.stringify(input.choices), at)
+    return this.announceApproval(id) as Approval
+  }
+
+  /** Resolves an open approval and announces it; undefined when it is unknown or already resolved. */
+  resolveApproval(id: string, resolution: Resolution): Approval | undefined {
+    const changed = this.db.query('UPDATE approvals SET resolved = ? WHERE id = ? AND resolved IS NULL').run(JSON.stringify(resolution), id).changes
+    return changed ? this.announceApproval(id) : undefined
+  }
+
+  openApprovals(topic?: string): Approval[] {
+    const rows = (topic === undefined
+      ? this.db.query('SELECT * FROM approvals WHERE resolved IS NULL ORDER BY created_at').all()
+      : this.db.query('SELECT * FROM approvals WHERE resolved IS NULL AND topic = ? ORDER BY created_at').all(topic)) as ApprovalRow[]
+    return rows.map(approvalFrom)
+  }
+
+  approval(id: string): Approval | undefined {
+    const row = this.db.query('SELECT * FROM approvals WHERE id = ?').get(id) as ApprovalRow | null
+    return row ? approvalFrom(row) : undefined
+  }
+
+  private announceApproval(id: string): Approval | undefined {
+    const approval = this.approval(id)
+    if (!approval) return undefined
+    const cursor = Number(this.db.query("INSERT INTO events (type, topic, ref) VALUES ('approval', ?, ?)").run(approval.topic, id).lastInsertRowid)
+    for (const listener of this.listeners) listener({ cursor, type: 'approval', approval })
+    return approval
   }
 
   /** Records that a topic changed, for clients to read it again. */
@@ -250,6 +297,10 @@ export class ConductorStore {
       .all(cursor, limit) as Array<{ cursor: number; type: StoredEvent['type']; ref: string }>
     return rows.flatMap((row): StoredEvent[] => {
       if (row.type === 'topic') return [{ cursor: row.cursor, type: 'topic', topic: row.ref }]
+      if (row.type === 'approval') {
+        const approval = this.approval(row.ref)
+        return approval ? [{ cursor: row.cursor, type: 'approval', approval }] : []
+      }
       const message = this.message(row.ref)
       return message ? [{ cursor: row.cursor, type: 'message', message }] : []
     })

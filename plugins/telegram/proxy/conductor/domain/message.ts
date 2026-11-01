@@ -1,3 +1,5 @@
+import type { Approval } from './approval'
+
 // A message as the conductor keeps it: what was said in a topic, by whom, from
 // where, in the order the topic saw it. The shapes follow docs/conductor.md.
 
@@ -47,6 +49,7 @@ export type StoredMessage = Required<Omit<NewMessage, 'replyTo' | 'chatIds' | 'c
 export type StoredEvent =
   | { cursor: number; type: 'message'; message: StoredMessage }
   | { cursor: number; type: 'topic'; topic: string }
+  | { cursor: number; type: 'approval'; approval: Approval }
 
 const MIME_BY_EXTENSION: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',

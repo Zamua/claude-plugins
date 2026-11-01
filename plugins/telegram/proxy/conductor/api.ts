@@ -12,7 +12,7 @@ import type { ConductorControl, ControlResult } from './control'
 import type { Ledger } from './ledger'
 import type { ConductorStore } from './sqlite-store'
 import { topicTracker } from './topic-tracker'
-import { wireDevice, wireMessage, wireScreen, wireTopic } from './wire'
+import { wireApproval, wireDevice, wireMessage, wireScreen, wireTopic } from './wire'
 import type { AgentState, Device, ScreenView, TopicView } from './wire'
 
 export type TopicSummary = {
@@ -118,7 +118,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
   const now = ports.now ?? Date.now
   const sockets = new Set<ServerWebSocket<SocketData>>()
   const inFlight = new Map<string, Promise<Response>>()
-  const tracker = topicTracker({ topics: ports.topics, store, extra: topic => store.prefs(topic), now })
+  const tracker = topicTracker({ topics: ports.topics, store, extra: topic => ({ ...store.prefs(topic), pending: store.openApprovals(topic).length }), now })
 
   function topicView(t: TopicSummary): TopicView {
     const { last, unread, readSeq } = store.summary(t.id)
@@ -130,7 +130,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
       stateSince: tracker.since(t.id),
       unread,
       readSeq,
-      pendingApprovals: 0,
+      pendingApprovals: store.openApprovals(t.id).length,
       lastMessage: last ? { preview: last.text.slice(0, 200), format: last.format, author: last.author, at: last.at } : null,
     }
   }
@@ -138,6 +138,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
   /** The event as the stream sends it; a topic event carries the topic as it is now, and none for a topic no longer listed. */
   function wireEvent(event: StoredEvent): Record<string, unknown> | undefined {
     if (event.type === 'message') return { type: 'message', cursor: event.cursor, message: wireMessage(event.message) }
+    if (event.type === 'approval') return { type: 'approval', cursor: event.cursor, approval: wireApproval(event.approval) }
     const listed = ports.topics().find(t => t.id === event.topic)
     return listed ? { type: 'topic', cursor: event.cursor, topic: wireTopic(topicView(listed)) } : undefined
   }
@@ -493,6 +494,10 @@ export function createConductorApi(ports: ConductorApiPorts) {
     if (req.method !== 'GET') return fail(405, 'method_not_allowed', 'not yet served')
     if (url.pathname === '/v1/me') return Response.json({ device: wireDevice(device), server_version: ports.version, contract: 'v1' })
     if (url.pathname === '/v1/topics') return topics()
+    if (url.pathname === '/v1/approvals') {
+      if ((url.searchParams.get('state') ?? 'open') !== 'open') return fail(400, 'bad_state', 'state must be open')
+      return Response.json({ cursor: store.latestCursor(), approvals: store.openApprovals().map(wireApproval) })
+    }
     if (url.pathname === '/v1/secrets' || remindersPath) {
       const control = ports.control
       if (!control) return fail(503, 'not_available', 'commands are not wired on this server')
