@@ -9,6 +9,7 @@ import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-rou
 import { log } from '../log'
 import { mux } from './mux'
 import { nextAgent } from './domain/agent'
+import { nextRoute } from '../routing/domain/route-flow'
 import { getTopic, topicNames, topics } from './state'
 
 function routeFromRegistry(value: unknown, fallback = DEFAULT_TOPIC_ROUTE): TopicRoute {
@@ -43,11 +44,11 @@ export function saveRegistry(): void {
       name: st.name,
       spawned_at: running?.since ?? 0,
       claude_session_id: st.claudeSessionId,
-      route: st.route ?? DEFAULT_TOPIC_ROUTE,
+      route: st.routing.route,
       ...(running?.profile !== undefined ? { launch_profile_version: running.profile } : {}),
-      ...(st.pendingRoute ? { pending_route: st.pendingRoute } : {}),
-      ...(st.exhaustedRoutes.length ? { exhausted_routes: st.exhaustedRoutes } : {}),
-      ...(st.pendingResumeNotice ? { pending_resume_notice: st.pendingResumeNotice } : {}),
+      ...(st.routing.pending ? { pending_route: st.routing.pending } : {}),
+      ...(st.routing.exhausted.length ? { exhausted_routes: st.routing.exhausted } : {}),
+      ...(st.routing.resumeNotice ? { pending_resume_notice: st.routing.resumeNotice } : {}),
     }
   }
   writeRegistryFile(REGISTRY_FILE, out)
@@ -64,15 +65,18 @@ export function loadAndReconcileRegistry(): void {
     st.threadId = entry.thread_id ?? undefined
     st.name = entry.name
     st.claudeSessionId = entry.claude_session_id ?? undefined
-    st.route = routeFromRegistry(entry.route)
-    st.pendingRoute = pendingRouteFromRegistry(entry.pending_route)
-    st.exhaustedRoutes = Array.isArray(entry.exhausted_routes)
-      ? entry.exhausted_routes.flatMap(route => {
-          const parsed = topicRouteFromRecord(route)
-          return parsed ? [parsed] : []
-        })
-      : []
-    st.pendingResumeNotice = entry.pending_resume_notice ?? undefined
+    const pending = pendingRouteFromRegistry(entry.pending_route)
+    st.routing = {
+      route: routeFromRegistry(entry.route),
+      ...(pending && { pending }),
+      exhausted: Array.isArray(entry.exhausted_routes)
+        ? entry.exhausted_routes.flatMap(route => {
+            const parsed = topicRouteFromRecord(route)
+            return parsed ? [parsed] : []
+          })
+        : [],
+      ...(entry.pending_resume_notice && { resumeNotice: entry.pending_resume_notice }),
+    }
     if (entry.name) topicNames.set(topic, entry.name)
     const isLive = !!entry.tmux_session && live.has(entry.tmux_session)
     st.agent = nextAgent(st.agent, {
@@ -87,14 +91,11 @@ export function loadAndReconcileRegistry(): void {
         entry.launch_profile_version ?? undefined,
         TOPIC_LAUNCH_PROFILE_VERSION,
         entry.route,
-        st.route,
+        st.routing.route,
       )
-      if (refresh && !st.pendingRoute) {
-        st.pendingRoute = {
-          route: st.route,
-          reason: 'migration',
-          requestedAt: Date.now(),
-        }
+      const refreshed = refresh ? nextRoute(st.routing, { type: 'profile-stale', now: Date.now() }) : undefined
+      if (refreshed?.outcome === 'queued') {
+        st.routing = refreshed.flow
         log(
           `live topic ${topic} "${entry.name}" has a stale launch profile; ` +
           `queued same-UUID refresh at the next safe turn boundary`,

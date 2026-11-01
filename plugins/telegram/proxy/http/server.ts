@@ -7,7 +7,6 @@ import type { LockedHarness } from '../harness/domain/topic-harness'
 import type { TopicHarnessAdapter } from '../harness/topic-harness-adapter'
 import { log } from '../log'
 import type { createReminders } from '../reminders/reminders'
-import type { RouteChangeReason, TopicRoute } from '../routing/domain/model-routing'
 import type { createRouting } from '../routing/routing'
 import { inboundModeForRoute } from '../shared/domain/inbound-delivery'
 import { topicSlug } from '../shared/domain/topic-slug'
@@ -30,7 +29,10 @@ export type HttpPorts = {
   outbound: ReturnType<typeof createOutbound>
   harnessOfKind: (kind: LockedHarness) => TopicHarnessAdapter
   schedulePanePump: (topic: string, delayMs?: number) => void
-  applyRouteNow: (topic: string, route: TopicRoute, reason: RouteChangeReason) => void
+  /** The running turn ended: a route change waiting for it applies now. */
+  turnEnded: (topic: string) => void
+  /** The resumed session received its resume notice. */
+  noticeDelivered: (topic: string) => void
   routing: Pick<ReturnType<typeof createRouting>, 'handleRateLimit' | 'handleCapacity' | 'handleTurnFailed'>
   square: Pick<
     ReturnType<typeof createSquare>,
@@ -66,7 +68,7 @@ function longPoll<T>(queue: T[], waiters: Array<(item: T | null) => void>, signa
 }
 
 export function createHttpServer(ports: HttpPorts) {
-  const { api, outbound, harnessOfKind, schedulePanePump, applyRouteNow, routing, square, reminders } = ports
+  const { api, outbound, harnessOfKind, schedulePanePump, turnEnded, noticeDelivered, routing, square, reminders } = ports
 
   function handlePoll(url: URL, signal: AbortSignal): Promise<Response> {
     const topic = url.searchParams.get('topic') ?? 'general'
@@ -81,15 +83,13 @@ export function createHttpServer(ports: HttpPorts) {
     // A polling Claude has completed its previous turn, so this is the safe
     // boundary for a route change that was requested while it was busy. Return
     // 204 to the old process after restarting; the resumed process polls again.
-    if (st.pendingRoute) {
-      const pending = st.pendingRoute
-      applyRouteNow(topic, pending.route, pending.reason)
+    if (st.routing.pending) {
+      turnEnded(topic)
       return Promise.resolve(new Response(null, { status: 204 }))
     }
-    if (st.pendingResumeNotice) {
-      const content = st.pendingResumeNotice
-      st.pendingResumeNotice = undefined
-      saveRegistry()
+    if (st.routing.resumeNotice) {
+      const content = st.routing.resumeNotice
+      noticeDelivered(topic)
       return Promise.resolve(json(resumeNoticeTurn(topic, content)))
     }
     return longPoll(st.queue, st.waiters, signal)

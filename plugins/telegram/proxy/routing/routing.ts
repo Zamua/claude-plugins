@@ -6,7 +6,7 @@ import type { Api, Context } from 'grammy'
 import { InlineKeyboard } from 'grammy'
 import {
   ADMIN_USER_ID,
-  DEFAULT_TOPIC_ROUTE,
+  
   GROUP_CHAT_ID,
   OPENCODE_BIN,
   OPENCODE_GO_KEY_FILE,
@@ -35,23 +35,24 @@ import {
   autoCompactWindow,
   auxiliaryModelForRoute,
   exhaustedRouteFor,
-  forgetExhaustedProvider,
+  
   modelLabel,
-  planRouteChange,
+  
   providerLabel,
-  quotaFallbackRoute,
-  quotaReturnRoute,
-  rememberExhaustedRoute,
-  retainsExhaustedRoute,
+  
+  
+  
+  
   sameRoute,
   topicRoute,
 } from './domain/model-routing'
-import type { Effort, PickerReason, ProviderId, RouteChangeReason, TopicRoute } from './domain/model-routing'
+import type { Effort, PickerReason, ProviderId, TopicRoute } from './domain/model-routing'
 import { capacityTransition, nextResetAt, providerCapacity } from './domain/provider-capacity'
+import { nextRoute } from './domain/route-flow'
+import type { RouteEvent, RouteOutcome, RouteStep } from './domain/route-flow'
 import type { ProviderCapacity } from './domain/provider-capacity'
 import { readOpenCodeGoCapacity } from './opencode-go-capacity'
 import { permissionNotice } from './permission-notice'
-import { launchModel } from '../topics/claude-launch'
 import { sessionOf } from '../topics/domain/agent'
 import { catalogFromBridge, parseOpenCodeModels } from './provider-catalog'
 import type { ProviderCatalog, ProviderModel } from './provider-catalog'
@@ -68,9 +69,6 @@ export type RoutingPorts = {
 }
 
 export function createRouting({ api, sayIn, killSession, ensureSession, schedulePanePump, paneInFlight }: RoutingPorts) {
-  const ROUTE_DEBOUNCE_MS = 10_000
-  const lastRouteChange = new Map<string, number>()
-
   const capacities = new Map<ProviderId, ProviderCapacity>()
   type ModelSelection = {
     topic: string
@@ -212,51 +210,86 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     return 'busy'
   }
 
-  function recoveryNotice(from: TopicRoute, to: TopicRoute): string {
-    return (
-      `SYSTEM NOTICE (not a user message): the previous turn failed because ${providerLabel(from.provider)} ` +
-      `${modelLabel(from.model)} reached its usage limit. This same Claude Code session has resumed through ${providerLabel(to.provider)} ` +
-      `on ${modelLabel(to.model)}, with the full conversation intact. Continue where you left off and answer ` +
-      `the user's most recent unanswered message now. Mention the provider switch only if it affects the answer.`
+  // Moves a topic's route through one event and performs what the step asks for. Announcements are sent
+  // asynchronously; `announced` settles once they have gone out.
+  function step(topic: string, event: RouteEvent): RouteStep & { announced: Promise<void> } {
+    const st = getTopic(topic)
+    const from = st.routing
+    const result = nextRoute(from, event)
+    st.routing = result.flow
+    const announcements: Promise<void>[] = []
+    for (const effect of result.effects) {
+      switch (effect.type) {
+        case 'stop-agent':
+          killSession(st, topic)
+          break
+        case 'save':
+          saveRegistry()
+          break
+        case 'start-agent':
+          ensureSession(topic)
+          schedulePanePump(topic)
+          break
+        case 'await-boundary':
+          if (inboundModeForRoute(from.route) === 'pane') schedulePanePump(topic, 250)
+          break
+        case 'announce-fallback':
+          announcements.push(announceFallback(topic, effect.limited, effect.fallback, effect.resetAt))
+          break
+        case 'announce-limit':
+          announcements.push(announceLimit(topic, effect.limited, effect.resetAt))
+          break
+        default: {
+          const unhandled: never = effect
+          throw new Error(`unhandled route effect ${JSON.stringify(unhandled)}`)
+        }
+      }
+    }
+    if (result.applied) {
+      const { from: was, to, reason } = result.applied
+      log(`topic ${topic} route applied: ${routeSummary(was)} -> ${routeSummary(to)} (${reason})`)
+    }
+    return { ...result, announced: Promise.all(announcements).then(() => {}) }
+  }
+
+  const busy = (topic: string) => topicRuntime(topic, getTopic(topic)) === 'busy'
+  const limitedProviders = (): ProviderId[] =>
+    [...capacities.values()].filter(c => c.availability === 'exhausted').map(c => c.provider)
+
+  /** The running turn ended (a poll, or an idle pane): a change waiting for it applies now. */
+  const turnEnded = (topic: string): void => void step(topic, { type: 'turn-ended' })
+  /** The resumed session received its resume notice. */
+  const noticeDelivered = (topic: string): void => void step(topic, { type: 'notice-delivered' })
+
+  async function announceFallback(topic: string, limited: TopicRoute, fallback: TopicRoute, resetAt?: number): Promise<void> {
+    await api.sendMessage(
+      String(GROUP_CHAT_ID),
+      `${modelLabel(limited.model)} reached its usage limit.${resetLine(resetAt)}\n` +
+        `This session continues on ${routeSummary(fallback)}.`,
+      { ...threadOf(topic), reply_markup: switchBackKeyboard(topic, limited) },
+    ).catch(e => log(`quota fallback notice failed for topic ${topic}: ${e}`))
+    if (resetAt) scheduleFallbackReturnOffer(topic, limited, fallback, resetAt)
+  }
+
+  async function announceLimit(topic: string, limited: TopicRoute, resetAt?: number): Promise<void> {
+    observeCapacity(providerCapacity(limited.provider, [{
+      name: 'current window',
+      usedPercent: 100,
+      availability: 'exhausted',
+      ...(resetAt ? { resetsAt: resetAt } : {}),
+    }], Date.now()))
+    await sendProviderPicker(
+      String(GROUP_CHAT_ID),
+      topic,
+      'quota',
+      `${providerLabel(limited.provider)} · ${modelLabel(limited.model)} reached its usage limit.` +
+        resetLine(resetAt) +
+        `\n\nContinue this same Claude session with:`,
+      limited.provider,
     )
   }
 
-  function applyRouteNow(topic: string, route: TopicRoute, reason: RouteChangeReason): void {
-    const st = getTopic(topic)
-    const from = currentRoute(st)
-    killSession(st, topic)
-    st.route = route
-    st.pendingRoute = undefined
-    if (reason === 'quota') {
-      const exhausted = st.exhaustedRoutes.at(-1) ?? from
-      st.pendingResumeNotice = recoveryNotice(exhausted, route)
-    }
-    const recorded = exhaustedRouteFor(st.exhaustedRoutes, route.provider)
-    if (reason === 'reset' || (recorded && !retainsExhaustedRoute(recorded, route, reason))) {
-      st.exhaustedRoutes = forgetExhaustedProvider(st.exhaustedRoutes, route.provider)
-    }
-    saveRegistry()
-    ensureSession(topic)
-    schedulePanePump(topic)
-    log(`topic ${topic} route applied: ${routeSummary(from)} -> ${routeSummary(route)} (${reason})`)
-  }
-
-  function requestRouteChange(topic: string, route: TopicRoute, reason: RouteChangeReason): 'unchanged' | 'applied' | 'queued' {
-    const st = getTopic(topic)
-    const plan = planRouteChange(currentRoute(st), route, reason, topicRuntime(topic, st), Date.now())
-    if (plan.kind === 'unchanged') return 'unchanged'
-    if (plan.kind === 'wait-for-turn-boundary') {
-      st.pendingRoute = plan.pending
-      if (reason === 'quota') {
-        st.pendingResumeNotice = recoveryNotice(st.exhaustedRoutes.at(-1) ?? currentRoute(st), route)
-      }
-      saveRegistry()
-      if (inboundModeForRoute(currentRoute(st)) === 'pane') schedulePanePump(topic, 250)
-      return 'queued'
-    }
-    applyRouteNow(topic, plan.route, plan.reason)
-    return 'applied'
-  }
+  const resetLine = (resetAt?: number) => (resetAt ? `\nExpected reset: ${formatTime(resetAt)}.` : '')
 
   async function handleModelCommand(chatId: string, topic: string, fromId: string, arg: string): Promise<void> {
     if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
@@ -324,44 +357,37 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
   }
 
   async function applySwitchBackCallback(ctx: any, provider: ProviderId, topic: string): Promise<void> {
-    const st = getTopic(topic)
-    const route = exhaustedRouteFor(st.exhaustedRoutes, provider)
-    if (!route) {
-      await ctx.answerCallbackQuery({ text: 'This switch-back was already handled or is no longer available.' }).catch(() => {})
-      return
+    const route = exhaustedRouteFor(getTopic(topic).routing.exhausted, provider)
+    const result = step(topic, { type: 'switch-back', provider, busy: busy(topic), limitedProviders: limitedProviders(), now: Date.now() })
+    switch (result.outcome) {
+      case 'nothing-to-return':
+        await ctx.answerCallbackQuery({ text: 'This switch-back was already handled or is no longer available.' }).catch(() => {})
+        return
+      case 'still-limited':
+        await ctx.answerCallbackQuery({ text: `${providerLabel(provider)} is still at its usage limit.`, show_alert: true }).catch(() => {})
+        return
+      case 'too-soon':
+        await ctx.answerCallbackQuery({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
+        return
     }
-    if (capacities.get(provider)?.availability === 'exhausted') {
-      await ctx.answerCallbackQuery({
-        text: `${providerLabel(provider)} is still at its usage limit.`,
-        show_alert: true,
-      }).catch(() => {})
-      return
-    }
-    const since = Date.now() - (lastRouteChange.get(topic) ?? 0)
-    if (since < ROUTE_DEBOUNCE_MS) {
-      await ctx.answerCallbackQuery({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
-      return
-    }
-    lastRouteChange.set(topic, Date.now())
-    const result = requestRouteChange(topic, route, 'reset')
-    if (result === 'unchanged') {
-      st.exhaustedRoutes = forgetExhaustedProvider(st.exhaustedRoutes, provider)
-      saveRegistry()
-    }
-    const text = result === 'queued'
+    if (!route) return
+    await ctx.editMessageText(changeText(result.outcome, route) + permissionNotice(route.provider)).catch((error: unknown) =>
+      log(`could not update switch-back message for topic ${topic}: ${error}`))
+    await ctx.answerCallbackQuery({ text: result.outcome === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
+    log(`switch-back callback for topic ${topic}: ${provider}/${route.model} (${result.outcome})`)
+  }
+
+  function changeText(outcome: RouteOutcome, route: TopicRoute): string {
+    return outcome === 'queued'
       ? `Queued ${routeSummary(route)}. It will switch when the current Claude turn finishes.`
-      : result === 'unchanged'
+      : outcome === 'unchanged'
         ? `Already using ${routeSummary(route)}.`
         : `Now using ${routeSummary(route)} in the same Claude session.`
-    await ctx.editMessageText(text + permissionNotice(route.provider)).catch((error: unknown) =>
-      log(`could not update switch-back message for topic ${topic}: ${error}`))
-    await ctx.answerCallbackQuery({ text: result === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
-    log(`switch-back callback for topic ${topic}: ${provider}/${route.model} (${result})`)
   }
 
   async function notifyProviderReset(provider: ProviderId): Promise<void> {
     for (const [topic, st] of topics) {
-      const route = exhaustedRouteFor(st.exhaustedRoutes, provider)
+      const route = exhaustedRouteFor(st.routing.exhausted, provider)
       if (!route) continue
       await api.sendMessage(
         String(GROUP_CHAT_ID),
@@ -423,64 +449,27 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     const b = parseRateLimit(await req.json())
     const topic = b.topic
     const st = getTopic(topic)
-    const label = st.name || topic
-    const limitedRoute = st.route ?? DEFAULT_TOPIC_ROUTE
-    const returnRoute = quotaReturnRoute(st.exhaustedRoutes, limitedRoute)
-    const alreadyReported = exhaustedRouteFor(st.exhaustedRoutes, limitedRoute.provider)
-    // A report naming another route than the topic's came from a process a route
-    // change already replaced. A hook that names none leaves only the clock.
-    const fromReplaced = b.ranOn
-      ? b.ranOn.provider !== limitedRoute.provider || b.ranOn.model !== launchModel(limitedRoute)
-      : Date.now() - (lastRouteChange.get(topic) ?? 0) < ROUTE_DEBOUNCE_MS
-    if (fromReplaced || (st.agent.state !== 'running' && alreadyReported && sameRoute(alreadyReported, returnRoute))) {
-      return json({ ok: true, provider: limitedRoute.provider, awaiting_selection: true, duplicate: true })
+    const limited = st.routing.route
+    const result = step(topic, {
+      type: 'rate-limited',
+      ...(b.ranOn && { ranOn: b.ranOn }),
+      agentRunning: st.agent.state === 'running',
+      limitedProviders: limitedProviders(),
+      ...(b.resetAt !== undefined && b.resetAt * 1000 > Date.now() && { resetAt: b.resetAt * 1000 }),
+      now: Date.now(),
+    })
+    const where = `topic ${topic} "${st.name || topic}" for ${limited.provider}/${limited.model}`
+    if (result.outcome === 'duplicate') {
+      return json({ ok: true, provider: limited.provider, awaiting_selection: true, duplicate: true })
     }
-    const resetMs = b.resetAt !== undefined && b.resetAt * 1000 > Date.now()
-      ? b.resetAt * 1000
-      : undefined
-    const resetText = resetMs ? `\nExpected reset: ${formatTime(resetMs)}.` : ''
-
-    const fallback = quotaFallbackRoute(limitedRoute)
-    if (fallback && capacities.get(fallback.provider)?.availability !== 'exhausted') {
-      st.exhaustedRoutes = rememberExhaustedRoute(st.exhaustedRoutes, limitedRoute)
-      st.pendingRoute = undefined
-      killSession(st, topic)
-      saveRegistry()
-      lastRouteChange.set(topic, Date.now())
-      const result = requestRouteChange(topic, fallback, 'quota')
-      log(`rate limit on topic ${topic} "${label}" for ${limitedRoute.provider}/${limitedRoute.model}; ` +
-        `fell back to ${routeSummary(fallback)} (${result})`)
-      await api.sendMessage(
-        String(GROUP_CHAT_ID),
-        `${modelLabel(limitedRoute.model)} reached its usage limit.${resetText}\n` +
-          `This session continues on ${routeSummary(fallback)}.`,
-        { ...threadOf(topic), reply_markup: switchBackKeyboard(topic, limitedRoute) },
-      ).catch(e => log(`quota fallback notice failed for topic ${topic}: ${e}`))
-      if (resetMs) scheduleFallbackReturnOffer(topic, limitedRoute, fallback, resetMs)
-      return json({ ok: true, provider: limitedRoute.provider, fallback, awaiting_selection: false })
+    await result.announced
+    if (result.outcome === 'fell-back') {
+      const fallback = st.routing.route
+      log(`rate limit on ${where}; fell back to ${routeSummary(fallback)}`)
+      return json({ ok: true, provider: limited.provider, fallback, awaiting_selection: false })
     }
-
-    observeCapacity(providerCapacity(limitedRoute.provider, [{
-      name: 'current window',
-      usedPercent: 100,
-      availability: 'exhausted',
-      ...(resetMs ? { resetsAt: resetMs } : {}),
-    }], Date.now()))
-    st.exhaustedRoutes = rememberExhaustedRoute(st.exhaustedRoutes, returnRoute)
-    st.pendingRoute = undefined
-    killSession(st, topic)
-    saveRegistry()
-    log(`rate limit on topic ${topic} "${label}" for ${limitedRoute.provider}/${limitedRoute.model}`)
-    await sendProviderPicker(
-      String(GROUP_CHAT_ID),
-      topic,
-      'quota',
-      `${providerLabel(limitedRoute.provider)} · ${modelLabel(limitedRoute.model)} reached its usage limit.` +
-        resetText +
-        `\n\nContinue this same Claude session with:`,
-      limitedRoute.provider,
-    )
-    return json({ ok: true, provider: limitedRoute.provider, awaiting_selection: true })
+    log(`rate limit on ${where}`)
+    return json({ ok: true, provider: limited.provider, awaiting_selection: true })
   }
 
   // A model-scoped limit never marks the provider exhausted, so provider capacity
@@ -489,7 +478,7 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     const delay = Math.min(Math.max(1000, resetMs - Date.now() + 1000), 2_147_000_000)
     setTimeout(() => {
       const st = getTopic(topic)
-      const recorded = exhaustedRouteFor(st.exhaustedRoutes, limited.provider)
+      const recorded = exhaustedRouteFor(st.routing.exhausted, limited.provider)
       if (!recorded || !sameRoute(recorded, limited) || !sameRoute(currentRoute(st), fallback)) return
       api.sendMessage(
         String(GROUP_CHAT_ID),
@@ -589,7 +578,7 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     if (cb.kind === 'providers') {
       const { reason, topic } = cb
       const st = getTopic(topic)
-      const exclude = reason === 'quota' ? st.exhaustedRoutes.at(-1)?.provider : undefined
+      const exclude = reason === 'quota' ? st.routing.exhausted.at(-1)?.provider : undefined
       await ctx.editMessageText('Choose a provider:', {
         reply_markup: providerKeyboard(topic, reason, exclude),
       }).catch(() => {})
@@ -681,26 +670,27 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
         }).catch(() => {})
         return true
       }
-      const since = Date.now() - (lastRouteChange.get(selection.topic) ?? 0)
-      if (since < ROUTE_DEBOUNCE_MS) {
-        await ctx.answerCallbackQuery({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
-        return true
-      }
-      lastRouteChange.set(selection.topic, Date.now())
       const route = topicRoute({
         provider: selection.provider,
         model: selection.model.id,
         effort: selection.effort,
         ultracode,
       })
-      const result = requestRouteChange(selection.topic, route, selection.reason)
+      const { outcome: result } = step(selection.topic, {
+        type: 'requested',
+        route,
+        reason: selection.reason,
+        busy: busy(selection.topic),
+        byOperator: true,
+        now: Date.now(),
+      })
+      if (result === 'too-soon') {
+        await ctx.answerCallbackQuery({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
+        return true
+      }
       modelSelections.delete(cb.token)
       await ctx.editMessageText(
-        (result === 'queued'
-          ? `Queued ${routeSummary(route)}. It will switch when the current Claude turn finishes.`
-          : result === 'unchanged'
-            ? `Already using ${routeSummary(route)}.`
-            : `Now using ${routeSummary(route)} in the same Claude session.`) +
+        changeText(result, route) +
         permissionNotice(route.provider) +
         (result === 'unchanged' && route.provider === 'codex'
           ? '\nRun /relaunch to apply the launch settings to this existing session.' : ''),
@@ -728,7 +718,8 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
 
   return {
     modelCatalog,
-    applyRouteNow,
+    turnEnded,
+    noticeDelivered,
     handleModelCommand,
     capacityText,
     refreshProviderCapacity,

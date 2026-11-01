@@ -348,8 +348,12 @@ Telegram topic -> Claude Code session UUID -> launch profile
 ```
 
 `TopicRoute {provider, model, effort, ultracode}` is domain state persisted in
-`registry.json`. `proxy/routing/domain/` owns route validation and safe-turn-boundary
-planning; `proxy/routing/` owns provider catalogs, capacity reads, Codex
+`registry.json`. `proxy/routing/domain/` owns route validation and the route
+flow: `nextRoute(flow, event)` in `route-flow.ts` is the only thing that changes
+a topic's route, its change waiting for the turn to end, its recorded limits and
+the resume notice it owes, on a pick, a switch-back, a turn's end, a limit report,
+a delivered notice or a stale launch profile, and returns the effects
+(`routing.ts` stops and starts the agent, saves, and announces). `proxy/routing/` owns provider catalogs, capacity reads, Codex
 app-server JSON-RPC and OpenCode Go usage HTTP, and `proxy/topics/` the Claude
 launch environments. The proxy coordinates those ports with Telegram and the
 multiplexer. The Claude UUID never changes when the route changes.
@@ -390,8 +394,10 @@ Quota recovery:
    (`quotaFallbackRoute`), keeps the limited route in `exhausted_routes`, and posts
    a "switch back" button, re-offered at the reported reset time. A limit at the end of the chain marks the provider exhausted, stops
    the stalled process, and posts provider buttons in that topic. The proxy never
-   consumes a reset credit. A report inside `ROUTE_DEBOUNCE_MS` of a route change
-   is treated as coming from the replaced process and ignored.
+   consumes a reset credit. The hook sends the provider and model its pane was
+   launched with; a report naming another route than the topic's came from a
+   process a change already replaced and is ignored. A report naming none falls
+   back to ignoring anything inside `ROUTE_DEBOUNCE_MS` (10 s) of the last change.
 3. After provider, model, effort, and Ultracode are selected, the launcher starts Claude Code
    with `--resume <the-same-uuid>` and the new launch profile. A durable
    `pending_resume_notice` tells it to answer the most recent unanswered user
@@ -941,7 +947,8 @@ there is no agent to relaunch.
     refresh and update-restart policy.
   - `proxy/routing/`: provider/model routing below the Claude harness: the
     bridge model catalog, Codex app-server and OpenCode Go capacity clients,
-    the permission notice; `domain/` holds routes and capacity transitions.
+    the permission notice; `domain/` holds routes, the route flow and
+    capacity transitions.
   - `proxy/harness/`: the harness-locked topics. `topic-harness-adapter.ts` is
     the port the proxy drives each one through, `domain/topic-harness.ts` the
     lock rule, and `json-topic-repository.ts` their shared versioned file.
