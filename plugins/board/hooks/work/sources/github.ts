@@ -1,7 +1,8 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { TrackedPr } from '../../../types'
-import { cachedFacts, needsOf, needsYou, storedPrs } from '../../views/prs'
+import { cachedFacts } from '../../github/cache'
+import { needsOf, needsYou, storedPrs } from '../../views/prs'
 import type { Artifact, Status } from '../model'
 
 /** Needs the person by the prs view's rule; someone else's open pull request is otherwise watched. */

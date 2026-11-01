@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { board, engine, HOME, open, PANE, start, world } from './engine'
+import { board, engine, HOME, open, PANE, start } from './engine'
 import { gh, pr } from './github'
 import type { Pr } from './github'
 
