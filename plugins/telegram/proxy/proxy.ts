@@ -39,18 +39,18 @@ import { join, extname } from 'path'
 import { spawnSync, execFileSync } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
-import { SECRET_CMD_RE } from './secret'
-import { permissionNotice } from './adapters/permission-notice'
-import { claudeSpawnEnv } from './adapters/claude-launch'
-import type { ClaudeSpawnSpec } from './adapters/claude-launch'
-import { effectiveClaudeSettings } from './adapters/claude-settings'
-import { catalogFromBridge, parseOpenCodeModels } from './adapters/provider-catalog'
-import type { ProviderCatalog, ProviderModel } from './adapters/provider-catalog'
-import { readCodexSnapshot } from './adapters/codex-app-server'
-import { readOpenCodeGoCapacity } from './adapters/opencode-go-capacity'
-import { claudeConversationExists } from './adapters/claude-transcript'
-import { installedClaudeVersion, liveClaudeSessions } from './adapters/claude-sessions'
-import { updateRestartAction } from './domain/claude-update'
+import { SECRET_CMD_RE } from './secrets/secret'
+import { permissionNotice } from './routing/permission-notice'
+import { claudeSpawnEnv } from './topics/claude-launch'
+import type { ClaudeSpawnSpec } from './topics/claude-launch'
+import { effectiveClaudeSettings } from './topics/claude-settings'
+import { catalogFromBridge, parseOpenCodeModels } from './routing/provider-catalog'
+import type { ProviderCatalog, ProviderModel } from './routing/provider-catalog'
+import { readCodexSnapshot } from './routing/codex-app-server'
+import { readOpenCodeGoCapacity } from './routing/opencode-go-capacity'
+import { claudeConversationExists } from './topics/claude-transcript'
+import { installedClaudeVersion, liveClaudeSessions } from './topics/claude-sessions'
+import { updateRestartAction } from './topics/domain/claude-update'
 import {
   callbackHarness,
   callbackTopic,
@@ -60,8 +60,8 @@ import {
   legacySwitchBack,
   MODELS_PER_PAGE,
   PICKER_TTL_MS,
-} from './adapters/telegram-callback'
-import { inboundModeForRoute, renderPaneTurn } from './domain/inbound-delivery'
+} from './telegram/telegram-callback'
+import { inboundModeForRoute, renderPaneTurn } from './shared/domain/inbound-delivery'
 import {
   auxiliaryModelForRoute,
   autoCompactWindow,
@@ -76,26 +76,26 @@ import {
   retainsExhaustedRoute,
   sameRoute,
   topicRoute,
-} from './domain/model-routing'
+} from './routing/domain/model-routing'
 import type {
   Effort,
   PickerReason,
   ProviderId,
   RouteChangeReason,
   TopicRoute,
-} from './domain/model-routing'
-import { capacityTransition, nextResetAt, providerCapacity } from './domain/provider-capacity'
-import type { ProviderCapacity } from './domain/provider-capacity'
-import { environmentFlag } from './domain/env-flag'
-import { missingConversationNotice, planRelaunch, spawnConversation, spawnFailureNotice } from './domain/topic-conversation'
-import {  } from './application/antigravity-topic-service'
-import { } from './adapters/antigravity-cli'
-import {  } from './adapters/herdr-antigravity-runtime'
-import {  } from './adapters/antigravity-mcp-config'
-import {  } from './adapters/json-topic-repository'
-import { writeJsonAtomic } from './adapters/json-file'
-import { lockRefusal } from './domain/topic-harness'
-import { RELAUNCH_META } from './domain/turn-meta'
+} from './routing/domain/model-routing'
+import { capacityTransition, nextResetAt, providerCapacity } from './routing/domain/provider-capacity'
+import type { ProviderCapacity } from './routing/domain/provider-capacity'
+import { environmentFlag } from './shared/env-flag'
+import { missingConversationNotice, planRelaunch, spawnConversation, spawnFailureNotice } from './topics/domain/topic-conversation'
+import {  } from './harness/antigravity/antigravity-topic-service'
+import { } from './harness/antigravity/antigravity-cli'
+import {  } from './harness/antigravity/herdr-antigravity-runtime'
+import {  } from './harness/antigravity/antigravity-mcp-config'
+import {  } from './harness/json-topic-repository'
+import { writeJsonAtomic } from './shared/json-file'
+import { lockRefusal } from './harness/domain/topic-harness'
+import { RELAUNCH_META } from './shared/domain/turn-meta'
 import { ROUTE } from './http/routes'
 import {
   BadRequest,
@@ -108,10 +108,10 @@ import {
   parseTopicCreate,
   parseTurnFailed,
 } from './http/requests'
-import { topicSlug } from './domain/topic-slug'
-import type { LockedHarness, TopicHarness } from './domain/topic-harness'
-import {  } from './domain/antigravity-capacity'
-import type {  } from './application/antigravity-ports'
+import { topicSlug } from './shared/domain/topic-slug'
+import type { LockedHarness, TopicHarness } from './harness/domain/topic-harness'
+import {  } from './harness/antigravity/domain/antigravity-capacity'
+import type {  } from './harness/antigravity/antigravity-ports'
 import {
   ADMIN_USER_ID,
   BOT_API_ROOT,
@@ -146,9 +146,9 @@ import {
 } from './config'
 import { log, noticeFailed, reason } from './log'
 import type { TopicContext, TopicHarnessAdapter } from './harness/topic-harness-adapter'
-import { createLocalgenHarness } from './harness/localgen'
-import { createOpencodeHarness } from './harness/opencode'
-import { createAntigravityHarness } from './harness/antigravity'
+import { createLocalgenHarness } from './harness/localgen/localgen-harness'
+import { createOpencodeHarness } from './harness/opencode/opencode-harness'
+import { createAntigravityHarness } from './harness/antigravity/antigravity-harness'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
 import { mux } from './topics/mux'
@@ -168,9 +168,9 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_CHUNK_LIMIT,
   PHOTO_EXTS,
-} from './adapters/telegram-messages'
-import { telegramDownloader } from './adapters/telegram-files'
-import { transcribeVoice, VOICE_TAG } from './adapters/voice-transcription'
+} from './telegram/telegram-messages'
+import { telegramDownloader } from './telegram/telegram-files'
+import { transcribeVoice, VOICE_TAG } from './telegram/voice-transcription'
 
 // "/relaunch" in a topic kills that topic's agent and respawns it with the
 // same provider route and conversation, freshly loading MCP servers and settings

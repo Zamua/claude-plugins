@@ -1,5 +1,5 @@
 import type { Api } from 'grammy'
-import type { LockedHarness } from '../domain/topic-harness'
+import type { LockedHarness } from './domain/topic-harness'
 
 /** Who sent a command or message, and where. */
 export type TopicContext = { chatId: string; topic: string; fromId: string }

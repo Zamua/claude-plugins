@@ -1,8 +1,8 @@
 // Every topic's in-memory state: its inbound queues, its session, its route.
 import { GROUP_CHAT_ID } from '../config'
-import type { InboundMessage } from '../domain/inbound-delivery'
-import type { PendingRouteChange, TopicRoute } from '../domain/model-routing'
-import { topicSlug } from '../domain/topic-slug'
+import type { InboundMessage } from '../shared/domain/inbound-delivery'
+import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-routing'
+import { topicSlug } from '../shared/domain/topic-slug'
 
 export type InboundMsg = InboundMessage
 export type PermAnswer = { request_id: string; behavior: 'allow' | 'deny' }

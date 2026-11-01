@@ -1,11 +1,11 @@
 // registry.json: each topic's conversation, session and route, saved after every
 // change and reconciled against the live multiplexer at boot.
-import { readRegistryFile, writeRegistryFile } from '../adapters/registry-file'
-import type { Registry } from '../adapters/registry-file'
+import { readRegistryFile, writeRegistryFile } from './registry-file'
+import type { Registry } from './registry-file'
 import { DEFAULT_TOPIC_ROUTE, REGISTRY_FILE, TOPIC_LAUNCH_PROFILE_VERSION } from '../config'
-import { launchProfileNeedsRefresh } from '../domain/launch-profile'
-import { topicRouteFromRecord } from '../domain/model-routing'
-import type { PendingRouteChange, TopicRoute } from '../domain/model-routing'
+import { launchProfileNeedsRefresh } from './domain/launch-profile'
+import { topicRouteFromRecord } from '../routing/domain/model-routing'
+import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-routing'
 import { log } from '../log'
 import { mux } from './mux'
 import { getTopic, topicNames, topics } from './state'

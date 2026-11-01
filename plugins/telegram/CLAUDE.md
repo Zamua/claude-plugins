@@ -84,7 +84,7 @@ The detached topic-Claudes are hosted by a terminal multiplexer, selectable via
 The code follows a ports-and-adapters split so neither backend leaks into the
 core:
 
-- **The port** (`proxy/adapters/multiplexer.ts`): `interface MultiplexerPort
+- **The port** (`proxy/topics/multiplexer.ts`): `interface MultiplexerPort
   { kind; liveSessions(); runtime(); prompt(); kill() }`. `runtime` and `prompt`
   provide safe idle-turn delivery for custom provider routes. `TmuxMux` shells
   to `tmux`; `HerdrMux`
@@ -212,7 +212,7 @@ never broadcast; behavioral discipline, no caps).
 
 ## Location messages
 
-A shared location or venue arrives as text built by `proxy/domain/location.ts`:
+A shared location or venue arrives as text built by `proxy/telegram/location.ts`:
 `(location: <lat>, <lon>, ±<m> m) <maps link>`, or `(venue: <title>, <address>, at
 <lat>, <lon>) <maps link>`. A live location is relayed once, when shared, with its
 duration; its later position updates arrive as `edited_message` updates, which the
@@ -251,7 +251,7 @@ and a flag also reads with an em or en dash. The PROXY handles all of it in
 `handleSecretDrop`, before every relay path including the square, and the
 message itself is never enqueued: a topic-Claude's transcript persists every
 inbound message in plaintext, so the value must not reach one. Parsing and the
-files live in `proxy/secret.ts` (pure, tested with `bun test`).
+files live in `proxy/secrets/secret.ts` (pure, tested with `bun test`).
 
 **The guided flow.** A menu tap sends the bare verb, so a bare `/secret` or
 `/unsecret` opens a prompt exchange instead of failing with usage: the proxy
@@ -311,14 +311,14 @@ respawn mints a new id and starts a fresh conversation with the kickoff. The
 ack names the missing id and says a new conversation was started, and the
 notice tells the agent it has no earlier history. Nothing is lost that was not
 already gone. The decision and both messages are pure in
-`proxy/domain/topic-conversation.ts` (`planRelaunch`, `spawnConversation`).
+`proxy/topics/domain/topic-conversation.ts` (`planRelaunch`, `spawnConversation`).
 
 ## Reminders (`remind`, `list_reminders`, `cancel_reminder`)
 
 A topic agent's own scheduler (CronCreate) lives in its session and dies with
 it, so "remind me" could silently vanish on a relaunch, an update restart or a
 failover. Reminders are therefore proxy state: `reminders.json` in the state
-dir (`proxy/domain/reminder.ts` validates, `proxy/adapters/json-reminder-repository.ts`
+dir (`proxy/reminders/domain/reminder.ts` validates, `proxy/reminders/json-reminder-repository.ts`
 persists, both tested with `bun test`). The MCP tools post to `/remind`,
 `/reminders` and `/reminder/cancel`, always scoped to the caller's own topic.
 
@@ -346,10 +346,10 @@ Telegram topic -> Claude Code session UUID -> launch profile
 ```
 
 `TopicRoute {provider, model, effort, ultracode}` is domain state persisted in
-`registry.json`. `proxy/domain/` owns route validation and safe-turn-boundary
-planning; `proxy/adapters/` owns provider catalogs, capacity reads, Codex
-app-server JSON-RPC, OpenCode Go usage HTTP, and Claude launch environments.
-The proxy/application layer coordinates those ports with Telegram and the
+`registry.json`. `proxy/routing/domain/` owns route validation and safe-turn-boundary
+planning; `proxy/routing/` owns provider catalogs, capacity reads, Codex
+app-server JSON-RPC and OpenCode Go usage HTTP, and `proxy/topics/` the Claude
+launch environments. The proxy coordinates those ports with Telegram and the
 multiplexer. The Claude UUID never changes when the route changes.
 
 Inbound delivery is also route state. Anthropic uses the MCP's native Channel
@@ -503,7 +503,7 @@ and emits only `agroute:*` callbacks. It has no provider step and no Ultracode.
 Conversely, the Claude picker emits only `tgroute:*`. The callback boundary
 checks both the callback namespace and Telegram thread id, so an old or forged
 Claude-route button cannot mutate an Antigravity topic (and vice versa). Every
-callback string is built and parsed by `adapters/telegram-callback.ts`, whose
+callback string is built and parsed by `proxy/telegram/telegram-callback.ts`, whose
 decoder must keep accepting buttons already posted in chats.
 `/usage` runs Antigravity's native `/usage` command and reports only its
 subscription pools. `/relaunch` closes and recreates the Herdr process with the
@@ -542,7 +542,7 @@ classifier; the topic should be treated as an unreviewed local agent.
 `/localcode` is the Antigravity pattern applied to a third runtime: the OpenCode
 TUI driving the local Qwen server (`qwen-local/Qwen3.8-27B`, the same thing the
 operator's `localcode` alias runs by hand). It is a separate bounded context
-(`proxy/domain/opencode-topic.ts`, `OpencodeTopicService`,
+(`proxy/harness/opencode/domain/opencode-topic.ts`, `OpencodeTopicService`,
 `HerdrOpencodeRuntime`, `opencode-topics.json`) and shares only the Telegram
 Bot API adapter and the generic JSON topic repository with Antigravity. Same rules: admin only, a fresh
 topic with no Claude UUID/live pane, never the square, no unlock or conversion
@@ -649,7 +649,7 @@ locked topic sends every text message straight to the qwen-image server
 OpenAI Images shape with `n: 1` and `response_format: b64_json`) and posts the
 PNG back into the same thread with `sendPhoto`. Nothing sits in between: no
 Claude, no pane, no queue drain, no MCP. Bounded context:
-`proxy/domain/localgen-topic.ts` (aggregate, option parser, request body,
+`proxy/harness/localgen/domain/localgen-topic.ts` (aggregate, option parser, request body,
 caption, failure mapping), `LocalgenTopicService` (per-topic serialization),
 `QwenImageClient` (fetch adapter, logs every request/response with timing),
 `localgen-topics.json` (same shape as `opencode-topics.json`).
@@ -758,7 +758,7 @@ there is no agent to relaunch.
   restarting the proxy.
 - **A missing conversation is reported, never replaced.** Before resuming, the
   proxy checks that `<id>.jsonl` exists in some `~/.claude/projects/*/` directory
-  (`adapters/claude-transcript.ts`). If it is gone, it posts an error in the
+  (`proxy/topics/claude-transcript.ts`). If it is gone, it posts an error in the
   topic (at most once a minute) and spawns nothing: starting a fresh session
   would silently drop the topic's history. Claude Code deletes transcripts older
   than `cleanupPeriodDays` (default 30) at startup, so `~/.claude/settings.json`
@@ -810,7 +810,7 @@ there is no agent to relaunch.
   fresh. `saveRegistry` persists any topic that has been spawned at least once
   (has an id), live or not. A registry.json that cannot be parsed is renamed
   to `registry.json.unreadable-<ms>` and logged before the proxy starts empty
-  (`adapters/registry-file.ts`), since the save that follows boot would
+  (`proxy/topics/registry-file.ts`), since the save that follows boot would
   otherwise overwrite every `claude_session_id`; to recover, copy the ids back
   with the proxy stopped.
 - **General topic.** Messages in the General topic carry no `message_thread_id`
@@ -907,27 +907,44 @@ there is no agent to relaunch.
 - `.claude-plugin/plugin.json`: manifest (name `telegram`).
 - `.mcp.json`: starts the MCP via `bun run --cwd ${CLAUDE_PLUGIN_ROOT} ... start`.
 - `server.ts` + `package.json`: the thin MCP client (dep: `@modelcontextprotocol/sdk`).
-- `proxy/proxy.ts` + `proxy/package.json`: the daemon (dep: `grammy`).
-- `proxy/domain/`: pure provider-route, harness-lock, Antigravity-topic,
-  OpenCode-topic, inbound-delivery, reminder, topic-conversation (resume vs.
-  fresh start), and capacity types/transitions.
-- `proxy/adapters/`: Claude launch profiles, bridge model catalog, Codex
-  app-server client, OpenCode Go capacity client, official Antigravity catalog,
-  persistent Herdr runtimes (`herdr-antigravity-runtime.ts`,
-  `herdr-opencode-runtime.ts`), MCP config, JSON repositories, and
-  portable-skill interop. Every JSON state file is written through
-  `json-file.ts` (`writeJsonAtomic`: 0600 temp file renamed into place), and
-  the three harness-locked topic files share `json-topic-repository.ts`.
-  Tests sit beside them.
-- `proxy/application/antigravity-topic-service.ts`: serializes turns and keeps
-  exact Antigravity conversation identity independent of Telegram and Herdr I/O.
-- `proxy/application/opencode-topic-service.ts` + `opencode-ports.ts`: the same
-  shape for localcode topics (session id instead of conversation id; no
-  route/usage).
-- `proxy/application/localgen-topic-service.ts` + `localgen-ports.ts`,
-  `proxy/domain/localgen-topic.ts`, `proxy/adapters/qwen-image-client.ts`:
-  the agentless localgen
-  harness (prompt in, PNG out).
+- `proxy/proxy.ts` + `proxy/package.json`: the daemon (dep: `grammy`), and
+  the composition root: it builds each context below with its ports and wires
+  the Telegram handlers and HTTP routes to them. `proxy/config.ts` holds every
+  path and environment setting (importing it loads the `.env` files);
+  `proxy/log.ts` the log and its small text helpers.
+- The proxy is grouped by context; within one, `domain/` holds the pure types
+  and rules, and the rest are its application services and adapters. Tests sit
+  beside the code they test.
+  - `proxy/topics/`: Claude topics: in-memory state, the multiplexer
+    (`multiplexer.ts`, tmux or herdr), registry.json (`registry.json` load,
+    reconcile and save, `registry-file.ts`), the permission relay, Claude
+    launch profiles, settings, sessions and transcripts; `domain/` holds
+    resume vs. fresh start, launch-profile refresh and update-restart policy.
+  - `proxy/routing/`: provider/model routing below the Claude harness: the
+    bridge model catalog, Codex app-server and OpenCode Go capacity clients,
+    the permission notice; `domain/` holds routes and capacity transitions.
+  - `proxy/harness/`: the harness-locked topics. `topic-harness-adapter.ts` is
+    the port the proxy drives each one through, `domain/topic-harness.ts` the
+    lock rule, and `json-topic-repository.ts` their shared versioned file.
+    `antigravity/`, `opencode/` and `localgen/` each hold that harness's
+    Telegram front end (`*-harness.ts`), application service, ports, runtime
+    adapters and `domain/` aggregate.
+  - `proxy/square/`: the agent-to-agent square and its conversation registry.
+  - `proxy/reminders/`: reminders; `domain/reminder.ts` validates.
+  - `proxy/secrets/`: the `/secret` drop (`secret.ts` parses and stores,
+    `secret-drop.ts` runs the Telegram exchange).
+  - `proxy/telegram/`: the Bot API edge: message description, the callback
+    codec, file download, voice transcription, locations.
+  - `proxy/http/`: the loopback HTTP API's routes, request parsers and
+    responses.
+  - `proxy/shared/`: atomic JSON writes (`json-file.ts`: a 0600 temp file
+    renamed into place, used for every state file), the process runner, Herdr
+    pane parsing; `domain/` holds the channel envelope, turn meta flags and
+    topic slugs.
+  - `proxy/contracts/`: tests that run the launch scripts and hooks end to end.
+  - `proxy/proxy.e2e.test.ts`: the whole proxy, booted from a copy of the
+    plugin against a stand-in Bot API, multiplexer, Herdr, opencode and image
+    server.
 - `scripts/launch-topic.sh`: the one-harness launcher (invoked by the proxy;
   `TG_MUX` picks only the multiplexer). Every pane executes `claude`.
 - `scripts/launch-herdr-topic.sh`: shared by Antigravity and OpenCode topics
@@ -950,8 +967,8 @@ there is no agent to relaunch.
   (`$TG_HOOK`, set by the proxy + forwarded by the launcher), NOT a plugin
   `hooks/hooks.json` (`--dangerously-load-development-channels` doesn't load
   those). See the Stop-hook gotcha above. The meta flags it accepts as
-  "no reply needed" come from `proxy/domain/turn-meta.ts`, and
-  `proxy/adapters/hook-contract.test.ts` runs the hook against turns rendered
+  "no reply needed" come from `proxy/shared/domain/turn-meta.ts`, and
+  `proxy/contracts/hook-contract.test.ts` runs the hook against turns rendered
   with them.
 - `proxy/http/routes.ts`: the proxy's HTTP paths, used by the proxy,
   `server.ts`, and checked against the Python hooks' calls.
@@ -1044,8 +1061,8 @@ server, not work in progress, and stopping the session stops it too.
 Each topic is restarted at most once per installed version, so a launcher that
 resolves a different `claude` cannot loop. The waiting state is in memory: after
 a proxy restart a topic still waiting is treated as idle-stale and only stopped.
-Policy is pure in `proxy/domain/claude-update.ts`; the session records and the
-installed version are read by `proxy/adapters/claude-sessions.ts`.
+Policy is pure in `proxy/topics/domain/claude-update.ts`; the session records and the
+installed version are read by `proxy/topics/claude-sessions.ts`.
 
 The MCP client also reads `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` (default `5000`)
 for the cold-start first-poll delay above.

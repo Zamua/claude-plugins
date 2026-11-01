@@ -87,8 +87,7 @@ Code disables Channels under API billing).
   and proxy restarts. Native Anthropic launches without overrides; Codex and
   OpenCode Go launch the same `claude` binary through a loopback compatibility
   bridge.
-- **Antigravity application service** (`proxy/application/` +
-  `proxy/adapters/antigravity-*`): owns a separate, private topic registry and
+- **Antigravity application service** (`proxy/harness/antigravity/`): owns a separate, private topic registry and
   launches one persistent interactive `agy` process in a visible Herdr
   workspace. Telegram turns are injected through Herdr; the existing MCP is
   loaded outbound-only so replies still use the proxy's single Bot API poller.
@@ -97,8 +96,7 @@ Code disables Channels under API billing).
   with the new route, never the conversation. Its callback namespace is
   separate, and stale/forged Claude route callbacks are rejected at the
   topic-harness boundary.
-- **OpenCode (localcode) application service** (`proxy/application/opencode-*` +
-  `proxy/adapters/*opencode-topic*`, `herdr-opencode-runtime.ts`): the same
+- **OpenCode (localcode) application service** (`proxy/harness/opencode/`): the same
   shape for the OpenCode TUI on a local Qwen server. One model, no route or
   usage; the first launch persists the OpenCode session id and every relaunch
   resumes it with `-s <same-id>`. The Telegram MCP is injected through
