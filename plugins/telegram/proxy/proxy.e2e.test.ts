@@ -157,6 +157,7 @@ beforeAll(async () => {
       TELEGRAM_ANTIGRAVITY: 'off',
       TELEGRAM_TOPICS_UPDATE_RESTART: 'off',
       TELEGRAM_TOPICS_VOICE_TRANSCRIBE: 'off',
+      TELEGRAM_TOPICS_SQUARE_TOPIC_ID: '900',
       // Absent binaries, so no capacity probe or catalog runs a real CLI
       TELEGRAM_OPENCODE_BIN: join(root, 'absent', 'opencode'),
       TELEGRAM_PROVIDER_PROXY_BIN: join(root, 'absent', 'claude-code-proxy'),
@@ -204,6 +205,33 @@ describe('the proxy, end to end', () => {
     const resumed = await until('topic 43 to resume', () => spawns().find(s => s.session === 'claude-resumed-43'))
     expect(resumed.env.TG_RESUME).toBe('1')
     expect(resumed.env.TG_CLAUDE_SESSION_ID).toBe(RESUMED)
+  }, 20_000)
+
+  test('a square tag posts the root and a breadcrumb, and the peer can poll it and reply', async () => {
+    const tag = await fetch(`${proxyUrl}/square/tag`, {
+      method: 'POST',
+      body: JSON.stringify({ topic: '42', peer: '43', text: 'can you check the build?' }),
+    })
+    expect(tag.status).toBe(200)
+    const root = calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 900)
+    expect(root?.body.text).toBe('🤖 42 → @resumed\ncan you check the build?')
+    expect(calls.some(c => c.method === 'sendMessage' && c.body.message_thread_id === 42 && /asked @resumed in #square/.test(c.body.text)))
+      .toBeTrue()
+
+    // Topic 43 still holds the turn the resume test sent; the square delivery queues behind it
+    let polled = await fetch(`${proxyUrl}/poll?topic=43`).then(r => r.json())
+    if (polled.meta.square !== '1') polled = await fetch(`${proxyUrl}/poll?topic=43`).then(r => r.json())
+    expect(polled.meta.square).toBe('1')
+    expect(polled.content).toContain('can you check the build?')
+
+    const reply = await fetch(`${proxyUrl}/square/reply`, {
+      method: 'POST',
+      body: JSON.stringify({ topic: '43', conv: polled.meta.conv, reply_token: polled.meta.reply_token, text: 'green' }),
+    })
+    expect(reply.status).toBe(200)
+    const answer = calls.findLast(c => c.method === 'sendMessage' && c.body.message_thread_id === 900)
+    expect(answer?.body.text).toBe(`🤖 resumed · #${polled.meta.conv}\ngreen`)
+    expect(answer?.body.reply_parameters).toEqual({ message_id: Number(polled.meta.reply_token) })
   }, 20_000)
 
   test('a topic bound to a missing conversation is told so and starts nothing', async () => {

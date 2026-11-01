@@ -31,7 +31,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
-import { ROUTE } from './proxy/adapters/proxy-routes'
+import { ROUTE } from './proxy/http/routes'
 
 // The same stdio MCP is loaded globally for persistent Antigravity panes. It
 // exposes no tools unless the owning launcher binds it to an explicit topic;
