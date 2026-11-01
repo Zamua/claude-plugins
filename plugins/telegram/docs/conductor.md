@@ -7,8 +7,8 @@ adds a store, an authenticated API and push, and later lets Telegram go.
 
 Status: contract version 1. Built: the store and mirror, the listener with
 identity, enrollment, the reads and the stream, signed writes (sending a
-message, read markers) and push for messages (`docs/conductor-plan.md` C1 to C3
-and C8). Approval pushes come with approvals (C7), and the rest follows the
+message, read markers), push for messages, and the ledger `verify.py` checks
+(`docs/conductor-plan.md` C1 to C4 and C8). Approval pushes come with approvals (C7), and the rest follows the
 plan. The golden
 fixtures and signing vectors in `conductor-v1/` are part of the contract: the
 server's tests encode them and the app's tests decode them.
@@ -108,10 +108,18 @@ bound to that device, usable only when unlocked, never exported.
   fetches a message while the phone may be locked.
 
 **The ledger.** An append-only file of operator acts, one JSON object per line,
-each carrying the hash of the line before it: topic, seq, device, the body's
-SHA-256, the signature, the timestamp, and the kind of act. `verify.py` reads
-it to confirm an operator go that came from the app, so a go is bound to an
-enrolled device's key, and nothing on the conductor's machine can make one.
+each carrying the hash of the line before it: the kind of act, the device, and
+for a write what the device signed (method, path, client id, the body's SHA-256,
+the timestamp and the signature) with the topic and seq it produced. An
+enrollment records the device's name and full public key. Each line is its
+hashed body with `"hash"` appended last, so a verifier hashes the bytes as
+written. Beside it, `signed-bodies/<sha256>` keeps each signed body of at most
+256 KB (a text message; one with images is not kept). `verify.py` reads both to
+confirm an operator go that came from the app: the chain holds, the entry is a
+message from that device to that topic recorded once, the device's key signed
+it, and the signed text is what was delivered. It takes the key from its own
+pinned list of devices, never from this machine, so a go is bound to an
+enrolled device's key and nothing on the conductor's machine can make one.
 Nothing rewrites the ledger.
 
 **An app message is an operator turn.** Its sender was verified (an enrolled
@@ -199,7 +207,7 @@ All under `/v1`. "Signed" marks a write that needs the device headers.
 | `GET /secrets` | | names, sizes, dates |
 | `POST /secrets` | signed | `name`, `value`, `replace`, `topic`; returns `path`, `bytes`, `replaced` |
 | `DELETE /secrets/{name}` | signed | remove one |
-| `GET /topics/{id}/reminders` | | the topic's reminders |
+| `GET /topics/{id}/reminders` | | `{reminders}`: the topic's pending reminders, soonest first; no cursor, since reminders are not stream events |
 | `POST /topics/{id}/reminders` | signed | `at` (with a zone offset), `text`, `prompt` |
 | `DELETE /reminders/{id}` | signed | cancel one |
 | `POST /ask` | signed | the `/ask` fields; returns the message's `topic` and `seq` |

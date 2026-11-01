@@ -150,10 +150,11 @@ hold these before any of its traffic is trusted:
 
 `verify.py` (the check other topics run before acting on an operator go) anchors
 on the Telegram operator's numeric user id in a channel delivery the harness
-recorded in the general topic. It says nothing about any other transport: until a
-second adapter states which of its account ids is the operator and how that id is
-authenticated, and `verify.py` checks that statement, nothing arriving through it
-counts as a go.
+recorded. A delivery marked `origin="app"` (the conductor's) counts only when the
+conductor's ledger backs it with a signature from a device pinned in verify.py's
+own list (see "The conductor"). Any other transport counts for nothing until it
+states which of its account ids is the operator and how that id is
+authenticated, and `verify.py` checks that statement.
 
 ### Not portable yet
 
@@ -195,7 +196,11 @@ with its tailnet certificate (`tailscale.ts`); each request is admitted by
 `whois` on its peer address (`domain/identity.ts`: this machine's own node is
 refused first, then any other user, then any node off `CONDUCTOR_NODES`), and
 reads also need an `X-Device` enrolled from that same node. Enrollment is written
-to the hash-chained ledger (`ledger.ts`) and announced in general. Writes are
+to the hash-chained ledger (`ledger.ts`) and announced in general. Each signed
+message's request (method, path, client id, body hash, timestamp, signature)
+goes into the ledger and its body into `signed-bodies/`, so the operator's
+`verify.py` can check an app go against a device key pinned outside this
+machine; the ledger's line format is pinned in `ledger.test.ts`. Writes are
 signed by the device's key (`domain/write-auth.ts`: the canonical bytes, a 120 s
 window, a client id whose retry with the same body gets the first answer).
 `POST /v1/topics/{id}/messages` stores the operator's message, writes it to the
