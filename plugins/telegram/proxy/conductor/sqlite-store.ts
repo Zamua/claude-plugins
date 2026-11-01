@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'crypto'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { BlobRef, NewMessage, StoredEvent, StoredMessage } from './domain/message'
+import type { Device } from './wire'
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -27,6 +28,11 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, mime TEXT NOT NULL, bytes INTEGER NOT NULL, width INTEGER, height INTEGER);
 CREATE TABLE IF NOT EXISTS message_blobs (message_id TEXT NOT NULL, blob_id TEXT NOT NULL, ord INTEGER NOT NULL, PRIMARY KEY (message_id, ord));
 CREATE TABLE IF NOT EXISTS events (cursor INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, topic TEXT NOT NULL, ref TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS devices (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, public_key TEXT NOT NULL UNIQUE, node_id TEXT NOT NULL,
+  apns_token TEXT, apns_env TEXT, enrolled_at TEXT NOT NULL, last_seen TEXT
+);
+CREATE TABLE IF NOT EXISTS read_state (topic TEXT PRIMARY KEY, seq INTEGER NOT NULL);
 `
 
 type MessageRow = {
@@ -34,9 +40,15 @@ type MessageRow = {
   format: string; reply_to: string | null; chat_ids: string; at: string; edited_at: string | null; reactions: string
 }
 
+type DeviceRow = {
+  id: string; name: string; public_key: string; node_id: string; apns_token: string | null
+  apns_env: Device['apnsEnv']; enrolled_at: string; last_seen: string | null
+}
+
 export class ConductorStore {
   private readonly db: Database
   private readonly blobDir: string
+  private readonly listeners: Array<(event: StoredEvent) => void> = []
 
   constructor(dir: string) {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -49,7 +61,7 @@ export class ConductorStore {
 
   /** Stores the message and its event in one transaction, taking the topic's next seq. */
   append(message: NewMessage): StoredMessage {
-    return this.db.transaction(() => {
+    const stored = this.db.transaction(() => {
       const { next } = this.db
         .query('SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM messages WHERE topic = ?')
         .get(message.topic) as { next: number }
@@ -61,9 +73,61 @@ export class ConductorStore {
           message.replyTo ?? null, JSON.stringify(message.chatIds ?? []), at)
       ;(message.blobs ?? []).forEach((blob, ord) =>
         this.db.query('INSERT INTO message_blobs (message_id, blob_id, ord) VALUES (?, ?, ?)').run(id, blob.id, ord))
-      this.db.query("INSERT INTO events (type, topic, ref) VALUES ('message', ?, ?)").run(message.topic, id)
-      return this.message(id) as StoredMessage
+      const { lastInsertRowid } = this.db.query("INSERT INTO events (type, topic, ref) VALUES ('message', ?, ?)").run(message.topic, id)
+      return { cursor: Number(lastInsertRowid), type: 'message' as const, message: this.message(id) as StoredMessage }
     })()
+    for (const listener of this.listeners) listener(stored)
+    return stored.message
+  }
+
+  /** Called with each event once it is stored. */
+  onEvent(listener: (event: StoredEvent) => void): void {
+    this.listeners.push(listener)
+  }
+
+  latestCursor(): number {
+    return (this.db.query('SELECT COALESCE(MAX(cursor), 0) AS c FROM events').get() as { c: number }).c
+  }
+
+  /** The topic's newest message, and how many messages after `readSeq` are not the operator's. */
+  summary(topic: string): { last: StoredMessage | undefined; unread: number; readSeq: number } {
+    const readSeq = (this.db.query('SELECT seq FROM read_state WHERE topic = ?').get(topic) as { seq: number } | null)?.seq ?? 0
+    const { n } = this.db
+      .query("SELECT COUNT(*) AS n FROM messages WHERE topic = ? AND seq > ? AND author != 'operator'")
+      .get(topic, readSeq) as { n: number }
+    return { last: this.history(topic, 1)[0], unread: n, readSeq }
+  }
+
+  /** Stores a new device, or gives the one already enrolled with this key. */
+  enroll(device: Omit<Device, 'id' | 'enrolledAt' | 'lastSeen'>, at = new Date().toISOString()): { device: Device; created: boolean } {
+    const existing = this.db.query('SELECT * FROM devices WHERE public_key = ?').get(device.publicKey) as DeviceRow | null
+    if (existing) return { device: this.deviceFrom(existing), created: false }
+    const id = `dev_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+    this.db
+      .query('INSERT INTO devices (id, name, public_key, node_id, apns_token, apns_env, enrolled_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, device.name, device.publicKey, device.nodeId, device.apnsToken, device.apnsEnv, at)
+    return { device: this.device(id) as Device, created: true }
+  }
+
+  device(id: string): Device | undefined {
+    const row = this.db.query('SELECT * FROM devices WHERE id = ?').get(id) as DeviceRow | null
+    return row ? this.deviceFrom(row) : undefined
+  }
+
+  touchDevice(id: string, at = new Date().toISOString()): void {
+    this.db.query('UPDATE devices SET last_seen = ? WHERE id = ?').run(at, id)
+  }
+
+  blobPath(id: string): { path: string; mime: string } | undefined {
+    const row = this.db.query('SELECT mime FROM blobs WHERE id = ?').get(id) as { mime: string } | null
+    return row ? { path: join(this.blobDir, id), mime: row.mime } : undefined
+  }
+
+  private deviceFrom(row: DeviceRow): Device {
+    return {
+      id: row.id, name: row.name, publicKey: row.public_key, nodeId: row.node_id, apnsToken: row.apns_token,
+      apnsEnv: row.apns_env, enrolledAt: row.enrolled_at, lastSeen: row.last_seen,
+    }
   }
 
   /** Keeps the bytes once, named by their hash, and gives the reference a message carries. */

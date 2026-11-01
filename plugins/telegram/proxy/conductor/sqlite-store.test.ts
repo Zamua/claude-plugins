@@ -62,3 +62,36 @@ describe('ConductorStore', () => {
     expect(again.append(say('general', 'next')).seq).toBe(2)
   })
 })
+
+describe('ConductorStore, for the API', () => {
+  test('each stored message is announced with its cursor, and the latest cursor follows', () => {
+    const { s } = store()
+    const seen: Array<[number, string]> = []
+    s.onEvent(e => seen.push([e.cursor, e.message.text]))
+    s.append(say('general', 'one'))
+    s.append(say('42', 'two'))
+    expect(seen).toEqual([[1, 'one'], [2, 'two']])
+    expect(s.latestCursor()).toBe(2)
+  })
+
+  test('a topic\'s summary: its newest message, and unread messages that are not the operator\'s', () => {
+    const { s } = store()
+    s.append(say('7', 'agent says'))
+    s.append({ ...say('7', 'operator says'), author: 'operator', origin: 'telegram' })
+    s.append(say('7', 'agent again'))
+    expect(s.summary('7')).toMatchObject({ unread: 2, readSeq: 0 })
+    expect(s.summary('7').last?.text).toBe('agent again')
+    expect(s.summary('none')).toEqual({ last: undefined, unread: 0, readSeq: 0 })
+  })
+
+  test('a device enrolls once per key, and keeps its node', () => {
+    const { s } = store()
+    const first = s.enroll({ name: 'iPhone', publicKey: 'KEY', nodeId: 'nPHONE', apnsToken: null, apnsEnv: 'sandbox' }, '2026-11-01T20:00:00.000Z')
+    const again = s.enroll({ name: 'renamed', publicKey: 'KEY', nodeId: 'nOTHER', apnsToken: null, apnsEnv: null })
+    expect(first.created).toBeTrue()
+    expect(again).toEqual({ device: first.device, created: false })
+    expect(s.device(first.device.id)).toMatchObject({ name: 'iPhone', nodeId: 'nPHONE', enrolledAt: '2026-11-01T20:00:00.000Z', lastSeen: null })
+    s.touchDevice(first.device.id, '2026-11-01T21:00:00.000Z')
+    expect(s.device(first.device.id)?.lastSeen).toBe('2026-11-01T21:00:00.000Z')
+  })
+})

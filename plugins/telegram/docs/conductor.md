@@ -5,7 +5,9 @@ apps (an iOS app first), beside Telegram, over the tailnet only. It is not a
 rewrite. The proxy already reaches its chat through `ChatPort`; the conductor
 adds a store, an authenticated API and push, and later lets Telegram go.
 
-Status: specification, contract version 1. Nothing here runs yet. The golden
+Status: contract version 1. Built: the store and mirror, and the listener with
+identity, enrollment, the reads and the stream (`docs/conductor-plan.md` C1 and
+C2). Signed writes, push and the rest follow the plan. The golden
 fixtures and signing vectors in `conductor-v1/` are part of the contract: the
 server's tests encode them and the app's tests decode them.
 
