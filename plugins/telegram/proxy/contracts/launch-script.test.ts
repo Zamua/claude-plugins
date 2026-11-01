@@ -165,7 +165,7 @@ describe('launch-topic.sh', () => {
         ])
         expect(run.paneEnv.CLAUDE_CODE_SUBAGENT_MODEL).toBe('claude-opus-5-5')
         expect(run.paneEnv.CLAUDE_CODE_EFFORT_LEVEL).toBe('xhigh')
-        expect(run.paneEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('claude-haiku-4-5-20251001')
+        expect(run.paneEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('claude-haiku-5-5')
         expect(run.paneEnv.ANTHROPIC_BASE_URL).toBeUndefined()
       })
 

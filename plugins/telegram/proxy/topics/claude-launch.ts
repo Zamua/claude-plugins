@@ -81,7 +81,7 @@ function providerLaunchProfile(
   }
 }
 
-const ANTHROPIC_MODEL_IDS: Record<string, string> = { haiku: 'claude-haiku-4-5-20251001' }
+const ANTHROPIC_MODEL_IDS: Record<string, string> = { haiku: 'claude-haiku-5-5' }
 
 export function claudeSpawnEnv(spec: ClaudeSpawnSpec): Record<string, string> {
   const proxied = spec.route.provider !== 'anthropic'
