@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Subprocess } from 'bun'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
 
@@ -64,7 +64,8 @@ const until = async <T>(what: string, probe: () => T | undefined | false, ms = 1
   }
 }
 
-function send(thread: number, text: string) {
+function send(thread: number, text: string): number {
+  const id = messageId
   pending.push({
     update_id: updateId++,
     message: {
@@ -77,6 +78,7 @@ function send(thread: number, text: string) {
       text,
     },
   })
+  return id
 }
 
 const spawns = () =>
@@ -158,6 +160,8 @@ beforeAll(async () => {
       TELEGRAM_TOPICS_UPDATE_RESTART: 'off',
       TELEGRAM_TOPICS_VOICE_TRANSCRIBE: 'off',
       TELEGRAM_TOPICS_SQUARE_TOPIC_ID: '900',
+      TELEGRAM_TOPICS_SECRETS_USER_ID: String(OPERATOR),
+      TELEGRAM_TOPICS_SECRETS_DIR: join(root, 'keys'),
       // Absent binaries, so no capacity probe or catalog runs a real CLI
       TELEGRAM_OPENCODE_BIN: join(root, 'absent', 'opencode'),
       TELEGRAM_PROVIDER_PROXY_BIN: join(root, 'absent', 'claude-code-proxy'),
@@ -233,6 +237,51 @@ describe('the proxy, end to end', () => {
     expect(answer?.body.text).toBe(`🤖 resumed · #${polled.meta.conv}\ngreen`)
     expect(answer?.body.reply_parameters).toEqual({ message_id: Number(polled.meta.reply_token) })
   }, 20_000)
+
+  test('a /secret is stored owner-only, deleted from the chat, acked, and its topic told without the value', async () => {
+    const id = send(42, '/secret apikey\nsk-test-123')
+    const file = join(root, 'keys', 'apikey')
+    await until('the secret file', () => existsSync(file))
+    expect(readFileSync(file, 'utf8')).toBe('sk-test-123\n')
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    await until('the message deleted', () => calls.find(c => c.method === 'deleteMessage' && c.body.message_id === id))
+    await until('the ack', () => calls.find(c => c.method === 'sendMessage' && /🔐 stored .*apikey \(11 bytes\)/.test(c.body.text)))
+    let notice: any
+    for (let i = 0; i < 4 && notice?.meta?.secret_drop !== '1'; i++) {
+      notice = await fetch(`${proxyUrl}/poll?topic=42`).then(r => r.json())
+    }
+    expect(notice.meta.secret_drop).toBe('1')
+    expect(notice.content).not.toContain('sk-test-123')
+  }, 20_000)
+
+  test('a bare /secret asks for the name, then the value, and stores it', async () => {
+    send(42, '/secret')
+    await until('the name prompt', () => calls.find(c => c.method === 'sendMessage' && c.body.reply_markup?.force_reply))
+    const prompts = () => calls.filter(c => c.method === 'sendMessage' && c.body.reply_markup?.force_reply).length
+    send(42, 'guided')
+    await until('the value prompt', () => prompts() >= 2)
+    send(42, 'v2')
+    const file = join(root, 'keys', 'guided')
+    await until('the guided secret file', () => existsSync(file))
+    expect(readFileSync(file, 'utf8')).toBe('v2\n')
+  }, 20_000)
+
+  test('reminders are listed, cancelled, and fired into their topic', async () => {
+    const post = (path: string, body: unknown) =>
+      fetch(`${proxyUrl}${path}`, { method: 'POST', body: JSON.stringify(body) })
+    const later = await post('/remind', { topic: '42', at: new Date(Date.now() + 3_600_000).toISOString(), text: 'later' })
+    expect(later.status).toBe(200)
+    const { id } = await later.json()
+    const listed = await fetch(`${proxyUrl}/reminders?topic=42`).then(r => r.json())
+    expect(listed.reminders.map((r: { id: string }) => r.id)).toContain(id)
+    expect((await post('/reminder/cancel', { topic: '42', id })).status).toBe(200)
+
+    expect((await post('/remind', { topic: '42', at: new Date(Date.now() + 1_000).toISOString(), text: 'stretch' })).status).toBe(200)
+    await until('the reminder to fire', () =>
+      calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 42 && c.body.text === '⏰ stretch'), 25_000)
+    const left = await fetch(`${proxyUrl}/reminders?topic=42`).then(r => r.json())
+    expect(left.reminders).toEqual([])
+  }, 30_000)
 
   test('a topic bound to a missing conversation is told so and starts nothing', async () => {
     send(44, 'hello?')
