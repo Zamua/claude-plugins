@@ -176,6 +176,11 @@ src_pr_meta() {  # <owner/repo#N>
             .url ] | @tsv'
 }
 
+# The pull request's unified diff on stdout; non-zero when GitHub cannot give it.
+src_pr_diff() {  # <owner/repo#N>
+  gh pr diff "${1##*#}" --repo "${1%%#*}"
+}
+
 # One JSON object for <pr>: its title, state, draft flag, head sha and branches,
 # author, whether the operator's latest approving or change-requesting review
 # approves it, and each review thread the operator started: its first comment's url,

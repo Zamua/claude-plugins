@@ -26,7 +26,7 @@ source "$HERE/lib.sh"
 # Pluggable adapters, selected by config. `runtime: "stub"` exercises the trigger,
 # the grouping and the assignment without launching any agent, which is how a new
 # config is validated before the scheduler is armed.
-PRB_SOURCE="$(prb_get source github-reactions)"; PRB_RUNTIME="$(prb_get runtime herdr)"
+PRB_SOURCE="$(prb_source_name)"; PRB_RUNTIME="$(prb_runtime_name)"
 # shellcheck disable=SC1090
 source "$HERE/adapters/source-$PRB_SOURCE.sh"   || { prb_log "no source adapter: $PRB_SOURCE"; exit 1; }
 # shellcheck disable=SC1090
@@ -39,7 +39,7 @@ prb_validate_adapter() {  # <name> <required-fn>...
   for fn in "$@"; do declare -F "$fn" >/dev/null || missing="$missing $fn"; done
   [ -z "$missing" ] || { prb_log "adapter $name is missing required functions:$missing"; exit 1; }
 }
-prb_validate_adapter "source-$PRB_SOURCE" src_deps src_fresh src_pr_meta src_stack src_kickoff_context src_cutoff_iso
+prb_validate_adapter "source-$PRB_SOURCE" src_deps src_fresh src_pr_meta src_pr_diff src_stack src_kickoff_context src_cutoff_iso
 prb_validate_adapter "runtime-$PRB_RUNTIME" rt_deps rt_status rt_running_count rt_spawn rt_resume rt_notify rt_relabel rt_close_workspace rt_list
 
 # ---- grouping ----
@@ -100,8 +100,6 @@ _match_review() {  # <pr> <head> <base> <default-branch> -> review key or empty
 _repo_short() { local r="${1%%#*}"; printf '%s' "${r##*/}"; }
 _pr_num()     { printf '%s' "${1##*#}"; }
 
-# A single-pull-request review keeps the established reviews/<repo>-<number> name.
-_slug_single() { printf '%s-%s' "$(prb_safe "$(_repo_short "$1")")" "$(_pr_num "$1")"; }
 
 # An umbrella is named for the change, anchored by the number of the pull request
 # that opened it, so it stays unique and greppable while still reading as English.
@@ -221,7 +219,8 @@ _handle_fresh() {  # <pr> <reactedAt> <head> <base> <defaultBranch> <isDraft> <t
   # use belongs to a finished review whose record is kept, so take the next free
   # one rather than overwriting the history.
   local n=2
-  slug="$(_slug_single "$pr")"
+  # A single-pull-request review keeps the established reviews/<repo>-<number> name.
+  slug="$(prb_pr_slug "$pr")"
   key="$slug"
   while [ -n "$(prb_review_json "$key")" ]; do key="$slug-r$n"; n=$(( n + 1 )); done
   dir="$(prb_reviews_root)/$key"

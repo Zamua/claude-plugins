@@ -62,6 +62,13 @@ prb_meta_dir() {  # <key>
 # A filesystem- and agent-name-safe token.
 prb_safe() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_-' '-' | tr -s '-' | sed -e 's/^-//' -e 's/-$//'; }
 
+# A pull request's safe name, <repo>-<number>: a single-PR review's slug and its cached diff's file name.
+prb_pr_slug() { local r="${1%%#*}"; printf '%s-%s' "$(prb_safe "${r##*/}")" "${1##*#}"; }
+
+# The configured adapters, by name. Their defaults live here alone.
+prb_source_name()  { prb_get source github-reactions; }
+prb_runtime_name() { prb_get runtime herdr; }
+
 # Env vars that, inherited from a parent claude session, mark a nested claude as a
 # "child" and disable its transcript, which would break `claude --resume`. Scrub
 # them plus inherited herdr pointers before launching herdr, so workers save

@@ -7,19 +7,21 @@
 # joined the review after the first pass was invisible to it: sync-all printed
 # nothing for it, which reads as "nothing moved".
 #
-# The pull requests here do not exist, so `gh pr diff` fails and each line reports
+# GitHub is a stand-in (fake-gh.sh) with no diff to give, so each line reports
 # ERROR. That is enough: the assertion is that every pull request gets a line.
 #
 # Run: bash test_sync_all_covers_review_prs.sh
 set -uo pipefail
 
 SCRIPTS="${SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)}"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fake-gh.sh"
 
 TD="$(mktemp -d)"; trap 'rm -rf "$TD"' EXIT
 export PR_REVIEW_BOARD_CONFIG="$TD/config.json"
 export PR_REVIEW_BOARD_STATE="$TD/state.json"
 export PR_REVIEW_BOARD_LOCK="$TD/.poll.lock"
 mkdir -p "$TD/reviews" "$TD/workspace"
+fake_gh "$TD/gh"
 cat > "$PR_REVIEW_BOARD_CONFIG" <<CFG
 { "source": "github-reactions", "runtime": "stub", "orgs": ["acme"],
   "reviews_root": "$TD/reviews", "workspace_root": "$TD/workspace" }
@@ -41,6 +43,12 @@ printf '%s\n' "$out" | sed 's/^/  /'
 
 eq "sync-all names every pull request in the review" "acme/api#10 acme/web#20" \
    "$(printf '%s\n' "$out" | cut -f1 | sort | tr '\n' ' ' | sed 's/ $//')"
+
+eq "each diff is asked of the source adapter's GitHub" "2" "$(grep -c '^pr diff' "$TD/gh/gh.calls")"
+
+printf 'diff --git a/x b/x\n' > "$TD/gh/diff"
+eq "a diff seen for the first time is CHANGED" "CHANGED" "$(bash "$SCRIPTS/diffs.sh" sync api-10 'acme/api#10' 2>/dev/null)"
+eq "the same diff again is UNCHANGED" "UNCHANGED" "$(bash "$SCRIPTS/diffs.sh" sync api-10 'acme/api#10' 2>/dev/null)"
 
 echo
 [ "$fail" = 0 ] && echo "all assertions passed" || echo "FAILURES PRESENT"

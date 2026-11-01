@@ -14,10 +14,11 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib.sh"
+# shellcheck disable=SC1090
+source "$HERE/adapters/source-$(prb_source_name).sh" || { prb_log "no source adapter: $(prb_source_name)"; exit 1; }
 
 _d_state() { printf '%s/diffs.json' "$(prb_meta_dir "$1")"; }
-_d_slug()  { printf '%s-%s' "$(prb_safe "$(basename "${1%%#*}")")" "${1##*#}"; }
-_d_patch() { printf '%s/patches/%s.patch' "$(prb_meta_dir "$1")" "$(_d_slug "$2")"; }
+_d_patch() { printf '%s/patches/%s.patch' "$(prb_meta_dir "$1")" "$(prb_pr_slug "$2")"; }
 
 _d_state_init() { local f; f="$(_d_state "$1")"; mkdir -p "$(dirname "$f")"; [ -f "$f" ] || printf '{"prs":{}}\n' >"$f"; }
 _d_set() {  # <key> <jq-expr> [--argjson/--arg pairs...]
@@ -31,12 +32,11 @@ _d_set() {  # <key> <jq-expr> [--argjson/--arg pairs...]
 # is unchanged, so the monitor loop can tell "moved" from "nothing happened", and 2
 # on a real failure.
 _d_write_patch() {  # <key> <pr>
-  local key="$1" pr="$2" repo num out tmp
-  repo="${pr%%#*}"; num="${pr##*#}"
+  local key="$1" pr="$2" out tmp
   out="$(_d_patch "$key" "$pr")"; mkdir -p "$(dirname "$out")"
   tmp="$(mktemp)"
-  if ! gh pr diff "$num" --repo "$repo" >"$tmp" 2>/dev/null; then
-    rm -f "$tmp"; prb_log "gh pr diff failed for $pr"; return 2
+  if ! src_pr_diff "$pr" >"$tmp" 2>/dev/null; then
+    rm -f "$tmp"; prb_log "fetching the diff failed for $pr"; return 2
   fi
   if [ ! -s "$tmp" ]; then rm -f "$tmp"; prb_log "$pr has an empty diff"; return 2; fi
   if [ -f "$out" ] && cmp -s "$tmp" "$out"; then rm -f "$tmp"; return 1; fi
