@@ -2,6 +2,6 @@
 // depends only on its port; tmux and herdr live in adapters/multiplexer.ts.
 import { createMultiplexer } from '../adapters/multiplexer'
 import type { MultiplexerPort } from '../adapters/multiplexer'
-import { MUX_KIND } from '../config'
+import { HERDR_BIN, MUX_KIND } from '../config'
 
-export const mux: MultiplexerPort = createMultiplexer(MUX_KIND)
+export const mux: MultiplexerPort = createMultiplexer(MUX_KIND, HERDR_BIN)
