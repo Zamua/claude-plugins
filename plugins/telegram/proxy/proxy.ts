@@ -33,40 +33,22 @@ import {
   writeFileSync,
   mkdirSync,
   rmSync,
-  statSync,
 } from 'fs'
-import { join, extname } from 'path'
+import { join } from 'path'
 import { execFileSync } from 'child_process'
-import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
-import type { ReactionTypeEmoji } from 'grammy/types'
-import { encodeCallback } from './telegram/telegram-callback'
-import { inboundModeForRoute } from './shared/domain/inbound-delivery'
+import { Bot, GrammyError } from 'grammy'
 import { lockRefusal } from './harness/domain/topic-harness'
-import { ROUTE } from './http/routes'
-import {
-  BadRequest,
-  parseDownload,
-  parseEdit,
-  parsePermissionRequest,
-  parseReact,
-  parseSend,
-  parseTopicCreate,
-} from './http/requests'
-import { topicSlug } from './shared/domain/topic-slug'
 import type { LockedHarness, TopicHarness } from './harness/domain/topic-harness'
 import {
   ADMIN_USER_ID,
   BOT_API_ROOT,
   CAPACITY_POLL_MS,
-  ENV_FILES,
   GROUP_CHAT_ID,
   INBOX_DIR,
   MARKETPLACE,
   MODEL,
   PID_FILE,
   PLUGIN_ROOT,
-  PORT,
-  PROXY_URL,
   SPAWN_DIR,
   SQUARE_TOPIC,
   STATE_DIR,
@@ -80,27 +62,18 @@ import { createLocalgenHarness } from './harness/localgen/localgen-harness'
 import { createOpencodeHarness } from './harness/opencode/opencode-harness'
 import { createAntigravityHarness } from './harness/antigravity/antigravity-harness'
 import { createRouting } from './routing/routing'
-import { createTopicLifecycle, resumeNoticeTurn } from './topics/lifecycle'
+import { createTopicLifecycle } from './topics/lifecycle'
 import { createUpdateRestarts } from './topics/update-restarts'
 import { registerCommands, registerInbound } from './telegram/inbound'
+import { createHttpServer } from './http/server'
+import { createOutbound } from './http/outbound'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
-import { pendingPerms, prunePendingPerms } from './topics/permissions'
-import { loadAndReconcileRegistry, saveRegistry } from './topics/registry'
-import { currentRoute, getTopic, topicNames, topics } from './topics/state'
-import type { InboundMsg, PermAnswer } from './topics/state'
+import { loadAndReconcileRegistry } from './topics/registry'
+import { getTopic } from './topics/state'
 import { loadConvs } from './square/conversations'
 import { createSquare } from './square/square'
-import { json } from './http/response'
-import {
-  assertSendable,
-  chunk,
-  threadIdForTopic,
-  threadOf,
-  MAX_ATTACHMENT_BYTES,
-  MAX_CHUNK_LIMIT,
-  PHOTO_EXTS,
-} from './telegram/telegram-messages'
+import { threadOf } from './telegram/telegram-messages'
 import { telegramDownloader } from './telegram/telegram-files'
 
 if (!TOKEN) {
@@ -125,37 +98,6 @@ process.on('unhandledRejection', err => {
 process.on('uncaughtException', err => {
   log(`uncaught exception: ${err}`)
 })
-
-// GET /topics - the directory tool's backing endpoint.
-function handleTopics(): Response {
-  return json({ square: SQUARE_TOPIC || null, topics: topicDirectory() })
-}
-
-// POST /topic/create {name} - create a forum topic AND register it. Telegram
-// never echoes a bot's own actions via getUpdates, so a bot-created topic is
-// otherwise invisible to the proxy until a human messages it. Routing creation
-// through the proxy closes that hole: the createForumTopic RESPONSE carries the
-// thread id, and we register + persist immediately - no user action needed.
-// (Requires the bot to be a group admin with can_manage_topics.)
-async function handleTopicCreate(req: Request): Promise<Response> {
-  const { name, harness } = parseTopicCreate(await req.json())
-  const lockNewTopic = harness === 'claude' ? undefined : await harnessOfKind(harness).prepareTopic(name)
-  const created = await bot.api.createForumTopic(String(GROUP_CHAT_ID), name)
-  const topic = String(created.message_thread_id)
-  const st = getTopic(topic)
-  st.name = name
-  topicNames.set(topic, name)
-  saveRegistry()
-  if (lockNewTopic) await lockNewTopic(topic)
-  log(`created + registered topic ${topic} "${name}"`)
-  return json({
-    topic,
-    thread_id: created.message_thread_id,
-    name,
-    harness,
-    slug: harness === 'claude' ? slugForTopic(topic) : topicSlug(name),
-  })
-}
 
 // ---- grammy inbound --------------------------------------------------------
 
@@ -293,174 +235,6 @@ registerInbound(bot, {
   harnessCallback: (ctx, cb, topic) => antigravity.handleCallback(ctx, cb, topic),
 })
 
-// ---- outbound HTTP (the MCP clients call these) ----------------------------
-
-// Outbound gate: reply/react/edit/download can only target the configured group.
-function assertGroup(chatId: unknown): void {
-  if (String(chatId) !== String(GROUP_CHAT_ID)) {
-    throw new Error(`chat ${chatId} is not the configured group`)
-  }
-}
-
-function handlePoll(url: URL): Promise<Response> {
-  const topic = url.searchParams.get('topic') ?? 'general'
-  const st = getTopic(topic)
-  // Claude Code rejects Channel notifications under custom provider/API
-  // billing. A stale MCP from an older launch may still call /poll, so never
-  // let it drain a proxied route's queue. The pane pump owns that ingress.
-  if (inboundModeForRoute(currentRoute(st)) === 'pane') {
-    schedulePanePump(topic)
-    return Promise.resolve(new Response(null, { status: 204 }))
-  }
-  // A polling Claude has completed its previous turn, so this is the safe
-  // boundary for a route change that was requested while it was busy. Return
-  // 204 to the old process after restarting; the resumed process polls again.
-  if (st.pendingRoute) {
-    const pending = st.pendingRoute
-    applyRouteNow(topic, pending.route, pending.reason)
-    return Promise.resolve(new Response(null, { status: 204 }))
-  }
-  if (st.pendingResumeNotice) {
-    const content = st.pendingResumeNotice
-    st.pendingResumeNotice = undefined
-    saveRegistry()
-    return Promise.resolve(json(resumeNoticeTurn(topic, content)))
-  }
-  const existing = st.queue.shift()
-  if (existing) return Promise.resolve(json(existing))
-  return new Promise<Response>(resolve => {
-    let timer: ReturnType<typeof setTimeout>
-    const wrapped = (m: InboundMsg | null) => {
-      clearTimeout(timer)
-      resolve(m ? json(m) : new Response(null, { status: 204 }))
-    }
-    timer = setTimeout(() => {
-      const i = st.waiters.indexOf(wrapped)
-      if (i >= 0) st.waiters.splice(i, 1)
-      resolve(new Response(null, { status: 204 }))
-    }, 25000)
-    st.waiters.push(wrapped)
-  })
-}
-
-async function handleSend(req: Request): Promise<Response> {
-  const { chatId, topic, text, replyTo, files, markdown } = parseSend(await req.json())
-  assertGroup(chatId)
-  const threadId = threadIdForTopic(topic)
-  const parseMode = markdown ? ('MarkdownV2' as const) : undefined
-
-  for (const f of files) {
-    assertSendable(f, STATE_DIR, ENV_FILES)
-    const st = statSync(f)
-    if (st.size > MAX_ATTACHMENT_BYTES) {
-      throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 50MB)`)
-    }
-  }
-
-  const ids: number[] = []
-  const chunks = text.length ? chunk(text, MAX_CHUNK_LIMIT) : []
-  for (let i = 0; i < chunks.length; i++) {
-    const sent = await bot.api.sendMessage(chatId, chunks[i], {
-      ...(threadId != null ? { message_thread_id: threadId } : {}),
-      ...(replyTo != null && i === 0 ? { reply_parameters: { message_id: replyTo } } : {}),
-      ...(parseMode ? { parse_mode: parseMode } : {}),
-    })
-    ids.push(sent.message_id)
-  }
-
-  for (const f of files) {
-    const ext = extname(f).toLowerCase()
-    const opts = {
-      ...(threadId != null ? { message_thread_id: threadId } : {}),
-      ...(replyTo != null ? { reply_parameters: { message_id: replyTo } } : {}),
-    }
-    const input = new InputFile(f)
-    const sent = PHOTO_EXTS.has(ext)
-      ? await bot.api.sendPhoto(chatId, input, opts)
-      : await bot.api.sendDocument(chatId, input, opts)
-    ids.push(sent.message_id)
-  }
-
-  harnessFor(topic)?.sent(topic, ids.length)
-
-  return json({ message_ids: ids })
-}
-
-async function handleReact(req: Request): Promise<Response> {
-  const b = parseReact(await req.json())
-  assertGroup(b.chatId)
-  await bot.api.setMessageReaction(b.chatId, b.messageId, [
-    { type: 'emoji', emoji: b.emoji as ReactionTypeEmoji['emoji'] },
-  ])
-  return json({ ok: true })
-}
-
-async function handleEdit(req: Request): Promise<Response> {
-  const b = parseEdit(await req.json())
-  assertGroup(b.chatId)
-  const parseMode = b.markdown ? ('MarkdownV2' as const) : undefined
-  const edited = await bot.api.editMessageText(
-    b.chatId,
-    b.messageId,
-    b.text,
-    ...(parseMode ? [{ parse_mode: parseMode }] : []),
-  )
-  const id = typeof edited === 'object' ? edited.message_id : b.messageId
-  return json({ message_id: id })
-}
-
-async function handleDownload(req: Request): Promise<Response> {
-  const path = await downloadFile(parseDownload(await req.json()).fileId)
-  if (!path) throw new Error('download failed (file may have expired)')
-  return json({ path })
-}
-
-// A topic-MCP forwards a harness permission prompt here. Remember it against
-// the origin topic and post an approve/deny prompt into that topic's thread.
-async function handlePermissionRequest(req: Request): Promise<Response> {
-  const { topic, requestId, tool, input } = parsePermissionRequest(await req.json())
-
-  prunePendingPerms()
-  pendingPerms.set(requestId, { topic, createdAt: Date.now() })
-
-  const threadId = threadIdForTopic(topic)
-  const trimmed = input.length > 500 ? input.slice(0, 500) + '…' : input
-  const preview = trimmed ? `\n\n${trimmed}` : ''
-  const text =
-    `🔐 Permission: ${tool}${preview}\n\n` +
-    `Tap a button, or reply "yes ${requestId}" to allow / "no ${requestId}" to deny.`
-  const keyboard = new InlineKeyboard()
-    .text('✅ Allow', encodeCallback({ kind: 'permission', behavior: 'allow', requestId }))
-    .text('❌ Deny', encodeCallback({ kind: 'permission', behavior: 'deny', requestId }))
-  await bot.api.sendMessage(String(GROUP_CHAT_ID), text, {
-    ...(threadId != null ? { message_thread_id: threadId } : {}),
-    reply_markup: keyboard,
-  })
-  return json({ ok: true })
-}
-
-// Long-poll for a permission answer for a topic. Mirrors handlePoll: ~25s hold,
-// 204 on idle, 200 {request_id, behavior} when the user answers.
-function handlePermissionPoll(url: URL): Promise<Response> {
-  const topic = url.searchParams.get('topic') ?? 'general'
-  const st = getTopic(topic)
-  const existing = st.permQueue.shift()
-  if (existing) return Promise.resolve(json(existing))
-  return new Promise<Response>(resolve => {
-    let timer: ReturnType<typeof setTimeout>
-    const wrapped = (a: PermAnswer | null) => {
-      clearTimeout(timer)
-      resolve(a ? json(a) : new Response(null, { status: 204 }))
-    }
-    timer = setTimeout(() => {
-      const i = st.permWaiters.indexOf(wrapped)
-      if (i >= 0) st.permWaiters.splice(i, 1)
-      resolve(new Response(null, { status: 204 }))
-    }, 25000)
-    st.permWaiters.push(wrapped)
-  })
-}
-
 // ---- boot ------------------------------------------------------------------
 
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
@@ -518,69 +292,6 @@ process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 process.on('SIGHUP', shutdown)
 
-async function serveWithRetry(): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      Bun.serve({
-        port: PORT,
-        hostname: '127.0.0.1', // loopback only; the MCP clients are local
-        idleTimeout: 60, // > the ~25s long-poll hold
-        async fetch(req) {
-          const url = new URL(req.url)
-          try {
-            if (req.method === 'GET' && url.pathname === ROUTE.poll) return handlePoll(url)
-            if (req.method === 'GET' && url.pathname === ROUTE.permissionPoll) {
-              return handlePermissionPoll(url)
-            }
-            if (req.method === 'GET' && url.pathname === ROUTE.health) {
-              return json({
-                ok: true,
-                topics: [...topics.keys()],
-                port: PORT,
-                polling: pollingSince != null,
-                polling_since: pollingSince != null ? new Date(pollingSince).toISOString() : null,
-              })
-            }
-            if (req.method === 'POST' && url.pathname === ROUTE.rateLimit) return await handleRateLimit(req)
-            if (req.method === 'POST' && url.pathname === ROUTE.capacity) return await handleCapacity(req)
-            if (req.method === 'POST' && url.pathname === ROUTE.turnFailed) return await handleTurnFailed(req)
-            if (req.method === 'GET' && url.pathname === ROUTE.topics) return handleTopics()
-            if (req.method === 'POST' && url.pathname === ROUTE.topicCreate) return await handleTopicCreate(req)
-            if (req.method === 'POST' && url.pathname === ROUTE.squareTag) return await handleSquareTag(req)
-            if (req.method === 'POST' && url.pathname === ROUTE.squareReply) return await handleSquareReply(req)
-            if (req.method === 'POST' && url.pathname === ROUTE.remind) return await handleRemind(req)
-            if (req.method === 'GET' && url.pathname === ROUTE.reminders) return handleListReminders(url)
-            if (req.method === 'POST' && url.pathname === ROUTE.reminderCancel) return await handleCancelReminder(req)
-            if (req.method === 'POST' && url.pathname === ROUTE.send) return await handleSend(req)
-            if (req.method === 'POST' && url.pathname === ROUTE.react) return await handleReact(req)
-            if (req.method === 'POST' && url.pathname === ROUTE.edit) return await handleEdit(req)
-            if (req.method === 'POST' && url.pathname === ROUTE.download) return await handleDownload(req)
-            if (req.method === 'POST' && url.pathname === ROUTE.permissionRequest) {
-              return await handlePermissionRequest(req)
-            }
-            return new Response('not found', { status: 404 })
-          } catch (e) {
-            const m = e instanceof Error ? e.message : String(e)
-            return json({ error: m }, e instanceof BadRequest || e instanceof SyntaxError ? 400 : 500)
-          }
-        },
-      })
-      log(`http server listening on ${PROXY_URL}`)
-      return
-    } catch (e) {
-      if (attempt >= 10) {
-        // The port never freed (a foreign process, not our stale proxy). Exit
-        // cleanly so launchd/the supervisor restarts us later rather than
-        // lingering alive-but-serverless.
-        log(`port ${PORT} still busy after ${attempt} attempts, exiting for a clean restart: ${e}`)
-        process.exit(1)
-      }
-      log(`port ${PORT} busy (attempt ${attempt}, stale proxy draining?), retrying in 500ms: ${e}`)
-      await new Promise(r => setTimeout(r, 500))
-    }
-  }
-}
-
 // Retry polling with backoff on any error. bot.catch only handles throws inside
 // update handlers; a rejection of bot.start() itself (ETIMEDOUT/ECONNRESET/DNS
 // or a 409 from a not-yet-drained old poller) would otherwise stop polling
@@ -633,7 +344,18 @@ async function pollWithRetry(): Promise<void> {
   }
 }
 
-await serveWithRetry()
+const http = createHttpServer({
+  api: bot.api,
+  outbound: createOutbound({ api: bot.api, downloadFile, sent: (topic, n) => harnessFor(topic)?.sent(topic, n) }),
+  harnessOfKind,
+  schedulePanePump,
+  applyRouteNow,
+  routing: { handleRateLimit, handleCapacity, handleTurnFailed },
+  square: { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply },
+  reminders: { handleRemind, handleListReminders, handleCancelReminder },
+  pollingSince: () => pollingSince,
+})
+await http.serve()
 void pollWithRetry()
 void registerCommands(bot.api)
 for (const harness of HARNESSES) {

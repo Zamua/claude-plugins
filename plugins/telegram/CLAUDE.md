@@ -894,11 +894,11 @@ there is no agent to relaunch.
   server): a rejection of `bot.start()` itself (ETIMEDOUT/ECONNRESET/DNS or a
   409 from a not-yet-drained old poller) is retried instead of silently killing
   polling forever (`bot.catch` only catches throws INSIDE update handlers). A
-  PID file (`proxy.pid`) SIGTERMs any stale proxy on boot; `serveWithRetry`
+  PID file (`proxy.pid`) SIGTERMs any stale proxy on boot; the HTTP server (`proxy/http/server.ts`)
   retries the `Bun.serve` bind while the old instance releases the port; SIGTERM/
   SIGINT/SIGHUP call `bot.stop()` + remove the pid file. `GET /health` reports
   `polling` + `polling_since` so a monitor can tell "up but deaf" from healthy.
-- **Exfil guard on outbound files.** `handleSend` runs `assertSendable(f)` before
+- **Exfil guard on outbound files.** `handleSend` (`proxy/http/outbound.ts`) runs `assertSendable(f)` before
   shipping any file: it refuses the proxy's own state (anything under STATE_DIR
   except `inbox/`) and the token-bearing `.env` files, so a prompt-injected
   topic-Claude cannot `reply(files:['.../telegram-topics/.env'])` the bot token
@@ -945,8 +945,9 @@ there is no agent to relaunch.
     message and button answer, and the "/" menu (`inbound.ts`); message
     description, the callback codec, file download, voice transcription,
     locations.
-  - `proxy/http/`: the loopback HTTP API's routes, request parsers and
-    responses.
+  - `proxy/http/`: the loopback HTTP API: the server and its route table,
+    the long-polls and permission relay (`server.ts`), the outbound tools
+    (`outbound.ts`), routes, request parsers and responses.
   - `proxy/shared/`: atomic JSON writes (`json-file.ts`: a 0600 temp file
     renamed into place, used for every state file), the process runner, Herdr
     pane parsing; `domain/` holds the channel envelope, turn meta flags and

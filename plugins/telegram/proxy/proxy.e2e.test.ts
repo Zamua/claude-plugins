@@ -253,6 +253,7 @@ beforeAll(async () => {
         if (pending.length === 0) await Bun.sleep(200)
         return ok(pending.splice(0))
       }
+      if (method === 'createForumTopic') return ok({ message_thread_id: 77, name: body.name, icon_color: 0 })
       if (method === 'sendPhoto' || method === 'sendDocument') {
         return ok({ message_id: messageId++, date: 0, chat: { id: Number(GROUP), type: 'supergroup' } })
       }
@@ -606,6 +607,49 @@ describe('the proxy, end to end', () => {
     expect(await fetch(`${proxyUrl}/permission-poll?topic=48`).then(r => r.json())).toEqual({ request_id: 'abcde', behavior: 'allow' })
     await until('the reply to be marked', () =>
       calls.find(c => c.method === 'setMessageReaction' && c.body.message_id === reply && c.body.reaction[0].emoji === '✅'))
+  }, 20_000)
+
+  test('a reply is chunked into its thread, quoting only once; react and edit reach the group', async () => {
+    const out = (path: string, body: unknown) =>
+      fetch(`${proxyUrl}${path}`, { method: 'POST', body: JSON.stringify(body) })
+    const before = calls.length
+    const sent = await out('/send', { chat_id: GROUP, topic: '42', text: 'x'.repeat(5000), reply_to: 7 })
+    expect(sent.status).toBe(200)
+    expect((await sent.json()).message_ids).toHaveLength(2)
+    const chunks = calls.slice(before).filter(c => c.method === 'sendMessage')
+    expect(chunks.map(c => c.body.message_thread_id)).toEqual([42, 42])
+    expect(chunks.map(c => c.body.reply_parameters?.message_id)).toEqual([7, undefined])
+    expect(chunks.map(c => c.body.text.length).reduce((a, b) => a + b)).toBe(5000)
+
+    const picture = join(root, 'out.png')
+    writeFileSync(picture, Buffer.from(PNG, 'base64'))
+    expect((await out('/send', { chat_id: GROUP, topic: '42', files: [picture] })).status).toBe(200)
+    expect(calls.at(-1)?.method).toBe('sendPhoto')
+
+    expect((await out('/react', { chat_id: GROUP, message_id: 5, emoji: '👍' })).status).toBe(200)
+    expect(calls.at(-1)).toEqual({ method: 'setMessageReaction', body: expect.objectContaining({ message_id: 5 }) })
+    const edited = await out('/edit', { chat_id: GROUP, message_id: 5, text: 'better' })
+    expect(await edited.json()).toEqual({ message_id: 5 })
+    expect(calls.at(-1)).toEqual({ method: 'editMessageText', body: expect.objectContaining({ text: 'better' }) })
+  }, 20_000)
+
+  test('outbound refuses another chat and the proxy\'s own state files', async () => {
+    const out = (body: unknown) => fetch(`${proxyUrl}/send`, { method: 'POST', body: JSON.stringify(body) })
+    const other = await out({ chat_id: '-100999', topic: '42', text: 'hi' })
+    expect(other.status).toBe(500)
+    expect((await other.json()).error).toContain('is not the configured group')
+    const own = await out({ chat_id: GROUP, topic: '42', files: [join(state, 'registry.json')] })
+    expect(own.status).toBe(500)
+    expect((await own.json()).error).toContain('refusing to send channel state')
+  }, 20_000)
+
+  test('a topic created through the proxy is registered and in the directory at once', async () => {
+    const created = await fetch(`${proxyUrl}/topic/create`, { method: 'POST', body: JSON.stringify({ name: 'Fresh Start' }) })
+    expect(await created.json()).toEqual({ topic: '77', thread_id: 77, name: 'Fresh Start', harness: 'claude', slug: 'fresh-start' })
+    expect(registry()['77']?.name).toBe('Fresh Start')
+    const directory = await fetch(`${proxyUrl}/topics`).then(r => r.json())
+    expect(directory.square).toBe('900')
+    expect(directory.topics).toContainEqual({ slug: 'fresh-start', name: 'Fresh Start', topic: '77', live: false })
   }, 20_000)
 
   test('a malformed request is refused with a 400 naming the field', async () => {
