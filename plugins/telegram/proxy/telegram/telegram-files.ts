@@ -29,16 +29,21 @@ async function downloadFile(
     const res = await fetch(url)
     if (!res.ok) return null
     const buf = Buffer.from(await res.arrayBuffer())
-    // file_path is from Telegram (trusted) but strip to safe chars anyway.
-    const rawExt = file.file_path.includes('.') ? file.file_path.split('.').pop()! : 'bin'
-    const ext = rawExt.replace(/[^a-zA-Z0-9]/g, '') || 'bin'
-    const uid = (file.file_unique_id ?? uniqueHint ?? '').replace(/[^a-zA-Z0-9_-]/g, '') || 'dl'
-    mkdirSync(inboxDir, { recursive: true })
-    const path = join(inboxDir, `${Date.now()}-${uid}.${ext}`)
-    writeFileSync(path, buf)
-    return path
+    const ext = file.file_path.includes('.') ? file.file_path.split('.').pop()! : 'bin'
+    return writeInboxFile(inboxDir, buf, ext, file.file_unique_id ?? uniqueHint ?? '')
   } catch (e) {
     log(`download failed for ${fileId}: ${e}`)
     return null
   }
+}
+
+/** Writes a file into `inboxDir` under the name every saved attachment gets, and gives its path. */
+export function writeInboxFile(inboxDir: string, bytes: Uint8Array, ext: string, uid: string): string {
+  // Names may come from outside, so only safe characters reach the path.
+  const safeExt = ext.replace(/[^a-zA-Z0-9]/g, '') || 'bin'
+  const safeUid = uid.replace(/[^a-zA-Z0-9_-]/g, '') || 'dl'
+  mkdirSync(inboxDir, { recursive: true })
+  const path = join(inboxDir, `${Date.now()}-${safeUid}.${safeExt}`)
+  writeFileSync(path, bytes)
+  return path
 }

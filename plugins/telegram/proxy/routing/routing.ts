@@ -260,6 +260,9 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
   const turnEnded = (topic: string): void => void step(topic, { type: 'turn-ended' })
   /** The resumed session received its resume notice. */
   const noticeDelivered = (topic: string): void => void step(topic, { type: 'notice-delivered' })
+  /** Puts a topic on a route the proxy chose for it, as a pick would. */
+  const routeTopic = (topic: string, route: TopicRoute): void =>
+    void step(topic, { type: 'requested', route, reason: 'manual', busy: busy(topic), byOperator: false, now: Date.now() })
 
   async function announceFallback(topic: string, limited: TopicRoute, fallback: TopicRoute, resetAt?: number): Promise<void> {
     await api.sendMessage(
@@ -720,6 +723,7 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     modelCatalog,
     turnEnded,
     noticeDelivered,
+    routeTopic,
     handleModelCommand,
     capacityText,
     refreshProviderCapacity,

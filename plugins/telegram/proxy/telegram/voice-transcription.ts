@@ -1,6 +1,8 @@
 import { execFile } from 'child_process'
 import { existsSync, rmSync } from 'fs'
+import { randomUUID } from 'crypto'
 import type { Downloader } from './telegram-files'
+import { writeInboxFile } from './telegram-files'
 
 // Inbound voice notes are transcribed locally (whisper.cpp + large-v3-turbo)
 // and delivered as text behind a short provenance tag, so a topic-Claude gets
@@ -49,24 +51,22 @@ function run(bin: string, args: string[], timeoutMs: number): Promise<string | n
 
 export type VoiceSettings = { enabled: boolean; ffmpeg: string; whisper: string; model: string; glossary: string }
 
-export async function transcribeVoice(
-  voice: VoiceSettings,
-  downloadFile: Downloader,
-  fileId: string,
-  log: (m: string) => void,
-): Promise<string | null> {
-  if (!voice.enabled) return null
+// ffmpeg, whisper-cli and the model must all be present; a missing one turns transcription off, never fails a message.
+function voiceReady(voice: VoiceSettings, log: (m: string) => void): boolean {
+  if (!voice.enabled) return false
   for (const [what, p] of [['ffmpeg', voice.ffmpeg], ['whisper-cli', voice.whisper], ['model', voice.model]] as const) {
     if (!existsSync(p)) {
       log(`voice transcription skipped: ${what} not found at ${p}`)
-      return null
+      return false
     }
   }
-  const oga = await downloadFile(fileId)
-  if (!oga) return null
-  const wav = `${oga}.16k.wav`
+  return true
+}
+
+async function transcribeFile(voice: VoiceSettings, audio: string, log: (m: string) => void): Promise<string | null> {
+  const wav = `${audio}.16k.wav`
   try {
-    const ff = await run(voice.ffmpeg, ['-y', '-v', 'error', '-i', oga, '-ar', '16000', '-ac', '1', wav], 30_000)
+    const ff = await run(voice.ffmpeg, ['-y', '-v', 'error', '-i', audio, '-ar', '16000', '-ac', '1', wav], 30_000)
     if (ff === null) {
       log('voice transcription: ffmpeg failed')
       return null
@@ -81,8 +81,38 @@ export async function transcribeVoice(
     const text = out.trim()
     return text || null
   } finally {
-    for (const f of [wav, oga]) {
-      try { rmSync(f) } catch {}
-    }
+    try { rmSync(wav) } catch {}
+  }
+}
+
+export async function transcribeVoice(
+  voice: VoiceSettings,
+  downloadFile: Downloader,
+  fileId: string,
+  log: (m: string) => void,
+): Promise<string | null> {
+  if (!voiceReady(voice, log)) return null
+  const oga = await downloadFile(fileId)
+  if (!oga) return null
+  try {
+    return await transcribeFile(voice, oga, log)
+  } finally {
+    try { rmSync(oga) } catch {}
+  }
+}
+
+/** Transcribes a recording uploaded to the proxy; it is kept in `inboxDir` only while transcribing. */
+export async function transcribeAudio(
+  voice: VoiceSettings,
+  inboxDir: string,
+  audio: Uint8Array,
+  log: (m: string) => void,
+): Promise<string | null> {
+  if (!voiceReady(voice, log)) return null
+  const path = writeInboxFile(inboxDir, audio, 'audio', `audio-${randomUUID().slice(0, 8)}`)
+  try {
+    return await transcribeFile(voice, path, log)
+  } finally {
+    try { rmSync(path) } catch {}
   }
 }
