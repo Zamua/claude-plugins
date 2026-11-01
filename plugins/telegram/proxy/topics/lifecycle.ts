@@ -122,10 +122,10 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     else st.queue.push(msg)
   }
 
-  // Kills a topic's session AND drops its long-polls. A dead MCP's /poll waiter
-  // stays registered until it times out, and enqueue prefers a waiter to the
-  // queue, so a nudge enqueued after a bare mux.kill would be handed to the
-  // dead process and lost. Resolving the waiters answers 204 to dead sockets.
+  // Kills a topic's session AND drops its long-polls. A killed MCP's /poll
+  // waiter stays registered until the proxy sees its connection close, and
+  // enqueue prefers a waiter to the queue, so a nudge enqueued right after a
+  // bare mux.kill would be handed to the dying process and lost.
   function killSession(st: TopicState, topic: string): boolean {
     const killed = !!(st.session && mux.liveSessions().has(st.session)) && mux.kill(st.session)
     while (st.waiters.length) st.waiters.shift()?.(null)

@@ -42,21 +42,25 @@ export type HttpPorts = {
 }
 
 // Answers with the next queued item, or holds the request until one is handed
-// to its waiter, answering 204 after the hold.
-function longPoll<T>(queue: T[], waiters: Array<(item: T | null) => void>): Promise<Response> {
+// to its waiter, answering 204 after the hold. A waiter leaves the list the
+// moment its client disconnects: an agent that dies mid-poll would otherwise be
+// handed the next item, and that item would be lost.
+function longPoll<T>(queue: T[], waiters: Array<(item: T | null) => void>, signal: AbortSignal): Promise<Response> {
   const existing = queue.shift()
   if (existing) return Promise.resolve(json(existing))
+  if (signal.aborted) return Promise.resolve(new Response(null, { status: 204 }))
   return new Promise<Response>(resolve => {
-    let timer: ReturnType<typeof setTimeout>
-    const wrapped = (item: T | null) => {
+    const settle = (item: T | null) => {
       clearTimeout(timer)
-      resolve(item ? json(item) : new Response(null, { status: 204 }))
-    }
-    timer = setTimeout(() => {
+      signal.removeEventListener('abort', gone)
       const i = waiters.indexOf(wrapped)
       if (i >= 0) waiters.splice(i, 1)
-      resolve(new Response(null, { status: 204 }))
-    }, LONG_POLL_MS)
+      resolve(item ? json(item) : new Response(null, { status: 204 }))
+    }
+    const wrapped = (item: T | null) => settle(item)
+    const gone = () => settle(null)
+    const timer = setTimeout(gone, LONG_POLL_MS)
+    signal.addEventListener('abort', gone, { once: true })
     waiters.push(wrapped)
   })
 }
@@ -64,7 +68,7 @@ function longPoll<T>(queue: T[], waiters: Array<(item: T | null) => void>): Prom
 export function createHttpServer(ports: HttpPorts) {
   const { api, outbound, harnessOfKind, schedulePanePump, applyRouteNow, routing, square, reminders } = ports
 
-  function handlePoll(url: URL): Promise<Response> {
+  function handlePoll(url: URL, signal: AbortSignal): Promise<Response> {
     const topic = url.searchParams.get('topic') ?? 'general'
     const st = getTopic(topic)
     // Claude Code rejects Channel notifications under custom provider/API
@@ -88,7 +92,7 @@ export function createHttpServer(ports: HttpPorts) {
       saveRegistry()
       return Promise.resolve(json(resumeNoticeTurn(topic, content)))
     }
-    return longPoll(st.queue, st.waiters)
+    return longPoll(st.queue, st.waiters, signal)
   }
 
   // A topic-MCP forwards a harness permission prompt here. Remember it against
@@ -115,9 +119,9 @@ export function createHttpServer(ports: HttpPorts) {
     return json({ ok: true })
   }
 
-  function handlePermissionPoll(url: URL): Promise<Response> {
+  function handlePermissionPoll(url: URL, signal: AbortSignal): Promise<Response> {
     const st = getTopic(url.searchParams.get('topic') ?? 'general')
-    return longPoll(st.permQueue, st.permWaiters)
+    return longPoll(st.permQueue, st.permWaiters, signal)
   }
 
   // Telegram never echoes a bot's own actions via getUpdates, so a topic the bot
@@ -160,8 +164,8 @@ export function createHttpServer(ports: HttpPorts) {
     const get = req.method === 'GET'
     const post = req.method === 'POST'
     switch (url.pathname) {
-      case ROUTE.poll: if (get) return handlePoll(url); break
-      case ROUTE.permissionPoll: if (get) return handlePermissionPoll(url); break
+      case ROUTE.poll: if (get) return handlePoll(url, req.signal); break
+      case ROUTE.permissionPoll: if (get) return handlePermissionPoll(url, req.signal); break
       case ROUTE.health: if (get) return handleHealth(); break
       case ROUTE.rateLimit: if (post) return routing.handleRateLimit(req); break
       case ROUTE.capacity: if (post) return routing.handleCapacity(req); break
