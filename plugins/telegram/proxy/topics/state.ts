@@ -13,6 +13,8 @@ export type PermAnswer = { request_id: string; behavior: 'allow' | 'deny' }
 export type TopicState = {
   queue: InboundMsg[]
   waiters: Array<(m: InboundMsg | null) => void>
+  /** The message handed to the MCP and not yet acknowledged by its next poll. */
+  inflight?: { id: string; item: InboundMsg }
   // Permission answers ride a SEPARATE queue + long-poll (GET /permission-poll)
   // so a Telegram "yes <id>" reply is delivered ONLY to the topic-MCP that
   // asked, never mixed into (or consumed by) the normal channel /poll stream.

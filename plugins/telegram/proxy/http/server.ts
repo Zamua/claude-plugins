@@ -7,6 +7,7 @@ import type { TopicHarness } from '../harness/domain/topic-harness'
 import { log } from '../log'
 import type { createReminders } from '../reminders/reminders'
 import type { createRouting } from '../routing/routing'
+import { acknowledge, requeueInflight } from '../shared/domain/inbox'
 import { inboundModeForRoute } from '../shared/domain/inbound-delivery'
 import { topicSlug } from '../shared/domain/topic-slug'
 import type { createSquare } from '../square/square'
@@ -15,10 +16,9 @@ import { pendingPerms, prunePendingPerms } from '../topics/permissions'
 import { currentRoute, getTopic, topics } from '../topics/state'
 import type { createOutbound } from './outbound'
 import { BadRequest, parsePermissionRequest, parseTopicCreate } from './requests'
+import { acknowledgedPoll, longPoll } from './long-poll'
 import { json } from './response'
 import { ROUTE } from './routes'
-
-const LONG_POLL_MS = 25_000
 
 export type HttpPorts = {
   chat: Pick<ChatPort, 'send'>
@@ -40,36 +40,17 @@ export type HttpPorts = {
   pollingSince: () => number | null
 }
 
-// Answers with the next queued item, or holds the request until one is handed
-// to its waiter, answering 204 after the hold. A waiter leaves the list the
-// moment its client disconnects: an agent that dies mid-poll would otherwise be
-// handed the next item, and that item would be lost.
-function longPoll<T>(queue: T[], waiters: Array<(item: T | null) => void>, signal: AbortSignal): Promise<Response> {
-  const existing = queue.shift()
-  if (existing) return Promise.resolve(json(existing))
-  if (signal.aborted) return Promise.resolve(new Response(null, { status: 204 }))
-  return new Promise<Response>(resolve => {
-    const settle = (item: T | null) => {
-      clearTimeout(timer)
-      signal.removeEventListener('abort', gone)
-      const i = waiters.indexOf(wrapped)
-      if (i >= 0) waiters.splice(i, 1)
-      resolve(item ? json(item) : new Response(null, { status: 204 }))
-    }
-    const wrapped = (item: T | null) => settle(item)
-    const gone = () => settle(null)
-    const timer = setTimeout(gone, LONG_POLL_MS)
-    signal.addEventListener('abort', gone, { once: true })
-    waiters.push(wrapped)
-  })
-}
-
 export function createHttpServer(ports: HttpPorts) {
   const { chat, outbound, createTopic, schedulePanePump, turnEnded, noticeDelivered, routing, square, reminders } = ports
 
   function handlePoll(url: URL, signal: AbortSignal): Promise<Response> {
     const topic = url.searchParams.get('topic') ?? 'general'
     const st = getTopic(topic)
+    // An MCP that acknowledges sends `ack` on every poll, empty when it holds
+    // nothing; a reader that does not gets back whatever was left in flight.
+    const ack = url.searchParams.get('ack')
+    if (ack === null) requeueInflight(st)
+    else acknowledge(st, ack)
     // Claude Code rejects Channel notifications under custom provider/API
     // billing. A stale MCP from an older launch may still call /poll, so never
     // let it drain a proxied route's queue. The pane pump owns that ingress.
@@ -89,7 +70,7 @@ export function createHttpServer(ports: HttpPorts) {
       noticeDelivered(topic)
       return Promise.resolve(json(resumeNoticeTurn(topic, content)))
     }
-    return longPoll(st.queue, st.waiters, signal)
+    return ack === null ? longPoll(st.queue, st.waiters, signal) : acknowledgedPoll(st, ack, signal)
   }
 
   // A topic-MCP forwards a harness permission prompt here. Remember it against

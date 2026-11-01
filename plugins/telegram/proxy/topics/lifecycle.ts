@@ -25,6 +25,7 @@ import { log, reason } from '../log'
 import { autoCompactWindow, auxiliaryModelForRoute } from '../routing/domain/model-routing'
 import type { TopicRoute } from '../routing/domain/model-routing'
 import type { ProviderCatalog } from '../routing/provider-catalog'
+import { requeueInflight } from '../shared/domain/inbox'
 import { inboundModeForRoute, renderPaneTurn } from '../shared/domain/inbound-delivery'
 import { writeJsonAtomic } from '../shared/json-file'
 import { RELAUNCH_META } from '../shared/domain/turn-meta'
@@ -187,6 +188,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
   function pumpPane(topic: string): void {
     const st = getTopic(topic)
     if (inboundModeForRoute(currentRoute(st)) !== 'pane') return
+    requeueInflight(st)
 
     ensureSession(topic, 'timer')
     const state = panePumpState(topic)

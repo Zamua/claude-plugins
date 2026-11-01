@@ -1130,6 +1130,15 @@ there is no agent to relaunch.
 - **Nothing lost during spawn.** The inbound message is enqueued regardless; it
   waits in the topic queue until the freshly spawned MCP's first `/poll` drains
   it (~1-2s later).
+- **Acknowledged delivery.** `/poll` answers carry a `delivery` id, and the MCP
+  names the last one it handed to Claude in `ack` on its next poll. Until then
+  the message stays in flight and goes again to whoever polls next, so a
+  message handed to an MCP that died before the proxy saw its socket close
+  reaches the next process. A message may so arrive twice, never not at all. A
+  poll without `ack` (an MCP from before this) gets the old take-and-forget
+  behaviour, with anything left in flight put back first; the pane pump does
+  the same when a topic moves to pane delivery (`shared/domain/inbox.ts`,
+  `http/long-poll.ts`).
 - **A failed launch is reported in the topic.** When the launcher fails, the
   proxy posts the cause (at most once a minute per topic) and the message stays
   queued; the next message or `/relaunch` retries. A topic is bound to a newly

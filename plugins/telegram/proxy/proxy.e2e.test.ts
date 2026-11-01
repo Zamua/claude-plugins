@@ -513,16 +513,17 @@ describe('the proxy, end to end', () => {
   test('a message sent after an agent died mid-poll reaches the next poll, not the dead one', async () => {
     send(49, 'hi')
     await until('topic 49 to spawn', () => spawns().find(s => s.session === 'claude-49'))
-    expect((await fetch(`${proxyUrl}/poll?topic=49`).then(r => r.json())).content).toContain('hi')
+    const first = await fetch(`${proxyUrl}/poll?topic=49&ack=`).then(r => r.json())
+    expect(first.content).toContain('hi')
     // The agent's MCP dies while its long-poll is held
     const dying = new AbortController()
-    const held = fetch(`${proxyUrl}/poll?topic=49`, { signal: dying.signal }).catch(() => undefined)
+    const held = fetch(`${proxyUrl}/poll?topic=49&ack=${first.delivery}`, { signal: dying.signal }).catch(() => undefined)
     await Bun.sleep(300)
     dying.abort()
     await held
     await Bun.sleep(200)
     send(49, 'after the crash')
-    const next = await fetch(`${proxyUrl}/poll?topic=49`, { signal: AbortSignal.timeout(5_000) }).then(r => r.json())
+    const next = await fetch(`${proxyUrl}/poll?topic=49&ack=`, { signal: AbortSignal.timeout(5_000) }).then(r => r.json())
     expect(next.content).toContain('after the crash')
   }, 20_000)
 
