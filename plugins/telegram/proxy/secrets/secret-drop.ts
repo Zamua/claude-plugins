@@ -176,7 +176,7 @@ export function createSecretDrop({ chat, sayIn, harnessLocked, ensureSession, en
     const note = `${stored.replaced ? 'replaced' : 'stored'} ${shown} (${stored.bytes} bytes)`
     log(`secret drop: ${note}`)
     await sayIn(chatId, topic, `🔐 ${note}.${undeleted}`)
-    notifyTopic(chatId, topic, fromId, `the operator ${note}. Read the file when a task needs it; the value was deliberately never sent to you.`)
+    notifyTopic(chatId, topic, `the operator ${note}. Read the file when a task needs it; the value was deliberately never sent to you.`)
   }
 
   async function deleteAndAck(
@@ -187,7 +187,7 @@ export function createSecretDrop({ chat, sayIn, harnessLocked, ensureSession, en
       const gone = deleteSecret(SECRETS_DIR, name)
       log(`secret drop: deleted ${shown}`)
       await sayIn(chatId, topic, `🔐 deleted ${shown} (${gone.bytes} bytes).${undeleted}`)
-      notifyTopic(chatId, topic, fromId, `the operator deleted the secret ${shown}.`)
+      notifyTopic(chatId, topic, `the operator deleted the secret ${shown}.`)
     } catch (err) {
       const why = err instanceof SecretMissing ? `no such secret: ${shown}` : `could not delete ${shown}: ${reason(err)}`
       await sayIn(chatId, topic, `🔐 ${why}.${undeleted}`)
@@ -198,7 +198,7 @@ export function createSecretDrop({ chat, sayIn, harnessLocked, ensureSession, en
   // a message takes (waking it if dormant), so nobody has to tell it. The square
   // has no Claude of its own. secret_drop=1 lets the reply guard accept silence:
   // the proxy already acked in the topic.
-  function notifyTopic(chatId: string, topic: string, fromId: string, what: string): void {
+  function notifyTopic(chatId: string, topic: string, what: string): void {
     if ((SQUARE_TOPIC && topic === SQUARE_TOPIC) || harnessLocked(topic)) return
     ensureSession(topic)
     enqueue(topic, {
@@ -206,7 +206,7 @@ export function createSecretDrop({ chat, sayIn, harnessLocked, ensureSession, en
       meta: {
         chat_id: chatId,
         user: 'telegram-topics-proxy',
-        user_id: fromId,
+        user_id: '',
         ts: new Date().toISOString(),
         ...(topic !== 'general' ? { message_thread_id: topic } : {}),
         ...SECRET_DROP_META,
