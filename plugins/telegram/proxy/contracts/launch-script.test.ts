@@ -19,7 +19,7 @@ printf '%s\\n' "$*" >> "$HOME/fake/calls"
 case "$1 $2" in
   "pane list") cat "$HOME/fake/panes.json" ;;
   "workspace create") echo '{"result":{"workspace":{"workspace_id":"w1"},"pane":{"pane_id":"p1"}}}' ;;
-  "pane run") env -i HOME="$HOME" bash -c "$4" ;;
+  "pane run") env -i HOME="$HOME" CLAUDECODE=1 CLAUDE_CODE_CHILD_SESSION=1 CLAUDE_CODE_SESSION_ID=parent bash -c "$4" ;;
 esac
 `,
   tmux: `#!/usr/bin/env bash
@@ -37,7 +37,7 @@ case "$1" in
         *) cmd="$1"; shift ;;
       esac
     done
-    env -i HOME="$HOME" "\${envs[@]}" bash -c "$cmd" ;;
+    env -i HOME="$HOME" CLAUDECODE=1 CLAUDE_CODE_CHILD_SESSION=1 CLAUDE_CODE_SESSION_ID=parent "\${envs[@]}" bash -c "$cmd" ;;
 esac
 `,
   hc: `#!/usr/bin/env bash
@@ -55,7 +55,7 @@ case "$1" in
         *) argv+=("$1"); shift ;;
       esac
     done
-    env -i HOME="$HOME" "\${argv[@]}" ;;
+    env -i HOME="$HOME" CLAUDECODE=1 CLAUDE_CODE_CHILD_SESSION=1 CLAUDE_CODE_SESSION_ID=parent "\${argv[@]}" ;;
 esac
 `,
   seq: '#!/bin/sh\nexit 0\n',
@@ -136,6 +136,11 @@ describe('launch-topic.sh', () => {
           expect([key, run.paneEnv[key]]).toEqual([key, value])
         }
         expect(run.paneEnv.MCP_TIMEOUT).toBe('180000')
+      })
+
+      test('a server started inside another Claude does not make the topic\'s Claude its child', () => {
+        const run = launch(baseSpec({ muxKind: mux }))
+        expect([run.paneEnv.CLAUDECODE, run.paneEnv.CLAUDE_CODE_CHILD_SESSION, run.paneEnv.CLAUDE_CODE_SESSION_ID]).toEqual([undefined, undefined, undefined])
       })
 
       test('a first launch mints the conversation with the kickoff under checked auto mode', () => {

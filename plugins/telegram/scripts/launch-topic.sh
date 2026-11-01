@@ -94,6 +94,9 @@ TG_PATH="$PATH"
 # required (variadic, like --channels), and the disallowedTools SETTINGS key is
 # not honored for AskUserQuestion; only the CLI flag removes it.
 # `exec` so the pane dies with claude and the proxy's reconcile drops it.
+# A multiplexer server started from inside another Claude hands that Claude's
+# identity to every pane; the unset keeps the topic's Claude from running as its
+# child, which saves no transcript and so cannot be resumed.
 #
 # Session continuity: a FIRST spawn uses --session-id <id> + the kickoff; a
 # re-spawn (TG_RESUME=1) uses --resume <id> and NO kickoff. TG_MODEL controls the
@@ -105,7 +108,10 @@ TG_PATH="$PATH"
 # but an Anthropic-authenticated session can otherwise restore its native route
 # before issuing an HTTP request.
 # Args use `set --` so a bracketed id stays one properly quoted argument.
-PANE_CMD='export PATH="$TG_PATH"; \
+PANE_CMD='unset CLAUDECODE CLAUDE_PID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID \
+   CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN \
+   CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH AI_AGENT; \
+ export PATH="$TG_PATH"; \
  if [ -n "$TG_MODEL" ]; then \
    export CLAUDE_CODE_SUBAGENT_MODEL="$TG_MODEL"; \
  else \
