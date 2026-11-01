@@ -96,7 +96,8 @@ TG_PATH="$PATH"
 # `exec` so the pane dies with claude and the proxy's reconcile drops it.
 # A multiplexer server started from inside another Claude hands that Claude's
 # identity to every pane; the unset keeps the topic's Claude from running as its
-# child, which saves no transcript and so cannot be resumed.
+# child, which saves no transcript and so cannot be resumed. Claude finds its
+# login in the keychain by USER, which a server's environment may lack.
 #
 # Session continuity: a FIRST spawn uses --session-id <id> + the kickoff; a
 # re-spawn (TG_RESUME=1) uses --resume <id> and NO kickoff. TG_MODEL controls the
@@ -111,6 +112,7 @@ TG_PATH="$PATH"
 PANE_CMD='unset CLAUDECODE CLAUDE_PID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID \
    CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN \
    CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH AI_AGENT; \
+ [ -n "${USER:-}" ] || export USER="$(id -un)"; \
  export PATH="$TG_PATH"; \
  if [ -n "$TG_MODEL" ]; then \
    export CLAUDE_CODE_SUBAGENT_MODEL="$TG_MODEL"; \

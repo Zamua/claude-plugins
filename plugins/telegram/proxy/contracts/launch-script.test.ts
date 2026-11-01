@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { tmpdir, userInfo } from 'os'
 import { join } from 'path'
 import { claudeSpawnEnv } from '../topics/claude-launch'
 import type { ClaudeSpawnSpec } from '../topics/claude-launch'
@@ -141,6 +141,10 @@ describe('launch-topic.sh', () => {
       test('a server started inside another Claude does not make the topic\'s Claude its child', () => {
         const run = launch(baseSpec({ muxKind: mux }))
         expect([run.paneEnv.CLAUDECODE, run.paneEnv.CLAUDE_CODE_CHILD_SESSION, run.paneEnv.CLAUDE_CODE_SESSION_ID]).toEqual([undefined, undefined, undefined])
+      })
+
+      test('Claude gets USER, which it finds its login by, from a server environment without one', () => {
+        expect(launch(baseSpec({ muxKind: mux })).paneEnv.USER).toBe(userInfo().username)
       })
 
       test('a first launch mints the conversation with the kickoff under checked auto mode', () => {
