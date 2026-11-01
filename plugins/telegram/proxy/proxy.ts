@@ -198,6 +198,8 @@ loadEnvFile(join(PLUGIN_ROOT, '.env'))
 loadEnvFile(join(STATE_DIR, '.env'))
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN
+// A stand-in Bot API for the end-to-end tests; unset, grammy talks to Telegram.
+const BOT_API_ROOT = process.env.TELEGRAM_BOT_API_ROOT || undefined
 const GROUP_CHAT_ID = process.env.TELEGRAM_GROUP_CHAT_ID
 const SPAWN_DIR = process.env.TELEGRAM_TOPICS_SPAWN_DIR ?? homedir()
 const PORT = parseInt(process.env.TELEGRAM_PROXY_PORT ?? '8790', 10)
@@ -1682,7 +1684,7 @@ async function transcribeVoice(fileId: string): Promise<string | null> {
 
 // ---- grammy inbound --------------------------------------------------------
 
-const bot = new Bot(TOKEN)
+const bot = new Bot(TOKEN, BOT_API_ROOT ? { client: { apiRoot: BOT_API_ROOT } } : undefined)
 
 // Antigravity is a separate harness-bounded context. It shares only the one
 // Telegram Bot API adapter with Claude topics; its session identity, model
