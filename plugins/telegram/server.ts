@@ -31,6 +31,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
+import { ROUTE } from './proxy/adapters/proxy-routes'
 
 // The same stdio MCP is loaded globally for persistent Antigravity panes. It
 // exposes no tools unless the owning launcher binds it to an explicit topic;
@@ -98,7 +99,7 @@ mcp.setNotificationHandler(
   async ({ params }) => {
     const { request_id, tool_name, description, input_preview } = params
     try {
-      await postJSON('/permission-request', {
+      await postJSON(ROUTE.permissionRequest, {
         topic: TOPIC,
         request_id,
         tool: tool_name,
@@ -288,7 +289,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
   try {
     switch (req.params.name) {
       case 'reply': {
-        const data = await postJSON('/send', {
+        const data = await postJSON(ROUTE.send, {
           topic: TOPIC,
           chat_id: args.chat_id,
           text: args.text,
@@ -310,7 +311,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return { content: [{ type: 'text', text: result }] }
       }
       case 'react': {
-        await postJSON('/react', {
+        await postJSON(ROUTE.react, {
           topic: TOPIC,
           chat_id: args.chat_id,
           message_id: args.message_id,
@@ -319,11 +320,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return { content: [{ type: 'text', text: 'reacted' }] }
       }
       case 'download_attachment': {
-        const data = await postJSON('/download', { topic: TOPIC, file_id: args.file_id })
+        const data = await postJSON(ROUTE.download, { topic: TOPIC, file_id: args.file_id })
         return { content: [{ type: 'text', text: String(data.path) }] }
       }
       case 'edit_message': {
-        const data = await postJSON('/edit', {
+        const data = await postJSON(ROUTE.edit, {
           topic: TOPIC,
           chat_id: args.chat_id,
           message_id: args.message_id,
@@ -334,13 +335,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return { content: [{ type: 'text', text: `edited (id: ${id})` }] }
       }
       case 'list_topics': {
-        const res = await fetch(`${PROXY}/topics`)
+        const res = await fetch(`${PROXY}${ROUTE.topics}`)
         const raw = await res.text()
         if (!res.ok) throw new Error(raw || `HTTP ${res.status}`)
         return { content: [{ type: 'text', text: raw }] }
       }
       case 'create_topic': {
-        const data = await postJSON('/topic/create', { topic: TOPIC, name: args.name })
+        const data = await postJSON(ROUTE.topicCreate, { topic: TOPIC, name: args.name })
         return {
           content: [
             {
@@ -351,7 +352,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
       }
       case 'square_tag': {
-        const data = await postJSON('/square/tag', {
+        const data = await postJSON(ROUTE.squareTag, {
           topic: TOPIC,
           peer: args.peer,
           text: args.text,
@@ -366,7 +367,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
       }
       case 'square_reply': {
-        const data = await postJSON('/square/reply', {
+        const data = await postJSON(ROUTE.squareReply, {
           topic: TOPIC,
           conv: args.conv,
           ...(args.reply_token != null ? { reply_token: args.reply_token } : {}),
@@ -375,7 +376,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return { content: [{ type: 'text', text: `replied in conversation ${args.conv} (id: ${data.message_id})` }] }
       }
       case 'remind': {
-        const data = await postJSON('/remind', {
+        const data = await postJSON(ROUTE.remind, {
           topic: TOPIC,
           at: args.at,
           text: args.text,
@@ -384,13 +385,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return { content: [{ type: 'text', text: `reminder ${data.id} set for ${data.at}` }] }
       }
       case 'list_reminders': {
-        const res = await fetch(`${PROXY}/reminders?topic=${encodeURIComponent(TOPIC)}`)
+        const res = await fetch(`${PROXY}${ROUTE.reminders}?topic=${encodeURIComponent(TOPIC)}`)
         const raw = await res.text()
         if (!res.ok) throw new Error(raw || `HTTP ${res.status}`)
         return { content: [{ type: 'text', text: raw }] }
       }
       case 'cancel_reminder': {
-        const data = await postJSON('/reminder/cancel', { topic: TOPIC, id: args.id })
+        const data = await postJSON(ROUTE.reminderCancel, { topic: TOPIC, id: args.id })
         return { content: [{ type: 'text', text: `cancelled reminder ${data.cancelled}` }] }
       }
       default:
@@ -466,7 +467,7 @@ async function inboundLoop(): Promise<void> {
   if (FIRST_POLL_DELAY_MS > 0) await new Promise(r => setTimeout(r, FIRST_POLL_DELAY_MS))
   while (running) {
     try {
-      const res = await fetch(`${PROXY}/poll?topic=${encodeURIComponent(TOPIC)}`, {
+      const res = await fetch(`${PROXY}${ROUTE.poll}?topic=${encodeURIComponent(TOPIC)}`, {
         signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
       })
       if (res.status === 204) {
@@ -508,7 +509,7 @@ async function permissionLoop(): Promise<void> {
   let backoff = 500
   while (running) {
     try {
-      const res = await fetch(`${PROXY}/permission-poll?topic=${encodeURIComponent(TOPIC)}`, {
+      const res = await fetch(`${PROXY}${ROUTE.permissionPoll}?topic=${encodeURIComponent(TOPIC)}`, {
         signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
       })
       if (res.status === 204) {

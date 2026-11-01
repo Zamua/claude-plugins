@@ -949,7 +949,12 @@ there is no agent to relaunch.
   resend via the reply tool (once per turn). Wired via `override-settings.json`
   (`$TG_HOOK`, set by the proxy + forwarded by the launcher), NOT a plugin
   `hooks/hooks.json` (`--dangerously-load-development-channels` doesn't load
-  those). See the Stop-hook gotcha above.
+  those). See the Stop-hook gotcha above. The meta flags it accepts as
+  "no reply needed" come from `proxy/domain/turn-meta.ts`, and
+  `proxy/adapters/hook-contract.test.ts` runs the hook against turns rendered
+  with them.
+- `proxy/adapters/proxy-routes.ts`: the proxy's HTTP paths, used by the proxy,
+  `server.ts`, and checked against the Python hooks' calls.
 - `override-settings.json`: the BASE session settings - enables `telegram@zamua`
   AND wires the Stop hook (`hooks.Stop` -> `python3 "$TG_HOOK"`). The proxy does
   NOT hand this to the launcher directly; it generates

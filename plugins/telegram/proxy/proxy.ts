@@ -121,6 +121,8 @@ import { HerdrOpencodeRuntime } from './adapters/herdr-opencode-runtime'
 import { opencodeTopic, opencodeTopicFromRecord } from './domain/opencode-topic'
 import type { OpencodeTopic } from './domain/opencode-topic'
 import { lockRefusal } from './domain/topic-harness'
+import { RELAUNCH_META, reminderMeta, SECRET_DROP_META, SQUARE_META } from './domain/turn-meta'
+import { ROUTE } from './adapters/proxy-routes'
 import { topicSlug } from './domain/topic-slug'
 import type { LockedHarness, TopicHarness } from './domain/topic-harness'
 import { LocalgenTopicService } from './application/localgen-topic-service'
@@ -1024,7 +1026,7 @@ function deliverSquare(
     enqueue(topic, {
       content: `${text}\n\n${squareNorm(meta.conv, meta.reply_token)}`,
       meta: {
-        square: '1',
+        ...SQUARE_META,
         conv: meta.conv,
         reply_token: String(meta.reply_token),
         from: meta.from,
@@ -2077,7 +2079,7 @@ function notifyTopic(chatId: string, topic: string, fromId: string, what: string
       user_id: fromId,
       ts: new Date().toISOString(),
       ...(topic !== 'general' ? { message_thread_id: topic } : {}),
-      secret_drop: '1',
+      ...SECRET_DROP_META,
     },
   })
 }
@@ -2168,8 +2170,7 @@ async function fireDueReminders(): Promise<void> {
             user_id: '',
             ts: new Date(now).toISOString(),
             ...(r.topic !== 'general' ? { message_thread_id: r.topic } : {}),
-            // "notice" lets the reply guard accept silence; "act" carries work.
-            reminder: r.prompt ? 'act' : 'notice',
+            ...reminderMeta(!!r.prompt),
           },
         })
       }
@@ -2564,7 +2565,7 @@ async function handleRelaunch(chatId: string, topic: string, fromId: string): Pr
       user_id: fromId,
       ts: new Date().toISOString(),
       ...(topic !== 'general' ? { message_thread_id: topic } : {}),
-      relaunch: '1',
+      ...RELAUNCH_META,
     },
   })
   ensureSession(topic)
@@ -3776,11 +3777,11 @@ async function serveWithRetry(): Promise<void> {
         async fetch(req) {
           const url = new URL(req.url)
           try {
-            if (req.method === 'GET' && url.pathname === '/poll') return handlePoll(url)
-            if (req.method === 'GET' && url.pathname === '/permission-poll') {
+            if (req.method === 'GET' && url.pathname === ROUTE.poll) return handlePoll(url)
+            if (req.method === 'GET' && url.pathname === ROUTE.permissionPoll) {
               return handlePermissionPoll(url)
             }
-            if (req.method === 'GET' && url.pathname === '/health') {
+            if (req.method === 'GET' && url.pathname === ROUTE.health) {
               return json({
                 ok: true,
                 topics: [...topics.keys()],
@@ -3789,21 +3790,21 @@ async function serveWithRetry(): Promise<void> {
                 polling_since: pollingSince != null ? new Date(pollingSince).toISOString() : null,
               })
             }
-            if (req.method === 'POST' && url.pathname === '/rate-limit') return await handleRateLimit(req)
-            if (req.method === 'POST' && url.pathname === '/capacity') return await handleCapacity(req)
-            if (req.method === 'POST' && url.pathname === '/turn-failed') return await handleTurnFailed(req)
-            if (req.method === 'GET' && url.pathname === '/topics') return handleTopics()
-            if (req.method === 'POST' && url.pathname === '/topic/create') return await handleTopicCreate(req)
-            if (req.method === 'POST' && url.pathname === '/square/tag') return await handleSquareTag(req)
-            if (req.method === 'POST' && url.pathname === '/square/reply') return await handleSquareReply(req)
-            if (req.method === 'POST' && url.pathname === '/remind') return await handleRemind(req)
-            if (req.method === 'GET' && url.pathname === '/reminders') return handleListReminders(url)
-            if (req.method === 'POST' && url.pathname === '/reminder/cancel') return await handleCancelReminder(req)
-            if (req.method === 'POST' && url.pathname === '/send') return await handleSend(req)
-            if (req.method === 'POST' && url.pathname === '/react') return await handleReact(req)
-            if (req.method === 'POST' && url.pathname === '/edit') return await handleEdit(req)
-            if (req.method === 'POST' && url.pathname === '/download') return await handleDownload(req)
-            if (req.method === 'POST' && url.pathname === '/permission-request') {
+            if (req.method === 'POST' && url.pathname === ROUTE.rateLimit) return await handleRateLimit(req)
+            if (req.method === 'POST' && url.pathname === ROUTE.capacity) return await handleCapacity(req)
+            if (req.method === 'POST' && url.pathname === ROUTE.turnFailed) return await handleTurnFailed(req)
+            if (req.method === 'GET' && url.pathname === ROUTE.topics) return handleTopics()
+            if (req.method === 'POST' && url.pathname === ROUTE.topicCreate) return await handleTopicCreate(req)
+            if (req.method === 'POST' && url.pathname === ROUTE.squareTag) return await handleSquareTag(req)
+            if (req.method === 'POST' && url.pathname === ROUTE.squareReply) return await handleSquareReply(req)
+            if (req.method === 'POST' && url.pathname === ROUTE.remind) return await handleRemind(req)
+            if (req.method === 'GET' && url.pathname === ROUTE.reminders) return handleListReminders(url)
+            if (req.method === 'POST' && url.pathname === ROUTE.reminderCancel) return await handleCancelReminder(req)
+            if (req.method === 'POST' && url.pathname === ROUTE.send) return await handleSend(req)
+            if (req.method === 'POST' && url.pathname === ROUTE.react) return await handleReact(req)
+            if (req.method === 'POST' && url.pathname === ROUTE.edit) return await handleEdit(req)
+            if (req.method === 'POST' && url.pathname === ROUTE.download) return await handleDownload(req)
+            if (req.method === 'POST' && url.pathname === ROUTE.permissionRequest) {
               return await handlePermissionRequest(req)
             }
             return new Response('not found', { status: 404 })
