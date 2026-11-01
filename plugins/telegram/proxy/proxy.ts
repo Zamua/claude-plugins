@@ -94,6 +94,7 @@ import { capacityTransition, nextResetAt, providerCapacity } from './domain/prov
 import type { ProviderCapacity } from './domain/provider-capacity'
 import { environmentFlag } from './domain/env-flag'
 import { launchProfileNeedsRefresh } from './domain/launch-profile'
+import { missingConversationNotice, planRelaunch, spawnConversation } from './domain/topic-conversation'
 import { AntigravityTopicService } from './application/antigravity-topic-service'
 import { routeLabel as antigravityRouteLabel } from './adapters/antigravity-cli'
 import { HerdrAntigravityRuntime } from './adapters/herdr-antigravity-runtime'
@@ -1469,8 +1470,7 @@ function reportMissingConversation(topic: string, sessionId: string): void {
   lastMissingConversationNotice.set(topic, Date.now())
   bot.api.sendMessage(
     String(GROUP_CHAT_ID),
-    `This topic's Claude conversation (${sessionId}) no longer exists on disk, so it cannot be resumed. ` +
-      `Nothing was started and your message was not delivered.`,
+    missingConversationNotice(sessionId),
     threadOf(topic),
   ).catch(e => log(`missing-conversation notice failed for topic ${topic}: ${e}`))
 }
@@ -1524,7 +1524,7 @@ function ensureSession(topic: string): void {
   }
   // A topic bound to a conversation must resume THAT conversation. If its file is
   // gone, starting a fresh one would silently drop the topic's history, so report
-  // it in the topic and start nothing.
+  // it in the topic and start nothing; /relaunch is the explicit way out.
   if (st.claudeSessionId && !claudeConversationExists(st.claudeSessionId)) {
     reportMissingConversation(topic, st.claudeSessionId)
     return
@@ -1533,8 +1533,9 @@ function ensureSession(topic: string): void {
   try {
     const label = st.name || topicNames.get(topic) || topic
     st.name = label
-    const resuming = !!st.claudeSessionId
-    if (!st.claudeSessionId) st.claudeSessionId = crypto.randomUUID()
+    const conversation = spawnConversation(st.claudeSessionId, () => crypto.randomUUID())
+    const resuming = conversation.resume
+    st.claudeSessionId = conversation.claudeSessionId
     const route = st.route ?? DEFAULT_TOPIC_ROUTE
     st.route = route
     // Name the mux session from the CURRENT label (fresh each spawn, so a
@@ -2620,17 +2621,18 @@ async function handleRelaunch(chatId: string, topic: string, fromId: string): Pr
   lastRelaunch.set(topic, Date.now())
   const st = getTopic(topic)
   const wasLive = killSession(st, topic)
-  log(`relaunch of topic ${topic} "${st.name || topic}" requested by user ${fromId} (was ${wasLive ? 'live' : 'not running'})`)
-  await sayIn(
-    chatId, topic,
-    `♻️ relaunching this topic's agent${wasLive ? '' : ' (it was not running)'}: same conversation, ` +
-      'freshly loaded MCP servers and settings.',
+  const plan = planRelaunch(st.claudeSessionId, id => claudeConversationExists(id), wasLive)
+  if (plan.claudeSessionId !== st.claudeSessionId) {
+    st.claudeSessionId = plan.claudeSessionId
+    saveRegistry()
+  }
+  log(
+    `relaunch of topic ${topic} "${st.name || topic}" requested by user ${fromId} (was ${wasLive ? 'live' : 'not running'})` +
+      (plan.missingSessionId ? `; conversation ${plan.missingSessionId} missing on disk, starting a new one` : ''),
   )
+  await sayIn(chatId, topic, plan.ack)
   enqueue(topic, {
-    content:
-      'SYSTEM NOTICE (not a user message): the operator relaunched this session, so it has just restarted ' +
-      'with your full conversation intact and freshly loaded MCP servers and settings. Reply with ONE short ' +
-      'line confirming you are back and naming the MCP servers you now see, then continue any pending work.',
+    content: plan.notice,
     meta: {
       chat_id: chatId,
       user: 'telegram-topics-proxy',
