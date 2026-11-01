@@ -921,7 +921,9 @@ there is no agent to relaunch.
 - The proxy is grouped by context; within one, `domain/` holds the pure types
   and rules, and the rest are its application services and adapters. Tests sit
   beside the code they test.
-  - `proxy/topics/`: Claude topics: in-memory state, the multiplexer
+  - `proxy/topics/`: Claude topics: the agent lifecycle (`lifecycle.ts`:
+    spawn, the inbound queue, pane delivery on proxied routes, kill and
+    `/relaunch`), in-memory state, the multiplexer
     (`multiplexer.ts`, tmux or herdr), registry.json (`registry.json` load,
     reconcile and save, `registry-file.ts`), the permission relay, Claude
     launch profiles, settings, sessions and transcripts; `domain/` holds

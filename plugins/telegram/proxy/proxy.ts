@@ -36,14 +36,10 @@ import {
   statSync,
 } from 'fs'
 import { join, extname } from 'path'
-import { spawnSync, execFileSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
 import { SECRET_CMD_RE } from './secrets/secret'
-import { claudeSpawnEnv } from './topics/claude-launch'
-import type { ClaudeSpawnSpec } from './topics/claude-launch'
-import { effectiveClaudeSettings } from './topics/claude-settings'
-import { claudeConversationExists } from './topics/claude-transcript'
 import { installedClaudeVersion, liveClaudeSessions } from './topics/claude-sessions'
 import { updateRestartAction } from './topics/domain/claude-update'
 import {
@@ -52,19 +48,9 @@ import {
   decodeCallback,
   encodeCallback,
 } from './telegram/telegram-callback'
-import { inboundModeForRoute, renderPaneTurn } from './shared/domain/inbound-delivery'
-import {
-  auxiliaryModelForRoute,
-  autoCompactWindow,
-} from './routing/domain/model-routing'
-import type {
-  TopicRoute,
-} from './routing/domain/model-routing'
+import { inboundModeForRoute } from './shared/domain/inbound-delivery'
 import { environmentFlag } from './shared/env-flag'
-import { missingConversationNotice, planRelaunch, spawnConversation, spawnFailureNotice } from './topics/domain/topic-conversation'
-import { writeJsonAtomic } from './shared/json-file'
 import { lockRefusal } from './harness/domain/topic-harness'
-import { RELAUNCH_META } from './shared/domain/turn-meta'
 import { ROUTE } from './http/routes'
 import {
   BadRequest,
@@ -80,44 +66,35 @@ import type { LockedHarness, TopicHarness } from './harness/domain/topic-harness
 import {
   ADMIN_USER_ID,
   BOT_API_ROOT,
-  CAPACITY_HOOK,
   CAPACITY_POLL_MS,
-  DEFAULT_TOPIC_ROUTE,
-  EFFECTIVE_SETTINGS_DIR,
   ENV_FILES,
-  FAILOVER_HOOK,
   GROUP_CHAT_ID,
   INBOX_DIR,
-  LAUNCH_SCRIPT,
   MARKETPLACE,
   MODEL,
-  OVERRIDE_SETTINGS,
   PID_FILE,
   PLUGIN_ROOT,
   PORT,
-  PROVIDER_PROXY_URL,
   PROXY_URL,
   SECRETS_USER_ID,
   SPAWN_DIR,
   SQUARE_TOPIC,
   STATE_DIR,
-  STOP_HOOK,
   TOKEN,
-  TOPIC_LAUNCH_PROFILE_VERSION,
   VOICE,
 } from './config'
-import { log, noticeFailed, reason } from './log'
+import { log, noticeFailed,  } from './log'
 import type { TopicContext, TopicHarnessAdapter } from './harness/topic-harness-adapter'
 import { createLocalgenHarness } from './harness/localgen/localgen-harness'
 import { createOpencodeHarness } from './harness/opencode/opencode-harness'
 import { createAntigravityHarness } from './harness/antigravity/antigravity-harness'
 import { createRouting } from './routing/routing'
+import { createTopicLifecycle, resumeNoticeTurn } from './topics/lifecycle'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
-import { mux } from './topics/mux'
 import { PERMISSION_REPLY_RE, pendingPerms, prunePendingPerms, resolvePermission } from './topics/permissions'
 import { loadAndReconcileRegistry, saveRegistry } from './topics/registry'
-import { currentRoute, getTopic, legacySessionNameFor, sessionNameFor, topicNames, topics } from './topics/state'
+import { currentRoute, getTopic, topicNames, topics } from './topics/state'
 import type { InboundMsg, PermAnswer, TopicState } from './topics/state'
 import { loadConvs } from './square/conversations'
 import { createSquare } from './square/square'
@@ -139,38 +116,9 @@ import { transcribeVoice, VOICE_TAG } from './telegram/voice-transcription'
 // same provider route and conversation, freshly loading MCP servers and settings
 // that a running session cannot pick up mid-flight.
 const RELAUNCH_RE = /^\/relaunch(?:@\w+)?\s*$/
-// A double tap lands inside the spawn window: the second request finds no
-// live session, so it cannot double-spawn, but it would enqueue a second
-// nudge and the fresh session would answer twice.
-const RELAUNCH_DEBOUNCE_MS = 30_000
-const lastRelaunch = new Map<string, number>()
 
 const MODEL_RE = /^\/model(?:@\w+)?(?:\s+(\S+))?\s*$/
 const USAGE_RE = /^\/usage(?:@\w+)?\s*$/
-
-// Called PER SPAWN (not once at module load) so each (re)spawn reflects the
-// CURRENT committed override-settings.json - a base-settings edit (e.g. a git
-// pull) then reaches topics on their next respawn (an update restart, a kill),
-// matching the pre-generation behavior where spawns read the base file live. Also
-// self-heals if the generated file is removed. On any read/write error it falls
-// back to the committed base un-generated (topics still spawn, just without the
-// ultracode override).
-function resolveSettings(topic: string, route: TopicRoute): string {
-  try {
-    const base = JSON.parse(readFileSync(OVERRIDE_SETTINGS, 'utf8'))
-    const settings = effectiveClaudeSettings(base, route)
-    const safeTopic = topic.replace(/[^a-zA-Z0-9_-]/g, '_')
-    const settingsPath = join(EFFECTIVE_SETTINGS_DIR, `${safeTopic}.json`)
-    // NB the MODEL is NOT baked in here: a settings `model` is only a default and
-    // is ignored by a --resume'd interactive session. The launcher passes MODEL as
-    // the --model FLAG (via TG_MODEL) instead, which overrides even on resume.
-    writeJsonAtomic(settingsPath, settings)
-    return settingsPath
-  } catch (e) {
-    log(`could not generate effective settings (${e}); using override-settings.json`)
-    return OVERRIDE_SETTINGS
-  }
-}
 
 if (!TOKEN) {
   process.stderr.write(
@@ -194,179 +142,6 @@ process.on('unhandledRejection', err => {
 process.on('uncaughtException', err => {
   log(`uncaught exception: ${err}`)
 })
-
-function enqueue(topic: string, msg: InboundMsg): void {
-  const st = getTopic(topic)
-  if (inboundModeForRoute(currentRoute(st)) === 'pane') {
-    // A proxied Claude runs under API billing, where Claude Code deliberately
-    // disables Channels. Never hand its message to a stale /poll waiter: the
-    // harness would silently discard it. Queue it for the foreground-pane
-    // adapter instead.
-    while (st.waiters.length) st.waiters.shift()?.(null)
-    st.queue.push(msg)
-    log(
-      `queued Telegram turn ${msg.meta.message_id ?? '(no id)'} for proxied Claude topic ${topic} ` +
-      `(proxy depth ${st.queue.length})`,
-    )
-    schedulePanePump(topic)
-    return
-  }
-  const waiter = st.waiters.shift()
-  if (waiter) waiter(msg)
-  else st.queue.push(msg)
-}
-
-// Kill a topic's session AND drop the long-polls that belonged to it.
-//
-// The proxy cannot observe an MCP dying: its /poll waiter stays registered in
-// st.waiters until it times out ~25s later. enqueue() prefers a waiter over
-// the queue, so a message enqueued in that window is handed to a process that
-// no longer exists and is LOST - it never reaches the queue the respawned
-// session drains. That is exactly how the first real usage-limit failover
-// failed (2026-07-19): the nudge vanished into the killed session, so the
-// Claude that came back on its replacement route had nothing to do and sat idle
-// while its pane still showed the limit message - looking hung when it was
-// actually fine.
-//
-// Resolving a stale waiter with null just answers 204 to a dead socket, which
-// is harmless; the point is to empty the list so the NEXT enqueue queues.
-// Always kill through this helper, never mux.kill() directly, when anything
-// might be enqueued afterwards.
-function killSession(st: TopicState, topic: string): boolean {
-  const killed = !!(st.session && mux.liveSessions().has(st.session)) && mux.kill(st.session)
-  while (st.waiters.length) st.waiters.shift()?.(null)
-  while (st.permWaiters.length) st.permWaiters.shift()?.(null)
-  st.session = ''
-  st.spawnedAt = 0
-  st.launchProfileVersion = undefined
-  return killed
-}
-
-// ---- multiplexer port -------------------------------------------------------
-//
-// The domain/application code depends only on this port. Concrete tmux and
-// herdr process control lives in adapters/multiplexer.ts.
-
-
-type PanePumpState = {
-  timer?: ReturnType<typeof setTimeout>
-  inFlight: boolean
-  observedActive: boolean
-  submittedAt: number
-}
-
-const panePumps = new Map<string, PanePumpState>()
-
-function panePumpState(topic: string): PanePumpState {
-  let state = panePumps.get(topic)
-  if (!state) {
-    state = { inFlight: false, observedActive: false, submittedAt: 0 }
-    panePumps.set(topic, state)
-  }
-  return state
-}
-
-function schedulePanePump(topic: string, delayMs = 0): void {
-  const st = getTopic(topic)
-  if (inboundModeForRoute(currentRoute(st)) !== 'pane') return
-  const state = panePumpState(topic)
-  if (state.timer) return
-  state.timer = setTimeout(() => {
-    state.timer = undefined
-    pumpPane(topic)
-  }, delayMs)
-}
-
-function pendingPaneMessage(topic: string, st: TopicState): { message: InboundMsg; resumeNotice: boolean } | undefined {
-  if (st.pendingResumeNotice) {
-    return {
-      message: {
-        content: st.pendingResumeNotice,
-        meta: {
-          chat_id: String(GROUP_CHAT_ID),
-          user: 'telegram-topics-proxy',
-          ts: new Date().toISOString(),
-          ...(topic !== 'general' ? { message_thread_id: topic } : {}),
-          route_switch: '1',
-        },
-      },
-      resumeNotice: true,
-    }
-  }
-  const message = st.queue[0]
-  return message ? { message, resumeNotice: false } : undefined
-}
-
-/**
- * Deliver queued turns to a proxied Claude through its foreground prompt.
- * Claude Code disables Channels under custom API billing, but its normal REPL
- * and MCP tools remain available. We submit only while the pane is idle, wait
- * for the resulting turn to become active and settle, then deliver the next
- * queued turn. The Claude UUID and transcript are untouched.
- */
-function pumpPane(topic: string): void {
-  const st = getTopic(topic)
-  if (inboundModeForRoute(currentRoute(st)) !== 'pane') return
-
-  ensureSession(topic)
-  const state = panePumpState(topic)
-  const runtime = st.session ? mux.runtime(st.session) : 'missing'
-
-  if (state.inFlight) {
-    if (runtime === 'busy' || runtime === 'blocked' || runtime === 'starting') {
-      state.observedActive = true
-    }
-    // A very short turn can finish between status samples. Five seconds after
-    // an accepted prompt, an idle pane is safe even if we missed its busy edge.
-    if (runtime === 'idle' && (state.observedActive || Date.now() - state.submittedAt >= 5000)) {
-      state.inFlight = false
-      state.observedActive = false
-    } else {
-      schedulePanePump(topic, 250)
-      return
-    }
-  }
-
-  if (st.pendingRoute) {
-    if (runtime === 'idle' || runtime === 'missing') {
-      const pending = st.pendingRoute
-      applyRouteNow(topic, pending.route, pending.reason)
-    } else {
-      schedulePanePump(topic, 500)
-    }
-    return
-  }
-
-  const pending = pendingPaneMessage(topic, st)
-  if (!pending) return
-  if (runtime !== 'idle' || !st.session) {
-    schedulePanePump(topic, 500)
-    return
-  }
-
-  if (!mux.prompt(st.session, renderPaneTurn(pending.message))) {
-    schedulePanePump(topic, 500)
-    return
-  }
-
-  if (pending.resumeNotice) {
-    st.pendingResumeNotice = undefined
-    saveRegistry()
-  } else {
-    st.queue.shift()
-  }
-  state.inFlight = true
-  state.observedActive = false
-  state.submittedAt = Date.now()
-  log(`delivered Telegram turn to proxied Claude pane ${st.session} for topic ${topic}`)
-  schedulePanePump(topic, 150)
-}
-
-// How long after a spawn we still treat a topic as live even if the multiplexer
-// cannot see an agent yet (herdr reports `agent_status: "unknown"` for the first
-// ~2s of a pane's life). Generous enough to cover a slow boot, short enough that
-// a genuinely failed spawn is retried on the next message.
-const SPAWN_GRACE_MS = 30_000
 
 // GET /topics - the directory tool's backing endpoint.
 function handleTopics(): Response {
@@ -399,159 +174,25 @@ async function handleTopicCreate(req: Request): Promise<Response> {
   })
 }
 
-// ---- spawn (single-flight) -------------------------------------------------
-
-// Every message to a topic that cannot start retries ensureSession, so its
-// failure notice is posted at most once a minute per topic and kind.
-const SPAWN_NOTICE_MS = 60_000
-const lastSpawnNotice = new Map<string, number>()
-function postSpawnNotice(kind: 'missing-conversation' | 'spawn-failed', topic: string, text: string): void {
-  const key = `${kind}:${topic}`
-  if (Date.now() - (lastSpawnNotice.get(key) ?? 0) < SPAWN_NOTICE_MS) return
-  lastSpawnNotice.set(key, Date.now())
-  bot.api.sendMessage(String(GROUP_CHAT_ID), text, threadOf(topic))
-    .catch(e => log(`${kind} notice failed for topic ${topic}: ${e}`))
-}
-
-function reportMissingConversation(topic: string, sessionId: string): void {
-  log(`topic ${topic}: claude conversation ${sessionId} not found on disk; not spawning`)
-  postSpawnNotice('missing-conversation', topic, missingConversationNotice(sessionId))
-}
-
-// Ensure a live Claude Code session exists for a topic. Single-flight: the synchronous
-// spawnSync blocks the event loop for the whole launch, so two inbound
-// messages for a brand-new topic cannot spawn two sessions; the spawning
-// flag + the live-session dedup are belt and suspenders.
-function ensureSession(topic: string): void {
-  // Harness lock: a locked topic must never fall through to the Claude
-  // launcher, even if a stale queue/callback reaches this boundary.
-  if (harnessLocked(topic)) return
-  // The square topic hosts conversations, not a claude of its own.
-  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return
-  const st = getTopic(topic)
-  if (st.spawning) return
-  const live = mux.liveSessions()
-  // Dedup on the RECORDED session name (stable for a live session's whole life;
-  // '' for a brand-new / dead topic, so we fall through and spawn). We do NOT
-  // re-derive the name here: it now depends on the topic's mutable label, and
-  // re-deriving after a rename would miss the running (old-named) session and
-  // double-spawn. `live.has(...)` also confirms it is actually up, so a stale
-  // recorded name (session died) correctly falls through to a respawn.
-  // Boot grace: herdr reports a freshly spawned pane as `agent_status:
-  // "unknown"` for ~2s before the agent is detected, and liveSessions() (which
-  // now requires a real agent - see HerdrMux) would read that as dead. Without
-  // this window, a message arriving in those first seconds would trigger a
-  // SECOND spawn on top of the one still booting. Treat anything we spawned very
-  // recently as live; after the window, normal liveness applies (so a genuinely
-  // failed spawn still gets retried on the next message).
-  const bootingGrace =
-    !!st.session && st.spawnedAt > 0 && Date.now() - st.spawnedAt < SPAWN_GRACE_MS
-  if (st.session && (live.has(st.session) || bootingGrace)) {
-    if (!st.spawnedAt) {
-      st.spawnedAt = Date.now()
-      saveRegistry()
-    }
-    return
-  }
-  // Migration bridge: an OLD-scheme `tg-<cid>-<tid>` session may be live but
-  // UNTRACKED (predates session-id tracking, or the registry was lost), so
-  // reconcile never recorded it in st.session. Adopt it by its legacy name
-  // instead of spawning a SECOND session under the new name (the launcher's
-  // has-session guard keys off the new name, so it would not catch the old one).
-  // It gets the new name on its next respawn. Removable once no `tg-*` remain.
-  if (!st.session) {
-    const legacy = legacySessionNameFor(topic)
-    if (live.has(legacy)) {
-      st.session = legacy
-      if (!st.spawnedAt) st.spawnedAt = Date.now()
-      saveRegistry()
-      log(`adopted legacy-named session ${legacy} for topic ${topic}; renames on next respawn`)
-      return
-    }
-  }
-  // A topic bound to a conversation must resume THAT conversation. If its file is
-  // gone, starting a fresh one would silently drop the topic's history, so report
-  // it in the topic and start nothing; /relaunch is the explicit way out.
-  if (st.claudeSessionId && !claudeConversationExists(st.claudeSessionId)) {
-    reportMissingConversation(topic, st.claudeSessionId)
-    return
-  }
-  st.spawning = true
-  try {
-    const label = st.name || topicNames.get(topic) || topic
-    st.name = label
-    // The topic is bound to a new conversation only once its launch succeeds: a
-    // failed first launch leaves no transcript, and a binding to it would read
-    // as a missing conversation on every later message.
-    const conversation = spawnConversation(st.claudeSessionId, () => crypto.randomUUID())
-    const resuming = conversation.resume
-    const route = st.route ?? DEFAULT_TOPIC_ROUTE
-    st.route = route
-    // Name the mux session from the CURRENT label (fresh each spawn, so a
-    // rename takes effect on the next respawn); recorded in st.session after a
-    // successful spawn so dedup + kill target this exact string.
-    const name = sessionNameFor(topic, label)
-    // Regenerate the effective settings for THIS spawn so it reflects the current
-    // committed base + the ultracode config (fresh on every respawn).
-    const settingsPath = resolveSettings(topic, route)
-    const providerModels = modelCatalog()[route.provider]
-    const routeModel = providerModels.find(model => model.id === route.model)
-    const auxiliaryModel = auxiliaryModelForRoute(
-      route,
-      providerModels.filter(model => model.bridgeSupported !== false).map(model => model.id),
-    )
-    const spec: ClaudeSpawnSpec = {
-      topic,
-      label,
-      sessionName: name,
-      muxKind: mux.kind,
-      spawnDir: SPAWN_DIR,
-      proxyUrl: PROXY_URL,
-      squareTopic: SQUARE_TOPIC,
-      marketplace: MARKETPLACE,
-      route,
-      auxiliaryModel,
-      claudeSessionId: conversation.claudeSessionId,
-      resume: resuming,
-      settingsPath,
-      stopHook: STOP_HOOK,
-      failoverHook: FAILOVER_HOOK,
-      capacityHook: CAPACITY_HOOK,
-      providerProxyUrl: PROVIDER_PROXY_URL,
-      modelContextWindow: routeModel?.contextWindow,
-    }
-    const env = {
-      ...process.env,
-      ...claudeSpawnEnv(spec),
-    }
-    const r = spawnSync('bash', [LAUNCH_SCRIPT], { env, encoding: 'utf8' })
-    if (r.status !== 0) {
-      throw new Error(`launcher exit ${r.status}: ${(r.stderr || '').trim()}`)
-    }
-    st.claudeSessionId = conversation.claudeSessionId
-    st.session = name
-    st.spawnedAt = Date.now()
-    st.launchProfileVersion = TOPIC_LAUNCH_PROFILE_VERSION
-    saveRegistry()
-    log(
-      `${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" ` +
-      `(claude ${st.claudeSessionId}; ${route.provider}/${route.model}; ${route.effort}; ` +
-      `aux ${auxiliaryModel}; subagents locked; ultracode ${route.ultracode ? 'on' : 'off'}; ` +
-      `compact ${autoCompactWindow(route.provider, routeModel?.contextWindow) ?? 'auto'}) ` +
-      `-> ${mux.kind} ${name}`,
-    )
-  } catch (e) {
-    log(`spawn failed for topic ${topic}: ${e}`)
-    postSpawnNotice('spawn-failed', topic, spawnFailureNotice(reason(e)))
-  } finally {
-    st.spawning = false
-  }
-}
-
 // ---- grammy inbound --------------------------------------------------------
 
 const bot = new Bot(TOKEN, BOT_API_ROOT ? { client: { apiRoot: BOT_API_ROOT } } : undefined)
 const downloadFile = telegramDownloader(bot.api, TOKEN, INBOX_DIR, log)
+const {
+  enqueue,
+  killSession,
+  ensureSession,
+  schedulePanePump,
+  paneInFlight,
+  resumePendingPanes,
+  relaunch,
+} = createTopicLifecycle({
+  api: bot.api,
+  sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
+  harnessLocked,
+  modelCatalog: () => modelCatalog(),
+  applyRouteNow: (topic, route, why) => applyRouteNow(topic, route, why),
+})
 const { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply, handleSquareUserMessage } = createSquare({
   api: bot.api,
   harnessLocked,
@@ -641,7 +282,7 @@ const {
   killSession,
   ensureSession,
   schedulePanePump,
-  paneInFlight: topic => !!panePumps.get(topic)?.inFlight,
+  paneInFlight,
 })
 
 const sayIn = (chatId: string, topic: string, t: string) =>
@@ -652,50 +293,10 @@ bot.catch(err => {
 })
 
 
-// Same kill-then-nudge sequence as a provider-route recovery: killSession
-// drains the dying MCP's long-polls first so the nudge cannot be handed to it
-// and lost. The nudge asks for one line back, so a respawn that fails is a
-// visible silence rather than a quiet one.
 async function handleRelaunch(chatId: string, topic: string, fromId: string): Promise<void> {
   const harness = harnessFor(topic)
-  if (harness) {
-    await harness.relaunch({ chatId, topic, fromId })
-    return
-  }
-  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
-    await sayIn(chatId, topic, '♻️ the square has no agent of its own; run /relaunch in a topic.')
-    return
-  }
-  const since = Date.now() - (lastRelaunch.get(topic) ?? 0)
-  if (since < RELAUNCH_DEBOUNCE_MS) {
-    await sayIn(chatId, topic, `♻️ already relaunching; it answers within a few seconds.`)
-    return
-  }
-  lastRelaunch.set(topic, Date.now())
-  const st = getTopic(topic)
-  const wasLive = killSession(st, topic)
-  const plan = planRelaunch(st.claudeSessionId, id => claudeConversationExists(id), wasLive)
-  if (plan.claudeSessionId !== st.claudeSessionId) {
-    st.claudeSessionId = plan.claudeSessionId
-    saveRegistry()
-  }
-  log(
-    `relaunch of topic ${topic} "${st.name || topic}" requested by user ${fromId} (was ${wasLive ? 'live' : 'not running'})` +
-      (plan.missingSessionId ? `; conversation ${plan.missingSessionId} missing on disk, starting a new one` : ''),
-  )
-  await sayIn(chatId, topic, plan.ack)
-  enqueue(topic, {
-    content: plan.notice,
-    meta: {
-      chat_id: chatId,
-      user: 'telegram-topics-proxy',
-      user_id: fromId,
-      ts: new Date().toISOString(),
-      ...(topic !== 'general' ? { message_thread_id: topic } : {}),
-      ...RELAUNCH_META,
-    },
-  })
-  ensureSession(topic)
+  if (harness) await harness.relaunch({ chatId, topic, fromId })
+  else await relaunch(chatId, topic, fromId)
 }
 
 // ---- harness registry --------------------------------------------------------
@@ -1033,16 +634,7 @@ function handlePoll(url: URL): Promise<Response> {
     const content = st.pendingResumeNotice
     st.pendingResumeNotice = undefined
     saveRegistry()
-    return Promise.resolve(json({
-      content,
-      meta: {
-        chat_id: String(GROUP_CHAT_ID),
-        user: 'telegram-topics-proxy',
-        ts: new Date().toISOString(),
-        ...(topic !== 'general' ? { message_thread_id: topic } : {}),
-        route_switch: '1',
-      },
-    }))
+    return Promise.resolve(json(resumeNoticeTurn(topic, content)))
   }
   const existing = st.queue.shift()
   if (existing) return Promise.resolve(json(existing))
@@ -1207,14 +799,7 @@ writeFileSync(PID_FILE, String(process.pid))
 
 loadAndReconcileRegistry()
 loadConvs()
-for (const [topic, st] of topics) {
-  if (
-    inboundModeForRoute(currentRoute(st)) === 'pane' &&
-    (st.queue.length > 0 || !!st.pendingResumeNotice || !!st.pendingRoute)
-  ) {
-    schedulePanePump(topic)
-  }
-}
+resumePendingPanes()
 void refreshProviderCapacity()
 void antigravity.refreshUsage(false).catch(() => {})
 if (Number.isFinite(CAPACITY_POLL_MS) && CAPACITY_POLL_MS >= 60_000) {
@@ -1385,7 +970,7 @@ const updateDeferred = new Set<string>()
 const updateAttempted = new Map<string, string>()
 
 function proxyHoldsWork(topic: string, st: TopicState): boolean {
-  if (st.queue.length > 0 || panePumps.get(topic)?.inFlight) return true
+  if (st.queue.length > 0 || paneInFlight(topic)) return true
   for (const pending of pendingPerms.values()) if (pending.topic === topic) return true
   return false
 }
