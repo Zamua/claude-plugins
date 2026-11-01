@@ -12,13 +12,15 @@ Estimates are working days for one agent, not measurements.
 | C1 | Store and mirror | 2 | Every message to and from a topic is in SQLite, with seq and cursor, and Telegram is unchanged |
 | C2 | Listener, identity and enrollment, read-only API | 3 | A development build enrolls, then lists topics and history over the tailnet; a request from this machine is refused |
 | C3 | Signed writes and sending | 2 to 3 | A signed message reaches the right session once, across a restart, and shows in Telegram; every signing vector passes |
+| C8 | Push (moved up: it makes the app usable every day) | 2 to 3 | Agent messages and approvals arrive as notifications; delivery time measured against Telegram |
 | C4 | The ledger | 1 to 2 | Every operator act is in the hash-chained ledger, and `verify.py` accepts a go from the app |
 | C5 | Agent states and terminal tail | 2 | The app shows live states and a session's screen |
 | C6 | Commands | 3 | Route switch, slash commands, secret drop and reminders from the app |
+| C6b | hc socket isolation | 2 to 3 | No session can reach another's terminal; the design is agreed first |
 | C7 | Approvals | 2 | A blocked session's dialog is answered from the app with a signed answer |
-| C8 | Push | 2 to 3 | Agent messages and approvals arrive as notifications; delivery time measured against Telegram |
 
-Total: about 18 to 21 working days, 3.5 to 4 weeks, in parallel with the app.
+Total: about 20 to 24 working days, 4 to 5 weeks, in parallel with the app. Push
+follows C3 so the app is usable every day early; approvals wait for C6b.
 
 ## Steps
 
@@ -66,6 +68,13 @@ markers.
 screen; the signed answer is sent as keys. The approval expires when the session
 leaves `blocked` on its own.
 
+**C6b, hc socket isolation.** Every hc terminal can reach its core's socket
+and type into any session, so a prompt-injected session could answer another's
+approval. The candidates (separate sockets per session, a broker the sessions
+talk to instead of the core, or a sandbox rule denying the socket to agents) are
+compared and one is agreed before it is built. Approvals from the app are not
+trusted until it lands.
+
 **C8, push.** APNs over HTTP/2 with a token from the `.p8` key. Message and
 approval payloads as in `conductor.md`, device tokens from `/v1/devices/push`,
 and tokens Apple reports as invalid dropped. Delivery times are logged for the
@@ -87,6 +96,5 @@ its key id, the team id and the app's bundle id.
   to APNs has been made yet; C8 starts with that spike, with a small helper
   process as the fallback.
 - **The hc socket.** Every hc terminal can reach its core's socket and type into
-  any session. The conductor does not fix that; isolating the socket is its own
-  piece of work and comes before approvals are trusted from the app.
+  any session; C6b isolates it before approvals are trusted from the app.
 - **History.** The store starts empty; Telegram keeps the older history.

@@ -172,6 +172,7 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_TOPICS_HC_TOPICS` | no | empty | thread ids (or `general`) whose Claude runs under herdr-core instead; see `docs/herdr-core.md` |
 | `TELEGRAM_HC_BIN` | no | `~/.local/bin/hc` | the herdr-core binary |
 | `TELEGRAM_HC_SESSION` | no | `topics` | the hc session for those topics; its core runs as its own launchd agent and the proxy never starts it |
+| `CONDUCTOR_LISTEN` | no | unset | turns the conductor on (`docs/conductor.md`); set, every topic's messages are also kept in a SQLite store |
 | `TELEGRAM_TOPICS_UPDATE_RESTART` | no | `on` | moves live topic sessions onto a newly installed Claude Code at their next idle turn boundary (an idle one resumes on its next message; a busy one is restarted once it goes idle) |
 | `TELEGRAM_TOPICS_MODEL` | no | `claude-opus-5-5` | initial model for topics without a persisted route; `/model` selections are persisted per topic |
 | `TELEGRAM_ASK_PORT` | no | `8791` | loopback port of the `/ask` listener, the only one to mount on a tailnet |

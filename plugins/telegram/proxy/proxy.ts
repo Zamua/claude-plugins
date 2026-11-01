@@ -42,6 +42,8 @@ import {
   ASK_TOPIC_FILE,
   BOT_API_ROOT,
   CAPACITY_POLL_MS,
+  CONDUCTOR_DIR,
+  CONDUCTOR_LISTEN,
   GROUP_CHAT_ID,
   HC_BIN,
   HC_SESSION,
@@ -57,7 +59,10 @@ import {
   UPDATE_SWEEP_MS,
   VOICE,
 } from './config'
-import { log, noticeFailed } from './log'
+import { log, noticeFailed, reason } from './log'
+import { mirroredChat, recordingOperatorTurns } from './conductor/mirror'
+import { ConductorStore } from './conductor/sqlite-store'
+import type { MessageKind } from './conductor/domain/message'
 import type { TopicHarnessAdapter } from './harness/topic-harness-adapter'
 import { createLocalgenHarness } from './harness/localgen/localgen-harness'
 import { createOpencodeHarness } from './harness/opencode/opencode-harness'
@@ -116,7 +121,14 @@ process.on('uncaughtException', err => {
 
 const bot = new Bot(TOKEN, BOT_API_ROOT ? { client: { apiRoot: BOT_API_ROOT } } : undefined)
 const downloadFile = telegramDownloader(bot.api, TOKEN, INBOX_DIR, log, BOT_API_ROOT)
-const chat = createTelegramChat(bot.api, String(GROUP_CHAT_ID), downloadFile)
+const telegramChat = createTelegramChat(bot.api, String(GROUP_CHAT_ID), downloadFile)
+// With the conductor on, every message a topic sees is also kept in its store; the
+// chat each service gets says who that service's messages are from.
+const conductorStore = CONDUCTOR_LISTEN ? new ConductorStore(CONDUCTOR_DIR) : undefined
+const storeFailed = (error: unknown) => log(`conductor store: ${reason(error)}`)
+const chatFor = (author: 'agent' | 'proxy', kind: MessageKind = null) =>
+  conductorStore ? mirroredChat(telegramChat, conductorStore, { author, kind }, storeFailed) : telegramChat
+const chat = chatFor('proxy')
 const {
   enqueue,
   killSession,
@@ -141,7 +153,7 @@ const { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply, handle
   enqueue,
 })
 const { handleRemind, handleListReminders, handleCancelReminder, fireDueReminders } = createReminders({
-  chat,
+  chat: chatFor('proxy', 'reminder'),
   topicDirectory,
   harnessLocked,
   ensureSession,
@@ -265,7 +277,7 @@ const askTopicStore = openOrSetAside('ask', ASK_TOPIC_FILE, () => new JsonAskTop
 const target = askTarget(ASK_TOPIC)
 if (!target) log(`TELEGRAM_ASK_TOPIC="${ASK_TOPIC}" is neither a thread id nor "general"; asks are refused`)
 const ask = createAsk({
-  chat,
+  chat: chatFor('proxy', 'ask'),
   chatId: String(GROUP_CHAT_ID),
   target,
   store: askTopicStore,
@@ -291,7 +303,11 @@ inbound.listen(createInboundRouter({
   harnessFor,
   topicHarnessOf,
   sayIn,
-  lifecycle: { enqueue, ensureSession, relaunch },
+  lifecycle: {
+    enqueue: conductorStore ? recordingOperatorTurns(enqueue, conductorStore, ADMIN_USER_ID, storeFailed) : enqueue,
+    ensureSession,
+    relaunch,
+  },
   routing: { handleModelCommand, refreshProviderCapacity, capacityText, handleRouteAction },
   secrets,
   square: { handleSquareUserMessage },
@@ -336,7 +352,7 @@ process.on('SIGHUP', shutdown)
 const http = createHttpServer({
   chat,
   outbound: createOutbound({
-    chat,
+    chat: chatFor('agent'),
     sent: reply => {
       sentMessages.record(reply.topic, reply.ids)
       harnessFor(reply.topic)?.sent(reply.topic, reply.ids.length)
