@@ -13,6 +13,7 @@ import type { Role } from '../topics/domain/session-tree'
 import type { ConductorControl, ControlResult } from './control'
 import type { Ledger } from './ledger'
 import type { ConductorStore } from './sqlite-store'
+import type { Thumbnailer } from './thumbnails'
 import { topicTracker } from './topic-tracker'
 import { wireApproval, wireDevice, wireMessage, wireScreen, wireTopic } from './wire'
 import type { AgentState, Device, ScreenView, TopicView } from './wire'
@@ -65,6 +66,8 @@ export type ConductorApiPorts = {
   control?: ConductorControl
   /** What this server can do now, so the app shows only what works. */
   features?: () => Features
+  /** A blob's narrower copy for `?w=`. Absent, every blob is served whole. */
+  thumbnail?: Thumbnailer
   /** Calls back whenever something the topic list reports may have changed. */
   watchTopics?: (changed: () => void) => void
   log: (message: string) => void
@@ -75,6 +78,7 @@ export type ConductorApiPorts = {
 type SocketData = { deviceId: string; ready: boolean; screens: Set<string> }
 
 const HEARTBEAT_MS = 20_000
+const MAX_THUMB_WIDTH = 4096
 const REPLAY_PAGE = 500
 /** Topic changes the list cannot announce (the lifecycle's own) are found by looking this often. */
 const TOPIC_SWEEP_MS = 2_000
@@ -434,9 +438,15 @@ export function createConductorApi(ports: ConductorApiPorts) {
     return Response.json({ cursor: store.latestCursor(), messages: messages.map(m => wireMessage(m)) })
   }
 
-  function blob(id: string): Response {
+  async function blob(id: string, url: URL): Promise<Response> {
     const found = store.blobPath(id)
-    return found ? new Response(Bun.file(found.path), { headers: { 'content-type': found.mime } }) : fail(404, 'not_found', 'no such blob')
+    if (!found) return fail(404, 'not_found', 'no such blob')
+    const w = url.searchParams.get('w')
+    if (w !== null && !(/^\d+$/.test(w) && Number(w) >= 1 && Number(w) <= MAX_THUMB_WIDTH)) {
+      return fail(400, 'bad_width', `w must be 1 to ${MAX_THUMB_WIDTH}`)
+    }
+    const thumb = w !== null && ports.thumbnail ? await ports.thumbnail(found.path, found.mime, Number(w)) : undefined
+    return new Response(Bun.file(thumb ?? found.path), { headers: { 'content-type': found.mime } })
   }
 
   async function fetch(req: Request, server: Server<SocketData>): Promise<Response | undefined> {
@@ -530,7 +540,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
     const messages = url.pathname.match(/^\/v1\/topics\/([^/]+)\/messages$/)
     if (messages) return history(decodeURIComponent(messages[1]), url)
     const blobPath = url.pathname.match(/^\/v1\/blobs\/(blob_[0-9a-f]+)$/)
-    if (blobPath) return blob(blobPath[1])
+    if (blobPath) return blob(blobPath[1], url)
     return fail(404, 'not_found', 'no such path')
   }
 

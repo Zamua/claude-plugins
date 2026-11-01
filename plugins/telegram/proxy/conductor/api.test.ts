@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync } from 'fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from 'crypto'
@@ -115,6 +115,11 @@ beforeEach(() => {
       deliveries.push(input)
       return deliverOutcome
     },
+    thumbnail: async (source, _mime, width) => {
+      if (width >= 100) return undefined
+      writeFileSync(`${source}.w${width}`, new Uint8Array([width]))
+      return `${source}.w${width}`
+    },
     log: line => void logged.push(line),
     version: '1.0.0-test',
   })
@@ -210,6 +215,18 @@ describe('reads', () => {
     expect((await get('/v1/topics/42/messages?limit=500', device)).status).toBe(400)
     const bytes = await get(`/v1/blobs/${blob.id}`, device)
     expect([bytes.headers.get('content-type'), [...new Uint8Array(await bytes.arrayBuffer())]]).toEqual(['image/png', [1, 2, 3]])
+  })
+
+  test('a blob asked for at most w pixels wide comes narrower when it can, whole otherwise, and w is checked', async () => {
+    const device = await enrolled()
+    const blob = store.addBlob(new Uint8Array([1, 2, 3]), 'image/png')
+    const read = async (query: string) => {
+      const res = await get(`/v1/blobs/${blob.id}${query}`, device)
+      return [res.status, res.headers.get('content-type'), [...new Uint8Array(await res.arrayBuffer())]]
+    }
+    expect(await read('?w=40')).toEqual([200, 'image/png', [40]])
+    expect(await read('?w=400')).toEqual([200, 'image/png', [1, 2, 3]])
+    for (const bad of ['0', '-1', 'wide', '4097', '']) expect((await get(`/v1/blobs/${blob.id}?w=${bad}`, device)).status).toBe(400)
   })
 })
 
