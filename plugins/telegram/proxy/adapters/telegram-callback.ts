@@ -129,3 +129,14 @@ export function legacySwitchBack(message: unknown): { provider: ProviderId; topi
   }
   return undefined
 }
+
+// A picker's buttons outlive their selection by this long; then it asks for /model again.
+export const PICKER_TTL_MS = 10 * 60_000
+export const MODELS_PER_PAGE = 8
+
+/** A time as the operator reads it in a notice: weekday, hour and zone. */
+export function formatTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleString(undefined, {
+    weekday: 'short', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  })
+}
