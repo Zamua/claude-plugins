@@ -1,0 +1,68 @@
+{
+  "public_key": "BAaxuTrfzXvBuI7z+aJJzGOkzUtE3RH/e/fBYvFNlxcC4BG5wy9bko1wyliDS11uD0sEYaUzeBPqHCy1QK3MewM=",
+  "curve": "P-256",
+  "hash": "SHA-256",
+  "signature_encoding": "DER",
+  "vectors": [
+    {
+      "name": "message",
+      "method": "POST",
+      "path": "/v1/topics/general/messages",
+      "client_id": "01JC6Z8Q2V5W9N3K7F4D1B0XAE",
+      "timestamp": 1793570737123,
+      "body": "{\"text\":\"run the tests\"}",
+      "body_sha256": "51b365c654de71c69dac5afdc09dbbf06929ef6137ee7878f32937071d2923a8",
+      "canonical": "v1\nPOST\n/v1/topics/general/messages\n01JC6Z8Q2V5W9N3K7F4D1B0XAE\n51b365c654de71c69dac5afdc09dbbf06929ef6137ee7878f32937071d2923a8\n1793570737123",
+      "signature": "MEQCIC5mldEfOiJbk44RnlHivy9KwljcxfcqfCg/pM1NZq0kAiAFe7rsP0dH40fZ3/ox/i44AtLaLQhTbKFkqIC0Vsz94g==",
+      "valid": true
+    },
+    {
+      "name": "approval",
+      "method": "POST",
+      "path": "/v1/approvals/ap_7f3c",
+      "client_id": "01JC6Z8Q2V5W9N3K7F4D1B0XAF",
+      "timestamp": 1793570738123,
+      "body": "{\"choice\":\"1\"}",
+      "body_sha256": "1fdabf8803a77604b6ba6cc7384bb1555bd681c3b20e96f93e2980b2590388f0",
+      "canonical": "v1\nPOST\n/v1/approvals/ap_7f3c\n01JC6Z8Q2V5W9N3K7F4D1B0XAF\n1fdabf8803a77604b6ba6cc7384bb1555bd681c3b20e96f93e2980b2590388f0\n1793570738123",
+      "signature": "MEUCIQD7KyCirgH9WZ/kcrZm1bbBQavEAHXSwL6xJtApSeFbwQIgVtV8zbyJP6xUotR4NpFYzPwjqsDeshIqQ/tv9e0pkHo=",
+      "valid": true
+    },
+    {
+      "name": "empty body",
+      "method": "DELETE",
+      "path": "/v1/reminders/rm_42",
+      "client_id": "01JC6Z8Q2V5W9N3K7F4D1B0XAG",
+      "timestamp": 1793570739123,
+      "body": "",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "v1\nDELETE\n/v1/reminders/rm_42\n01JC6Z8Q2V5W9N3K7F4D1B0XAG\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1793570739123",
+      "signature": "MEQCIB4YAk+7eKxqMirULXZtxUQTK009KYB4ogxTjR03TE0UAiBOvEt/as6ee8wVLReN7UnYcHMw8TLr2Sv1obNGm4r0qw==",
+      "valid": true
+    },
+    {
+      "name": "body changed after signing",
+      "method": "POST",
+      "path": "/v1/topics/general/messages",
+      "client_id": "01JC6Z8Q2V5W9N3K7F4D1B0XAE",
+      "timestamp": 1793570737123,
+      "body": "{\"text\":\"rm -rf\"}",
+      "body_sha256": "5afd6fd558e13ec7c2c1aa0a0b9cf047af217751cfb29fc480ed698566e87cf3",
+      "canonical": "v1\nPOST\n/v1/topics/general/messages\n01JC6Z8Q2V5W9N3K7F4D1B0XAE\n5afd6fd558e13ec7c2c1aa0a0b9cf047af217751cfb29fc480ed698566e87cf3\n1793570737123",
+      "signature": "MEQCIC5mldEfOiJbk44RnlHivy9KwljcxfcqfCg/pM1NZq0kAiAFe7rsP0dH40fZ3/ox/i44AtLaLQhTbKFkqIC0Vsz94g==",
+      "valid": false
+    },
+    {
+      "name": "path changed after signing",
+      "method": "POST",
+      "path": "/v1/approvals/ap_0000",
+      "client_id": "01JC6Z8Q2V5W9N3K7F4D1B0XAF",
+      "timestamp": 1793570738123,
+      "body": "{\"choice\":\"1\"}",
+      "body_sha256": "1fdabf8803a77604b6ba6cc7384bb1555bd681c3b20e96f93e2980b2590388f0",
+      "canonical": "v1\nPOST\n/v1/approvals/ap_0000\n01JC6Z8Q2V5W9N3K7F4D1B0XAF\n1fdabf8803a77604b6ba6cc7384bb1555bd681c3b20e96f93e2980b2590388f0\n1793570738123",
+      "signature": "MEUCIQD7KyCirgH9WZ/kcrZm1bbBQavEAHXSwL6xJtApSeFbwQIgVtV8zbyJP6xUotR4NpFYzPwjqsDeshIqQ/tv9e0pkHo=",
+      "valid": false
+    }
+  ]
+}
