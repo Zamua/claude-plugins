@@ -120,8 +120,8 @@ import { OpencodeTopicService } from './application/opencode-topic-service'
 import { HerdrOpencodeRuntime } from './adapters/herdr-opencode-runtime'
 import { opencodeTopic, opencodeTopicFromRecord } from './domain/opencode-topic'
 import type { OpencodeTopic } from './domain/opencode-topic'
-import { callbackBelongsToHarness, callbackTopicTarget } from './domain/topic-harness'
-import type { TopicHarness } from './domain/topic-harness'
+import { callbackBelongsToHarness, callbackTopicTarget, lockRefusal } from './domain/topic-harness'
+import type { LockedHarness, TopicHarness } from './domain/topic-harness'
 import { LocalgenTopicService } from './application/localgen-topic-service'
 import { QwenImageClient } from './adapters/qwen-image-client'
 import { localgenTopic, localgenTopicFromRecord } from './domain/localgen-topic'
@@ -1822,9 +1822,31 @@ const localgenService = new LocalgenTopicService(
   LOCALGEN_START_CMD,
 )
 
+function topicHarnessOf(topic: string): TopicHarness {
+  if (antigravityService.isLocked(topic)) return 'antigravity'
+  if (opencodeService.isLocked(topic)) return 'opencode'
+  if (localgenService.isLocked(topic)) return 'localgen'
+  return 'claude'
+}
+
 // True for every harness that owns the topic instead of a Claude pane.
 function harnessLocked(topic: string): boolean {
-  return antigravityService.isLocked(topic) || opencodeService.isLocked(topic) || localgenService.isLocked(topic)
+  return topicHarnessOf(topic) !== 'claude'
+}
+
+// Says why `topic` cannot be locked to `harness` and returns false, or returns
+// true when it can (including when it already is).
+async function mayLockTopic(chatId: string, topic: string, fromId: string, harness: LockedHarness): Promise<boolean> {
+  const claude = getTopic(topic)
+  const refusal = lockRefusal({
+    harness,
+    byOperator: !!ADMIN_USER_ID && fromId === ADMIN_USER_ID,
+    inSquare: !!SQUARE_TOPIC && topic === SQUARE_TOPIC,
+    current: topicHarnessOf(topic),
+    ownsClaudeConversation: !!(claude.claudeSessionId || claude.session),
+  })
+  if (refusal) await sayIn(chatId, topic, refusal)
+  return !refusal
 }
 
 function syncAntigravityInterop(): void {
@@ -2283,16 +2305,9 @@ async function activateAntigravityTopic(
   topic: string,
   fromId: string,
 ): Promise<void> {
-  if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
-    await sayIn(chatId, topic, 'Only the operator can lock a topic to Antigravity.')
-    return
-  }
+  if (!(await mayLockTopic(chatId, topic, fromId, 'antigravity'))) return
   if (!ANTIGRAVITY_ENABLED) {
     await sayIn(chatId, topic, ANTIGRAVITY_DISABLED_MESSAGE)
-    return
-  }
-  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
-    await sayIn(chatId, topic, 'The square cannot be assigned an agent harness.')
     return
   }
   const existing = antigravityService.get(topic)
@@ -2310,24 +2325,7 @@ async function activateAntigravityTopic(
     }
     return
   }
-  if (opencodeService.isLocked(topic)) {
-    await sayIn(chatId, topic, 'This topic is locked to OpenCode / local Qwen. Create a fresh topic and run /antigravity there.')
-    return
-  }
-  if (localgenService.isLocked(topic)) {
-    await sayIn(chatId, topic, 'This topic is locked to localgen. Create a fresh topic and run /antigravity there.')
-    return
-  }
   const claude = getTopic(topic)
-  if (claude.claudeSessionId || claude.session) {
-    await sayIn(
-      chatId,
-      topic,
-      'This topic already owns a Claude Code conversation, so it cannot be converted in place. ' +
-      'Create a fresh topic and run /antigravity there.',
-    )
-    return
-  }
   try {
     const route = await defaultAntigravityRoute()
     const name = claude.name || topicNames.get(topic) || `Antigravity ${topic}`
@@ -2399,22 +2397,7 @@ async function activateLocalcodeTopic(
   topic: string,
   fromId: string,
 ): Promise<void> {
-  if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
-    await sayIn(chatId, topic, 'Only the operator can lock a topic to OpenCode.')
-    return
-  }
-  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
-    await sayIn(chatId, topic, 'The square cannot be assigned an agent harness.')
-    return
-  }
-  if (antigravityService.isLocked(topic)) {
-    await sayIn(chatId, topic, 'This topic is locked to Google / Antigravity. Create a fresh topic and run /localcode there.')
-    return
-  }
-  if (localgenService.isLocked(topic)) {
-    await sayIn(chatId, topic, 'This topic is locked to localgen. Create a fresh topic and run /localcode there.')
-    return
-  }
+  if (!(await mayLockTopic(chatId, topic, fromId, 'opencode'))) return
   const existing = opencodeService.get(topic)
   if (existing) {
     try {
@@ -2431,15 +2414,6 @@ async function activateLocalcodeTopic(
     return
   }
   const claude = getTopic(topic)
-  if (claude.claudeSessionId || claude.session) {
-    await sayIn(
-      chatId,
-      topic,
-      'This topic already owns a Claude Code conversation, so it cannot be converted in place. ' +
-      'Create a fresh topic and run /localcode there.',
-    )
-    return
-  }
   try {
     const name = claude.name || topicNames.get(topic) || `localcode ${topic}`
     opencodeService.activate(opencodeTopic(topic, name))
@@ -2488,36 +2462,12 @@ async function activateLocalgenTopic(
   fromId: string,
   argument: string,
 ): Promise<void> {
-  if (!ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
-    await sayIn(chatId, topic, 'Only the operator can lock a topic to localgen.')
-    return
-  }
-  if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
-    await sayIn(chatId, topic, 'The square cannot be assigned an agent harness.')
-    return
-  }
-  if (antigravityService.isLocked(topic)) {
-    await sayIn(chatId, topic, 'This topic is locked to Google / Antigravity. Create a fresh topic and run /localgen there.')
-    return
-  }
-  if (opencodeService.isLocked(topic)) {
-    await sayIn(chatId, topic, 'This topic is locked to OpenCode / local Qwen. Create a fresh topic and run /localgen there.')
-    return
-  }
+  if (!(await mayLockTopic(chatId, topic, fromId, 'localgen'))) return
   if (localgenService.isLocked(topic)) {
     await sayIn(chatId, topic, `This topic is already locked to ${localgenRouteLabel()}.`)
     return
   }
   const claude = getTopic(topic)
-  if (claude.claudeSessionId || claude.session) {
-    await sayIn(
-      chatId,
-      topic,
-      'This topic already owns a Claude Code conversation, so it cannot be converted in place. ' +
-      'Create a fresh topic and run /localgen there.',
-    )
-    return
-  }
   try {
     const name = argument.trim() || claude.name || topicNames.get(topic) || 'localgen'
     localgenService.activate(localgenTopic(topic, name))
@@ -3269,11 +3219,7 @@ bot.on('callback_query:data', async ctx => {
     const callbackTopic = (ctx.callbackQuery.message as any)?.message_thread_id != null
       ? String((ctx.callbackQuery.message as any).message_thread_id)
       : 'general'
-    const callbackHarness: TopicHarness = antigravityService.isLocked(callbackTopic)
-      ? 'antigravity'
-      : opencodeService.isLocked(callbackTopic)
-        ? 'opencode'
-        : localgenService.isLocked(callbackTopic) ? 'localgen' : 'claude'
+    const callbackHarness = topicHarnessOf(callbackTopic)
     const explicitCallbackTopic = callbackTopicTarget(data)
     if (explicitCallbackTopic && explicitCallbackTopic !== callbackTopic) {
       await ctx.answerCallbackQuery({
