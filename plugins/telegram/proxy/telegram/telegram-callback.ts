@@ -1,27 +1,10 @@
+import type { ActionIntent } from '../chat/domain/actions'
 import type { AntigravityEffort } from '../harness/antigravity/domain/antigravity-topic'
 import type { Effort, PickerReason, ProviderId } from '../routing/domain/model-routing'
 import type { TopicHarness } from '../harness/domain/topic-harness'
 
-/**
- * Every inline-button action, decoded from or encoded to Telegram callback data.
- * Buttons already posted in chats outlive any deploy, so a format change must
- * keep decoding the old strings.
- */
-export type Callback =
-  | { kind: 'permission'; behavior: 'allow' | 'deny'; requestId: string }
-  | { kind: 'providers'; reason: PickerReason; topic: string }
-  | { kind: 'provider'; provider: ProviderId; reason: PickerReason; topic: string }
-  | { kind: 'models'; provider: ProviderId; reason: PickerReason; topic: string; page: number }
-  | { kind: 'model'; token: string }
-  | { kind: 'effort'; token: string; effort: Effort }
-  | { kind: 'ultracode'; token: string; on: boolean }
-  | { kind: 'usage'; topic: string }
-  | { kind: 'switch-back'; provider: ProviderId; topic: string }
-  | { kind: 'dismiss' }
-  | { kind: 'antigravity-models'; topic: string; page: number }
-  | { kind: 'antigravity-model'; token: string }
-  | { kind: 'antigravity-effort'; token: string; effort: AntigravityEffort }
-  | { kind: 'antigravity-usage'; topic: string }
+/** Every button's meaning, as Telegram callback data carries it. */
+export type Callback = ActionIntent
 
 // Telegram rejects callback_data over 64 bytes.
 const MAX_CALLBACK_BYTES = 64

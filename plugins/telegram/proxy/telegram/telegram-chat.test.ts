@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { InputFile } from 'grammy'
+import { InlineKeyboard, InputFile } from 'grammy'
+import type { Context } from 'grammy'
+import type { ActionIntent } from '../chat/domain/actions'
 import type { MessageId } from '../chat/domain/chat-port'
-import { createTelegramChat } from './telegram-chat'
+import { encodeCallback } from './telegram-callback'
+import { createTelegramChat, renderActions, telegramActionPress } from './telegram-chat'
 
 type Call = { method: string; args: unknown[] }
 
@@ -117,5 +120,53 @@ describe('the rest of the port', () => {
 
   test('says what Telegram can do', () => {
     expect(chatOver().chat.capabilities).toMatchObject({ buttons: true, maxMessageLength: 4096, markdown: 'telegram-markdownv2' })
+  })
+})
+
+describe('actions', () => {
+  const allow: ActionIntent = { kind: 'permission', behavior: 'allow', requestId: 'r1' }
+  const deny: ActionIntent = { kind: 'permission', behavior: 'deny', requestId: 'r1' }
+
+  test('render as the inline keyboard the same buttons built by hand make', () => {
+    const byHand = new InlineKeyboard().text('✅ Allow', encodeCallback(allow)).text('❌ Deny', encodeCallback(deny))
+    expect(JSON.parse(JSON.stringify(renderActions([[{ label: '✅ Allow', intent: allow }, { label: '❌ Deny', intent: deny }]]))))
+      .toEqual(JSON.parse(JSON.stringify(byHand)))
+  })
+
+  test('go under the last part of a split text', async () => {
+    const { chat, calls } = chatOver()
+    await chat.send('42', { text: 'a'.repeat(5000), actions: [[{ label: 'Dismiss', intent: { kind: 'dismiss' } }]] })
+    expect(calls.map(c => (c.args[2] as { reply_markup?: unknown }).reply_markup !== undefined)).toEqual([false, true])
+  })
+
+  test('a press is answered and updated through its callback query, its siblings decoded', async () => {
+    const made: Array<[string, unknown[]]> = []
+    const record = (name: string) => async (...args: unknown[]) => void made.push([name, args])
+    const ctx = {
+      callbackQuery: {
+        from: { id: 4242 },
+        message: { reply_markup: { inline_keyboard: [[{ text: 'A', callback_data: encodeCallback(allow) }, { text: 'D', callback_data: encodeCallback(deny) }], [{ text: 'x', callback_data: 'junk' }]] } },
+      },
+      answerCallbackQuery: record('answer'),
+      editMessageText: record('edit'),
+      editMessageReplyMarkup: record('markup'),
+    } as unknown as Context
+    const press = telegramActionPress(ctx, allow, '42')
+    expect(press.senderId).toBe('4242')
+    expect(press.siblings).toEqual([allow, deny])
+    await press.answer()
+    await press.answer({ text: 'Not authorized.' })
+    await press.answer({ text: 'Still limited.', alert: true })
+    await press.update('done')
+    await press.update('pick', [[{ label: 'Dismiss', intent: { kind: 'dismiss' } }]])
+    await press.clearActions()
+    expect(JSON.parse(JSON.stringify(made))).toEqual([
+      ['answer', [null]],
+      ['answer', [{ text: 'Not authorized.' }]],
+      ['answer', [{ text: 'Still limited.', show_alert: true }]],
+      ['edit', ['done', null]],
+      ['edit', ['pick', { reply_markup: { inline_keyboard: [[{ text: 'Dismiss', callback_data: 'tgroute:dismiss' }]] } }]],
+      ['markup', [{}]],
+    ])
   })
 })
