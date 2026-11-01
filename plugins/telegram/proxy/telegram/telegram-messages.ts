@@ -137,6 +137,17 @@ export function describeMessage(msg: any): Described | null {
   return null
 }
 
+/**
+ * A deep link to a message in a topic. Only a supergroup's messages have one
+ * (t.me/c/<chat id without -100>/<thread id>/<message id>; the General topic's carry
+ * no thread id), so any other chat gives null.
+ */
+export function messageLink(chatId: string, topic: string, messageId: number): string | null {
+  const internal = /^-100(\d+)$/.exec(chatId)?.[1]
+  if (!internal) return null
+  return `https://t.me/c/${internal}/${topic === 'general' ? '' : `${topic}/`}${messageId}`
+}
+
 /** The forum thread a topic key names; the General topic has none. */
 export function threadIdForTopic(topic: string): number | undefined {
   return topic === 'general' ? undefined : Number(topic)

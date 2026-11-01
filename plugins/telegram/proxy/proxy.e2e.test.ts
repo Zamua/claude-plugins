@@ -858,6 +858,7 @@ describe('the proxy, end to end', () => {
       id: turn.meta.message_id,
       topic: '78',
       message_id: Number(turn.meta.message_id),
+      telegram_url: `https://t.me/c/7770000001/78/${turn.meta.message_id}`,
       question: 'what is this?',
       answer: 'It is a cat.',
       image: 'accepted',

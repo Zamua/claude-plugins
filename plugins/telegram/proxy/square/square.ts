@@ -7,7 +7,7 @@ import { topicSlug } from '../shared/domain/topic-slug'
 import { SQUARE_META } from '../shared/domain/turn-meta'
 import { parseSquareReply, parseSquareTag } from '../http/requests'
 import { json } from '../http/response'
-import { threadIdForTopic } from '../telegram/telegram-messages'
+import { messageLink, threadIdForTopic } from '../telegram/telegram-messages'
 import { log } from '../log'
 import { mux } from '../topics/mux'
 import { topicNames, topics } from '../topics/state'
@@ -51,12 +51,7 @@ export function createSquare({ api, harnessLocked, ensureSession, enqueue }: Squ
     return topic
   }
 
-  // Deep link to a message in the square thread (private supergroup form:
-  // t.me/c/<chat id without -100>/<thread id>/<message id>).
-  function squareLink(msgId: number): string {
-    const internal = String(GROUP_CHAT_ID).replace(/^-100/, '')
-    return `https://t.me/c/${internal}/${SQUARE_TOPIC}/${msgId}`
-  }
+  const squareLink = (msgId: number) => messageLink(String(GROUP_CHAT_ID), SQUARE_TOPIC, msgId)
 
   // The standing per-delivery norm (the "pre-message hook"): conversation
   // discipline is behavioral, not enforced - see the design doc. Appended to
@@ -151,7 +146,7 @@ export function createSquare({ api, harnessLocked, ensureSession, enqueue }: Squ
     if (callerIsReal) {
       const tid = threadIdForTopic(caller)
       api
-        .sendMessage(String(GROUP_CHAT_ID), `↪️ asked @${peerSlug} in #square: ${squareLink(sent.message_id)}`, {
+        .sendMessage(String(GROUP_CHAT_ID), `↪️ asked @${peerSlug} in #square: ${squareLink(sent.message_id) ?? 'the square'}`, {
           ...(tid != null ? { message_thread_id: tid } : {}),
         })
         .catch(e => log(`breadcrumb failed for ${caller}: ${e}`))

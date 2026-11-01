@@ -376,7 +376,7 @@ Loopback only (`127.0.0.1:8790`).
 `POST /ask` is not on this port: it has its own listener (`TELEGRAM_ASK_PORT`),
 bearer-authenticated, for a phone to post a question (multipart `question` or
 `audio`, optional `image`, `url`, `wait`). It answers `{id, topic, message_id,
-question, answer, image}`, where `answer` is the topic agent's first reply if it
+telegram_url, question, answer, image}`, where `answer` is the topic agent's first reply if it
 comes within `wait`. The full contract is in `CLAUDE.md`.
 
 `topic` is the `message_thread_id` as a string, or `"general"`. On `/send`,

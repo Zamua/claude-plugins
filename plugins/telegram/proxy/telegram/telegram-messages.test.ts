@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { assertSendable, chunk, describeMessage } from './telegram-messages'
+import { assertSendable, chunk, describeMessage, messageLink } from './telegram-messages'
 
 describe('telegram messages', () => {
   test('long text splits on Telegram\'s limit and keeps every character', () => {
@@ -33,5 +33,16 @@ describe('telegram messages', () => {
     expect(() => assertSendable(join(state, 'registry.json'), state, [])).toThrow('channel state')
     expect(() => assertSendable(other, '/nonexistent', [other])).toThrow('credential file')
     expect(() => assertSendable(join(state, 'inbox', 'photo.jpg'), state, [other])).not.toThrow()
+  })
+})
+
+describe('messageLink', () => {
+  test('links a message in a supergroup topic, and in General with no thread', () => {
+    expect(messageLink('-1007770000001', '16854', 16901)).toBe('https://t.me/c/7770000001/16854/16901')
+    expect(messageLink('-1007770000001', 'general', 16901)).toBe('https://t.me/c/7770000001/16901')
+  })
+
+  test('a chat that is not a supergroup has no message links', () => {
+    expect(messageLink('-7770000001', '16854', 1)).toBeNull()
   })
 })
