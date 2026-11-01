@@ -65,6 +65,7 @@ export function wireMessage(m: StoredMessage): Record<string, unknown> {
     at: m.at,
     edited_at: m.editedAt,
     reactions: m.reactions.map(r => ({ emoji: r.emoji })),
+    ...(m.imported ? { imported: true } : {}),
   }
   if (m.author !== 'operator') return base
   // An operator message relayed from Telegram was delivered as it arrived.

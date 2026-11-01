@@ -13,10 +13,11 @@ const messageFrom = (f: Record<string, any>): StoredMessage => ({
   id: f.id, topic: f.topic, seq: f.seq, author: f.author, origin: f.origin, kind: f.kind, text: f.text,
   format: f.format, blobs: f.blobs, replyTo: f.reply_to, chatIds: [], at: f.at, editedAt: f.edited_at,
   reactions: f.reactions, clientId: f.client_id ?? null, delivery: f.delivery ?? null, failure: f.failure ?? null,
+  imported: f.imported ?? false,
 })
 
 describe('the wire matches the contract fixtures', () => {
-  for (const name of ['message-agent.json', 'message-reminder.json', 'message-ask.json']) {
+  for (const name of ['message-agent.json', 'message-reminder.json', 'message-ask.json', 'message-imported.json']) {
     test(name, () => {
       const f = fixture(name)
       expect(wireMessage(messageFrom(f))).toEqual(f)

@@ -213,6 +213,7 @@ describe('reads', () => {
     const older = await (await get('/v1/topics/42/messages?before_seq=2', device)).json()
     expect(older.messages.map((m: { text: string }) => m.text)).toEqual(['a'])
     expect((await get('/v1/topics/42/messages?limit=500', device)).status).toBe(400)
+    expect((await get('/v1/topics/42/messages?before_seq=-40', device)).status).toBe(200)
     const bytes = await get(`/v1/blobs/${blob.id}`, device)
     expect([bytes.headers.get('content-type'), [...new Uint8Array(await bytes.arrayBuffer())]]).toEqual(['image/png', [1, 2, 3]])
   })
