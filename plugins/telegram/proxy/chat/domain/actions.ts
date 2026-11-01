@@ -3,6 +3,7 @@
 // the reader's answer back to the same intent.
 import type { AntigravityEffort } from '../../harness/antigravity/domain/antigravity-topic'
 import type { TopicHarness } from '../../harness/domain/topic-harness'
+import type { Sender } from './inbound'
 import type { Effort, PickerReason, ProviderId } from '../../routing/domain/model-routing'
 
 /**
@@ -34,8 +35,9 @@ export type Actions = Action[][]
 export interface ActionPress {
   readonly intent: ActionIntent
   readonly topic: string
-  /** The verified identity of whoever pressed it. */
-  readonly senderId: string
+  readonly sender: Sender
+  /** The pressed message's text. */
+  readonly text: string
   /** The intents of every button on the pressed message, the pressed one included. */
   readonly siblings: readonly ActionIntent[]
   /** Acknowledges the press, with a short note or an alert the reader must dismiss. */

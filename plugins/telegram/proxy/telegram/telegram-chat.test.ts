@@ -151,8 +151,9 @@ describe('actions', () => {
       editMessageText: record('edit'),
       editMessageReplyMarkup: record('markup'),
     } as unknown as Context
-    const press = telegramActionPress(ctx, allow, '42')
-    expect(press.senderId).toBe('4242')
+    const press = telegramActionPress(ctx, allow, '42', { id: '4242', name: 'op', role: 'operator' })
+    expect(press.sender.id).toBe('4242')
+    expect(press.text).toBe('')
     expect(press.siblings).toEqual([allow, deny])
     await press.answer()
     await press.answer({ text: 'Not authorized.' })

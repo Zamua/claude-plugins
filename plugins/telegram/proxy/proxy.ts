@@ -62,10 +62,10 @@ import { createAntigravityHarness } from './harness/antigravity/antigravity-harn
 import { createRouting } from './routing/routing'
 import { createTopicLifecycle } from './topics/lifecycle'
 import { createUpdateRestarts } from './topics/update-restarts'
-import { registerCommands, registerInbound } from './telegram/inbound'
+import { createInboundRouter, registerCommands } from './chat/inbound-router'
 import { createHttpServer } from './http/server'
 import { createOutbound } from './http/outbound'
-import { createPolling } from './telegram/polling'
+import { createTelegramInbound } from './telegram/telegram-inbound'
 import { claimPidFile, releasePidFile } from './shared/pid-file'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
@@ -261,18 +261,19 @@ const ask = createAsk({
   log,
 })
 
-registerInbound(bot, {
+const inbound = createTelegramInbound(bot, String(GROUP_CHAT_ID), ADMIN_USER_ID)
+inbound.listen(createInboundRouter({
+  chat,
   harnesses: HARNESSES,
   harnessFor,
   topicHarnessOf,
   sayIn,
-  downloadFile,
   lifecycle: { enqueue, ensureSession, relaunch },
   routing: { handleModelCommand, refreshProviderCapacity, capacityText, handleRouteAction },
   secrets,
   square: { handleSquareUserMessage },
   harnessAction: press => antigravity.handleAction(press),
-})
+}))
 
 // ---- boot ------------------------------------------------------------------
 
@@ -290,7 +291,6 @@ if (Number.isFinite(CAPACITY_POLL_MS) && CAPACITY_POLL_MS >= 60_000) {
   setInterval(() => void antigravity.refreshUsage(true).catch(() => {}), CAPACITY_POLL_MS)
 }
 
-const polling = createPolling(bot)
 let shuttingDown = false
 
 function shutdown(): void {
@@ -300,7 +300,7 @@ function shutdown(): void {
   releasePidFile(PID_FILE)
   // Force-exit if the current getUpdates outlasts 2s.
   setTimeout(() => process.exit(0), 2000)
-  void polling.stop().finally(() => process.exit(0))
+  void inbound.stop().finally(() => process.exit(0))
 }
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
@@ -324,11 +324,11 @@ const http = createHttpServer({
   routing: { handleRateLimit, handleCapacity, handleTurnFailed },
   square: { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply },
   reminders: { handleRemind, handleListReminders, handleCancelReminder },
-  pollingSince: polling.since,
+  pollingSince: inbound.since,
 })
 await http.serve()
 void createAskServer({ port: ASK_PORT, tokenFile: ASK_TOKEN_FILE, images: ASK_IMAGES, ask: ask.ask, log }).serve()
-void polling.run()
+void inbound.start()
 void registerCommands(chat)
 for (const harness of HARNESSES) {
   if (harness.reconcile) setInterval(() => void harness.reconcile?.(), 2_000).unref()

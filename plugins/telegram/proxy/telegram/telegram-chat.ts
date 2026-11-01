@@ -5,6 +5,7 @@ import { InlineKeyboard, InputFile } from 'grammy'
 import type { Api, Context } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
 import type { ActionIntent, ActionPress, Actions } from '../chat/domain/actions'
+import type { Sender } from '../chat/domain/inbound'
 import type { ChatCapabilities, ChatPort, MessageId, OutgoingFile, OutgoingText, TextFormat } from '../chat/domain/chat-port'
 import { decodeCallback, encodeCallback } from './telegram-callback'
 import type { Downloader } from './telegram-files'
@@ -18,6 +19,9 @@ export const TELEGRAM_CAPABILITIES: ChatCapabilities = {
   forceReply: true,
   maxMessageLength: MAX_CHUNK_LIMIT,
   markdown: 'telegram-markdownv2',
+  // The proxy does not subscribe to message_reaction or edited_message updates
+  inboundReactionsAndEdits: false,
+  sessionStates: false,
 }
 
 type TelegramApi = Pick<
@@ -41,7 +45,7 @@ export function renderActions(actions: Actions): InlineKeyboard {
 }
 
 /** A pressed inline button as the port hands it on, answered through the callback query it came in. */
-export function telegramActionPress(ctx: Context, intent: ActionIntent, topic: string): ActionPress {
+export function telegramActionPress(ctx: Context, intent: ActionIntent, topic: string, sender: Sender): ActionPress {
   const rows: unknown = (ctx.callbackQuery?.message as { reply_markup?: { inline_keyboard?: unknown } } | undefined)
     ?.reply_markup?.inline_keyboard
   const siblings = (Array.isArray(rows) ? rows.flat() : [])
@@ -50,7 +54,8 @@ export function telegramActionPress(ctx: Context, intent: ActionIntent, topic: s
   return {
     intent,
     topic,
-    senderId: String(ctx.callbackQuery?.from.id ?? ''),
+    sender,
+    text: (ctx.callbackQuery?.message as { text?: string } | undefined)?.text ?? '',
     siblings,
     answer: async feedback => {
       await ctx.answerCallbackQuery(feedback ? { text: feedback.text, ...(feedback.alert ? { show_alert: true } : {}) } : undefined)
