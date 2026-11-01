@@ -138,6 +138,13 @@ out="$("$B" payload "$BOARD" acme/api#10 abc123 1 --summary x 2>&1)"; rc=$?
 eq "once marked, the comment cannot be posted again" "1" "$rc"
 out="$("$B" mark "$BOARD" 1 posted 2>&1)"; rc=$?
 eq "posted without a url is refused" "1 board: posted needs the comment's url" "$rc $out"
+out="$("$B" mark "$BOARD" 1 proposed 2>&1)"; rc=$?
+eq "a posted comment cannot be marked back, so it is never posted twice" \
+  "1 board: comment 1 is already posted: https://github.com/acme/api/pull/10#discussion_r1" "$rc $out"
+out="$("$B" mark "$BOARD" 1 posted https://github.com/acme/api/pull/10#discussion_r2 2>&1)"; rc=$?
+eq "nor re-posted under another url" "1" "$rc"
+eq "the post is kept" "posted https://github.com/acme/api/pull/10#discussion_r1" \
+  "$(jq -r '.comments[] | select(.n == 1) | "\(.status) \(.posted_url)"' "$BOARD")"
 out="$("$B" mark "$BOARD" 9 dropped 2>&1)"; rc=$?
 eq "an unknown number is refused" "1 board: comment 9 is not on the board" "$rc $out"
 "$B" mark "$BOARD" 2 dropped "Fixed in abc1234." >/dev/null
