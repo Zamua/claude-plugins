@@ -13,7 +13,7 @@ const store = (dir = mkdtempSync(join(tmpdir(), 'conductor-'))) => {
 }
 afterEach(() => open.splice(0).forEach(s => s.close()))
 
-const label = (e: StoredEvent) => (e.type === 'message' ? e.message.text : `topic ${e.topic}`)
+const label = (e: StoredEvent) => (e.type === 'message' ? e.message.text : e.type === 'topic' ? `topic ${e.topic}` : `approval ${e.approval.id}`)
 const say = (topic: string, text: string) => ({ topic, text, author: 'agent' as const, origin: 'proxy' as const, format: 'plain' as const })
 
 describe('ConductorStore', () => {
@@ -149,6 +149,19 @@ describe('ConductorStore, for the API', () => {
     s.append({ ...say('7', 'later'), at: '2026-11-01T22:00:00.000Z' })
     s.append({ ...say('8', 'earlier'), at: '2026-11-01T21:00:00.000Z' })
     expect(s.historySince()).toBe('2026-11-01T21:00:00.000Z')
+  })
+
+  test('an approval opens and resolves once, each an event in cursor order, and replays as it is now', () => {
+    const { s } = store()
+    const seen: string[] = []
+    s.onEvent(e => void seen.push(e.type === 'approval' ? `${e.approval.id} ${e.approval.resolved ? 'resolved' : 'open'}` : e.type))
+    const a = s.openApproval({ topic: '7', kind: 'permission', prompt: 'approve Bash: ls', choices: [{ id: '1', label: 'Yes', role: 'approve' }] })
+    expect(s.openApprovals('7').map(x => x.id)).toEqual([a.id])
+    expect(s.resolveApproval(a.id, { choice: null, by: null, at: '2026-11-01T22:00:00.000Z' })?.resolved).toEqual({ choice: null, by: null, at: '2026-11-01T22:00:00.000Z' })
+    expect(s.resolveApproval(a.id, { choice: '1', by: 'dev_x', at: 'later' })).toBeUndefined()
+    expect(seen).toEqual([`${a.id} open`, `${a.id} resolved`])
+    expect(s.openApprovals()).toEqual([])
+    expect(s.eventsAfter(0).map(e => e.type === 'approval' && e.approval.resolved !== null)).toEqual([true, true])
   })
 })
 

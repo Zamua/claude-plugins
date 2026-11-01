@@ -39,6 +39,15 @@ export function conductorTopics(hidden: (topic: string) => boolean, kindOf: (top
     })
 }
 
+/** What a topic's session says it is blocked on, when it is. */
+export const conductorBlocked = (topic: string, hc: HcTopics) => hcTerminal(topic, hc)?.blocked
+
+/** A topic's screen as text, read from its hc terminal; undefined for a topic with none. */
+export async function conductorScreenText(topic: string, hc: HcTopics): Promise<string | undefined> {
+  const terminal = hcTerminal(topic, hc)
+  return terminal ? hc.watch.read(terminal.address) : undefined
+}
+
 /** A topic's screen, read from its hc terminal; undefined for a topic with none to show. */
 export async function conductorScreen(topic: string, hc: HcTopics): Promise<ScreenView | undefined> {
   const terminal = hcTerminal(topic, hc)

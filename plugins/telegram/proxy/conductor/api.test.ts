@@ -552,6 +552,27 @@ describe('signed writes', () => {
   })
 })
 
+test('open approvals are listed, streamed as they open and resolve, and counted on their topic', async () => {
+  const device = await enrolled()
+  const frames: Array<Record<string, unknown>> = []
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/v1/stream`, { headers: { 'X-Device': device } } as never)
+  ws.onmessage = e => frames.push(JSON.parse(String(e.data)))
+  await new Promise(resolve => (ws.onopen = resolve))
+  ws.send(JSON.stringify({ type: 'hello' }))
+  await new Promise(resolve => setTimeout(resolve, 50))
+  const a = store.openApproval({ topic: '42', kind: 'permission', prompt: 'approve Bash: ls', choices: [{ id: '1', label: 'Yes', role: 'approve' }] })
+  const listedNow = await (await get('/v1/approvals?state=open', device)).json()
+  expect(Object.keys(listedNow).sort()).toEqual(Object.keys(readJson('approvals-response.json')).sort())
+  expect(listedNow.approvals.map((x: { id: string }) => x.id)).toEqual([a.id])
+  expect((await (await get('/v1/topics', device)).json()).topics.find((t: { id: string }) => t.id === '42').pending_approvals).toBe(1)
+  store.resolveApproval(a.id, { choice: null, by: null, at: '2026-11-01T22:00:00.000Z' })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  ws.close()
+  expect(frames.filter(f => f.type === 'approval').map(f => (f.approval as { resolved: unknown }).resolved === null)).toEqual([true, false])
+  expect((await (await get('/v1/approvals', device)).json()).approvals).toEqual([])
+  expect((await get('/v1/approvals?state=all', device)).status).toBe(400)
+})
+
 function readJson(name: string, over: Record<string, unknown> = {}): Record<string, unknown> {
   const f = JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'docs', 'conductor-v1', name), 'utf8'))
   return { ...f, ...over }
