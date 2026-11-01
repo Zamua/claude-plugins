@@ -383,7 +383,14 @@ describe('the proxy, end to end', () => {
     expect(pasted).toContain('<channel source="plugin:telegram:telegram"')
     expect(pasted).toContain('message_thread_id="46"')
     expect((await fetch(`${proxyUrl}/poll?topic=46`)).status).toBe(204)
-  }, 20_000)
+
+    // The stand-in pane never looks busy, so the next turn waits out the missed-edge window
+    send(46, 'one at a time')
+    const typed = () => readFileSync(join(home, 'fake', 'pasted'), 'utf8').includes('one at a time')
+    await Bun.sleep(2_500)
+    expect(typed()).toBeFalse()
+    await until('the second turn to be pasted', typed, 10_000)
+  }, 30_000)
 
   test('a message sent after an agent died mid-poll reaches the next poll, not the dead one', async () => {
     send(49, 'hi')
