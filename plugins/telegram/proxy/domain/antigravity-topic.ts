@@ -1,4 +1,6 @@
+import { channelEnvelope } from './inbound-delivery'
 import type { InboundMessage } from './inbound-delivery'
+import { topicSlug } from './topic-slug'
 
 export type AntigravityEffort = 'low' | 'medium' | 'high'
 
@@ -154,20 +156,7 @@ export function applyAntigravityPending(
 }
 
 export function antigravitySessionName(topic: string, name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 24) || 'topic'
-  return `agy-${slug}-${topic}`
-}
-
-function attribute(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
+  return `agy-${topicSlug(name)}-${topic}`
 }
 
 const COMPATIBILITY_CONTEXT = `SYSTEM CONTEXT — Telegram Antigravity session
@@ -205,10 +194,7 @@ export function renderAntigravityKickoff(): string {
 }
 
 export function renderAntigravityTurn(message: InboundMessage): string {
-  const meta = Object.entries(message.meta)
-    .map(([key, value]) => ` ${key}="${attribute(String(value))}"`)
-    .join('')
-  return `<channel source="telegram"${meta}>\n${message.content}\n</channel>\n\n` +
+  return `${channelEnvelope('telegram', message)}\n\n` +
     'Reply to this Telegram turn through the Telegram MCP reply tool using the chat_id above. ' +
     'Do not leave the user-facing answer only in the terminal.'
 }

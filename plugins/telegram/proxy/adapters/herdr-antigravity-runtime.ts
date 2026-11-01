@@ -8,7 +8,8 @@ import { AntigravityCli } from './antigravity-cli'
 import { nodeProcessRunner } from './process-runner'
 import type { ProcessRunner } from './process-runner'
 
-export type AntigravityPane = { paneId: string; status: string }
+import { findHerdrPane, herdrAgentStatus } from './herdr-panes'
+import type { HerdrPane } from './herdr-panes'
 
 export function antigravityInteractiveArgs(input: {
   modelVariant: string
@@ -24,28 +25,6 @@ export function antigravityInteractiveArgs(input: {
       ? ['--conversation', input.conversationId]
       : ['--prompt-interactive', input.kickoff]),
   ]
-}
-
-export function findAntigravityPane(output: string, sessionName: string): AntigravityPane | undefined {
-  try {
-    const panes = JSON.parse(output)?.result?.panes ?? []
-    const pane = panes.find((candidate: any) => candidate?.label === sessionName)
-    if (!pane?.pane_id) return undefined
-    return { paneId: String(pane.pane_id), status: String(pane.agent_status ?? 'unknown') }
-  } catch {
-    return undefined
-  }
-}
-
-export function antigravityHerdrStatus(
-  pane: AntigravityPane | undefined,
-  foregroundIsAgy: boolean,
-): AntigravitySessionStatus {
-  if (!pane) return 'missing'
-  if (pane.status === 'idle' || pane.status === 'done') return 'idle'
-  if (pane.status === 'working') return 'busy'
-  if (pane.status === 'blocked') return 'blocked'
-  return foregroundIsAgy ? 'starting' : 'missing'
 }
 
 export function parseAntigravityConversationId(output: string): string | undefined {
@@ -111,7 +90,7 @@ export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
     const pane = await this.pane(sessionName)
     if (!pane) return 'missing'
     const foreground = pane.status === 'unknown' ? await this.foregroundAgy(pane.paneId) : true
-    return antigravityHerdrStatus(pane, foreground)
+    return herdrAgentStatus(pane.status, foreground)
   }
 
   async ensureSession(input: AntigravitySessionSpec) {
@@ -219,11 +198,11 @@ export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
     return true
   }
 
-  private async pane(sessionName: string): Promise<AntigravityPane | undefined> {
+  private async pane(sessionName: string): Promise<HerdrPane | undefined> {
     const result = await this.run(this.herdrBinary, ['pane', 'list'], {
       cwd: this.cwd, timeout: 30_000,
     })
-    return findAntigravityPane(result.stdout, sessionName)
+    return findHerdrPane(result.stdout, sessionName)
   }
 
   private async foregroundAgy(paneId: string): Promise<boolean> {
@@ -257,7 +236,7 @@ export class HerdrAntigravityRuntime implements AntigravityRuntimePort {
     throw new Error(`Antigravity pane ${sessionName} did not become ready (last state: ${lastState})`)
   }
 
-  private async waitUntilIdle(sessionName: string, timeoutMs: number): Promise<AntigravityPane> {
+  private async waitUntilIdle(sessionName: string, timeoutMs: number): Promise<HerdrPane> {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       const pane = await this.pane(sessionName)

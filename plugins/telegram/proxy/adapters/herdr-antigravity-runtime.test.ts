@@ -1,8 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  antigravityHerdrStatus,
   antigravityInteractiveArgs,
-  findAntigravityPane,
   HerdrAntigravityRuntime,
   parseAntigravityConversationArgument,
   parseAntigravityConversationId,
@@ -36,18 +34,6 @@ describe('persistent Herdr Antigravity adapter', () => {
       '--dangerously-skip-permissions',
       '--conversation', 'conv-1',
     ])
-  })
-
-  test('finds a pane by its stable label and maps Herdr lifecycle state', () => {
-    const output = JSON.stringify({ result: { panes: [
-      { label: 'other', pane_id: 'w1:p1', agent_status: 'idle' },
-      { label: 'agy-pilot-42', pane_id: 'w2:p1', agent_status: 'working' },
-    ] } })
-    const pane = findAntigravityPane(output, 'agy-pilot-42')
-    expect(pane).toEqual({ paneId: 'w2:p1', status: 'working' })
-    expect(antigravityHerdrStatus(pane, true)).toBe('busy')
-    expect(antigravityHerdrStatus({ paneId: 'w2:p1', status: 'unknown' }, true)).toBe('starting')
-    expect(antigravityHerdrStatus({ paneId: 'w2:p1', status: 'unknown' }, false)).toBe('missing')
   })
 
   test('reads the conversation identity from the agy process open files', () => {
