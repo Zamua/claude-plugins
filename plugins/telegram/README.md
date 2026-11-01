@@ -344,7 +344,7 @@ the bridge reports clearly if its allowlist still needs updating.
 
 The Telegram route also owns nested execution. Ordinary subagents are pinned to
 the selected main model and effort. Auxiliary/title work uses a cheaper model
-from the same provider (Anthropic Haiku, Codex GPT-5.6 Luna, or OpenCode Go
+from the same provider (Anthropic Haiku 5.5, Codex GPT-5.6 Luna, or OpenCode Go
 GPT-5.6 Luna, with main-model fallback). Ultracode off blocks the Workflow tool
 at launch, so stale Claude settings cannot start an expensive workflow fan-out;
 turning it on explicitly is the only way to expose Workflow.

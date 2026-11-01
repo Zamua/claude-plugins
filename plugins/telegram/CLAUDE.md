@@ -749,11 +749,14 @@ Details that matter:
   that exposes it. `AskUserQuestion` stays denied because a detached pane cannot
   answer its terminal UI.
 - Auxiliary work uses an efficient model from the same provider allowance:
-  Anthropic Haiku, Codex GPT-5.6 Luna, or OpenCode Go GPT-5.6 Luna, with a
-  catalog-aware fallback to the selected main model. The launcher exports the
-  current `ANTHROPIC_DEFAULT_HAIKU_MODEL` and the legacy
+  Anthropic Haiku 5.5 (`claude-haiku-5-5`), Codex GPT-5.6 Luna, or OpenCode Go
+  GPT-5.6 Luna, with a catalog-aware fallback to the selected main model. The
+  launcher exports the current `ANTHROPIC_DEFAULT_HAIKU_MODEL` and the legacy
   `ANTHROPIC_SMALL_FAST_MODEL` alias for compatibility. This auxiliary choice
-  does not change the main or ordinary subagent model.
+  does not change the main or ordinary subagent model, but Claude Code resolves
+  the `haiku` alias through `ANTHROPIC_DEFAULT_HAIKU_MODEL`, so an Agent call
+  with `model: "haiku"` and the Haiku route both run that id. It must be a full
+  API id: Claude Code sends the variable verbatim.
 - Proxied routes set `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and
   `ANTHROPIC_MODEL` only in the spawned Claude environment. Codex models use the
   bridge's `[1m]` model suffix and a
