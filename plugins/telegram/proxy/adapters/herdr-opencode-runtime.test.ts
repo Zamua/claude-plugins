@@ -157,13 +157,15 @@ describe('persistent Herdr OpenCode adapter', () => {
       topic: '42', name: 'topic', sessionName: 'oc-topic-42', kickoff: 'kickoff',
     })).toEqual({ sessionName: 'oc-topic-42', opencodeSessionId: 'ses_fresh' })
     expect(listCalls).toBe(1)
-    expect(launchEnv?.OC_SESSION).toBe('oc-topic-42')
-    expect(launchEnv?.OC_SPAWN_DIR).toBe('/tmp/project')
-    expect(launchEnv?.OC_BIN).toBe('opencode')
-    expect(JSON.parse(launchEnv?.OC_ARGS_JSON ?? '[]')).toEqual([
+    expect(launchEnv?.HX_HARNESS).toBe('opencode')
+    expect(launchEnv?.HX_SESSION).toBe('oc-topic-42')
+    expect(launchEnv?.HX_SPAWN_DIR).toBe('/tmp/project')
+    expect(launchEnv?.HX_BIN).toBe('opencode')
+    expect(JSON.parse(launchEnv?.HX_ARGS_JSON ?? '[]')).toEqual([
       '/tmp/project', '--standalone', '--prompt', 'kickoff',
     ])
-    expect(JSON.parse(launchEnv?.OC_CONFIG_CONTENT ?? '{}').mcp.servers['telegram-topics'].command)
+    const extraEnv = JSON.parse(launchEnv?.HX_ENV_JSON ?? '{}')
+    expect(JSON.parse(extraEnv.OPENCODE_CONFIG_CONTENT).mcp.servers['telegram-topics'].command)
       .toEqual(['/tmp/bun', '/tmp/plugin/server.ts'])
     expect(launchEnv?.TELEGRAM_TOPIC_ID).toBe('42')
     expect(launchEnv?.TELEGRAM_PROXY_URL).toBe('http://127.0.0.1:8790')
