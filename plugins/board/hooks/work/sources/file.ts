@@ -18,6 +18,7 @@ export type LocalItem = {
   started?: string
   finished?: string
   detail?: string
+  answer?: string
   links?: ItemLink[]
   aliases?: string[]
   ref?: number
@@ -93,6 +94,7 @@ export function toItem(local: LocalItem): Item {
     started: local.started,
     finished: local.finished,
     detail: local.detail,
+    ...(typeof local.answer === 'string' && local.answer !== '' && { answer: local.answer }),
     links: linksOf(local),
     ref: Number.isInteger(local.ref) ? local.ref : undefined,
     workspace: typeof local.workspace === 'string' ? local.workspace : undefined,

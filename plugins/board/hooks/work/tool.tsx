@@ -22,6 +22,7 @@ const DESCRIPTION = `Read and change the work view of the board pane: one tree o
 - eta: when whoever works an Item expects it done, as an ISO date; an empty string clears it. Any Item takes one, whatever its source. A parent shows the latest ETA beneath it, marked late when that falls after its target.
 - sections: the names of the view's sections, in order, replacing the list; an empty list leaves one unsectioned list. section on add or update puts a top-level Item of any source in one by name; an empty string clears it. A top-level Item in no section shows in the last.
 - hide / unhide: leave any Item, Session or pull request out of the tree, with whatever sits under it, or bring it back. A read lists what is hidden.
+- Asks: anything that needs the person, a decision, an approval, a review or a reply, goes on the tree in the same turn you raise it: an Item with status needs under the Item it concerns, its title the ask in one line, its detail the options and your recommendation, its target when it is due. Once they answer, update it with answer, what they decided, which marks it done.
 A read lists each session under its Item with its state, the name to message it by, and the goal and summary from its session board.
 Only Items whose ids start with file: (or have no prefix) can be added, updated or removed; Items from other sources can only be linked, hidden, given an eta and put in a section. File changes apply together, or none do; a started session stays started. Keep titles to one short line.`
 
@@ -41,6 +42,7 @@ const ITEM_FIELDS = {
   eta: { type: 'string', description: 'When it is expected done, as an ISO date; empty clears it.' },
   section: { type: 'string', description: 'The section a top-level Item shows in, by name; empty clears it.' },
   detail: { type: 'string', description: 'Markdown shown when the Item is pressed open.' },
+  answer: { type: 'string', description: 'What the person decided on an ask; it marks the Item done unless status says otherwise.' },
   aliases: { type: 'array', items: { type: 'string' }, description: 'Identifiers such as an issue key.' },
   links: {
     type: 'array',
@@ -93,6 +95,7 @@ type Fields = {
   eta?: string
   section?: string
   detail?: string
+  answer?: string
   links?: ItemLink[]
   aliases?: string[]
 }
@@ -153,7 +156,8 @@ function checkFields(fields: Fields): string | undefined {
 /** Fields the file keeps beside the Items rather than in them, so an Item of any Source takes them. */
 const OVERLAY = ['id', 'eta', 'section']
 
-const patch = (item: LocalItem, fields: Fields): LocalItem => {
+const patch = (item: LocalItem, given: Fields): LocalItem => {
+  const fields: Fields = given.answer && given.status === undefined ? { ...given, status: 'done' } : given
   const next: LocalItem = { ...item }
   for (const [key, value] of Object.entries(fields)) if (value !== undefined && !OVERLAY.includes(key)) next[key] = value
   if (fields.parent !== undefined) next.parent = localId(fields.parent)

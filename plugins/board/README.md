@@ -17,6 +17,7 @@ you.
 | `prs` | the pull requests this session raised, each stack bottom first, with GitHub's live state | Claude, through `mcp__board__prs`; `gh pr create` and `gh stack submit` add theirs on their own |
 | `review` | the [pr-review-board](../pr-review-board/) review this session runs | the review agent's `board.json` |
 | `work` | everything you work on as one tree, from your goals down to the sessions and pull requests doing it | Claude, through `mcp__board__work`, plus the trackers it reads |
+| `decisions` | in the root session, every ask waiting on you, with its options and a recommendation | any session, through `mcp__board__work` |
 | `all prs` | in the root session, every session's pull requests, a tab per work-view section | the work tree and every session's prs board |
 | `all reviews` | in the root session, every pr-review-board review and where it stands, a tab per work-view section | the work tree and pr-review-board's own files |
 | `rollout` | a release's prerequisites, gates and checks, with each one's state per environment | a JSON file another process keeps |
@@ -146,6 +147,26 @@ complete brief, and expect you to work with any session directly. The [`intake` 
 one intake pass, run on a schedule such as `claude -p "/board:intake since <time>"`: it checks the sources your
 instructions name for new asks and adds them to the tree, saying nothing when none came in. A read ends each ask's line with its link, so a pass knows what it already
 added.
+
+### Decisions
+
+The root session's `decisions` view lists every Item whose own status is `needs`, from any Source: what blocks a
+session waiting on you first, then the nearest due, then the one waiting longest. A line gives the ask, the session
+that raised it, when it is due and how long it has waited. Pressing one opens its detail, where the options and the
+recommendation live, its links and a way to the session that asked.
+
+```
+                                              Updated 1m ago
+▸ Pick the fee route            fee-route              2h
+▸ Approve the vendor plan       vendor-work    in 22h    
+▸ Settle the fee account
+ ▸ ✓ 2 answered
+```
+
+Any session that needs you adds the ask to the tree in the same turn it raises it, with its options and a
+recommendation, and the root adds asks relayed to it; the work tool and the [`root` skill](skills/root/SKILL.md) say
+so. The tool's `answer` records what you decided and marks the ask done, and it folds behind the answered count for a
+week.
 
 ### The root's rollups
 

@@ -69,6 +69,18 @@ Rank it, most pressing first:
 
 Within a rank, the nearer target goes first. The person's own order wins over this one.
 
+## Asks for the person
+
+Every ask for the person lives on the tree, so the decisions view lists them all in one place.
+
+- A session that needs the person, for a decision, an approval, a review or a reply, adds the ask
+  in the same turn it raises it: an Item with status `needs` under the Item it concerns, its title
+  the ask in one line, its `detail` the options and its recommendation, its `target` when it is
+  due.
+- The root adds an ask relayed to it the same way, and any it raises itself.
+- Once the person answers, whoever holds the ask updates it with `answer`, what they decided, which
+  marks it done. Relay the answer to the session that asked.
+
 ## Answering where things stand
 
 1. Read the tree: `mcp__board__work` with no fields.
@@ -109,7 +121,9 @@ question needs are missing or stale, ask the sessions working those Items, then 
      or a merge. Between them it works on its own judgment;
    - "The person may talk to you directly; follow them. An approval of theirs that
      <your message name> relays counts as theirs. Keep your session board and your Item's ETA
-     current, and message <your message name> when done or stuck."
+     current. Put any ask for the person on the tree as an Item with status needs, with its
+     options and your recommendation, in the same turn you raise it. Message
+     <your message name> when done or stuck."
 3. A start for an Item that already has a running session is refused, naming that session.
    Message it instead. Pass `again: true` only when the person wants a second one.
 4. `model` runs the session on another model than the configured one, such as a lighter one for

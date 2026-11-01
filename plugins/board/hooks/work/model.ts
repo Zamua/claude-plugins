@@ -34,6 +34,8 @@ export type Item = {
   checkinDue?: string
   owner?: string
   detail?: string
+  /** What the person decided, on an ask they answered. */
+  answer?: string
   links: ItemLink[]
   ref?: number
   workspace?: string
@@ -452,6 +454,7 @@ export function treeText(tree: Tree): string {
     // An ask's link is how intake tells it already holds one
     const asked = node.item.origin?.type === 'asked' && node.item.links[0] ? ` <${node.item.links[0].url}>` : ''
     lines.push(`${pad}${node.item.id}${ref} [${node.item.kind}, ${node.shown}${needs}${target}${eta}${time}${by}] ${node.item.title}${asked}`)
+    if (node.item.answer) lines.push(`${pad}  answer: ${node.item.answer.replace(/\s*\n\s*/g, ' ')}`)
     for (const session of node.sessions) lines.push(...sessionText(tree, session, `${pad}  `))
     for (const artifact of node.artifacts) lines.push(`${pad}  ${artifact.id} [${artifact.status}] ${artifact.title}`)
     for (const child of node.children) walk(child)

@@ -32,8 +32,8 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   raised with GitHub's live state, the pr-review-board review this session runs,
   one tree of everything you work on from your goals down to the sessions and
   pull requests doing it, where a root session starts and coordinates the
-  others and sees every session's pull requests and reviews in a tab per
-  section, and any board another process writes as JSON, such as a rollout, named
+  others and sees every ask waiting on you and every session's pull requests
+  and reviews in a tab per section, and any board another process writes as JSON, such as a rollout, named
   in `~/.config/board/boards.json`. `/board` toggles the pane, `/board <name>` opens
   it on one board, `/board <name> clear` empties one.
 - **[clean-code-audit](plugins/clean-code-audit/)**: eleven smells that make code

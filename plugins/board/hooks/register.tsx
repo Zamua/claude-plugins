@@ -14,6 +14,7 @@ import { rolloutBoard, rolloutStart, rolloutView } from './views/rollout'
 import type { RolloutBoard } from './views/rollout'
 import { sessionHooks, sessionStart, sessionSync, sessionView } from './views/session'
 import { markWorkActive } from './work/cache'
+import { decisionsView } from './work/decisions'
 import { migrateFile, reportText } from './work/migrate'
 import { rollupPrsView, rollupReviewsView, rollupStart } from './work/rollup'
 import { rhythmsHooks } from './work/sources/rhythms'
@@ -55,7 +56,7 @@ function viewsOf($: EngineInterface): View[] {
     sessionView($, work ? els => workBreadcrumb($, els) : undefined),
     prsView($),
     reviewView($),
-    ...(work ? [workView($, work), rollupPrsView($), rollupReviewsView($)] : []),
+    ...(work ? [workView($, work), decisionsView($), rollupPrsView($), rollupReviewsView($)] : []),
     ...rolloutBoards.map(board => rolloutView($, board)),
     ...fileBoards.map(board => fileView($, board)),
   ]
