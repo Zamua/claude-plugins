@@ -3,7 +3,7 @@ import type { TopicSummary } from './api'
 import { topicTracker } from './topic-tracker'
 
 const topic = (over: Partial<TopicSummary> = {}): TopicSummary =>
-  ({ id: '7', name: 'build', kind: 'claude', title: null, route: null, state: 'idle', ...over })
+  ({ id: '7', name: 'build', kind: 'claude', title: null, route: null, state: 'idle', parentId: 'general', spawnedBy: null, spawnedAt: null, ...over })
 
 function setup() {
   let listed = [topic()]
@@ -24,6 +24,14 @@ test('the first look records quietly; a later change of state, title, name or ro
     tracker.refresh()
   }
   expect(changed).toEqual(['7', '7', '7'])
+})
+
+test('a topic moving in the session tree is news', () => {
+  const { tracker, changed, set } = setup()
+  tracker.refresh()
+  set([topic({ parentId: '42' })])
+  tracker.refresh()
+  expect(changed).toEqual(['7'])
 })
 
 test('a topic appearing later is news; since moves only when the state does', () => {

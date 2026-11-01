@@ -9,6 +9,7 @@ import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-rou
 import { log } from '../log'
 import { muxes } from './mux'
 import { nextAgent } from './domain/agent'
+import { sessionNodeFrom } from './domain/session-tree'
 import { nextRoute } from '../routing/domain/route-flow'
 import { getTopic, topicNames, topics } from './state'
 
@@ -49,6 +50,7 @@ export function saveRegistry(): void {
       ...(st.routing.pending ? { pending_route: st.routing.pending } : {}),
       ...(st.routing.exhausted.length ? { exhausted_routes: st.routing.exhausted } : {}),
       ...(st.routing.resumeNotice ? { pending_resume_notice: st.routing.resumeNotice } : {}),
+      ...(st.session ? { session: { parent: st.session.parent, spawned_by: st.session.spawnedBy, spawned_at: st.session.spawnedAt } } : {}),
     }
   }
   writeRegistryFile(REGISTRY_FILE, out)
@@ -65,6 +67,7 @@ export function loadAndReconcileRegistry(): void {
     st.threadId = entry.thread_id ?? undefined
     st.name = entry.name
     st.claudeSessionId = entry.claude_session_id ?? undefined
+    st.session = sessionNodeFrom(entry.session)
     const pending = pendingRouteFromRegistry(entry.pending_route)
     st.routing = {
       route: routeFromRegistry(entry.route),

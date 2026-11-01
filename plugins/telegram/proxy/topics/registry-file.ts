@@ -14,6 +14,8 @@ export type RegistryEntry = {
   pending_route?: PendingRouteChange | null
   exhausted_routes?: TopicRoute[] | null
   pending_resume_notice?: string | null
+  /** Where the topic hangs in the session tree; absent for a topic that predates it. */
+  session?: { parent: string | null; spawned_by: string | null; spawned_at: string | null } | null
 }
 
 export type Registry = Record<string, RegistryEntry>

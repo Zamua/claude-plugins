@@ -35,7 +35,7 @@ describe('the wire matches the contract fixtures', () => {
     expect(wireTopic({
       id: f.id, name: f.name, kind: f.kind, title: f.title, pinned: f.pinned, muted: f.muted, state: f.state,
       stateSince: f.state_since, unread: f.unread, readSeq: f.read_seq, pendingApprovals: f.pending_approvals,
-      route: f.route, lastMessage: f.last_message,
+      route: f.route, lastMessage: f.last_message, parentId: f.parent_id, spawnedBy: f.spawned_by, spawnedAt: f.spawned_at,
     })).toEqual(f)
   })
 
@@ -77,5 +77,19 @@ test('usage.json: the observed windows, with a reset as a time and an unknown sh
   expect(wireUsage([{ provider: 'anthropic', availability: 'available', observedAt: 0, windows: [{ name: w.name, usedPercent: w.used_percent, resetsAt: Date.parse(w.resets_at), availability: 'available' }] }])).toEqual(f)
   expect(wireUsage([{ provider: 'codex', availability: 'unknown', observedAt: 0, windows: [{ name: 'week', availability: 'unknown' }] }]))
     .toEqual({ providers: [{ id: 'codex', windows: [{ name: 'week', used_percent: null, resets_at: null }] }] })
+})
+
+test('topics-tree.json: one root, every other topic under a listed parent, no cycles', () => {
+  const { topics } = fixture('topics-tree.json') as { topics: Array<{ id: string; parent_id: string | null }> }
+  const byId = new Map(topics.map(t => [t.id, t]))
+  expect(topics.filter(t => t.parent_id === null).map(t => t.id)).toEqual(['general'])
+  for (const t of topics) {
+    const seen = new Set<string>()
+    for (let at: string | null = t.id; at !== null; at = byId.get(at)?.parent_id ?? null) {
+      expect(seen.has(at)).toBeFalse()
+      seen.add(at)
+      if (at !== t.id && at !== 'general') expect(byId.has(at)).toBeTrue()
+    }
+  }
 })
 

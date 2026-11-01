@@ -159,7 +159,13 @@ Each has a golden fixture in `conductor-v1/`.
 `muted`, `state` (`starting`, `idle`, `working`, `blocked`, `stopped`,
 `missing`), `state_since`, `unread`, `read_seq`, `pending_approvals`, `route`
 (`provider`, `model`, `effort`), `last_message` (`preview`, `format` as the
-message was written, `author`, `at`). `pinned` and `muted` are the app's own:
+message was written, `author`, `at`). `parent_id`, `spawned_by` and `spawned_at` place it in the session tree:
+`general` is the root (`parent_id` null); a topic an agent creates with
+`create_topic` hangs under that agent's topic, any other under `general`.
+`spawned_by` is `operator`, `proxy` (asks), the creating topic's id, or null for
+a topic that predates the tree, as is `spawned_at`. Until the broker can prove a
+caller, `spawned_by` from an agent is its own word and carries no authority
+(`conductor-v1/topics-tree.json`). `pinned` and `muted` are the app's own:
 `general` is pinned until changed, a muted topic gets no pushes and leaves the
 badge.
 
