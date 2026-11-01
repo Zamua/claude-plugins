@@ -4,7 +4,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from 'crypto'
 import { createConductorApi } from './api'
-import type { DeliverAppMessage } from './api'
+import type { DeliverAppMessage, TopicSummary } from './api'
+import type { ScreenView } from './wire'
 import type { Peer } from './domain/identity'
 import { Ledger, brokenLine } from './ledger'
 import { ConductorStore } from './sqlite-store'
@@ -23,6 +24,9 @@ let notices: string[]
 let deliveries: Array<Parameters<DeliverAppMessage>[0]>
 let deliverOutcome: Awaited<ReturnType<DeliverAppMessage>>
 let api: ReturnType<typeof createConductorApi>
+let listed: TopicSummary[]
+let screenOf: (topic: string) => ScreenView | undefined
+let topicsChanged: () => void
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'conductor-api-'))
@@ -31,15 +35,20 @@ beforeEach(() => {
   notices = []
   deliveries = []
   deliverOutcome = { delivered: true }
+  listed = [
+    { id: 'general', name: 'General', kind: 'claude', title: null, route: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'xhigh' }, state: 'idle' },
+    { id: '42', name: 'build', kind: 'claude', title: null, route: null, state: 'stopped' },
+  ]
+  screenOf = () => undefined
+  topicsChanged = () => {}
   api = createConductorApi({
     store,
     ledger: new Ledger(join(dir, 'ledger.jsonl')),
     policy: { selfNodeId: 'nSELF', operatorLogin: 'operator@example.com', allowedNodes: new Set(['nPHONE', 'nIPAD']) },
     whois: async () => peer,
-    topics: () => [
-      { id: 'general', name: 'General', kind: 'claude', route: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'xhigh' }, state: 'idle' },
-      { id: '42', name: 'build', kind: 'claude', route: null, state: 'stopped' },
-    ],
+    topics: () => listed,
+    screen: async topic => screenOf(topic),
+    watchTopics: changed => void (topicsChanged = changed),
     notify: text => notices.push(text),
     deliver: async input => {
       deliveries.push(input)
@@ -171,6 +180,64 @@ describe('the stream', () => {
     ahead.ws.close()
     expect(live.frames).toEqual([{ type: 'ready', cursor: 1 }])
     expect(ahead.frames).toEqual([{ type: 'reset' }])
+  })
+
+  test('a topic whose state or title changes is a topic event carrying the topic now, live and replayed', async () => {
+    const device = await enrolled()
+    const { ws, frames } = await open(device)
+    ws.send(JSON.stringify({ type: 'hello' }))
+    await settle()
+    listed = [listed[0], { ...listed[1], state: 'working', title: 'Fix the flaky test' }]
+    topicsChanged()
+    await settle()
+    const event = frames.find(f => f.type === 'topic') as { cursor: number; topic: Record<string, unknown> }
+    expect(event.cursor).toBe(1)
+    expect(event.topic).toMatchObject({ id: '42', state: 'working', title: 'Fix the flaky test' })
+    expect(typeof event.topic.state_since).toBe('string')
+    expect(Object.keys(event.topic).sort()).toEqual(Object.keys(topicFixture).sort())
+    const again = await open(device)
+    again.ws.send(JSON.stringify({ type: 'hello', since: 0 }))
+    await settle()
+    ws.close()
+    again.ws.close()
+    expect(again.frames.map(f => f.type)).toEqual(['topic', 'ready'])
+  })
+
+  test('a screen goes to the connections watching it, once per change and on every state change', async () => {
+    const device = await enrolled()
+    let rows = ['❯ bun test']
+    screenOf = topic => (topic === '42' ? { topic, rows, cols: 120, working: true } : undefined)
+    const watcher = await open(device)
+    const other = await open(device)
+    for (const c of [watcher, other]) c.ws.send(JSON.stringify({ type: 'hello' }))
+    watcher.ws.send(JSON.stringify({ type: 'subscribe', screen: '42' }))
+    await settle(700)
+    rows = ['❯ bun test', ' 485 pass']
+    await settle(700)
+    listed = [listed[0], { ...listed[1], state: 'idle' }]
+    topicsChanged()
+    await settle(200)
+    watcher.ws.send(JSON.stringify({ type: 'unsubscribe', screen: '42' }))
+    rows = ['done']
+    await settle(700)
+    const screens = watcher.frames.filter(f => f.type === 'screen').map(f => f.screen as Record<string, unknown> & { rows: string[] })
+    expect(screens.map(s => s.rows.length)).toEqual([1, 2, 2])
+    expect(screens[0]).toEqual({ topic: '42', rows: ['❯ bun test'], cols: 120, cursor: null, working: true })
+    expect(other.frames.some(f => f.type === 'screen')).toBeFalse()
+    watcher.ws.close()
+    other.ws.close()
+  })
+
+  test('a topic with no screen, or none listed, gets an error naming it', async () => {
+    const device = await enrolled()
+    const { ws, frames } = await open(device)
+    ws.send(JSON.stringify({ type: 'hello' }))
+    ws.send(JSON.stringify({ type: 'subscribe', screen: 'general' }))
+    ws.send(JSON.stringify({ type: 'subscribe', screen: 'nope' }))
+    await settle()
+    ws.close()
+    expect(frames.filter(f => f.type === 'error').map(f => [f.screen, (f.error as { code: string }).code]))
+      .toEqual([['general', 'no_screen'], ['nope', 'no_screen']])
   })
 
   test('the stream needs a device like any read', async () => {

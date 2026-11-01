@@ -64,7 +64,9 @@ export function startPush(ports: PushPorts & { sender: ApnsSender }): { stop(): 
     }
   }
 
-  store.onEvent(({ message }) => {
+  store.onEvent(event => {
+    if (event.type !== 'message') return
+    const { message } = event
     if (stopped || pushed.has(message.id)) return
     pushed.add(message.id)
     if (pushed.size > REMEMBERED) pushed.delete(pushed.values().next().value as string)

@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import type { StoredMessage } from './domain/message'
-import { wireDevice, wireMessage, wireTopic } from './wire'
+import { wireDevice, wireMessage, wireScreen, wireTopic } from './wire'
 
 const fixture = (name: string) =>
   JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'docs', 'conductor-v1', name), 'utf8'))
@@ -52,4 +52,9 @@ test('an operator message relayed from Telegram reads as delivered, with no clie
   const f = fixture('message-operator.json')
   const relayed = wireMessage({ ...messageFrom(f), origin: 'telegram', clientId: null, delivery: null })
   expect(relayed).toMatchObject({ origin: 'telegram', client_id: null, delivery: 'delivered' })
+})
+
+test('screen.json: hc reports no cursor, so a screen carries none', () => {
+  const f = fixture('screen.json')
+  expect(wireScreen({ topic: f.topic, rows: f.rows, cols: f.cols, working: f.working })).toEqual(f)
 })

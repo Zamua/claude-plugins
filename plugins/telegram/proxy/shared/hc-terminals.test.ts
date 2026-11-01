@@ -5,7 +5,7 @@ import type { HcTerminal } from './hc-terminals'
 // Shaped as `terminal.list` answers over the hc API.
 const listed = {
   terminals: [
-    { address: 't1', name: 'tg-34', state: 'live', labels: { session: 'claude-hostthis-34', topic: '34' }, reported: true, status: { app: 'claude-code', state: 'done' }, foreground: { name: 'claude' } },
+    { address: 't1', name: 'tg-34', state: 'live', labels: { session: 'claude-hostthis-34', topic: '34' }, reported: true, status: { app: 'claude-code', state: 'done' }, foreground: { name: 'claude' }, title: ' Fix the build ', cols: 120 },
     { address: 't2', name: 'tg-35', state: 'finished', labels: { session: 'claude-x-35' }, reason: 'killed' },
     { address: 't3', name: 'probe', state: 'live', labels: {}, reported: false, foreground: { name: 'zsh' } },
     { address: 't4', name: 'tg-36', state: 'live', labels: { session: 'claude-y-36' }, reported: false, foreground: { name: 'claude' } },
@@ -13,9 +13,9 @@ const listed = {
 }
 
 describe('parseHcTerminals', () => {
-  test('keeps each terminal\'s state, session label, reported status and foreground program', () => {
+  test('keeps each terminal\'s state, session label, reported status, foreground program, title and width', () => {
     expect(parseHcTerminals(listed)).toEqual([
-      { state: 'live', address: 't1', session: 'claude-hostthis-34', status: 'done', foreground: 'claude' },
+      { state: 'live', address: 't1', session: 'claude-hostthis-34', status: 'done', foreground: 'claude', title: 'Fix the build', cols: 120 },
       { state: 'finished', address: 't2', session: 'claude-x-35' },
       { state: 'live', address: 't3', foreground: 'zsh' },
       { state: 'live', address: 't4', session: 'claude-y-36', foreground: 'claude' },

@@ -69,7 +69,10 @@ import { ConductorStore } from './conductor/sqlite-store'
 import { listenMode, startConductor } from './conductor/conductor'
 import { Ledger } from './conductor/ledger'
 import { tailscaleCli } from './conductor/tailscale'
-import { conductorTopics } from './conductor/topic-source'
+import { conductorScreen, conductorTopics } from './conductor/topic-source'
+import type { HcTopics } from './conductor/topic-source'
+import { watchHc } from './conductor/hc-watch'
+import { hcEnvironment, hcSocketPath } from './topics/hc-mux'
 import { appDelivery } from './conductor/app-delivery'
 import { startConfiguredPush } from './conductor/push-service'
 import type { MessageKind } from './conductor/domain/message'
@@ -338,6 +341,11 @@ void antigravity.refreshUsage(false).catch(() => {})
 // The conductor's listener, when CONDUCTOR_LISTEN asks for one (docs/conductor.md).
 const conductorMode = CONDUCTOR_LISTEN ? listenMode(CONDUCTOR_LISTEN) : undefined
 if (CONDUCTOR_LISTEN && !conductorMode) log(`CONDUCTOR_LISTEN="${CONDUCTOR_LISTEN}" is neither store-only nor tailnet:<port>; no listener`)
+// hc topics' live states and screens, from one subscription to their core.
+const hcTopics: HcTopics | undefined = conductorStore && conductorMode?.listener && HC_TOPICS.size
+  ? { topics: HC_TOPICS, watch: watchHc({ socket: hcSocketPath(hcEnvironment(process.env, HC_SESSION)), log }) }
+  : undefined
+const conductorTopicList = () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf, hcTopics)
 const conductor = conductorStore && conductorMode?.listener
   ? startConductor({
       mode: conductorMode,
@@ -363,12 +371,16 @@ const conductor = conductorStore && conductorMode?.listener
           // Unmirrored: the store already holds the operator's message.
           echo: async (topic, text) => (await telegramChat.send(topic, { text }))[0],
         }),
+        ...(hcTopics && {
+          screen: (topic: string) => conductorScreen(topic, hcTopics),
+          watchTopics: (changed: () => void) => hcTopics.watch.onChange(changed),
+        }),
         log,
         version: '1',
       },
     })
   : undefined
-const conductorTopicList = () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf)
+if (!conductor) hcTopics?.watch.stop()
 const conductorPush = conductor && conductorStore
   ? startConfiguredPush(CONDUCTOR_APNS, { store: conductorStore, topics: conductorTopicList, log })
   : undefined
@@ -389,6 +401,7 @@ function shutdown(): void {
   log('shutting down')
   conductorPush?.stop()
   conductor?.stop()
+  hcTopics?.watch.stop()
   releasePidFile(PID_FILE)
   // Force-exit if the current getUpdates outlasts 2s.
   setTimeout(() => process.exit(0), 2000)
