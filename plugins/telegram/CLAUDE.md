@@ -1070,7 +1070,8 @@ Each topic is restarted at most once per installed version, so a launcher that
 resolves a different `claude` cannot loop. The waiting state is in memory: after
 a proxy restart a topic still waiting is treated as idle-stale and only stopped.
 Policy is pure in `proxy/topics/domain/claude-update.ts`; the session records and the
-installed version are read by `proxy/topics/claude-sessions.ts`.
+installed version are read by `proxy/topics/claude-sessions.ts`; the sweep is
+`proxy/topics/update-restarts.ts`.
 
 The MCP client also reads `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` (default `5000`)
 for the cold-start first-poll delay above.
