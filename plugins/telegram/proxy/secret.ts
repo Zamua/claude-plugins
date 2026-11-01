@@ -48,7 +48,8 @@ function nameError(name: string): string | null {
 // starts with one. A bare /secret or /unsecret is what the "/" menu sends on
 // a tap, so it begins the guided flow instead of failing with usage.
 export function parseSecretCommand(text: string): SecretCommand {
-  const verb = SECRET_CMD_RE.exec(text)?.[1]
+  // The regex admits only these three verbs.
+  const verb = SECRET_CMD_RE.exec(text)?.[1] as SecretVerb | 'secrets' | undefined
   if (!verb) return { error: USAGE }
   const body = text.replace(SECRET_CMD_RE, '')
   if (verb === 'secrets') return { kind: 'list' }
