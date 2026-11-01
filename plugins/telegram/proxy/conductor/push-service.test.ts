@@ -52,6 +52,18 @@ test('an agent message is pushed to each device with a token, titled by its topi
   expect(lines.some(l => /^push: 7#1 -> dev_\w+ 200 \d+ms, \d+ms after stored$/.test(l))).toBeTrue()
 })
 
+test('a reply\'s photo replaces its text\'s notification, silently and with the text, so the two read as one', async () => {
+  const { store, sent } = setup()
+  const text = store.append(agent('7', 'the new icon'))
+  await settle()
+  const photo = store.addBlob(new Uint8Array([1]), 'image/png')
+  store.append({ ...agent('7', ''), blobs: [photo] })
+  await settle()
+  expect(sent[0].push).toMatchObject({ collapseId: text.id, payload: { aps: { sound: 'default' } } })
+  expect(sent[1].push).toMatchObject({ collapseId: text.id, payload: { aps: { alert: { body: 'the new icon' } }, blob: photo.id } })
+  expect((sent[1].push.payload.aps as Record<string, unknown>).sound).toBeUndefined()
+})
+
 test('the operator\'s messages, ask posts and unlisted topics are not pushed', async () => {
   const { store, sent } = setup()
   store.append({ ...agent('7', 'mine'), author: 'operator', origin: 'app' })

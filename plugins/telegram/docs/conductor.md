@@ -316,7 +316,15 @@ pushes: iOS throttles them.
   much as fits the 4 KB payload), `thread-id`: topic id, `badge`: total
   unread, `mutable-content: 1`, and custom `topic` and `seq`, so the service
   extension can fetch the rest and the thumbnails. Full text goes through Apple
-  by the operator's choice; a secret never does.
+  by the operator's choice; a secret never does. Its `apns-collapse-id` is the
+  message id.
+- **Attachments:** a message with attachments carries custom `blob`, the first
+  one's id. With no text its body names them as Messages does: `Photo`,
+  `2 Photos`, `Attachment`, `3 Attachments`. The reply tool posts a text and
+  its files as separate messages, so a text-less attachment within 5 s of the
+  same author's text in the same topic is pushed under that text's collapse id,
+  with that text as body and no sound: it replaces the text's notification and
+  the two read as one (`push-media.json`).
 - **Approval:** category `APPROVAL` (approve and deny actions, authentication
   required), `interruption-level: time-sensitive`, and custom `topic` and
   `approval` (its id).

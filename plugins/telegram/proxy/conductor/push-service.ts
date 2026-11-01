@@ -4,7 +4,7 @@ import { readFileSync } from 'fs'
 import { apnsSender } from './apns'
 import type { ApnsReply, ApnsSender } from './apns'
 import type { StoredMessage } from './domain/message'
-import { messagePush, pushable } from './domain/push'
+import { captionOf, messagePush, pushable } from './domain/push'
 import type { ConductorStore } from './sqlite-store'
 import type { Device } from './wire'
 
@@ -47,12 +47,15 @@ export function startPush(ports: PushPorts & { sender: ApnsSender }): { stop(): 
   const pushed = new Set<string>()
   let stopped = false
 
-  async function toDevice(device: Device, message: StoredMessage, topicName: string, badge: number): Promise<void> {
+  /** Each topic's last pushed message with text, which a lone attachment right after it joins. */
+  const lastText = new Map<string, StoredMessage>()
+
+  async function toDevice(device: Device, message: StoredMessage, topicName: string, badge: number, caption?: StoredMessage): Promise<void> {
     if (!device.apnsToken || !device.apnsEnv) return
     const started = now()
     const route = `push: ${message.topic}#${message.seq} -> ${device.id}`
     try {
-      const reply = await sender.send(device.apnsEnv, device.apnsToken, messagePush(message, topicName, badge))
+      const reply = await sender.send(device.apnsEnv, device.apnsToken, messagePush(message, topicName, badge, caption))
       const finished = now()
       log(`${route} ${reply.status}${reply.reason ? ` ${reply.reason}` : ''} ${finished - started}ms, ${finished - Date.parse(message.at)}ms after stored`)
       if (deadToken(reply)) {
@@ -71,6 +74,8 @@ export function startPush(ports: PushPorts & { sender: ApnsSender }): { stop(): 
     pushed.add(message.id)
     if (pushed.size > REMEMBERED) pushed.delete(pushed.values().next().value as string)
     if (!pushable(message)) return
+    const caption = captionOf(message, lastText.get(message.topic))
+    if (message.text !== '') lastText.set(message.topic, message)
     try {
       const topics = ports.topics().filter(t => !store.prefs(t.id).muted)
       const topic = topics.find(t => t.id === message.topic)
@@ -78,7 +83,7 @@ export function startPush(ports: PushPorts & { sender: ApnsSender }): { stop(): 
       const devices = store.pushTargets()
       if (!devices.length) return
       const badge = store.unreadIn(topics.map(t => t.id))
-      for (const device of devices) void toDevice(device, message, topic.name, badge)
+      for (const device of devices) void toDevice(device, message, topic.name, badge, caption)
     } catch (error) {
       log(`push: ${message.topic}#${message.seq} not sent: ${error instanceof Error ? error.message : String(error)}`)
     }
