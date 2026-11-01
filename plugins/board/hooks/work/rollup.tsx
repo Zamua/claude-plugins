@@ -1,7 +1,7 @@
 import type { Color, EngineInterface, RenderNode } from 'claude-code'
 
 import type { PrFacts, TrackedPr } from '../../types'
-import { fitLine, fixed, span, spans } from '../kit'
+import { ago, fitLine, fixed, span, spans } from '../kit'
 import type { Els, Part, View } from '../kit'
 import { paneWidth } from '../pane'
 import { storedValues } from '../store'
@@ -248,7 +248,7 @@ export function rollupPrsView($: EngineInterface): View {
         )
       }
       const fresh = {
-        text: githubError ? `GitHub check failed: ${githubError}` : checkedAt > 0 ? `checked ${span(now - checkedAt)} ago` : '',
+        text: githubError ? `GitHub check failed: ${githubError}` : checkedAt > 0 ? `checked ${ago(now - checkedAt)}` : '',
         isError: Boolean(githubError),
       }
       // What needs the person leads each part, then the open ones; the merged and closed fold behind a count
@@ -374,7 +374,7 @@ export function rollupReviewsView($: EngineInterface): View {
           </Text>
         )
       }
-      const fresh = { text: reviewError || (Number.isNaN(polledAt) ? '' : `polled ${span(now - polledAt)} ago`), isError: Boolean(reviewError) }
+      const fresh = { text: reviewError || (Number.isNaN(polledAt) ? '' : `polled ${ago(now - polledAt)}`), isError: Boolean(reviewError) }
       const columns = paneWidth() - 2
 
       return (
