@@ -813,6 +813,12 @@ there is no agent to relaunch.
   (`proxy/topics/registry-file.ts`), since the save that follows boot would
   otherwise overwrite every `claude_session_id`; to recover, copy the ids back
   with the proxy stopped.
+- **Every other state file is set aside the same way.** An unreadable
+  `antigravity-topics.json`, `opencode-topics.json`, `localgen-topics.json` or
+  `reminders.json` is renamed to `<file>.unreadable-<ms>` and logged, and that
+  store starts empty (`proxy/shared/state-file.ts`), instead of the proxy
+  exiting at boot into a launchd crash loop. If the rename fails, boot stops
+  with the cause rather than risk an overwrite.
 - **General topic.** Messages in the General topic carry no `message_thread_id`
   -> topic = `"general"`, and outbound omits `message_thread_id`. Other topics:
   topic == `String(message_thread_id)`, thread id == `Number(topic)`.

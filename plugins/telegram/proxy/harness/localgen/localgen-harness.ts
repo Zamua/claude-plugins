@@ -9,6 +9,7 @@ import { GROUP_CHAT_ID, LOCALGEN_START_CMD, LOCALGEN_TOPICS_FILE, LOCALGEN_URL }
 import { localgenTopic, localgenTopicFromRecord } from './domain/localgen-topic'
 import type { LocalgenTopic } from './domain/localgen-topic'
 import { log, reason } from '../../log'
+import { openOrSetAside } from '../../shared/state-file'
 import { saveRegistry } from '../../topics/registry'
 import { getTopic, topicNames } from '../../topics/state'
 import type { HarnessPorts, TopicHarnessAdapter } from '../topic-harness-adapter'
@@ -17,7 +18,8 @@ import type { HarnessPorts, TopicHarnessAdapter } from '../topic-harness-adapter
 const LOCALGEN_RE = /^\/localgen(?:@\w+)?(?:\s+(.+?))?\s*$/
 
 export function createLocalgenHarness({ api, sayIn, mayLockTopic }: HarnessPorts): TopicHarnessAdapter {
-  const localgenRepository = new JsonTopicRepository<LocalgenTopic>(LOCALGEN_TOPICS_FILE, 'localgen', localgenTopicFromRecord)
+  const localgenRepository = openOrSetAside('localgen topics', LOCALGEN_TOPICS_FILE, () =>
+    new JsonTopicRepository<LocalgenTopic>(LOCALGEN_TOPICS_FILE, 'localgen', localgenTopicFromRecord), log)
   const localgenService = new LocalgenTopicService(
     localgenRepository,
     new QwenImageClient(LOCALGEN_URL, log),
