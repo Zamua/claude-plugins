@@ -23,7 +23,7 @@ export type HttpPorts = {
   chat: Pick<ChatPort, 'send'>
   outbound: ReturnType<typeof createOutbound>
   /** Creates and registers a forum topic and gives its id. */
-  createTopic: (name: string, harness: TopicHarness) => Promise<string>
+  createTopic: (name: string, harness: TopicHarness, by: string) => Promise<string>
   schedulePanePump: (topic: string, delayMs?: number) => void
   /** The running turn ended: a route change waiting for it applies now. */
   turnEnded: (topic: string) => void
@@ -120,8 +120,9 @@ export function createHttpServer(ports: HttpPorts) {
   }
 
   async function handleTopicCreate(req: Request): Promise<Response> {
-    const { name, harness } = parseTopicCreate(await req.json())
-    const topic = await createTopic(name, harness)
+    const { name, harness, by } = parseTopicCreate(await req.json())
+    // The calling topic is the agent's own word for itself; display only.
+    const topic = await createTopic(name, harness, by ?? 'proxy')
     return json({
       topic,
       thread_id: Number(topic),

@@ -22,6 +22,9 @@ export type TopicView = {
   pendingApprovals: number
   route: { provider: string; model: string; effort: string } | null
   lastMessage: { preview: string; format: MessageFormat; author: string; at: string } | null
+  parentId: string | null
+  spawnedBy: string | null
+  spawnedAt: string | null
 }
 
 /** hc reports no cursor position, so screens carry none. */
@@ -78,6 +81,9 @@ export function wireTopic(t: TopicView): Record<string, unknown> {
     pending_approvals: t.pendingApprovals,
     route: t.route,
     last_message: t.lastMessage,
+    parent_id: t.parentId,
+    spawned_by: t.spawnedBy,
+    spawned_at: t.spawnedAt,
   }
 }
 

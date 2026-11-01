@@ -299,7 +299,7 @@ const ask = createAsk({
   chatId: String(GROUP_CHAT_ID),
   target,
   store: askTopicStore,
-  createTopic: name => createTopic(name, 'claude'),
+  createTopic: name => createTopic(name, 'claude', 'proxy'),
   routeTopic,
   refusal: topic =>
     SQUARE_TOPIC && topic === SQUARE_TOPIC
@@ -394,7 +394,7 @@ const conductor = conductorStore && conductorMode?.listener
           interrupt,
           // Unmirrored, like the app's own messages: the app already shows what it did.
           say: async (topic, text) => void (await telegramChat.send(topic, { text }).catch(noticeFailed('app command echo', topic))),
-          createTopic: name => createTopic(name, 'claude'),
+          createTopic: name => createTopic(name, 'claude', 'operator'),
           renameTopic: async (topic, name) => {
             await chat.renameTopic(topic, name)
             learnTopicName(topic, name)

@@ -1,4 +1,5 @@
 // Every topic's in-memory state: its inbound queues, its session, its route.
+import type { SessionNode } from './domain/session-tree'
 import { DEFAULT_TOPIC_ROUTE, GROUP_CHAT_ID } from '../config'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import type { TopicRoute } from '../routing/domain/model-routing'
@@ -30,6 +31,8 @@ export type TopicState = {
   // the routes that hit their limits, and the notice a resumed session owes.
   // Every route runs Claude Code; only nextRoute changes it.
   routing: RouteFlow
+  /** Where the topic hangs in the session tree, when recorded at its creation. */
+  session?: SessionNode
 }
 
 export const topics = new Map<string, TopicState>()

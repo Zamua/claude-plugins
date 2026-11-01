@@ -15,7 +15,18 @@ import { topicTracker } from './topic-tracker'
 import { wireDevice, wireMessage, wireScreen, wireTopic } from './wire'
 import type { AgentState, Device, ScreenView, TopicView } from './wire'
 
-export type TopicSummary = { id: string; name: string; kind: string; title: string | null; route: TopicView['route']; state: AgentState }
+export type TopicSummary = {
+  id: string
+  name: string
+  kind: string
+  title: string | null
+  route: TopicView['route']
+  state: AgentState
+  /** The session tree: the topic it hangs under (null for the root), who spawned it and when, null where unknown. */
+  parentId: string | null
+  spawnedBy: string | null
+  spawnedAt: string | null
+}
 
 export type AppImage = { bytes: Uint8Array; mime: 'image/jpeg' | 'image/png' }
 

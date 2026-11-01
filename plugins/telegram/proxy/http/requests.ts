@@ -109,7 +109,8 @@ export function parsePermissionRequest(body: unknown): PermissionRequestBody {
   return { topic: topicKey(b, 'general'), requestId, tool: text(b, 'tool', 'tool'), input: text(b, 'input', '') }
 }
 
-export type TopicCreateRequest = { name: string; harness: TopicHarness }
+/** `by`: the topic whose agent asked, as it names itself. */
+export type TopicCreateRequest = { name: string; harness: TopicHarness; by?: string }
 
 export function parseTopicCreate(body: unknown): TopicCreateRequest {
   const b = object(body)
@@ -119,7 +120,8 @@ export function parseTopicCreate(body: unknown): TopicCreateRequest {
   if (harness !== 'claude' && harness !== 'antigravity' && harness !== 'opencode' && harness !== 'localgen') {
     throw new BadRequest('harness must be claude, antigravity, opencode, or localgen')
   }
-  return { name, harness }
+  const caller = text(b, 'topic', '').trim()
+  return { name, harness, ...(caller ? { by: caller } : {}) }
 }
 
 export function parseCancelReminder(body: unknown): { topic: string; id: string } {

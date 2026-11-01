@@ -220,7 +220,11 @@ change of state, title, name or route a `topic` event in the store.
 `control.ts` serves the app's commands (route switch, usage, relaunch,
 interrupt, topic create and rename) through routing's `requestRoute`, the one
 path the `/model` picker also takes, the lifecycle and the chat port; each is a
-ledger entry before it runs. Pin and mute are the store's own (`topic_prefs`).
+ledger entry before it runs. Pin and mute are the store's own (`topic_prefs`). Each topic's place in the
+session tree (`topics/domain/session-tree.ts`: general the root, an
+agent-created topic under its creator's) is recorded at creation in the
+registry's `session` field and served as `parent_id`, `spawned_by` and
+`spawned_at`.
 Every admitted request and the stream's open, hello and close are logged
 (`conductor: ...`). With
 `CONDUCTOR_LISTEN` set, `mirroredChat` wraps the

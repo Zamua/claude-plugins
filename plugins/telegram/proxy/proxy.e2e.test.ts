@@ -907,10 +907,11 @@ describe('the proxy, end to end', () => {
     expect((await own.json()).error).toContain('refusing to send channel state')
   }, 20_000)
 
-  test('a topic created through the proxy is registered and in the directory at once', async () => {
-    const created = await fetch(`${proxyUrl}/topic/create`, { method: 'POST', body: JSON.stringify({ name: 'Fresh Start' }) })
+  test('a topic created through the proxy is registered, in the directory at once, and hangs under the topic that asked', async () => {
+    const created = await fetch(`${proxyUrl}/topic/create`, { method: 'POST', body: JSON.stringify({ name: 'Fresh Start', topic: '43' }) })
     expect(await created.json()).toEqual({ topic: '77', thread_id: 77, name: 'Fresh Start', harness: 'claude', slug: 'fresh-start' })
     expect(registry()['77']?.name).toBe('Fresh Start')
+    expect(registry()['77']?.session).toMatchObject({ parent: '43', spawned_by: '43' })
     const directory = await fetch(`${proxyUrl}/topics`).then(r => r.json())
     expect(directory.square).toBe('900')
     expect(directory.topics).toContainEqual({ slug: 'fresh-start', name: 'Fresh Start', topic: '77', live: false })

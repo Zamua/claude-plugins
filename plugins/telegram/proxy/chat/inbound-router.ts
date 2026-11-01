@@ -12,7 +12,8 @@ import type { createSquare } from '../square/square'
 import { transcribeVoice, VOICE_TAG } from '../telegram/voice-transcription'
 import type { createTopicLifecycle } from '../topics/lifecycle'
 import { PERMISSION_REPLY_RE, pendingPerms, resolvePermission } from '../topics/permissions'
-import { learnTopicName } from '../topics/registry'
+import { learnTopicName, saveRegistry } from '../topics/registry'
+import { spawnedNode } from '../topics/domain/session-tree'
 import { topicNames, topics } from '../topics/state'
 import { intentHarness, intentTopic } from './domain/actions'
 import type { ActionPress } from './domain/actions'
@@ -119,6 +120,10 @@ export function createInboundRouter(ports: InboundPorts): (event: ChatEvent) => 
       topicNames.set(topic, nm)
       const st = topics.get(topic)
       if (st && !st.name) st.name = nm
+      if (st && !st.session) {
+        st.session = spawnedNode(topic, message.sender.role === 'operator' ? 'operator' : String(message.sender.id), id => topics.has(id), new Date(message.at).toISOString())
+        saveRegistry()
+      }
       harness?.rename(topic, nm)
       log(`learned topic ${topic} name "${nm}"`)
       return
