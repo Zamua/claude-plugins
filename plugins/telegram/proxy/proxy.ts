@@ -67,6 +67,7 @@ import { log, noticeFailed, reason } from './log'
 import { mirroredChat, recordingOperatorTurns } from './conductor/mirror'
 import { ConductorStore } from './conductor/sqlite-store'
 import { listenMode, startConductor } from './conductor/conductor'
+import { sipsThumbnailer } from './conductor/thumbnails'
 import { Ledger } from './conductor/ledger'
 import { tailscaleCli } from './conductor/tailscale'
 import { conductorControl } from './conductor/control'
@@ -418,6 +419,7 @@ const conductor = conductorStore && conductorMode?.listener
         }),
         // Answering waits for sessions to be isolated from each other (C6b).
         features: (): Features => ({ answer_approvals: false, push: conductorPush !== undefined, screens: hcTopics !== undefined, secrets: secrets.secretsOn() }),
+        thumbnail: sipsThumbnailer(log),
         log,
         version: '1',
       },

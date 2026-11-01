@@ -213,7 +213,7 @@ All under `/v1`. "Signed" marks a write that needs the device headers.
 | `GET /topics/{id}/messages?before_seq=&limit=` | | `{cursor, messages}`: history, newest first, at most 100 |
 | `POST /topics/{id}/messages` | signed | multipart: `text` (at most 64 KB), `client_id`, `reply_to`, `image[]` (JPEG or PNG, at most 10, 20 MB each); returns the message with `delivery: accepted`; a repeated `client_id` returns the first result |
 | `POST /topics/{id}/read` | signed | `seq`; read state is shared by every device |
-| `GET /blobs/{id}?w=` | | a blob's bytes, or a thumbnail at most `w` pixels wide |
+| `GET /blobs/{id}?w=` | | a blob's bytes, or a copy at most `w` (1 to 4096) pixels wide, same type, made once by `sips`; an image already that narrow, a type other than JPEG or PNG, or one `sips` cannot read comes whole |
 | `GET /approvals?state=open` | | `{cursor, approvals}`: open approvals |
 | `POST /approvals/{id}` | signed | `choice` |
 | `GET /commands` | | `{commands}`: `name`, `description`, `args_hint` |
