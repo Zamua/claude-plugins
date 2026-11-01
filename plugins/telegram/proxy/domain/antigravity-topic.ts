@@ -115,16 +115,20 @@ export function withAntigravityConversation(
   return { ...topic, conversationId, updatedAt: now }
 }
 
+/** A topic whose Herdr pane runs: its pane and conversation are known. */
+export type RunningAntigravityTopic = AntigravityTopic & { sessionName: string; conversationId: string }
+
 export function withAntigravitySession(
   topic: AntigravityTopic,
   sessionName: string,
   conversationId: string,
   now = Date.now(),
-): AntigravityTopic {
+): RunningAntigravityTopic {
   if (!sessionName.trim()) throw new Error('Antigravity session name is required')
   return {
     ...withAntigravityConversation(topic, conversationId, now),
     sessionName,
+    conversationId,
   }
 }
 

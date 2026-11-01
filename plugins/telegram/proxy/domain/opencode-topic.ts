@@ -47,12 +47,15 @@ export function opencodeTopicFromRecord(value: unknown): OpencodeTopic | undefin
   return structuredClone(raw) as OpencodeTopic
 }
 
+/** A topic whose Herdr pane runs: its pane and OpenCode session are known. */
+export type RunningOpencodeTopic = OpencodeTopic & { sessionName: string; opencodeSessionId: string }
+
 export function withOpencodeSession(
   topic: OpencodeTopic,
   sessionName: string,
   opencodeSessionId: string,
   now = Date.now(),
-): OpencodeTopic {
+): RunningOpencodeTopic {
   if (!sessionName.trim()) throw new Error('OpenCode session name is required')
   if (!opencodeSessionId.trim()) throw new Error('OpenCode session id is required')
   return { ...topic, sessionName, opencodeSessionId, updatedAt: now }

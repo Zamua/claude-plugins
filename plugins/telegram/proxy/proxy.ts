@@ -816,18 +816,14 @@ const SPAWN_GRACE_MS = 30_000
 
 // ---- registry --------------------------------------------------------------
 
-function parseRoute(value: unknown): TopicRoute | undefined {
-  return topicRouteFromRecord(value)
-}
-
 function routeFromRegistry(value: unknown, fallback = DEFAULT_TOPIC_ROUTE): TopicRoute {
-  return parseRoute(value) ?? fallback
+  return topicRouteFromRecord(value) ?? fallback
 }
 
 function pendingRouteFromRegistry(value: unknown): PendingRouteChange | undefined {
   const raw = value as any
   if (!raw || !['manual', 'quota', 'reset', 'migration'].includes(raw.reason)) return undefined
-  const route = parseRoute(raw.route)
+  const route = topicRouteFromRecord(raw.route)
   if (!route) return undefined
   return {
     route,
@@ -879,7 +875,7 @@ function loadAndReconcileRegistry(): void {
     st.pendingRoute = pendingRouteFromRegistry(entry.pending_route)
     st.exhaustedRoutes = Array.isArray(entry.exhausted_routes)
       ? entry.exhausted_routes.flatMap(route => {
-          const parsed = parseRoute(route)
+          const parsed = topicRouteFromRecord(route)
           return parsed ? [parsed] : []
         })
       : []
@@ -1903,9 +1899,7 @@ async function handleSecretDrop(
   chatId: string, topic: string, msgId: number, fromId: string, text: string,
 ): Promise<void> {
   const say = (t: string) =>
-    bot.api
-      .sendMessage(chatId, t, topic === 'general' ? {} : { message_thread_id: Number(topic) })
-      .catch(() => {})
+    bot.api.sendMessage(chatId, t, threadOf(topic)).catch(noticeFailed('secret notice', topic))
   // Delete before validating: a refused name must not leave the value on screen.
   let deleted = true
   try {
@@ -2084,8 +2078,11 @@ function notifyTopic(chatId: string, topic: string, fromId: string, what: string
 }
 
 const threadOf = (topic: string) => (topic === 'general' ? {} : { message_thread_id: Number(topic) })
+// A message meant for the operator that Telegram refused is logged, never dropped silently.
+const noticeFailed = (what: string, topic: string) => (err: unknown) =>
+  log(`${what} not sent in topic ${topic}: ${err instanceof Error ? err.message : String(err)}`)
 const sayIn = (chatId: string, topic: string, t: string) =>
-  bot.api.sendMessage(chatId, t, threadOf(topic)).catch(() => {})
+  bot.api.sendMessage(chatId, t, threadOf(topic)).catch(noticeFailed('notice', topic))
 const tilde = (p: string) => (p.startsWith(homedir() + sep) ? '~' + p.slice(homedir().length) : p)
 const reason = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
@@ -2800,7 +2797,8 @@ async function handleModelCommand(chatId: string, topic: string, fromId: string,
         : undefined
   if (requestedProvider) {
     const picker = modelPicker(topic, requestedProvider, 'manual', 0)
-    await bot.api.sendMessage(chatId, picker.text, { ...threadOf(topic), reply_markup: picker.keyboard }).catch(() => {})
+    await bot.api.sendMessage(chatId, picker.text, { ...threadOf(topic), reply_markup: picker.keyboard })
+      .catch(noticeFailed('model picker', topic))
     return
   }
   const route = currentRoute(getTopic(topic))
@@ -3187,7 +3185,8 @@ bot.on('message', async ctx => {
 // Inline-button answers. Route pickers are operator-only and bound to the topic
 // and harness that emitted them. A permission answer's access control is the
 // group gate: only members of the configured forum group can tap a button that
-// lives in that group's thread.
+// lives in that group's thread. Answers and edits here are not logged when they
+// fail: Telegram refuses a late answer or an edit that changes nothing routinely.
 bot.on('callback_query:data', async ctx => {
   const cb = decodeCallback(ctx.callbackQuery.data ?? '')
   if (!cb) {
