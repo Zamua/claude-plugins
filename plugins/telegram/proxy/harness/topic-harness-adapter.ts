@@ -1,4 +1,5 @@
 import type { Api } from 'grammy'
+import type { ChatPort } from '../chat/domain/chat-port'
 import type { LockedHarness } from './domain/topic-harness'
 
 /** Who sent a command or message, and where. */
@@ -41,6 +42,7 @@ export interface TopicHarnessAdapter {
 /** What every harness's Telegram front end needs from the proxy. */
 export type HarnessPorts = {
   api: Api
+  chat: ChatPort
   sayIn: (chatId: string, topic: string, text: string) => Promise<unknown>
   /** Says why a topic cannot be locked to `harness` and returns false, else true. */
   mayLockTopic: (chatId: string, topic: string, fromId: string, harness: LockedHarness) => Promise<boolean>

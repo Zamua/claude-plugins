@@ -179,7 +179,7 @@ function deliver(thread: number, fields: Record<string, unknown>) {
 }
 
 // The operator pressing an inline button under a message in `thread`.
-function press(thread: number, data: string) {
+function press(thread: number, data: string, keyboard?: Array<Array<{ text: string; callback_data: string }>>) {
   pending.push({
     update_id: updateId++,
     callback_query: {
@@ -194,6 +194,7 @@ function press(thread: number, data: string) {
         message_thread_id: thread,
         is_topic_message: true,
         text: 'picker',
+        ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {}),
       },
     },
   })
@@ -614,6 +615,28 @@ describe('the proxy, end to end', () => {
     await until('the usage answer', () =>
       calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 42 && /^Provider usage/.test(c.body.text)))
   }, 40_000)
+
+  test('usage goes back to the providers, dismiss clears the buttons, and an expired reset picker falls back to its switch-back', async () => {
+    const edits = () => calls.filter(c => c.method === 'editMessageText')
+    const answered = (pattern: RegExp) => () => calls.find(c => c.method === 'answerCallbackQuery' && pattern.test(c.body.text ?? ''))
+    let seen = edits().length
+    press(42, 'tgroute:usage:42')
+    const usage = await until('the usage view', () => edits().length > seen && edits().at(-1))
+    expect(usage.body.text).toMatch(/^Provider usage/)
+    expect(buttons(usage).map(b => b.callback_data)).toEqual(['tgroute:providers:m:42'])
+    seen = edits().length
+    press(42, 'tgroute:providers:m:42')
+    const providers = await until('the providers again', () => edits().length > seen && edits().at(-1))
+    expect(providers.body.text).toBe('Choose a provider:')
+    expect(buttons(providers).map(b => b.callback_data).at(-1)).toBe('tgroute:usage:42')
+
+    press(42, 'tgroute:dismiss')
+    await until('the buttons cleared', () => calls.find(c => c.method === 'editMessageReplyMarkup'))
+    await until('the dismissal', answered(/^Dismissed\.$/))
+
+    press(42, 'tgroute:m:deadbeef', [[{ text: 'Choose Anthropic model', callback_data: 'tgroute:p:a:r:42' }]])
+    await until('the legacy switch-back answer', answered(/already handled or is no longer available/))
+  }, 30_000)
 
   test('a usage limit fails over to Fable, both resets are announced, and switch-back restores the route', async () => {
     const said43 = (pattern: RegExp) =>

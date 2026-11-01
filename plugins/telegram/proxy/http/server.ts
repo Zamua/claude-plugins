@@ -1,8 +1,7 @@
 // The loopback HTTP API the topic MCPs and hooks call: inbound long-polls, the
 // permission relay, the topic directory, and the routes each context answers.
-import { InlineKeyboard } from 'grammy'
-import type { Api } from 'grammy'
-import { GROUP_CHAT_ID, PORT, PROXY_URL, SQUARE_TOPIC } from '../config'
+import type { ChatPort } from '../chat/domain/chat-port'
+import { PORT, PROXY_URL, SQUARE_TOPIC } from '../config'
 import type { TopicHarness } from '../harness/domain/topic-harness'
 import { log } from '../log'
 import type { createReminders } from '../reminders/reminders'
@@ -10,8 +9,6 @@ import type { createRouting } from '../routing/routing'
 import { inboundModeForRoute } from '../shared/domain/inbound-delivery'
 import { topicSlug } from '../shared/domain/topic-slug'
 import type { createSquare } from '../square/square'
-import { encodeCallback } from '../telegram/telegram-callback'
-import { threadIdForTopic } from '../telegram/telegram-messages'
 import { resumeNoticeTurn } from '../topics/lifecycle'
 import { pendingPerms, prunePendingPerms } from '../topics/permissions'
 import { currentRoute, getTopic, topics } from '../topics/state'
@@ -23,7 +20,7 @@ import { ROUTE } from './routes'
 const LONG_POLL_MS = 25_000
 
 export type HttpPorts = {
-  api: Api
+  chat: Pick<ChatPort, 'send'>
   outbound: ReturnType<typeof createOutbound>
   /** Creates and registers a forum topic and gives its id. */
   createTopic: (name: string, harness: TopicHarness) => Promise<string>
@@ -67,7 +64,7 @@ function longPoll<T>(queue: T[], waiters: Array<(item: T | null) => void>, signa
 }
 
 export function createHttpServer(ports: HttpPorts) {
-  const { api, outbound, createTopic, schedulePanePump, turnEnded, noticeDelivered, routing, square, reminders } = ports
+  const { chat, outbound, createTopic, schedulePanePump, turnEnded, noticeDelivered, routing, square, reminders } = ports
 
   function handlePoll(url: URL, signal: AbortSignal): Promise<Response> {
     const topic = url.searchParams.get('topic') ?? 'general'
@@ -102,18 +99,17 @@ export function createHttpServer(ports: HttpPorts) {
     prunePendingPerms()
     pendingPerms.set(requestId, { topic, createdAt: Date.now() })
 
-    const threadId = threadIdForTopic(topic)
     const trimmed = input.length > 500 ? input.slice(0, 500) + '…' : input
     const preview = trimmed ? `\n\n${trimmed}` : ''
     const text =
       `🔐 Permission: ${tool}${preview}\n\n` +
       `Tap a button, or reply "yes ${requestId}" to allow / "no ${requestId}" to deny.`
-    const keyboard = new InlineKeyboard()
-      .text('✅ Allow', encodeCallback({ kind: 'permission', behavior: 'allow', requestId }))
-      .text('❌ Deny', encodeCallback({ kind: 'permission', behavior: 'deny', requestId }))
-    await api.sendMessage(String(GROUP_CHAT_ID), text, {
-      ...(threadId != null ? { message_thread_id: threadId } : {}),
-      reply_markup: keyboard,
+    await chat.send(topic, {
+      text,
+      actions: [[
+        { label: '✅ Allow', intent: { kind: 'permission', behavior: 'allow', requestId } },
+        { label: '❌ Deny', intent: { kind: 'permission', behavior: 'deny', requestId } },
+      ]],
     })
     return json({ ok: true })
   }

@@ -155,6 +155,7 @@ const secrets = createSecretDrop({
 // catalog, route, and persistence are deliberately separate.
 const antigravity = createAntigravityHarness({
   api: bot.api,
+  chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
   mayLockTopic,
 })
@@ -165,6 +166,7 @@ const antigravityHarness = antigravity.harness
 // Telegram Bot API adapter with the other two.
 const opencodeHarness = createOpencodeHarness({
   api: bot.api,
+  chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
   mayLockTopic,
 })
@@ -174,6 +176,7 @@ const opencodeHarness = createOpencodeHarness({
 // comes back into the same thread.
 const localgenHarness = createLocalgenHarness({
   api: bot.api,
+  chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
   mayLockTopic,
 })
@@ -213,9 +216,9 @@ const {
   handleRateLimit,
   handleCapacity,
   handleTurnFailed,
-  handleRouteCallback,
+  handleRouteAction,
 } = createRouting({
-  api: bot.api,
+  chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
   killSession,
   ensureSession,
@@ -268,10 +271,10 @@ registerInbound(bot, {
   sayIn,
   downloadFile,
   lifecycle: { enqueue, ensureSession, relaunch },
-  routing: { handleModelCommand, refreshProviderCapacity, capacityText, handleRouteCallback },
+  routing: { handleModelCommand, refreshProviderCapacity, capacityText, handleRouteAction },
   secrets,
   square: { handleSquareUserMessage },
-  harnessCallback: (ctx, cb, topic) => antigravity.handleCallback(ctx, cb, topic),
+  harnessAction: press => antigravity.handleAction(press),
 })
 
 // ---- boot ------------------------------------------------------------------
@@ -307,7 +310,7 @@ process.on('SIGINT', shutdown)
 process.on('SIGHUP', shutdown)
 
 const http = createHttpServer({
-  api: bot.api,
+  chat,
   outbound: createOutbound({
     chat,
     sent: reply => {

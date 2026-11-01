@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { callbackHarness, callbackTopic, decodeCallback, encodeCallback, legacySwitchBack } from './telegram-callback'
+import { decodeCallback, encodeCallback } from './telegram-callback'
 import type { Callback } from './telegram-callback'
 
 const every: Callback[] = [
@@ -44,29 +44,4 @@ describe('Telegram callback codec', () => {
     expect(() => encodeCallback({ kind: 'usage', topic: 'x'.repeat(60) })).toThrow('64 bytes')
   })
 
-  test('names the topic a replayed button targets', () => {
-    expect(callbackTopic({ kind: 'models', provider: 'codex', reason: 'manual', topic: '42', page: 0 })).toBe('42')
-    expect(callbackTopic({ kind: 'antigravity-usage', topic: '7' })).toBe('7')
-    expect(callbackTopic({ kind: 'model', token: 'ab' })).toBeUndefined()
-  })
-
-  test('ties route pickers to the harness that emits them', () => {
-    expect(callbackHarness({ kind: 'model', token: 'ab' })).toBe('claude')
-    expect(callbackHarness({ kind: 'dismiss' })).toBe('claude')
-    expect(callbackHarness({ kind: 'antigravity-model', token: 'ab' })).toBe('antigravity')
-    expect(callbackHarness({ kind: 'permission', behavior: 'allow', requestId: 'r' })).toBeUndefined()
-  })
-
-  test('recovers the switch-back target from a reset keyboard posted before switch-back buttons', () => {
-    const message = {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: 'Switch back to GPT-5.6 Sol', callback_data: 'tgroute:m:deadbeef' }],
-          [{ text: 'Choose ChatGPT / Codex model', callback_data: 'tgroute:p:c:r:2308' }],
-        ],
-      },
-    }
-    expect(legacySwitchBack(message)).toEqual({ provider: 'codex', topic: '2308' })
-    expect(legacySwitchBack({ reply_markup: { inline_keyboard: [] } })).toBeUndefined()
-  })
 })

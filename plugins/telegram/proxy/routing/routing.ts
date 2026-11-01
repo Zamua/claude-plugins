@@ -2,12 +2,8 @@
 // failover and switch-back, provider capacity and its reset timers. Every route
 // runs the same Claude conversation; a change restarts it with a new launch profile.
 import { execFileSync } from 'child_process'
-import type { Api, Context } from 'grammy'
-import { InlineKeyboard } from 'grammy'
 import {
   ADMIN_USER_ID,
-  
-  GROUP_CHAT_ID,
   OPENCODE_BIN,
   OPENCODE_GO_KEY_FILE,
   PROVIDER_PROXY_BIN,
@@ -17,15 +13,9 @@ import { parseRateLimit, parseTurnFailed } from '../http/requests'
 import { json } from '../http/response'
 import { log, noticeFailed } from '../log'
 import { inboundModeForRoute } from '../shared/domain/inbound-delivery'
-import {
-  encodeCallback,
-  formatTime,
-  legacySwitchBack,
-  MODELS_PER_PAGE,
-  PICKER_TTL_MS,
-} from '../telegram/telegram-callback'
-import type { Callback } from '../telegram/telegram-callback'
-import { threadIdForTopic, threadOf } from '../telegram/telegram-messages'
+import type { Action, ActionPress, Actions } from '../chat/domain/actions'
+import type { ChatPort } from '../chat/domain/chat-port'
+import { formatTime, legacySwitchBack, MODELS_PER_PAGE, PICKER_TTL_MS } from '../chat/domain/pickers'
 import { mux } from '../topics/mux'
 import { saveRegistry } from '../topics/registry'
 import { currentRoute, getTopic, topics } from '../topics/state'
@@ -58,7 +48,7 @@ import { catalogFromBridge, parseOpenCodeModels } from './provider-catalog'
 import type { ProviderCatalog, ProviderModel } from './provider-catalog'
 
 export type RoutingPorts = {
-  api: Api
+  chat: Pick<ChatPort, 'send'>
   sayIn: (chatId: string, topic: string, text: string) => Promise<unknown>
   /** Stops a topic's agent and drops its long-polls, so nothing is handed to the dying process. */
   killSession: (st: TopicState, topic: string) => boolean
@@ -68,7 +58,7 @@ export type RoutingPorts = {
   paneInFlight: (topic: string) => boolean
 }
 
-export function createRouting({ api, sayIn, killSession, ensureSession, schedulePanePump, paneInFlight }: RoutingPorts) {
+export function createRouting({ chat, sayIn, killSession, ensureSession, schedulePanePump, paneInFlight }: RoutingPorts) {
   const capacities = new Map<ProviderId, ProviderCapacity>()
   type ModelSelection = {
     topic: string
@@ -128,29 +118,24 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     ].join('\n')
   }
 
-  function providerKeyboard(topic: string, reason: PickerReason, exclude?: ProviderId): InlineKeyboard {
-    const keyboard = new InlineKeyboard()
+  function providerActions(topic: string, reason: PickerReason, exclude?: ProviderId): Actions {
     const providers: ProviderId[] = ['anthropic', 'codex', 'opencode-go']
-    for (const provider of providers.filter(value => value !== exclude)) {
+    const rows: Actions = providers.filter(value => value !== exclude).map(provider => {
       const availability = capacities.get(provider)?.availability
       const suffix = availability === 'exhausted' ? ' · limit reached' : availability === 'available' ? ' · available' : ''
-      keyboard.text(`${providerLabel(provider)}${suffix}`, encodeCallback({ kind: 'provider', provider, reason, topic })).row()
-    }
-    keyboard.text('Usage', encodeCallback({ kind: 'usage', topic }))
-    return keyboard
+      return [{ label: `${providerLabel(provider)}${suffix}`, intent: { kind: 'provider', provider, reason, topic } }]
+    })
+    return [...rows, [{ label: 'Usage', intent: { kind: 'usage', topic } }]]
   }
 
   async function sendProviderPicker(
-    chatId: string,
     topic: string,
     reason: PickerReason,
     text: string,
     exclude?: ProviderId,
   ): Promise<void> {
-    await api.sendMessage(chatId, text, {
-      ...threadOf(topic),
-      reply_markup: providerKeyboard(topic, reason, exclude),
-    }).catch(e => log(`provider picker failed for topic ${topic}: ${e}`))
+    await chat.send(topic, { text, actions: providerActions(topic, reason, exclude) })
+      .catch(e => log(`provider picker failed for topic ${topic}: ${e}`))
   }
 
   function modelToken(selection: ModelSelection): string {
@@ -171,31 +156,27 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     provider: ProviderId,
     reason: PickerReason,
     page: number,
-  ): { text: string; keyboard: InlineKeyboard } {
+  ): { text: string; actions: Actions } {
     pruneModelSelections()
     const models = modelCatalog()[provider]
     const pages = Math.max(1, Math.ceil(models.length / MODELS_PER_PAGE))
     const safePage = Math.max(0, Math.min(page, pages - 1))
-    const keyboard = new InlineKeyboard()
-    for (const model of models.slice(safePage * MODELS_PER_PAGE, (safePage + 1) * MODELS_PER_PAGE)) {
+    const actions: Actions = models.slice(safePage * MODELS_PER_PAGE, (safePage + 1) * MODELS_PER_PAGE).map(model => {
       const token = modelToken({ topic, provider, model, reason, expiresAt: Date.now() + PICKER_TTL_MS })
-      keyboard.text(`${model.label}${model.bridgeSupported === false ? ' · bridge update needed' : ''}`, encodeCallback({ kind: 'model', token })).row()
-    }
+      return [{ label: `${model.label}${model.bridgeSupported === false ? ' · bridge update needed' : ''}`, intent: { kind: 'model', token } }]
+    })
     if (pages > 1) {
-      if (safePage > 0) {
-        keyboard.text('Previous', encodeCallback({ kind: 'models', provider, reason, topic, page: safePage - 1 }))
-      }
-      if (safePage + 1 < pages) {
-        keyboard.text('Next', encodeCallback({ kind: 'models', provider, reason, topic, page: safePage + 1 }))
-      }
-      keyboard.row()
+      const nav: Action[] = []
+      if (safePage > 0) nav.push({ label: 'Previous', intent: { kind: 'models', provider, reason, topic, page: safePage - 1 } })
+      if (safePage + 1 < pages) nav.push({ label: 'Next', intent: { kind: 'models', provider, reason, topic, page: safePage + 1 } })
+      actions.push(nav)
     }
-    keyboard.text('Back', encodeCallback({ kind: 'providers', reason, topic }))
+    actions.push([{ label: 'Back', intent: { kind: 'providers', reason, topic } }])
     return {
       text: models.length
         ? `${providerLabel(provider)} models${pages > 1 ? ` (${safePage + 1}/${pages})` : ''}:` + permissionNotice(provider)
         : `${providerLabel(provider)} model catalog is temporarily unavailable. Go back and try again.`,
-      keyboard,
+      actions,
     }
   }
 
@@ -265,12 +246,11 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     void step(topic, { type: 'requested', route, reason: 'manual', busy: busy(topic), byOperator: false, now: Date.now() })
 
   async function announceFallback(topic: string, limited: TopicRoute, fallback: TopicRoute, resetAt?: number): Promise<void> {
-    await api.sendMessage(
-      String(GROUP_CHAT_ID),
-      `${modelLabel(limited.model)} reached its usage limit.${resetLine(resetAt)}\n` +
+    await chat.send(topic, {
+      text: `${modelLabel(limited.model)} reached its usage limit.${resetLine(resetAt)}\n` +
         `This session continues on ${routeSummary(fallback)}.`,
-      { ...threadOf(topic), reply_markup: switchBackKeyboard(topic, limited) },
-    ).catch(e => log(`quota fallback notice failed for topic ${topic}: ${e}`))
+      actions: switchBackActions(topic, limited),
+    }).catch(e => log(`quota fallback notice failed for topic ${topic}: ${e}`))
     if (resetAt) scheduleFallbackReturnOffer(topic, limited, fallback, resetAt)
   }
 
@@ -282,7 +262,6 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
       ...(resetAt ? { resetsAt: resetAt } : {}),
     }], Date.now()))
     await sendProviderPicker(
-      String(GROUP_CHAT_ID),
       topic,
       'quota',
       `${providerLabel(limited.provider)} · ${modelLabel(limited.model)} reached its usage limit.` +
@@ -324,12 +303,12 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
           : undefined
     if (requestedProvider) {
       const picker = modelPicker(topic, requestedProvider, 'manual', 0)
-      await api.sendMessage(chatId, picker.text, { ...threadOf(topic), reply_markup: picker.keyboard })
+      await chat.send(topic, { text: picker.text, actions: picker.actions })
         .catch(noticeFailed('model picker', topic))
       return
     }
     const route = currentRoute(getTopic(topic))
-    await sendProviderPicker(chatId, topic, 'manual', `Current route: ${routeSummary(route)}\n\nChoose a provider:`)
+    await sendProviderPicker(topic, 'manual', `Current route: ${routeSummary(route)}\n\nChoose a provider:`)
   }
 
   function capacityText(): string {
@@ -350,33 +329,32 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     return `Provider usage\n\n${lines.join('\n\n')}`
   }
 
-  function switchBackKeyboard(topic: string, route: TopicRoute): InlineKeyboard {
-    return new InlineKeyboard()
-      .text(`Switch back to ${modelLabel(route.model)}`, encodeCallback({ kind: 'switch-back', provider: route.provider, topic }))
-      .row()
-      .text(`Choose ${providerLabel(route.provider)} model`, encodeCallback({ kind: 'provider', provider: route.provider, reason: 'reset', topic }))
-      .row()
-      .text('Dismiss', encodeCallback({ kind: 'dismiss' }))
+  function switchBackActions(topic: string, route: TopicRoute): Actions {
+    return [
+      [{ label: `Switch back to ${modelLabel(route.model)}`, intent: { kind: 'switch-back', provider: route.provider, topic } }],
+      [{ label: `Choose ${providerLabel(route.provider)} model`, intent: { kind: 'provider', provider: route.provider, reason: 'reset', topic } }],
+      [{ label: 'Dismiss', intent: { kind: 'dismiss' } }],
+    ]
   }
 
-  async function applySwitchBackCallback(ctx: any, provider: ProviderId, topic: string): Promise<void> {
+  async function applySwitchBack(press: ActionPress, provider: ProviderId, topic: string): Promise<void> {
     const route = exhaustedRouteFor(getTopic(topic).routing.exhausted, provider)
     const result = step(topic, { type: 'switch-back', provider, busy: busy(topic), limitedProviders: limitedProviders(), now: Date.now() })
     switch (result.outcome) {
       case 'nothing-to-return':
-        await ctx.answerCallbackQuery({ text: 'This switch-back was already handled or is no longer available.' }).catch(() => {})
+        await press.answer({ text: 'This switch-back was already handled or is no longer available.' }).catch(() => {})
         return
       case 'still-limited':
-        await ctx.answerCallbackQuery({ text: `${providerLabel(provider)} is still at its usage limit.`, show_alert: true }).catch(() => {})
+        await press.answer({ text: `${providerLabel(provider)} is still at its usage limit.`, alert: true }).catch(() => {})
         return
       case 'too-soon':
-        await ctx.answerCallbackQuery({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
+        await press.answer({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
         return
     }
     if (!route) return
-    await ctx.editMessageText(changeText(result.outcome, route) + permissionNotice(route.provider)).catch((error: unknown) =>
+    await press.update(changeText(result.outcome, route) + permissionNotice(route.provider)).catch((error: unknown) =>
       log(`could not update switch-back message for topic ${topic}: ${error}`))
-    await ctx.answerCallbackQuery({ text: result.outcome === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
+    await press.answer({ text: result.outcome === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
     log(`switch-back callback for topic ${topic}: ${provider}/${route.model} (${result.outcome})`)
   }
 
@@ -392,11 +370,10 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     for (const [topic, st] of topics) {
       const route = exhaustedRouteFor(st.routing.exhausted, provider)
       if (!route) continue
-      await api.sendMessage(
-        String(GROUP_CHAT_ID),
-        `${providerLabel(provider)} is available again. This topic switched away after its limit was reached.`,
-        { ...threadOf(topic), reply_markup: switchBackKeyboard(topic, route) },
-      ).catch(e => log(`reset notice failed for ${provider} topic ${topic}: ${e}`))
+      await chat.send(topic, {
+        text: `${providerLabel(provider)} is available again. This topic switched away after its limit was reached.`,
+        actions: switchBackActions(topic, route),
+      }).catch(e => log(`reset notice failed for ${provider} topic ${topic}: ${e}`))
     }
   }
 
@@ -483,11 +460,10 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
       const st = getTopic(topic)
       const recorded = exhaustedRouteFor(st.routing.exhausted, limited.provider)
       if (!recorded || !sameRoute(recorded, limited) || !sameRoute(currentRoute(st), fallback)) return
-      api.sendMessage(
-        String(GROUP_CHAT_ID),
-        `${modelLabel(limited.model)} should be available again.`,
-        { ...threadOf(topic), reply_markup: switchBackKeyboard(topic, limited) },
-      ).catch(e => log(`fallback return offer failed for topic ${topic}: ${e}`))
+      chat.send(topic, {
+        text: `${modelLabel(limited.model)} should be available again.`,
+        actions: switchBackActions(topic, limited),
+      }).catch(e => log(`fallback return offer failed for topic ${topic}: ${e}`))
     }, delay)
   }
 
@@ -533,7 +509,6 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     const overflow = /\b(too long|too large|exceeds|token limit)\b/i.test(details)
     const overloaded = /overload/i.test(err) || /529/.test(details)
     const st = getTopic(topic)
-    const tid = threadIdForTopic(topic)
     const text = overflow
       ? `🗜️ Context filled up, so I'm auto-compacting and carrying on - normal housekeeping, ` +
         `nothing broken. If I go quiet for more than a minute or two, resend your last message.`
@@ -543,9 +518,7 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
         : `⚠️ My last turn failed with an API error (${err}). Your last message may be unanswered - ` +
           `resend it or say "continue".`
     try {
-      await api.sendMessage(String(GROUP_CHAT_ID), text, {
-        ...(tid != null ? { message_thread_id: tid } : {}),
-      })
+      await chat.send(topic, { text })
       log(`turn-failed notice posted for topic ${topic} "${st.name}" (${err}${overflow ? ', context-overflow/compacting' : ''})`)
       return json({ ok: true })
     } catch (e) {
@@ -555,10 +528,11 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
   }
 
 
-  // The route pickers' and switch-back buttons; true when the callback was one of them.
-  async function handleRouteCallback(ctx: Context, cb: Callback): Promise<boolean> {
+  // The route pickers' and switch-back buttons; true when the press was one of them.
+  async function handleRouteAction(press: ActionPress): Promise<boolean> {
+    const cb = press.intent
     if (cb.kind === 'switch-back') {
-      await applySwitchBackCallback(ctx, cb.provider, cb.topic)
+      await applySwitchBack(press, cb.provider, cb.topic)
       return true
     }
 
@@ -566,15 +540,13 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
       const { provider, reason, topic } = cb
       const page = cb.kind === 'models' ? cb.page : 0
       if (capacities.get(provider)?.availability === 'exhausted') {
-        await ctx.answerCallbackQuery({
-          text: `${providerLabel(provider)} is still at its usage limit. Use /usage for the reset time.`,
-          show_alert: true,
-        }).catch(() => {})
+        await press.answer({
+          text: `${providerLabel(provider)} is still at its usage limit. Use /usage for the reset time.`, alert: true }).catch(() => {})
         return true
       }
       const picker = modelPicker(topic, provider, reason, page)
-      await ctx.editMessageText(picker.text, { reply_markup: picker.keyboard }).catch(() => {})
-      await ctx.answerCallbackQuery().catch(() => {})
+      await press.update(picker.text, picker.actions).catch(() => {})
+      await press.answer().catch(() => {})
       return true
     }
 
@@ -582,10 +554,8 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
       const { reason, topic } = cb
       const st = getTopic(topic)
       const exclude = reason === 'quota' ? st.routing.exhausted.at(-1)?.provider : undefined
-      await ctx.editMessageText('Choose a provider:', {
-        reply_markup: providerKeyboard(topic, reason, exclude),
-      }).catch(() => {})
-      await ctx.answerCallbackQuery().catch(() => {})
+      await press.update('Choose a provider:', providerActions(topic, reason, exclude)).catch(() => {})
+      await press.answer().catch(() => {})
       return true
     }
 
@@ -593,38 +563,30 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
       pruneModelSelections()
       const selection = modelSelections.get(cb.token)
       if (!selection) {
-        const legacy = legacySwitchBack(ctx.callbackQuery?.message)
+        const legacy = legacySwitchBack(press.siblings)
         if (legacy) {
-          await applySwitchBackCallback(ctx, legacy.provider, legacy.topic)
+          await applySwitchBack(press, legacy.provider, legacy.topic)
           return true
         }
-        await ctx.answerCallbackQuery({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
+        await press.answer({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
         return true
       }
       if (capacities.get(selection.provider)?.availability === 'exhausted') {
-        await ctx.answerCallbackQuery({
-          text: `${providerLabel(selection.provider)} is still at its usage limit.`,
-          show_alert: true,
-        }).catch(() => {})
+        await press.answer({
+          text: `${providerLabel(selection.provider)} is still at its usage limit.`, alert: true }).catch(() => {})
         return true
       }
       if (selection.model.bridgeSupported === false) {
-        await ctx.answerCallbackQuery({
-          text: `${selection.model.label} is installed but this bridge build cannot route it yet.`,
-          show_alert: true,
-        }).catch(() => {})
+        await press.answer({ text: `${selection.model.label} is installed but this bridge build cannot route it yet.`, alert: true }).catch(() => {})
         return true
       }
-      const keyboard = new InlineKeyboard()
-      for (const effort of selection.model.efforts) {
+      const efforts: Actions = selection.model.efforts.map(effort => {
         const label = effort === 'auto' ? 'Provider default' : effort
         const suffix = effort === selection.model.defaultEffort ? ' · default' : ''
-        keyboard.text(`${label}${suffix}`, encodeCallback({ kind: 'effort', token: cb.token, effort })).row()
-      }
-      await ctx.editMessageText(`${selection.model.label}: choose reasoning effort`, {
-        reply_markup: keyboard,
-      }).catch(() => {})
-      await ctx.answerCallbackQuery().catch(() => {})
+        return [{ label: `${label}${suffix}`, intent: { kind: 'effort', token: cb.token, effort } }]
+      })
+      await press.update(`${selection.model.label}: choose reasoning effort`, efforts).catch(() => {})
+      await press.answer().catch(() => {})
       return true
     }
 
@@ -633,24 +595,24 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
       const selection = modelSelections.get(cb.token)
       const effort = cb.effort
       if (!selection || !selection.model.efforts.includes(effort)) {
-        await ctx.answerCallbackQuery({ text: 'This effort picker expired.' }).catch(() => {})
+        await press.answer({ text: 'This effort picker expired.' }).catch(() => {})
         return true
       }
       selection.effort = effort
-      const keyboard = new InlineKeyboard().text('Off', encodeCallback({ kind: 'ultracode', token: cb.token, on: false })).row()
+      const choices: Actions = [[{ label: 'Off', intent: { kind: 'ultracode', token: cb.token, on: false } }]]
       if (selection.model.supportsUltracode) {
-        keyboard.text('On · forces xhigh + workflows', encodeCallback({ kind: 'ultracode', token: cb.token, on: true })).row()
+        choices.push([{ label: 'On · forces xhigh + workflows', intent: { kind: 'ultracode', token: cb.token, on: true } }])
       }
       const compact = autoCompactWindow(selection.provider, selection.model.contextWindow)
-      await ctx.editMessageText(
+      await press.update(
         `${selection.model.label} · ${effort === 'auto' ? 'provider-default effort' : `${effort} effort`}\n` +
         `Auto-compaction: ${compact ? `${compact.toLocaleString()} tokens` : 'provider-managed'}\n\n` +
         (selection.model.supportsUltracode
           ? 'Choose Ultracode. Turning it on overrides effort to xhigh and enables dynamic workflows.'
           : 'Ultracode is not supported by this model; choose Off.'),
-        { reply_markup: keyboard },
+        choices,
       ).catch(() => {})
-      await ctx.answerCallbackQuery().catch(() => {})
+      await press.answer().catch(() => {})
       return true
     }
 
@@ -659,18 +621,15 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
       const selection = modelSelections.get(cb.token)
       const ultracode = cb.on
       if (!selection || !selection.effort) {
-        await ctx.answerCallbackQuery({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
+        await press.answer({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
         return true
       }
       if (ultracode && !selection.model.supportsUltracode) {
-        await ctx.answerCallbackQuery({ text: 'Ultracode is not supported by this model.', show_alert: true }).catch(() => {})
+        await press.answer({ text: 'Ultracode is not supported by this model.', alert: true }).catch(() => {})
         return true
       }
       if (capacities.get(selection.provider)?.availability === 'exhausted') {
-        await ctx.answerCallbackQuery({
-          text: `${providerLabel(selection.provider)} is still at its usage limit.`,
-          show_alert: true,
-        }).catch(() => {})
+        await press.answer({ text: `${providerLabel(selection.provider)} is still at its usage limit.`, alert: true }).catch(() => {})
         return true
       }
       const route = topicRoute({
@@ -688,32 +647,30 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
         now: Date.now(),
       })
       if (result === 'too-soon') {
-        await ctx.answerCallbackQuery({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
+        await press.answer({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
         return true
       }
       modelSelections.delete(cb.token)
-      await ctx.editMessageText(
+      await press.update(
         changeText(result, route) +
         permissionNotice(route.provider) +
         (result === 'unchanged' && route.provider === 'codex'
           ? '\nRun /relaunch to apply the launch settings to this existing session.' : ''),
       ).catch(() => {})
-      await ctx.answerCallbackQuery({ text: result === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
+      await press.answer({ text: result === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
       return true
     }
 
     if (cb.kind === 'usage') {
       await refreshProviderCapacity()
-      await ctx.editMessageText(capacityText(), {
-        reply_markup: new InlineKeyboard().text('Back', encodeCallback({ kind: 'providers', reason: 'manual', topic: cb.topic })),
-      }).catch(() => {})
-      await ctx.answerCallbackQuery().catch(() => {})
+      await press.update(capacityText(), [[{ label: 'Back', intent: { kind: 'providers', reason: 'manual', topic: cb.topic } }]]).catch(() => {})
+      await press.answer().catch(() => {})
       return true
     }
 
     if (cb.kind === 'dismiss') {
-      await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {})
-      await ctx.answerCallbackQuery({ text: 'Dismissed.' }).catch(() => {})
+      await press.clearActions().catch(() => {})
+      await press.answer({ text: 'Dismissed.' }).catch(() => {})
       return true
     }
     return false
@@ -730,6 +687,6 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     handleRateLimit,
     handleCapacity,
     handleTurnFailed,
-    handleRouteCallback,
+    handleRouteAction,
   }
 }

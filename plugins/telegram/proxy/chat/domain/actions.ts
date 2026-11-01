@@ -2,6 +2,7 @@
 // with buttons renders them natively; one without may render them as text and map
 // the reader's answer back to the same intent.
 import type { AntigravityEffort } from '../../harness/antigravity/domain/antigravity-topic'
+import type { TopicHarness } from '../../harness/domain/topic-harness'
 import type { Effort, PickerReason, ProviderId } from '../../routing/domain/model-routing'
 
 /**
@@ -42,4 +43,18 @@ export interface ActionPress {
   /** Replaces the pressed message's text, and its buttons when given. */
   update(text: string, actions?: Actions): Promise<void>
   clearActions(): Promise<void>
+}
+
+/** The topic an intent names outright, so a button replayed in another topic can be refused. */
+export function intentTopic(i: ActionIntent): string | undefined {
+  return 'topic' in i ? i.topic : undefined
+}
+
+/**
+ * The harness whose picker made the button; undefined for controls any harness
+ * may use. A button a topic did not make (an old or forged one) is refused against this.
+ */
+export function intentHarness(i: ActionIntent): TopicHarness | undefined {
+  if (i.kind === 'permission') return undefined
+  return i.kind.startsWith('antigravity-') ? 'antigravity' : 'claude'
 }
