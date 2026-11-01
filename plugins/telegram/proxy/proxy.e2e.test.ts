@@ -148,6 +148,22 @@ function send(thread: number, text: string): number {
   return id
 }
 
+// A service message, such as a topic being created or renamed, in `thread`.
+function deliver(thread: number, fields: Record<string, unknown>) {
+  pending.push({
+    update_id: updateId++,
+    message: {
+      message_id: messageId++,
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: Number(GROUP), type: 'supergroup', title: 'topics', is_forum: true },
+      from: { id: OPERATOR, is_bot: false, first_name: 'Operator' },
+      message_thread_id: thread,
+      is_topic_message: true,
+      ...fields,
+    },
+  })
+}
+
 // The operator pressing an inline button under a message in `thread`.
 function press(thread: number, data: string) {
   pending.push({
@@ -568,6 +584,28 @@ describe('the proxy, end to end', () => {
     const fresh = await until('topic 44 to spawn', () => spawns().find(s => s.session.endsWith('-44')))
     expect(fresh.env.TG_RESUME).toBe('')
     expect(fresh.env.TG_CLAUDE_SESSION_ID).not.toBe(MISSING)
+  }, 20_000)
+
+  test('a topic learns its name from Telegram, and a rename is kept for its next session', async () => {
+    deliver(48, { forum_topic_created: { name: 'Build Bot', icon_color: 7322096 } })
+    send(48, 'hi')
+    await until('topic 48 to spawn under its name', () => spawns().find(s => s.session === 'claude-build-bot-48'))
+    deliver(48, { forum_topic_edited: { name: 'Release' } })
+    await until('the rename to persist', () => registry()['48']?.name === 'Release')
+  }, 20_000)
+
+  test('a "yes <id>" reply answers a pending permission prompt in its own topic', async () => {
+    const asked = await fetch(`${proxyUrl}/permission-request`, {
+      method: 'POST',
+      body: JSON.stringify({ topic: '48', request_id: 'abcde', tool: 'Bash', input: 'ls' }),
+    })
+    expect(asked.status).toBe(200)
+    const prompt = said(48, /^🔐 Permission: Bash\n\nls/)
+    expect(buttons(prompt).map(b => b.text)).toEqual(['✅ Allow', '❌ Deny'])
+    const reply = send(48, 'yes abcde')
+    expect(await fetch(`${proxyUrl}/permission-poll?topic=48`).then(r => r.json())).toEqual({ request_id: 'abcde', behavior: 'allow' })
+    await until('the reply to be marked', () =>
+      calls.find(c => c.method === 'setMessageReaction' && c.body.message_id === reply && c.body.reaction[0].emoji === '✅'))
   }, 20_000)
 
   test('a malformed request is refused with a 400 naming the field', async () => {

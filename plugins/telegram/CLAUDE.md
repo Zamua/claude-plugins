@@ -245,7 +245,7 @@ value on the next line (same line works too); `/secrets` shows names, sizes
 and dates; `/unsecret <name>` removes one. Three flat verbs because Telegram's
 "/" menu has no sub-commands and a phone keyboard turns `--` into an em dash;
 the proxy registers them in the group's command menu at boot
-(`registerSecretCommands`, `setMyCommands` scoped to the group). The
+(`registerCommands` in `proxy/telegram/inbound.ts`, `setMyCommands` scoped to the group). The
 `/secret --list` and `/secret --delete <name>` flag forms remain as aliases,
 and a flag also reads with an em or en dash. The PROXY handles all of it in
 `handleSecretDrop`, before every relay path including the square, and the
@@ -941,8 +941,10 @@ there is no agent to relaunch.
   - `proxy/reminders/`: reminders; `domain/reminder.ts` validates.
   - `proxy/secrets/`: the `/secret` drop (`secret.ts` parses and stores,
     `secret-drop.ts` runs the Telegram exchange).
-  - `proxy/telegram/`: the Bot API edge: message description, the callback
-    codec, file download, voice transcription, locations.
+  - `proxy/telegram/`: the Bot API edge: inbound routing of every group
+    message and button answer, and the "/" menu (`inbound.ts`); message
+    description, the callback codec, file download, voice transcription,
+    locations.
   - `proxy/http/`: the loopback HTTP API's routes, request parsers and
     responses.
   - `proxy/shared/`: atomic JSON writes (`json-file.ts`: a 0600 temp file
