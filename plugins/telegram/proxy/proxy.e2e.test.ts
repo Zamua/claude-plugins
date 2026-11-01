@@ -104,6 +104,14 @@ if '-s' not in a:
     now = int(time.time() * 1000)
     json.dump([{'id': 'ses_fake1', 'created': now, 'updated': now}], open(sessions, 'w'))
 `
+// Voice transcription stand-ins: "converting" copies the recording, "transcribing" prints it.
+const FAKE_FFMPEG = `#!/usr/bin/env bash
+prev=''; for a in "$@"; do [ "$prev" = -i ] && in="$a"; prev="$a"; done
+cp "$in" "$prev"
+`
+const FAKE_WHISPER = `#!/usr/bin/env bash
+prev=''; for a in "$@"; do [ "$prev" = -f ] && cat "$a"; prev="$a"; done
+`
 // A 1x1 PNG, as the qwen-image server would return one.
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
@@ -114,6 +122,8 @@ let home: string
 let state: string
 let proxy: Subprocess
 let proxyUrl: string
+let askUrl: string
+const ASK_TOKEN = 'e2e-ask-token'
 let api: ReturnType<typeof Bun.serve>
 let qwenImage: ReturnType<typeof Bun.serve>
 const generations: Record<string, any>[] = []
@@ -223,7 +233,7 @@ beforeAll(async () => {
 
   mkdirSync(join(home, '.local', 'bin'), { recursive: true })
   mkdirSync(join(home, 'fake'))
-  for (const [name, body] of [['tmux', FAKE_TMUX], ['herdr', FAKE_HERDR], ['opencode', FAKE_OPENCODE]]) {
+  for (const [name, body] of [['tmux', FAKE_TMUX], ['herdr', FAKE_HERDR], ['opencode', FAKE_OPENCODE], ['ffmpeg', FAKE_FFMPEG], ['whisper-cli', FAKE_WHISPER]]) {
     writeFileSync(join(home, '.local', 'bin', name), body)
     chmodSync(join(home, '.local', 'bin', name), 0o700)
   }
@@ -238,6 +248,9 @@ beforeAll(async () => {
   writeFileSync(join(home, '.claude', 'projects', 'p', `${PROXIED}.jsonl`), '{}\n')
   writeFileSync(join(home, '.claude', 'projects', 'p', `${STUCK}.jsonl`), '{}\n')
   writeFileSync(join(home, 'fake', 'fail-spawn'), 'claude-stuck-53\n')
+  writeFileSync(join(home, 'fake', 'whisper.bin'), '')
+  mkdirSync(join(root, 'keys'), { mode: 0o700 })
+  writeFileSync(join(root, 'keys', 'telegram-ask-token'), `${ASK_TOKEN}\n`, { mode: 0o600 })
   mkdirSync(state, { recursive: true })
   // A harness topic file that cannot be read must not keep the proxy from booting
   writeFileSync(join(state, 'localgen-topics.json'), '{"version":1,"topics":[')
@@ -258,9 +271,13 @@ beforeAll(async () => {
     port: 0,
     async fetch(req) {
       const method = new URL(req.url).pathname.split('/').at(-1) ?? ''
-      const text = await req.text()
       let body: Record<string, any> = {}
-      try { body = text ? JSON.parse(text) : {} } catch {}
+      if ((req.headers.get('content-type') ?? '').startsWith('multipart/form-data')) {
+        for (const [key, value] of await req.formData()) body[key] = typeof value === 'string' ? value : { bytes: value.size }
+      } else {
+        const text = await req.text()
+        try { body = text ? JSON.parse(text) : {} } catch {}
+      }
       calls.push({ method, body })
       const ok = (result: unknown) => Response.json({ ok: true, result })
       if (method === 'getMe') return ok({ id: 1, is_bot: true, first_name: 'fake', username: 'fakebot' })
@@ -268,7 +285,7 @@ beforeAll(async () => {
         if (pending.length === 0) await Bun.sleep(200)
         return ok(pending.splice(0))
       }
-      if (method === 'createForumTopic') return ok({ message_thread_id: 77, name: body.name, icon_color: 0 })
+      if (method === 'createForumTopic') return ok({ message_thread_id: body.name === 'ask' ? 78 : 77, name: body.name, icon_color: 0 })
       if (method === 'sendPhoto' || method === 'sendDocument') {
         return ok({ message_id: messageId++, date: 0, chat: { id: Number(GROUP), type: 'supergroup' } })
       }
@@ -293,8 +310,12 @@ beforeAll(async () => {
 
   const free = Bun.serve({ port: 0, fetch: () => new Response() })
   const port = free.port
+  const freeAsk = Bun.serve({ port: 0, fetch: () => new Response() })
+  const askPort = freeAsk.port
   free.stop(true)
+  freeAsk.stop(true)
   proxyUrl = `http://127.0.0.1:${port}`
+  askUrl = `http://127.0.0.1:${askPort}`
   proxy = Bun.spawn([process.execPath, join(plugin, 'proxy', 'proxy.ts')], {
     env: {
       HOME: home,
@@ -309,7 +330,12 @@ beforeAll(async () => {
       TELEGRAM_TOPICS_MULTIPLEXER: 'tmux',
       TELEGRAM_ANTIGRAVITY: 'off',
       TELEGRAM_TOPICS_UPDATE_SWEEP_MS: '300',
-      TELEGRAM_TOPICS_VOICE_TRANSCRIBE: 'off',
+      TELEGRAM_TOPICS_VOICE_TRANSCRIBE: 'on',
+      TELEGRAM_TOPICS_FFMPEG_BIN: join(home, '.local', 'bin', 'ffmpeg'),
+      TELEGRAM_TOPICS_WHISPER_BIN: join(home, '.local', 'bin', 'whisper-cli'),
+      TELEGRAM_TOPICS_WHISPER_MODEL: join(home, 'fake', 'whisper.bin'),
+      TELEGRAM_ASK_PORT: String(askPort),
+      TELEGRAM_ASK_IMAGES: 'on',
       TELEGRAM_TOPICS_SQUARE_TOPIC_ID: '900',
       TELEGRAM_TOPICS_SECRETS_USER_ID: String(OPERATOR),
       TELEGRAM_TOPICS_SECRETS_DIR: join(root, 'keys'),
@@ -782,6 +808,58 @@ describe('the proxy, end to end', () => {
     await Bun.sleep(1_000)
     expect(said(52, /updated to Claude Code/)).toBeUndefined()
   }, 30_000)
+
+  const ask = (fields: Record<string, string | Blob>, token?: string) => {
+    const form = new FormData()
+    for (const [key, value] of Object.entries(fields)) form.append(key, value)
+    return fetch(`${askUrl}/ask`, { method: 'POST', body: form, headers: token ? { authorization: `Bearer ${token}` } : {} })
+  }
+
+  test('an ask without the token is refused before anything reaches Telegram', async () => {
+    const before = calls.length
+    expect((await ask({ question: 'hi' })).status).toBe(401)
+    expect((await ask({ question: 'hi' }, 'not-the-token')).status).toBe(401)
+    expect(calls.slice(before).filter(c => c.method !== 'getUpdates')).toEqual([])
+  }, 10_000)
+
+  test('an ask lands in a dedicated topic on Sonnet, posted with its screenshot, and returns the first reply', async () => {
+    const screenshot = Buffer.from(PNG, 'base64')
+    const asked = ask({ question: 'what is this?', image: new Blob([screenshot]), url: 'https://example.com/post', wait: '15' }, ASK_TOKEN)
+    await until('the ask topic to spawn', () => spawns().find(s => s.session === 'claude-ask-78'))
+    const turn = await fetch(`${proxyUrl}/poll?topic=78`, { signal: AbortSignal.timeout(15_000) }).then(r => r.json())
+    expect(turn.meta).toMatchObject({ ask: '1', message_thread_id: '78', url: 'https://example.com/post', user_id: '' })
+    expect(turn.content.startsWith('what is this?\n')).toBeTrue()
+    expect(dirname(turn.meta.image_path)).toBe(join(state, 'inbox'))
+    expect(readFileSync(turn.meta.image_path)).toEqual(screenshot)
+    const post = calls.findLast(c => c.method === 'sendPhoto' && c.body.message_thread_id === '78')
+    expect(post?.body.caption).toBe('You asked: what is this?\nhttps://example.com/post')
+    await fetch(`${proxyUrl}/send`, {
+      method: 'POST',
+      body: JSON.stringify({ chat_id: GROUP, topic: '78', text: 'It is a cat.', reply_to: Number(turn.meta.message_id) }),
+    })
+    expect(await (await asked).json()).toEqual({
+      id: turn.meta.message_id,
+      topic: '78',
+      message_id: Number(turn.meta.message_id),
+      question: 'what is this?',
+      answer: 'It is a cat.',
+      image: 'accepted',
+    })
+    expect(registry()['78']).toMatchObject({ name: 'ask', route: { provider: 'anthropic', model: 'sonnet' } })
+    expect(spawns().find(s => s.session === 'claude-ask-78')?.env.TG_MODEL).toBe(registry()['78'].route.model)
+  }, 30_000)
+
+  test('a spoken ask is transcribed into the same topic, its recording not kept, with no answer when none comes in time', async () => {
+    const asked = await ask({ audio: new Blob(['explain this paper']), wait: '0' }, ASK_TOKEN)
+    expect(await asked.json()).toMatchObject({ topic: '78', question: 'explain this paper', answer: null, image: 'none' })
+    expect(calls.filter(c => c.method === 'createForumTopic' && c.body.name === 'ask')).toHaveLength(1)
+    const post = calls.findLast(c => c.method === 'sendMessage' && c.body.message_thread_id === 78)
+    expect(post?.body.text).toBe('You asked: explain this paper')
+    const turn = await fetch(`${proxyUrl}/poll?topic=78`, { signal: AbortSignal.timeout(5_000) }).then(r => r.json())
+    expect(turn.content.startsWith('[asked by voice, auto-transcribed; may contain errors]\nexplain this paper')).toBeTrue()
+    expect(turn.meta.voice_transcribed).toBe('1')
+    expect(readdirSync(join(state, 'inbox')).filter(f => f.includes('audio'))).toEqual([])
+  }, 20_000)
 
   // Runs last: it stops the proxy.
   test('SIGTERM stops polling, removes the pid file, and exits cleanly', async () => {

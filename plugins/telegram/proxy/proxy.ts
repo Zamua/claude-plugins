@@ -35,6 +35,11 @@ import { lockRefusal } from './harness/domain/topic-harness'
 import type { LockedHarness, TopicHarness } from './harness/domain/topic-harness'
 import {
   ADMIN_USER_ID,
+  ASK_IMAGES,
+  ASK_PORT,
+  ASK_TOKEN_FILE,
+  ASK_TOPIC,
+  ASK_TOPIC_FILE,
   BOT_API_ROOT,
   CAPACITY_POLL_MS,
   GROUP_CHAT_ID,
@@ -46,6 +51,7 @@ import {
   TOKEN,
   UPDATE_RESTART,
   UPDATE_SWEEP_MS,
+  VOICE,
 } from './config'
 import { log, noticeFailed } from './log'
 import type { TopicHarnessAdapter } from './harness/topic-harness-adapter'
@@ -67,7 +73,15 @@ import { getTopic } from './topics/state'
 import { loadConvs } from './square/conversations'
 import { createSquare } from './square/square'
 import { threadOf } from './telegram/telegram-messages'
-import { telegramDownloader } from './telegram/telegram-files'
+import { telegramDownloader, writeInboxFile } from './telegram/telegram-files'
+import { transcribeAudio } from './telegram/voice-transcription'
+import { createAsk } from './ask/ask-service'
+import { askTarget } from './ask/domain/ask'
+import { JsonAskTopicStore } from './ask/json-ask-topic-store'
+import { createAskServer } from './http/ask-server'
+import { createTopicCreation } from './topics/topic-creation'
+import { openOrSetAside } from './shared/state-file'
+import { randomUUID } from 'crypto'
 
 if (!TOKEN) {
   process.stderr.write(
@@ -189,6 +203,7 @@ const {
   modelCatalog,
   turnEnded,
   noticeDelivered,
+  routeTopic,
   handleModelCommand,
   capacityText,
   refreshProviderCapacity,
@@ -216,6 +231,31 @@ const sayIn = (chatId: string, topic: string, t: string) =>
 const HARNESSES: readonly TopicHarnessAdapter[] = [antigravityHarness, opencodeHarness, localgenHarness]
 const harnessFor = (topic: string) => HARNESSES.find(h => h.owns(topic))
 const harnessOfKind = (kind: LockedHarness) => HARNESSES.find(h => h.kind === kind) as TopicHarnessAdapter
+const createTopic = createTopicCreation({ api: bot.api, harnessOfKind })
+
+// Asks from the phone land in one topic: a configured one, or a dedicated one created on first use.
+const askTopicStore = openOrSetAside('ask', ASK_TOPIC_FILE, () => new JsonAskTopicStore(ASK_TOPIC_FILE), log)
+const target = askTarget(ASK_TOPIC)
+if (!target) log(`TELEGRAM_ASK_TOPIC="${ASK_TOPIC}" is neither a thread id nor "general"; asks are refused`)
+const ask = createAsk({
+  api: bot.api,
+  chatId: String(GROUP_CHAT_ID),
+  target,
+  store: askTopicStore,
+  createTopic: name => createTopic(name, 'claude'),
+  routeTopic,
+  refusal: topic =>
+    SQUARE_TOPIC && topic === SQUARE_TOPIC
+      ? 'the square cannot take asks'
+      : harnessLocked(topic)
+        ? `topic ${topic} is locked to another harness`
+        : undefined,
+  ensureSession,
+  enqueue,
+  saveImage: (bytes, kind) => writeInboxFile(INBOX_DIR, bytes, kind, `ask-${randomUUID().slice(0, 8)}`),
+  transcribe: audio => transcribeAudio(VOICE, INBOX_DIR, audio, log),
+  log,
+})
 
 registerInbound(bot, {
   harnesses: HARNESSES,
@@ -264,8 +304,15 @@ process.on('SIGHUP', shutdown)
 
 const http = createHttpServer({
   api: bot.api,
-  outbound: createOutbound({ api: bot.api, downloadFile, sent: (topic, n) => harnessFor(topic)?.sent(topic, n) }),
-  harnessOfKind,
+  outbound: createOutbound({
+    api: bot.api,
+    downloadFile,
+    sent: reply => {
+      harnessFor(reply.topic)?.sent(reply.topic, reply.messages)
+      ask.replied(reply.topic, reply.replyTo, reply.text)
+    },
+  }),
+  createTopic,
   schedulePanePump,
   turnEnded,
   noticeDelivered,
@@ -275,6 +322,7 @@ const http = createHttpServer({
   pollingSince: polling.since,
 })
 await http.serve()
+void createAskServer({ port: ASK_PORT, tokenFile: ASK_TOKEN_FILE, images: ASK_IMAGES, ask: ask.ask, log }).serve()
 void polling.run()
 void registerCommands(bot.api)
 for (const harness of HARNESSES) {

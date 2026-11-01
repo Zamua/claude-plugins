@@ -171,6 +171,10 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr` for Claude topics; Antigravity and localcode topics always use Herdr |
 | `TELEGRAM_TOPICS_UPDATE_RESTART` | no | `on` | moves live topic sessions onto a newly installed Claude Code at their next idle turn boundary (an idle one resumes on its next message; a busy one is restarted once it goes idle) |
 | `TELEGRAM_TOPICS_MODEL` | no | `claude-opus-5-5` | initial model for topics without a persisted route; `/model` selections are persisted per topic |
+| `TELEGRAM_ASK_PORT` | no | `8791` | loopback port of the `/ask` listener, the only one to mount on a tailnet |
+| `TELEGRAM_ASK_TOKEN_FILE` | no | `~/keys/telegram-ask-token` | bearer token `/ask` requires; no file = asks refused |
+| `TELEGRAM_ASK_TOPIC` | no | empty | where asks land: a thread id or `general`; empty = a dedicated "ask" topic created on first use, started on Sonnet |
+| `TELEGRAM_ASK_IMAGES` | no | `off` | whether an ask's screenshot is taken; off, it is ignored |
 | `TELEGRAM_TOPICS_FIRST_POLL_DELAY_MS` | no | `5000` | MCP-side: how long the first inbound poll is held so the booting REPL is idle before the first message is delivered |
 
 ## Run the proxy
@@ -367,6 +371,12 @@ Loopback only (`127.0.0.1:8790`).
 | `GET /reminders?topic=<t>` | | `{reminders: [{id, at, text, prompt?}]}`, soonest first |
 | `POST /reminder/cancel` | `{topic, id}` | `{cancelled}`, or `404` if the topic has no such reminder |
 | `GET /health` | | `{ok, topics, port, polling, polling_since}` |
+
+`POST /ask` is not on this port: it has its own listener (`TELEGRAM_ASK_PORT`),
+bearer-authenticated, for a phone to post a question (multipart `question` or
+`audio`, optional `image`, `url`, `wait`). It answers `{id, topic, message_id,
+question, answer, image}`, where `answer` is the topic agent's first reply if it
+comes within `wait`. The full contract is in `CLAUDE.md`.
 
 `topic` is the `message_thread_id` as a string, or `"general"`. On `/send`,
 long text is split into 4096-char chunks (each a message); `message_ids` lists

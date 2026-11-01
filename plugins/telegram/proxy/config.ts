@@ -144,6 +144,21 @@ export const HERDR_BIN = process.env.TELEGRAM_HERDR_BIN ||
 
 export const PROXY_URL = `http://localhost:${PORT}`
 
+// ---- asks from the phone -----------------------------------------------------
+// POST /ask listens on its own loopback port, the only one mounted on the tailnet.
+export const ASK_PORT = parseInt(process.env.TELEGRAM_ASK_PORT || '8791', 10)
+// A bearer token the caller must present; no file means asks are refused.
+export const ASK_TOKEN_FILE = process.env.TELEGRAM_ASK_TOKEN_FILE || join(SECRETS_DIR, 'telegram-ask-token')
+// A thread id or "general"; empty puts asks in a dedicated topic created on first use.
+export const ASK_TOPIC = process.env.TELEGRAM_ASK_TOPIC ?? ''
+export const ASK_TOPIC_FILE = join(STATE_DIR, 'ask-topic.json')
+// Screenshots stay off until there is a privacy model for them; off, an ask's image is ignored.
+export const ASK_IMAGES = environmentFlag(
+  process.env.TELEGRAM_ASK_IMAGES,
+  false,
+  (value) => log(`TELEGRAM_ASK_IMAGES="${value}" is not on/off; using off`),
+)
+
 // ---- the square (inter-Claude collaboration) --------------------------------
 // One designated forum topic hosts ALL agent-to-agent conversations (design:
 // "private rooms + one commons"). Empty/unset = the square is disabled and

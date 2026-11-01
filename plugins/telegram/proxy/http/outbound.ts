@@ -18,11 +18,13 @@ import {
 import { parseDownload, parseEdit, parseReact, parseSend } from './requests'
 import { json } from './response'
 
+/** A reply that has gone out in a topic. */
+export type SentReply = { topic: string; messages: number; text: string; replyTo?: number }
+
 export type OutboundPorts = {
   api: Api
   downloadFile: Downloader
-  /** Told once a reply has gone out in a topic. */
-  sent: (topic: string, messages: number) => void
+  sent: (reply: SentReply) => void
 }
 
 function assertGroup(chatId: unknown): void {
@@ -70,7 +72,7 @@ export function createOutbound({ api, downloadFile, sent }: OutboundPorts) {
       ids.push(message.message_id)
     }
 
-    sent(topic, ids.length)
+    sent({ topic, messages: ids.length, text, ...(replyTo != null ? { replyTo } : {}) })
     return json({ message_ids: ids })
   }
 

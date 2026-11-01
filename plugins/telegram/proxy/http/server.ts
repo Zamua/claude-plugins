@@ -3,8 +3,7 @@
 import { InlineKeyboard } from 'grammy'
 import type { Api } from 'grammy'
 import { GROUP_CHAT_ID, PORT, PROXY_URL, SQUARE_TOPIC } from '../config'
-import type { LockedHarness } from '../harness/domain/topic-harness'
-import type { TopicHarnessAdapter } from '../harness/topic-harness-adapter'
+import type { TopicHarness } from '../harness/domain/topic-harness'
 import { log } from '../log'
 import type { createReminders } from '../reminders/reminders'
 import type { createRouting } from '../routing/routing'
@@ -15,8 +14,7 @@ import { encodeCallback } from '../telegram/telegram-callback'
 import { threadIdForTopic } from '../telegram/telegram-messages'
 import { resumeNoticeTurn } from '../topics/lifecycle'
 import { pendingPerms, prunePendingPerms } from '../topics/permissions'
-import { saveRegistry } from '../topics/registry'
-import { currentRoute, getTopic, topicNames, topics } from '../topics/state'
+import { currentRoute, getTopic, topics } from '../topics/state'
 import type { createOutbound } from './outbound'
 import { BadRequest, parsePermissionRequest, parseTopicCreate } from './requests'
 import { json } from './response'
@@ -27,7 +25,8 @@ const LONG_POLL_MS = 25_000
 export type HttpPorts = {
   api: Api
   outbound: ReturnType<typeof createOutbound>
-  harnessOfKind: (kind: LockedHarness) => TopicHarnessAdapter
+  /** Creates and registers a forum topic and gives its id. */
+  createTopic: (name: string, harness: TopicHarness) => Promise<string>
   schedulePanePump: (topic: string, delayMs?: number) => void
   /** The running turn ended: a route change waiting for it applies now. */
   turnEnded: (topic: string) => void
@@ -68,7 +67,7 @@ function longPoll<T>(queue: T[], waiters: Array<(item: T | null) => void>, signa
 }
 
 export function createHttpServer(ports: HttpPorts) {
-  const { api, outbound, harnessOfKind, schedulePanePump, turnEnded, noticeDelivered, routing, square, reminders } = ports
+  const { api, outbound, createTopic, schedulePanePump, turnEnded, noticeDelivered, routing, square, reminders } = ports
 
   function handlePoll(url: URL, signal: AbortSignal): Promise<Response> {
     const topic = url.searchParams.get('topic') ?? 'general'
@@ -124,24 +123,12 @@ export function createHttpServer(ports: HttpPorts) {
     return longPoll(st.permQueue, st.permWaiters, signal)
   }
 
-  // Telegram never echoes a bot's own actions via getUpdates, so a topic the bot
-  // creates is invisible until a human messages it. Created here, the response
-  // carries its thread id and it is registered at once. Needs the bot to be a
-  // group admin with can_manage_topics.
   async function handleTopicCreate(req: Request): Promise<Response> {
     const { name, harness } = parseTopicCreate(await req.json())
-    const lockNewTopic = harness === 'claude' ? undefined : await harnessOfKind(harness).prepareTopic(name)
-    const created = await api.createForumTopic(String(GROUP_CHAT_ID), name)
-    const topic = String(created.message_thread_id)
-    const st = getTopic(topic)
-    st.name = name
-    topicNames.set(topic, name)
-    saveRegistry()
-    if (lockNewTopic) await lockNewTopic(topic)
-    log(`created + registered topic ${topic} "${name}"`)
+    const topic = await createTopic(name, harness)
     return json({
       topic,
-      thread_id: created.message_thread_id,
+      thread_id: Number(topic),
       name,
       harness,
       slug: harness === 'claude' ? square.slugForTopic(topic) : topicSlug(name),
