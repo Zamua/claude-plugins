@@ -121,6 +121,7 @@ import { HerdrOpencodeRuntime } from './adapters/herdr-opencode-runtime'
 import { opencodeTopic, opencodeTopicFromRecord } from './domain/opencode-topic'
 import type { OpencodeTopic } from './domain/opencode-topic'
 import { callbackBelongsToHarness, callbackTopicTarget, lockRefusal } from './domain/topic-harness'
+import { topicSlug } from './domain/topic-slug'
 import type { LockedHarness, TopicHarness } from './domain/topic-harness'
 import { LocalgenTopicService } from './application/localgen-topic-service'
 import { QwenImageClient } from './adapters/qwen-image-client'
@@ -530,19 +531,6 @@ const topics = new Map<string, TopicState>()
 // forum_topic_created names learned before a topic's session is spawned.
 const topicNames = new Map<string, string>()
 
-// A readable, tmux-safe slug from a topic name (tmux names cannot contain '.' or
-// ':', so collapse every non-alphanumeric run to '-', trim, and cap the length).
-function slugify(s: string): string {
-  return (
-    s
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 24)
-      .replace(/-+$/g, '') || 'topic'
-  )
-}
-
 // The mux session name. Readable: `<prefix>-<slug>-<thread_id>` (e.g.
 // `claude-hostthis-34`), with the numeric thread id as a short, stable,
 // collision-proof suffix; the General topic (no thread id) is just
@@ -554,7 +542,7 @@ function slugify(s: string): string {
 function sessionNameFor(topic: string, label?: string, prefix = 'claude'): string {
   if (topic === 'general') return `${prefix}-general`
   const id = topic.replace(/[^A-Za-z0-9]/g, '')
-  const slug = slugify(label ?? '')
+  const slug = topicSlug(label ?? '')
   // Unknown/degenerate name (the label fell back to the numeric id, or slugified
   // to the 'topic' placeholder) -> just `<prefix>-<id>`, not `<prefix>-<id>-<id>`.
   if (slug === id || slug === 'topic') return `${prefix}-${id}`
@@ -972,7 +960,7 @@ function topicDirectory(): Array<{ slug: string; name: string; topic: string; li
   for (const [topic, st] of topics) {
     if (topic === SQUARE_TOPIC || harnessLocked(topic)) continue
     const name = st.name || topicNames.get(topic) || ''
-    const slug = topic === 'general' ? 'general' : slugify(name) !== 'topic' ? slugify(name) : topic
+    const slug = topic === 'general' ? 'general' : topicSlug(name) !== 'topic' ? topicSlug(name) : topic
     out.push({ slug, name: name || topic, topic, live: !!(st.session && live.has(st.session)) })
   }
   return out
@@ -1350,7 +1338,7 @@ async function handleTopicCreate(req: Request): Promise<Response> {
     thread_id: created.message_thread_id,
     name,
     harness,
-    slug: harness === 'claude' ? slugForTopic(topic) : slugify(name),
+    slug: harness === 'claude' ? slugForTopic(topic) : topicSlug(name),
   })
 }
 

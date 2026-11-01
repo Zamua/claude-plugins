@@ -8,7 +8,8 @@ import type {
 import { nodeProcessRunner } from './process-runner'
 import type { ProcessRunner } from './process-runner'
 
-export type OpencodePane = { paneId: string; status: string }
+import { findHerdrPane, herdrAgentStatus } from './herdr-panes'
+import type { HerdrPane } from './herdr-panes'
 
 // Clock skew between the launcher and OpenCode's session timestamps.
 const SESSION_CREATED_SLACK_MS = 5_000
@@ -44,28 +45,6 @@ export function opencodeConfigContent(bunPath: string, serverFile: string, model
       },
     },
   })
-}
-
-export function findOpencodePane(output: string, sessionName: string): OpencodePane | undefined {
-  try {
-    const panes = JSON.parse(output)?.result?.panes ?? []
-    const pane = panes.find((candidate: any) => candidate?.label === sessionName)
-    if (!pane?.pane_id) return undefined
-    return { paneId: String(pane.pane_id), status: String(pane.agent_status ?? 'unknown') }
-  } catch {
-    return undefined
-  }
-}
-
-export function opencodeHerdrStatus(
-  pane: OpencodePane | undefined,
-  foregroundIsOpencode: boolean,
-): OpencodeSessionStatus {
-  if (!pane) return 'missing'
-  if (pane.status === 'idle' || pane.status === 'done') return 'idle'
-  if (pane.status === 'working') return 'busy'
-  if (pane.status === 'blocked') return 'blocked'
-  return foregroundIsOpencode ? 'starting' : 'missing'
 }
 
 // `opencode session list --format json` is scoped to its cwd, which the
@@ -274,16 +253,16 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
     return true
   }
 
-  private async pane(sessionName: string): Promise<OpencodePane | undefined> {
+  private async pane(sessionName: string): Promise<HerdrPane | undefined> {
     const result = await this.run(this.herdrBinary, ['pane', 'list'], {
       cwd: this.projectDir, timeout: 30_000,
     })
-    return findOpencodePane(result.stdout, sessionName)
+    return findHerdrPane(result.stdout, sessionName)
   }
 
-  private async paneStatus(pane: OpencodePane): Promise<OpencodeSessionStatus> {
+  private async paneStatus(pane: HerdrPane): Promise<OpencodeSessionStatus> {
     const foreground = pane.status === 'unknown' ? await this.foregroundOpencode(pane.paneId) : true
-    return opencodeHerdrStatus(pane, foreground)
+    return herdrAgentStatus(pane.status, foreground)
   }
 
   private async processInfo(paneId: string): Promise<string | undefined> {
@@ -351,7 +330,7 @@ export class HerdrOpencodeRuntime implements OpencodeRuntimePort {
 
   // Resolves only after OPENCODE_SETTLE_MS of uninterrupted idle; any other
   // observation restarts the window.
-  private async waitUntilIdle(sessionName: string, timeoutMs: number): Promise<OpencodePane> {
+  private async waitUntilIdle(sessionName: string, timeoutMs: number): Promise<HerdrPane> {
     const deadline = Date.now() + timeoutMs
     let idleSince: number | undefined
     while (Date.now() <= deadline) {

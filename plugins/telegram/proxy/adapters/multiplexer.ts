@@ -1,7 +1,9 @@
 import { existsSync } from 'fs'
 import { spawnSync } from 'child_process'
+import { herdrAgentStatus, parseHerdrPanes } from './herdr-panes'
+import type { AgentRuntime, HerdrPane } from './herdr-panes'
 
-export type AgentRuntime = 'missing' | 'starting' | 'idle' | 'busy' | 'blocked'
+export type { AgentRuntime }
 
 export interface MultiplexerPort {
   readonly kind: 'tmux' | 'herdr'
@@ -20,17 +22,6 @@ export function claudePromptVisible(visible: string): boolean {
     /^\s*❯(?:\s+Press up to edit queued messages)?\s*$/.test(line))
   if (prompt < 0) return false
   return lines.slice(prompt + 1).some(line => /^\s*Claude\s+·/.test(line))
-}
-
-export function herdrRuntime(
-  status: string,
-  foregroundIsAgent: boolean,
-  foregroundPromptVisible = false,
-): AgentRuntime {
-  if (status === 'idle' || status === 'done') return 'idle'
-  if (status === 'working') return foregroundPromptVisible ? 'idle' : 'busy'
-  if (status === 'blocked') return 'blocked'
-  return foregroundIsAgent ? 'starting' : 'missing'
 }
 
 export class TmuxMux implements MultiplexerPort {
@@ -73,28 +64,13 @@ export class TmuxMux implements MultiplexerPort {
   }
 }
 
-type HerdrPane = { paneId: string; status: string }
-
 export class HerdrMux implements MultiplexerPort {
   readonly kind = 'herdr' as const
   private readonly bin = existsSync('/opt/homebrew/bin/herdr') ? '/opt/homebrew/bin/herdr' : 'herdr'
 
   private panes(): Map<string, HerdrPane> {
-    const panes = new Map<string, HerdrPane>()
     const result = spawnSync(this.bin, ['pane', 'list'], { encoding: 'utf8' })
-    if (result.status !== 0) return panes
-    try {
-      const parsed = JSON.parse(result.stdout ?? '{}')
-      for (const pane of parsed?.result?.panes ?? []) {
-        if (pane?.label) {
-          panes.set(String(pane.label), {
-            paneId: String(pane.pane_id ?? ''),
-            status: String(pane.agent_status ?? 'unknown'),
-          })
-        }
-      }
-    } catch {}
-    return panes
+    return result.status === 0 ? parseHerdrPanes(result.stdout ?? '') : new Map()
   }
 
   private foregroundIsAgent(paneId: string): boolean {
@@ -118,7 +94,7 @@ export class HerdrMux implements MultiplexerPort {
   liveSessions(): Set<string> {
     const sessions = new Set<string>()
     for (const [label, pane] of this.panes()) {
-      if (herdrRuntime(pane.status, this.foregroundIsAgent(pane.paneId)) !== 'missing') sessions.add(label)
+      if (herdrAgentStatus(pane.status, this.foregroundIsAgent(pane.paneId)) !== 'missing') sessions.add(label)
     }
     return sessions
   }
@@ -127,14 +103,14 @@ export class HerdrMux implements MultiplexerPort {
     const pane = this.panes().get(session)
     if (!pane) return 'missing'
     const promptVisible = pane.status === 'working' && this.foregroundPromptVisible(pane.paneId)
-    return herdrRuntime(pane.status, this.foregroundIsAgent(pane.paneId), promptVisible)
+    return herdrAgentStatus(pane.status, this.foregroundIsAgent(pane.paneId), promptVisible)
   }
 
   prompt(session: string, text: string): boolean {
     const pane = this.panes().get(session)
     if (!pane) return false
     const promptVisible = pane.status === 'working' && this.foregroundPromptVisible(pane.paneId)
-    if (herdrRuntime(pane.status, this.foregroundIsAgent(pane.paneId), promptVisible) !== 'idle') return false
+    if (herdrAgentStatus(pane.status, this.foregroundIsAgent(pane.paneId), promptVisible) !== 'idle') return false
     const args = promptVisible
       ? ['pane', 'run', pane.paneId, text]
       : ['agent', 'prompt', pane.paneId, text]

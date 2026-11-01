@@ -1,4 +1,6 @@
+import { channelEnvelope } from './inbound-delivery'
 import type { InboundMessage } from './inbound-delivery'
+import { topicSlug } from './topic-slug'
 
 export type OpencodeTopic = {
   harness: 'opencode'
@@ -72,20 +74,7 @@ export function applyOpencodePending(
 }
 
 export function opencodeSessionName(topic: string, name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 24) || 'topic'
-  return `oc-${slug}-${topic}`
-}
-
-function attribute(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
+  return `oc-${topicSlug(name)}-${topic}`
 }
 
 const COMPATIBILITY_CONTEXT = `SYSTEM CONTEXT: Telegram OpenCode session
@@ -116,10 +105,7 @@ export function renderOpencodeKickoff(): string {
 }
 
 export function renderOpencodeTurn(message: InboundMessage): string {
-  const meta = Object.entries(message.meta)
-    .map(([key, value]) => ` ${key}="${attribute(String(value))}"`)
-    .join('')
-  return `<channel source="telegram"${meta}>\n${message.content}\n</channel>\n\n` +
+  return `${channelEnvelope('telegram', message)}\n\n` +
     'Reply to this Telegram turn with the reply tool of the telegram-topics MCP server, using the chat_id above. ' +
     'Do not leave the user-facing answer only in the terminal.'
 }

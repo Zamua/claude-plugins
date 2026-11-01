@@ -1,8 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  findOpencodePane,
   HerdrOpencodeRuntime,
-  opencodeHerdrStatus,
   opencodeInteractiveArgs,
   isOpencodeProcessName,
   opencodeConfigContent,
@@ -78,19 +76,6 @@ describe('persistent Herdr OpenCode adapter', () => {
         type: 'local', command: ['/tmp/bun', '/tmp/plugin/server.ts'],
       } } },
     })
-  })
-
-  test('finds a pane by its stable label and maps Herdr lifecycle state', () => {
-    const output = JSON.stringify({ result: { panes: [
-      { label: 'other', pane_id: 'w1:p1', agent_status: 'idle' },
-      { label: 'oc-pilot-42', pane_id: 'w2:p1', agent_status: 'working' },
-    ] } })
-    const pane = findOpencodePane(output, 'oc-pilot-42')
-    expect(pane).toEqual({ paneId: 'w2:p1', status: 'working' })
-    expect(opencodeHerdrStatus(pane, true)).toBe('busy')
-    expect(opencodeHerdrStatus({ paneId: 'w2:p1', status: 'unknown' }, true)).toBe('starting')
-    expect(opencodeHerdrStatus({ paneId: 'w2:p1', status: 'unknown' }, false)).toBe('missing')
-    expect(opencodeHerdrStatus(undefined, true)).toBe('missing')
   })
 
   test('lists only sessions created inside the launch window', () => {
