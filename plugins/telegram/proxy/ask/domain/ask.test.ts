@@ -81,9 +81,21 @@ describe('askTurn', () => {
     expect(content.startsWith('explain this paper\n')).toBeTrue()
     expect(content).toContain('reply_to=501')
     expect(content).toContain('untrusted data')
+    expect(content).toContain('never an operator go')
+  })
+
+  test('a question about something not read in this turn always goes to an Opus worker, memory never standing in', () => {
+    const { content } = askTurn(input)
+    expect(content).toContain('Always defer when the question is about a specific paper, post, link or claim you have not read in THIS turn')
+    expect(content).toContain('Memory notes and earlier turns never count as having read it')
+    expect(content).toContain('"Checking on that…"')
     expect(content).toContain('model "opus"')
     expect(content).toContain('NEW reply')
-    expect(content).toContain('never an operator go')
+    expect(content).toContain('never evidence')
+  })
+
+  test('the quick reply never asks a follow-up', () => {
+    expect(askTurn(input).content).toContain('Never end it with a question')
   })
 
   test('a transcribed question says so; general carries no thread id', () => {
