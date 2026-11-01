@@ -1,6 +1,7 @@
 // The square: one forum topic hosting every agent-to-agent conversation. It
 // delivers to participants or tagged topics only, never broadcast.
 import type { ChatPort } from '../chat/domain/chat-port'
+import type { ChatMessage } from '../chat/domain/inbound'
 import { SQUARE_TOPIC } from '../config'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import { topicSlug } from '../shared/domain/topic-slug'
@@ -201,13 +202,13 @@ export function createSquare({ chat, harnessLocked, ensureSession, enqueue }: Sq
   // depth (human presence re-authorizes budget) and re-registers a conv lazily
   // if conversations.json was lost (the self-describing "#<conv>" header in the
   // replied-to message).
-  function handleSquareUserMessage(msg: any, text: string): void {
-    const uname = msg.from?.username ?? String(msg.from?.id ?? 'operator')
+  function handleSquareUserMessage(message: ChatMessage, text: string): void {
+    const uname = message.sender.name
     // 1. Reply within a chain?
-    const parent = msg.reply_to_message
+    const parent = message.replyTo
     if (parent) {
-      const parentText = String(parent.text ?? '')
-      let conv = convs.has(String(parent.message_id)) ? String(parent.message_id) : ''
+      const parentText = parent.text
+      let conv = convs.has(String(parent.id)) ? String(parent.id) : ''
       if (!conv) {
         const m = parentText.match(/#(\d+)/)
         if (m && convs.has(m[1])) conv = m[1]
@@ -216,7 +217,7 @@ export function createSquare({ chat, harnessLocked, ensureSession, enqueue }: Sq
           conv = m[1]
           convs.set(conv, {
             participants: [],
-            last_msg_id: parent.message_id,
+            last_msg_id: parent.id,
             origin_topic: 'unknown',
             depth: 0,
             updated_at: Date.now(),
@@ -235,12 +236,12 @@ export function createSquare({ chat, harnessLocked, ensureSession, enqueue }: Sq
           }
         }
         c.depth = 0 // human message resets the budget clock
-        c.last_msg_id = msg.message_id
+        c.last_msg_id = message.id
         c.updated_at = Date.now()
         saveConvs()
         deliverSquare(c.participants, text, {
           conv,
-          reply_token: msg.message_id,
+          reply_token: message.id,
           from: `operator (${uname})`,
           origin_topic: 'square',
           depth: 0,
@@ -253,10 +254,10 @@ export function createSquare({ chat, harnessLocked, ensureSession, enqueue }: Sq
     const tags = [...text.matchAll(/@([a-z0-9-]+)/gi)].map(m => m[1])
     const peers = [...new Set(tags.map(t => resolvePeer(t)).filter((t): t is string => !!t))]
     if (peers.length > 0) {
-      const conv = String(msg.message_id)
+      const conv = String(message.id)
       convs.set(conv, {
         participants: peers,
-        last_msg_id: msg.message_id,
+        last_msg_id: message.id,
         origin_topic: 'square',
         depth: 0,
         updated_at: Date.now(),
@@ -264,7 +265,7 @@ export function createSquare({ chat, harnessLocked, ensureSession, enqueue }: Sq
       saveConvs()
       deliverSquare(peers, text, {
         conv,
-        reply_token: msg.message_id,
+        reply_token: message.id,
         from: `operator (${uname})`,
         origin_topic: 'square',
         depth: 0,

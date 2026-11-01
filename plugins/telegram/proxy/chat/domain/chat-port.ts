@@ -26,6 +26,10 @@ export type ChatCapabilities = {
   /** Longer text is sent as several messages. */
   maxMessageLength: number
   markdown: MarkdownDialect
+  /** Reports reactions and edits to earlier messages. */
+  inboundReactionsAndEdits: boolean
+  /** Hosts agent sessions and reports their state (working, blocked, idle, done). */
+  sessionStates: boolean
 }
 
 export type OutgoingText = {

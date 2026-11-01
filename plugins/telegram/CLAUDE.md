@@ -106,13 +106,83 @@ All outbound traffic goes through the port: the MCP's outbound routes, every
 proxy notice (`sayIn`), spawn and turn-failed notices, reminders, the square,
 the `/secret` drop, `/ask`, topic creation, the command menu, the pickers, the
 permission prompt, and the harness fronts' typing indicators, notices and
-photos. Still on grammy directly: inbound updates, including the gate in front
-of every button press.
+photos.
 
-The MCP's `format: "markdownv2"` is the Telegram dialect the agent writes itself;
-the port carries it as `format: 'markdown'`, and the adapter's capabilities name
-the dialect. `server.ts` is a separate process, so its tool descriptions still say
-MarkdownV2 rather than reading the dialect from the proxy.
+Inbound traffic arrives through `ChatInbound` (`proxy/chat/domain/inbound.ts`)
+as `ChatEvent`s: a `ChatMessage` (topic, id, sender, time, text or caption, the
+content a turn carries, a photo or attachment by reference, the message it
+replies to, a topic created or renamed) or an `ActionPress`. The adapter
+(`telegram/telegram-inbound.ts`) gates the chat, describes the message, decides
+the sender, owns the poll loop, and hands each event on.
+`proxy/chat/inbound-router.ts` routes it: verbs, the secret drop, harness
+locks, the square, service messages, permission answers, downloads, voice
+transcription, the turn's meta, the pickers' operator and topic gates. grammy is
+imported only under `proxy/telegram/` and where `proxy.ts` builds the bot.
+`ChatEvent` also types reactions, edits, and agent-session states (working,
+blocked, idle, done), with the matching capabilities `inboundReactionsAndEdits`
+and `sessionStates`. Telegram reports neither (the proxy does not subscribe to
+`message_reaction` or `edited_message`), and the router does not act on them.
+They are there so a transport built around agent sessions, an event stream per
+session with action requests in it, fits the same port.
+
+### What an adapter must guarantee
+
+The proxy's authority model rests on the adapter, so a second transport must
+hold these before any of its traffic is trusted:
+
+- **The gate.** Only events from the one configured space reach the router;
+  anything else is dropped (messages) or refused (button presses) in the adapter.
+- **The sender is verified, not described.** `Sender.id` is the transport's own
+  authenticated account id, and `role` is `operator` only when that id is the
+  configured operator account. It never comes from message content, a display
+  name, a forwarded or quoted message, or anything a member can type.
+- **Operator-origin identity comes only from that `Sender`.** A turn's
+  `user_id` is copied from `Sender.id` and nothing else. Turns the proxy makes
+  itself (asks, reminders, relaunch and secret notices, square deliveries, resume
+  notices) build their own meta with an empty or proxy user id and never carry an
+  operator id, so none of them can read as the operator.
+- **One event at a time.** The next event waits until the router has finished
+  the last; a topic's first two messages must not both spawn its agent.
+- **Message ids round-trip.** An id the adapter handed out (`MessageId`) is
+  accepted back for replies, edits and deletes. They are stored as numbers today
+  (`conversations.json`, `sent-messages.json`, the `/ask` response); a transport
+  with string ids means migrating those formats and the `/ask` contract.
+
+`verify.py` (the check other topics run before acting on an operator go) anchors
+on the Telegram operator's numeric user id in a channel delivery the harness
+recorded in the general topic. It says nothing about any other transport: until a
+second adapter states which of its account ids is the operator and how that id is
+authenticated, and `verify.py` checks that statement, nothing arriving through it
+counts as a go.
+
+### Not portable yet
+
+These lean on Telegram itself, so a second adapter has to answer each one rather
+than inherit it:
+
+- **The `/secret` drop's delete-after-store.** The value is safe only because
+  the bot, a group admin, deletes the operator's own message before anything
+  else happens, and the guided flow opens the reply box with Telegram's
+  ForceReply. A transport where the bot cannot delete a member's message, or that
+  keeps copies a delete cannot reach, would leave the value in the history; there
+  the drop belongs in the client itself, never relayed.
+- **The square's formatting.** Conversations are recovered from their own text:
+  root and reply headers (`🤖 slug · #conv`) and the `#<conv>` an operator's reply
+  quotes. A transport without reply-to text or with different threading loses
+  that recovery, and the square needs its own conversation store.
+- **Topic naming.** Topic names, and the session names made from them, come from
+  Telegram's forum service messages (created, renamed) and from the
+  bot-created-topic path, since Telegram does not echo a bot's own topic creation.
+- **The markdown dialect.** Agents write MarkdownV2 because the MCP's tools say
+  so. The port carries it as `format: 'markdown'` and the adapter's capabilities
+  name the dialect, but `server.ts` is a separate process whose tool descriptions
+  say MarkdownV2 rather than read the dialect from the proxy; another transport
+  needs translation or tools that name its own.
+- **Button data.** Intents fit Telegram's 64-byte callback data through short
+  codes and in-memory tokens that expire with the picker; a transport with no
+  buttons renders intents some other way.
+- **Links and the ask post.** Message links are `t.me/c/...`, and a bot cannot
+  post as the operator, which is why an ask is posted as "You asked: ...".
 
 ## Multiplexer backends (tmux | herdr)
 
@@ -282,7 +352,7 @@ value on the next line (same line works too); `/secrets` shows names, sizes
 and dates; `/unsecret <name>` removes one. Three flat verbs because Telegram's
 "/" menu has no sub-commands and a phone keyboard turns `--` into an em dash;
 the proxy registers them in the group's command menu at boot
-(`registerCommands` in `proxy/telegram/inbound.ts`, `setMyCommands` scoped to the group). The
+(`registerCommands` in `proxy/chat/inbound-router.ts`, set through the chat port and scoped to the group). The
 `/secret --list` and `/secret --delete <name>` flag forms remain as aliases,
 and a flag also reads with an em or en dash. The PROXY handles all of it in
 `handleSecretDrop`, before every relay path including the square, and the
@@ -1130,20 +1200,21 @@ there is no agent to relaunch.
   - `proxy/square/`: the agent-to-agent square and its conversation registry.
   - `proxy/reminders/`: reminders; `domain/reminder.ts` validates.
   - `proxy/chat/`: the chat port (`domain/chat-port.ts`): what the proxy
-    asks of a chat transport, with no vendor in it; buttons and their
-    intents (`domain/actions.ts`) and picker rules (`domain/pickers.ts`).
+    asks of a chat transport, with no vendor in it; inbound events
+    (`domain/inbound.ts`), buttons and their intents (`domain/actions.ts`),
+    picker rules (`domain/pickers.ts`), and the router every inbound event
+    goes through, with the "/" menu (`inbound-router.ts`).
   - `proxy/sent/`: the messages each topic's agent sent, kept so it can
     delete its own (`delete_message`) and nothing else.
   - `proxy/ask/`: asks from the phone (`POST /ask`); `domain/ask.ts` holds
     the target, the caption and the turn with its rules.
   - `proxy/secrets/`: the `/secret` drop (`secret.ts` parses and stores,
     `secret-drop.ts` runs the Telegram exchange).
-  - `proxy/telegram/`: the Bot API edge: the chat port's Telegram adapter
-    (`telegram-chat.ts`), inbound routing of every group
-    message and button answer, and the "/" menu (`inbound.ts`); the poll
-    loop (`polling.ts`); message
-    description, the callback codec, file download, voice transcription,
-    locations.
+  - `proxy/telegram/`: the Bot API edge: the chat port's Telegram adapter,
+    outbound (`telegram-chat.ts`) and inbound (`telegram-inbound.ts`: the
+    group gate, the verified sender, updates as chat events); the poll loop
+    (`polling.ts`); message description, the callback codec, file download,
+    voice transcription, locations.
   - `proxy/http/`: the loopback HTTP API: the server and its route table,
     the long-polls and permission relay (`server.ts`), the outbound tools
     (`outbound.ts`), routes, request parsers and responses; and the separate
