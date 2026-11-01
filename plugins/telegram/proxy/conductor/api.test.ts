@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { createHash, generateKeyPairSync, sign } from 'crypto'
 import { createConductorApi } from './api'
+import type { DeliverAppMessage } from './api'
 import type { Peer } from './domain/identity'
 import { Ledger, brokenLine } from './ledger'
 import { ConductorStore } from './sqlite-store'
@@ -18,6 +20,8 @@ let server: ReturnType<typeof Bun.serve>
 let base: string
 let peer: Peer
 let notices: string[]
+let deliveries: Array<Parameters<DeliverAppMessage>[0]>
+let deliverOutcome: Awaited<ReturnType<DeliverAppMessage>>
 let api: ReturnType<typeof createConductorApi>
 
 beforeEach(() => {
@@ -25,6 +29,8 @@ beforeEach(() => {
   store = new ConductorStore(dir)
   peer = PHONE
   notices = []
+  deliveries = []
+  deliverOutcome = { delivered: true }
   api = createConductorApi({
     store,
     ledger: new Ledger(join(dir, 'ledger.jsonl')),
@@ -35,6 +41,10 @@ beforeEach(() => {
       { id: '42', name: 'build', kind: 'claude', route: null, state: 'stopped' },
     ],
     notify: text => notices.push(text),
+    deliver: async input => {
+      deliveries.push(input)
+      return deliverOutcome
+    },
     log: () => {},
     version: '1.0.0-test',
   })
@@ -165,5 +175,129 @@ describe('the stream', () => {
 
   test('the stream needs a device like any read', async () => {
     expect((await get('/v1/stream', 'dev_nope')).status).toBe(401)
+  })
+})
+
+// A device key the tests hold, like the app's Secure Enclave key.
+function signer() {
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+  const jwk = publicKey.export({ format: 'jwk' }) as { x: string; y: string }
+  const point = Buffer.concat([Buffer.from([4]), Buffer.from(jwk.x, 'base64url'), Buffer.from(jwk.y, 'base64url')]).toString('base64')
+  const headers = (method: string, path: string, clientId: string, body: Uint8Array, timestamp = Date.now()) => {
+    const canonical = ['v1', method, path, clientId, createHash('sha256').update(body).digest('hex'), String(timestamp)].join('\n')
+    return {
+      'X-Client-Id': clientId,
+      'X-Timestamp': String(timestamp),
+      'X-Signature': sign('sha256', Buffer.from(canonical), { key: privateKey, dsaEncoding: 'der' }).toString('base64'),
+    }
+  }
+  return { point, headers }
+}
+
+describe('signed writes', () => {
+  const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3])
+
+  async function setupDevice() {
+    const key = signer()
+    const res = await enroll({ public_key: key.point, name: 'iPhone' })
+    return { key, device: ((await res.json()) as { id: string }).id }
+  }
+
+  async function multipart(fields: Record<string, string>, images: Uint8Array[] = []) {
+    const form = new FormData()
+    for (const [k, v] of Object.entries(fields)) form.append(k, v)
+    for (const image of images) form.append('image[]', new Blob([image as BlobPart]), 'p.jpg')
+    // A Response, unlike a Request, reports the boundary in its content type, read before the body.
+    const res = new Response(form)
+    const contentType = res.headers.get('content-type') ?? ''
+    return { bytes: new Uint8Array(await res.arrayBuffer()), contentType }
+  }
+
+  async function send(
+    d: { key: ReturnType<typeof signer>; device: string },
+    topic: string,
+    fields: Record<string, string>,
+    images: Uint8Array[] = [],
+    timestamp?: number,
+    encoded?: { bytes: Uint8Array; contentType: string },
+  ) {
+    const path = `/v1/topics/${topic}/messages`
+    const { bytes, contentType } = encoded ?? (await multipart(fields, images))
+    return fetch(`${base}${path}`, {
+      method: 'POST',
+      body: bytes as unknown as BodyInit,
+      headers: { 'X-Device': d.device, 'content-type': contentType, ...d.key.headers('POST', path, fields.client_id, bytes, timestamp) },
+    })
+  }
+
+  test('a signed message is stored, written to the ledger, and handed to its agent with the ledger hash', async () => {
+    const d = await setupDevice()
+    const res = await send(d, '42', { text: 'run the tests', client_id: 'client-0001' })
+    expect(res.status).toBe(201)
+    const message = await res.json()
+    expect(message).toMatchObject({ topic: '42', seq: 1, author: 'operator', origin: 'app', text: 'run the tests', client_id: 'client-0001', delivery: 'delivered' })
+    const ledger = readFileSync(join(dir, 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+    expect(ledger.map(l => l.kind)).toEqual(['enroll', 'message'])
+    expect(ledger[1]).toMatchObject({ device: d.device, topic: '42', seq: 1, client_id: 'client-0001' })
+    expect(deliveries).toHaveLength(1)
+    expect(deliveries[0]).toMatchObject({ topic: '42', deviceId: d.device, ledgerHash: ledger[1].hash })
+  })
+
+  test('a retry of the same bytes, newly signed, gets the first answer and delivers nothing again; another body under that id is refused', async () => {
+    const d = await setupDevice()
+    const encoded = await multipart({ text: 'once', client_id: 'client-0002' })
+    const first = await (await send(d, '42', { client_id: 'client-0002' }, [], undefined, encoded)).json()
+    const retry = await send(d, '42', { client_id: 'client-0002' }, [], Date.now() + 1_000, encoded)
+    expect([retry.status, await retry.json()]).toEqual([201, first])
+    expect(deliveries).toHaveLength(1)
+    const other = await send(d, '42', { text: 'twice', client_id: 'client-0002' })
+    expect([other.status, (await other.json()).error.code]).toEqual([409, 'client_id_reused'])
+  })
+
+  test('an unsigned, wrongly signed or stale write changes nothing', async () => {
+    const d = await setupDevice()
+    const stranger = signer()
+    expect((await send({ key: stranger, device: d.device }, '42', { text: 'x', client_id: 'client-0003' })).status).toBe(401)
+    expect((await send(d, '42', { text: 'x', client_id: 'client-0004' }, [], Date.now() - 200_000)).status).toBe(401)
+    const { bytes, contentType } = await multipart({ text: 'x', client_id: 'client-0005' })
+    expect((await fetch(`${base}/v1/topics/42/messages`, { method: 'POST', body: bytes as unknown as BodyInit, headers: { 'X-Device': d.device, 'content-type': contentType } })).status).toBe(400)
+    expect(deliveries).toEqual([])
+    expect(store.history('42', 10)).toEqual([])
+  })
+
+  test('images are kept as blobs and passed on; anything not JPEG or PNG is refused', async () => {
+    const d = await setupDevice()
+    const res = await send(d, '42', { text: '', client_id: 'client-0006' }, [JPEG])
+    expect((await res.json()).blobs).toEqual([expect.objectContaining({ mime: 'image/jpeg', bytes: JPEG.length })])
+    expect(deliveries[0].images).toEqual([{ bytes: JPEG, mime: 'image/jpeg' }])
+    const bad = await send(d, '42', { text: 'x', client_id: 'client-0007' }, [new Uint8Array([1, 2, 3])])
+    expect([bad.status, (await bad.json()).error.code]).toEqual([400, 'bad_image'])
+  })
+
+  test('a message the agent could not take is stored as failed, with the reason', async () => {
+    const d = await setupDevice()
+    deliverOutcome = { delivered: false, reason: 'the topic is locked to another harness' }
+    const res = await send(d, '42', { text: 'hello', client_id: 'client-0008' })
+    expect(await res.json()).toMatchObject({ delivery: 'failed', failure: 'the topic is locked to another harness' })
+  })
+
+  test('an unknown topic is refused; a client id that does not match its header is refused', async () => {
+    const d = await setupDevice()
+    expect((await send(d, '999', { text: 'x', client_id: 'client-0009' })).status).toBe(404)
+    const path = '/v1/topics/42/messages'
+    const { bytes, contentType } = await multipart({ text: 'x', client_id: 'client-other' })
+    const res = await fetch(`${base}${path}`, { method: 'POST', body: bytes as unknown as BodyInit, headers: { 'X-Device': d.device, 'content-type': contentType, ...d.key.headers('POST', path, 'client-0010', bytes) } })
+    expect((await res.json()).error.code).toBe('client_id_mismatch')
+  })
+
+  test('read markers are signed, shared, and never move back', async () => {
+    const d = await setupDevice()
+    const mark = async (seq: number, clientId: string) => {
+      const path = '/v1/topics/42/read'
+      const bytes = new TextEncoder().encode(JSON.stringify({ seq }))
+      return (await fetch(`${base}${path}`, { method: 'POST', body: bytes as unknown as BodyInit, headers: { 'X-Device': d.device, ...d.key.headers('POST', path, clientId, bytes) } })).json()
+    }
+    expect(await mark(5, 'read-00001')).toEqual({ topic: '42', read_seq: 5 })
+    expect(await mark(3, 'read-00002')).toEqual({ topic: '42', read_seq: 5 })
   })
 })

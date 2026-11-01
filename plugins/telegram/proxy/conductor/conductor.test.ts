@@ -29,7 +29,10 @@ function setup(tailnet: Partial<Tailnet>, allowedNodes = new Set(['nPHONE'])) {
       whois: async () => null,
       ...tailnet,
     },
-    ports: { store, ledger: new Ledger(join(dir, 'ledger.jsonl')), topics: () => [], notify: () => {}, log: m => logs.push(m), version: 't' },
+    ports: {
+      store, ledger: new Ledger(join(dir, 'ledger.jsonl')), topics: () => [], notify: () => {},
+      deliver: async () => ({ delivered: true }), log: m => logs.push(m), version: 't',
+    },
   })
   return { started, logs, store, dir }
 }

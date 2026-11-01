@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS messages (
   at TEXT NOT NULL,
   edited_at TEXT,
   reactions TEXT NOT NULL DEFAULT '[]',
+  client_id TEXT,
+  delivery TEXT,
+  failure TEXT,
   UNIQUE (topic, seq)
 );
 CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, mime TEXT NOT NULL, bytes INTEGER NOT NULL, width INTEGER, height INTEGER);
@@ -33,11 +36,16 @@ CREATE TABLE IF NOT EXISTS devices (
   apns_token TEXT, apns_env TEXT, enrolled_at TEXT NOT NULL, last_seen TEXT
 );
 CREATE TABLE IF NOT EXISTS read_state (topic TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS writes (
+  device TEXT NOT NULL, client_id TEXT NOT NULL, body_sha256 TEXT NOT NULL,
+  status INTEGER NOT NULL, response TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (device, client_id)
+);
 `
 
 type MessageRow = {
   id: string; topic: string; seq: number; author: string; origin: string; kind: string | null; text: string
   format: string; reply_to: string | null; chat_ids: string; at: string; edited_at: string | null; reactions: string
+  client_id: string | null; delivery: string | null; failure: string | null
 }
 
 type DeviceRow = {
@@ -68,9 +76,9 @@ export class ConductorStore {
       const id = `msg_${randomUUID().replaceAll('-', '').slice(0, 20)}`
       const at = message.at ?? new Date().toISOString()
       this.db
-        .query('INSERT INTO messages (id, topic, seq, author, origin, kind, text, format, reply_to, chat_ids, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .query('INSERT INTO messages (id, topic, seq, author, origin, kind, text, format, reply_to, chat_ids, at, client_id, delivery) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(id, message.topic, next, message.author, message.origin, message.kind ?? null, message.text, message.format,
-          message.replyTo ?? null, JSON.stringify(message.chatIds ?? []), at)
+          message.replyTo ?? null, JSON.stringify(message.chatIds ?? []), at, message.clientId ?? null, message.delivery ?? null)
       ;(message.blobs ?? []).forEach((blob, ord) =>
         this.db.query('INSERT INTO message_blobs (message_id, blob_id, ord) VALUES (?, ?, ?)').run(id, blob.id, ord))
       const { lastInsertRowid } = this.db.query("INSERT INTO events (type, topic, ref) VALUES ('message', ?, ?)").run(message.topic, id)
@@ -78,6 +86,41 @@ export class ConductorStore {
     })()
     for (const listener of this.listeners) listener(stored)
     return stored.message
+  }
+
+  /** Records whether an app message reached its agent, and announces the message again. */
+  setDelivery(id: string, delivery: 'delivered' | 'failed', failure?: string): StoredMessage | undefined {
+    const stored = this.db.transaction(() => {
+      const row = this.db.query('SELECT topic FROM messages WHERE id = ?').get(id) as { topic: string } | null
+      if (!row) return undefined
+      this.db.query('UPDATE messages SET delivery = ?, failure = ? WHERE id = ?').run(delivery, failure ?? null, id)
+      const { lastInsertRowid } = this.db.query("INSERT INTO events (type, topic, ref) VALUES ('message', ?, ?)").run(row.topic, id)
+      return { cursor: Number(lastInsertRowid), type: 'message' as const, message: this.message(id) as StoredMessage }
+    })()
+    if (stored) for (const listener of this.listeners) listener(stored)
+    return stored?.message
+  }
+
+  /** Read markers are shared by every device and never move back. */
+  markRead(topic: string, seq: number): number {
+    this.db
+      .query('INSERT INTO read_state (topic, seq) VALUES (?, ?) ON CONFLICT (topic) DO UPDATE SET seq = MAX(seq, excluded.seq)')
+      .run(topic, seq)
+    return this.summary(topic).readSeq
+  }
+
+  /** A device's earlier write under this client id, kept so a retry gets the first answer. */
+  earlierWrite(device: string, clientId: string): { bodySha256: string; status: number; response: string } | undefined {
+    const row = this.db
+      .query('SELECT body_sha256, status, response FROM writes WHERE device = ? AND client_id = ?')
+      .get(device, clientId) as { body_sha256: string; status: number; response: string } | null
+    return row ? { bodySha256: row.body_sha256, status: row.status, response: row.response } : undefined
+  }
+
+  recordWrite(device: string, clientId: string, bodySha256: string, status: number, response: string): void {
+    this.db
+      .query('INSERT OR IGNORE INTO writes (device, client_id, body_sha256, status, response, at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(device, clientId, bodySha256, status, response, new Date().toISOString())
   }
 
   /** Called with each event once it is stored. */
@@ -162,6 +205,10 @@ export class ConductorStore {
     this.db.close()
   }
 
+  messageById(id: string): StoredMessage | undefined {
+    return this.message(id)
+  }
+
   private message(id: string): StoredMessage | undefined {
     const row = this.db.query('SELECT * FROM messages WHERE id = ?').get(id) as MessageRow | null
     return row ? this.fromRow(row) : undefined
@@ -177,6 +224,7 @@ export class ConductorStore {
       kind: row.kind as StoredMessage['kind'], text: row.text, format: row.format as StoredMessage['format'],
       blobs, replyTo: row.reply_to, chatIds: JSON.parse(row.chat_ids), at: row.at,
       editedAt: row.edited_at, reactions: JSON.parse(row.reactions),
+      clientId: row.client_id, delivery: row.delivery as StoredMessage['delivery'], failure: row.failure,
     }
   }
 }

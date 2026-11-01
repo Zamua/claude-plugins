@@ -69,6 +69,7 @@ import { listenMode, startConductor } from './conductor/conductor'
 import { Ledger } from './conductor/ledger'
 import { tailscaleCli } from './conductor/tailscale'
 import { conductorTopics } from './conductor/topic-source'
+import { appDelivery } from './conductor/app-delivery'
 import type { MessageKind } from './conductor/domain/message'
 import type { TopicHarnessAdapter } from './harness/topic-harness-adapter'
 import { createLocalgenHarness } from './harness/localgen/localgen-harness'
@@ -347,6 +348,19 @@ const conductor = conductorStore && conductorMode?.listener
         ledger: new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')),
         topics: () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf),
         notify: text => void sayIn('', 'general', text),
+        deliver: appDelivery({
+          operatorId: ADMIN_USER_ID,
+          chatId: String(GROUP_CHAT_ID),
+          refuses: topic =>
+            SQUARE_TOPIC && topic === SQUARE_TOPIC
+              ? 'the square takes no messages from the app'
+              : harnessLocked(topic) ? 'this topic is locked to another harness; send from Telegram' : undefined,
+          saveImage: (bytes, extension) => writeInboxFile(INBOX_DIR, bytes, extension, `app-${randomUUID().slice(0, 8)}`),
+          ensureSession,
+          enqueue,
+          // Unmirrored: the store already holds the operator's message.
+          echo: async (topic, text) => (await telegramChat.send(topic, { text }))[0],
+        }),
         log,
         version: '1',
       },
