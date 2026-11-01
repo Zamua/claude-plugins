@@ -176,9 +176,11 @@ describe('enrollment', () => {
 })
 
 describe('reads', () => {
-  test('/v1/me names the device and the contract', async () => {
+  test('/v1/me names the device, the contract, and what the server can do now, in the contract\'s shape', async () => {
     const device = await enrolled()
-    expect(await (await get('/v1/me', device)).json()).toMatchObject({ device: { id: device }, contract: 'v1' })
+    const me = await (await get('/v1/me', device)).json()
+    expect(me).toMatchObject({ device: { id: device }, contract: 'v1', features: { answer_approvals: false } })
+    expect(Object.keys(me.features).sort()).toEqual(Object.keys(readJson('me.json').features as object).sort())
   })
 
   test('topics come with the cursor they are current to, general pinned first, in the contract\'s shape', async () => {
