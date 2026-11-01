@@ -33,7 +33,8 @@ export type SecretCommand =
   | { kind: 'begin'; verb: SecretVerb }
   | { error: string }
 
-function nameError(name: string): string | null {
+/** Why a secret name is refused, or null for a good one. */
+export function nameError(name: string): string | null {
   if (!name) return USAGE
   if (!NAME_RE.test(name) || name.includes('..')) {
     return `refused name "${name}": use lowercase letters, digits, dot, dash, underscore`

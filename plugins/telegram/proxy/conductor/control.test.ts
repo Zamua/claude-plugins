@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { RouteChoice, RouteRequest } from '../routing/routing'
+import { InvalidReminder } from '../reminders/domain/reminder'
 import { conductorControl } from './control'
 import type { ControlPorts } from './control'
 
@@ -31,6 +32,14 @@ function setup(over: Partial<ControlPorts> = {}) {
     createTopic: async name => (name === 'boom' ? Promise.reject(new Error('Bad Request')) : '501'),
     renameTopic: async (topic, name) => void said.push(`renamed ${topic} to ${name}`),
     setPrefs: (topic, prefs) => void said.push(`prefs ${topic} ${JSON.stringify(prefs)}`),
+    listed: topic => ['42', '7', 'agy', 'square'].includes(topic),
+    secretsOn: () => true,
+    listSecrets: () => [],
+    storeSecret: async (name, value, replace) => ({ path: `/home/op/keys/${name}`, bytes: value.length, replaced: replace }),
+    deleteSecret: async () => ({ bytes: 1 }),
+    topicReminders: () => [],
+    addReminder: () => { throw new Error('unused') },
+    cancelReminder: () => undefined,
     ...over,
   }
   return { control: conductorControl(ports), said, requested, relaunched, refreshed: () => refreshed }
@@ -110,6 +119,25 @@ describe('topics', () => {
     expect(await control.patchTopic('42', { pinned: true })).toEqual({ ok: {} })
     expect(await control.patchTopic('42', { muted: 1 })).toMatchObject({ refused: { status: 400, code: 'bad_muted' } })
     expect(said).toEqual(['renamed 42 to ci', 'prefs 42 {"muted":true}', 'prefs 42 {"pinned":true}'])
+  })
+})
+
+describe('secrets and reminders', () => {
+  test('secrets are refused while off, by a bad name or value, or for an unlisted topic; a stored one answers with its tilde path', async () => {
+    expect(await setup({ secretsOn: () => false }).control.storeSecret({ name: 'x', value: 'v' })).toMatchObject({ refused: { status: 503, code: 'secrets_off' } })
+    const { control } = setup()
+    expect(await control.storeSecret({ name: 'Bad Name', value: 'v' })).toMatchObject({ refused: { status: 400, code: 'bad_name' } })
+    expect(await control.storeSecret({ name: 'ok', value: '' })).toMatchObject({ refused: { status: 400, code: 'bad_value' } })
+    expect(await control.storeSecret({ name: 'ok', value: 'v', topic: 'nope' })).toMatchObject({ refused: { status: 404 } })
+    const home = require('os').homedir()
+    const stored = await setup({ storeSecret: async name => ({ path: `${home}/keys/${name}`, bytes: 1, replaced: false }) }).control.storeSecret({ name: 'ok', value: 'v' })
+    expect(stored).toEqual({ ok: { path: '~/keys/ok', bytes: 1, replaced: false } })
+  })
+
+  test('a reminder the domain refuses is a 400 naming why; cancelling an unknown one is 404', () => {
+    const { control } = setup({ addReminder: () => { throw new InvalidReminder('at must carry a zone') } })
+    expect(control.addReminder('42', { at: 'x', text: 'y' })).toEqual({ refused: { status: 400, code: 'bad_reminder', message: 'at must carry a zone' } })
+    expect(control.cancelReminder('rm_none')).toMatchObject({ refused: { status: 404 } })
   })
 })
 

@@ -3,6 +3,8 @@
 import { PROVIDERS, providerLabel } from '../routing/domain/model-routing'
 import type { ProviderCapacity } from '../routing/domain/provider-capacity'
 import type { ProviderCatalog } from '../routing/provider-catalog'
+import type { Reminder } from '../reminders/domain/reminder'
+import type { SecretEntry } from '../secrets/secret'
 import type { MessageFormat, StoredMessage } from './domain/message'
 import { offered } from './domain/route-choice'
 
@@ -124,5 +126,14 @@ export function wireUsage(capacities: readonly ProviderCapacity[]): Record<strin
       })),
     })),
   }
+}
+
+export function wireReminder(r: Reminder): Record<string, unknown> {
+  return { id: r.id, topic: r.topic, at: r.atText, text: r.text, prompt: r.prompt ?? null, created_at: new Date(r.createdAt).toISOString() }
+}
+
+/** Names, sizes and dates: a secret's value never leaves its file. */
+export function wireSecrets(entries: readonly SecretEntry[]): Record<string, unknown> {
+  return { secrets: entries.map(e => ({ name: e.name, bytes: e.bytes, updated_at: e.mtime.toISOString() })) }
 }
 

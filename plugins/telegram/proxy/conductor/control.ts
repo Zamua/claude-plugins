@@ -5,13 +5,18 @@
 import type { ProviderCapacity } from '../routing/domain/provider-capacity'
 import type { ProviderCatalog } from '../routing/provider-catalog'
 import type { RouteChoice, RouteRefusal, RouteRequest } from '../routing/routing'
+import { InvalidReminder } from '../reminders/domain/reminder'
+import type { Reminder, ReminderRequest } from '../reminders/domain/reminder'
+import { nameError, SecretExists, SecretMissing } from '../secrets/secret'
+import type { SecretEntry, StoredSecret } from '../secrets/secret'
+import { tilde } from '../log'
 import { routeChoice } from './domain/route-choice'
 import { topicName, topicPatch } from './domain/topic-edit'
-import { wireRoutes, wireUsage } from './wire'
+import { wireReminder, wireRoutes, wireSecrets, wireUsage } from './wire'
 
 export type ControlResult =
   | { ok: Record<string, unknown> }
-  | { refused: { status: 400 | 404 | 409 | 429 | 502; code: string; message: string } }
+  | { refused: { status: 400 | 404 | 409 | 429 | 500 | 502 | 503; code: string; message: string } }
 
 export type ControlPorts = {
   catalog: () => ProviderCatalog
@@ -37,7 +42,19 @@ export type ControlPorts = {
   renameTopic: (topic: string, name: string) => Promise<void>
   /** The app's own pin and mute. */
   setPrefs: (topic: string, prefs: { pinned?: boolean; muted?: boolean }) => void
+  /** Whether a topic is one the app lists. */
+  listed: (topic: string) => boolean
+  secretsOn: () => boolean
+  listSecrets: () => SecretEntry[]
+  storeSecret: (name: string, value: string, replace: boolean, topic?: string) => Promise<StoredSecret>
+  deleteSecret: (name: string, topic?: string) => Promise<{ bytes: number }>
+  topicReminders: (topic: string) => Reminder[]
+  addReminder: (request: ReminderRequest) => Reminder
+  cancelReminder: (id: string) => Reminder | undefined
 }
+
+/** A secret's value is at most this many bytes, as a drop's message would be. */
+const SECRET_MAX_BYTES = 64 * 1024
 
 export const COMMANDS = [
   { name: 'relaunch', description: "restart this topic's agent, same conversation", args_hint: null },
@@ -52,7 +69,57 @@ const REFUSALS: Record<RouteRefusal, { status: 409 | 429; code: string }> = {
 }
 
 export function conductorControl(ports: ControlPorts) {
-  const refuse = (status: 400 | 404 | 409 | 429 | 502, code: string, message: string): ControlResult => ({ refused: { status, code, message } })
+  const refuse = (status: 400 | 404 | 409 | 429 | 500 | 502 | 503, code: string, message: string): ControlResult => ({ refused: { status, code, message } })
+
+  function secretsGate(): ControlResult | undefined {
+    return ports.secretsOn() ? undefined : refuse(503, 'secrets_off', 'secrets are not configured on this server')
+  }
+
+  async function storeSecret(body: Record<string, unknown>): Promise<ControlResult> {
+    const gate = secretsGate()
+    if (gate) return gate
+    const name = typeof body.name === 'string' ? body.name : ''
+    const bad = nameError(name)
+    if (bad) return refuse(400, 'bad_name', bad)
+    const value = typeof body.value === 'string' ? body.value : ''
+    if (!value || Buffer.byteLength(value) > SECRET_MAX_BYTES) return refuse(400, 'bad_value', 'value must be 1 byte to 64 KB of text')
+    const topic = typeof body.topic === 'string' && body.topic ? body.topic : undefined
+    if (topic !== undefined && !ports.listed(topic)) return refuse(404, 'not_found', 'no such topic')
+    try {
+      const stored = await ports.storeSecret(name, value, body.replace === true, topic)
+      return { ok: { path: tilde(stored.path), bytes: stored.bytes, replaced: stored.replaced } }
+    } catch (error) {
+      if (error instanceof SecretExists) return refuse(409, 'secret_exists', `it exists (${error.bytes} bytes); send replace: true to overwrite it`)
+      return refuse(500, 'store_failed', 'the secret could not be stored')
+    }
+  }
+
+  async function deleteSecret(name: string): Promise<ControlResult> {
+    const gate = secretsGate()
+    if (gate) return gate
+    const bad = nameError(name)
+    if (bad) return refuse(400, 'bad_name', bad)
+    try {
+      return { ok: { name, bytes: (await ports.deleteSecret(name)).bytes } }
+    } catch (error) {
+      if (error instanceof SecretMissing) return refuse(404, 'not_found', 'no such secret')
+      return refuse(500, 'delete_failed', 'the secret could not be deleted')
+    }
+  }
+
+  function addReminder(topic: string, body: Record<string, unknown>): ControlResult {
+    try {
+      return { ok: wireReminder(ports.addReminder({ topic, at: body.at, text: body.text, prompt: body.prompt })) }
+    } catch (error) {
+      if (error instanceof InvalidReminder) return refuse(400, 'bad_reminder', error.message)
+      throw error
+    }
+  }
+
+  function cancelReminder(id: string): ControlResult {
+    const cancelled = ports.cancelReminder(id)
+    return cancelled ? { ok: wireReminder(cancelled) } : refuse(404, 'not_found', 'no such reminder')
+  }
   const why = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
   async function createTopic(body: Record<string, unknown>): Promise<ControlResult> {
@@ -129,6 +196,12 @@ export function conductorControl(ports: ControlPorts) {
     command,
     createTopic,
     patchTopic,
+    secrets: (): ControlResult => secretsGate() ?? { ok: wireSecrets(ports.listSecrets()) },
+    storeSecret,
+    deleteSecret,
+    reminders: (topic: string) => ({ reminders: ports.topicReminders(topic).map(wireReminder) }),
+    addReminder,
+    cancelReminder,
   }
 }
 
