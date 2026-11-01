@@ -3,10 +3,8 @@
 import { join } from 'path'
 import { JsonTopicRepository } from '../json-topic-repository'
 import { HerdrOpencodeRuntime } from './herdr-opencode-runtime'
-import { MAX_CHUNK_LIMIT, threadOf } from '../../telegram/telegram-messages'
 import { OpencodeTopicService } from './opencode-topic-service'
 import {
-  GROUP_CHAT_ID,
   HERDR_BIN,
   HERDR_LAUNCH_SCRIPT,
   OPENCODE_BIN,
@@ -26,7 +24,7 @@ import type { HarnessPorts, TopicHarnessAdapter } from '../topic-harness-adapter
 
 const LOCALCODE_RE = /^\/localcode(?:@\w+)?\s*$/
 
-export function createOpencodeHarness({ api, sayIn, mayLockTopic }: HarnessPorts): TopicHarnessAdapter {
+export function createOpencodeHarness({ chat, sayIn, mayLockTopic }: HarnessPorts): TopicHarnessAdapter {
   const opencodeRepository = openOrSetAside('OpenCode topics', OPENCODE_TOPICS_FILE, () =>
     new JsonTopicRepository<OpencodeTopic>(OPENCODE_TOPICS_FILE, 'OpenCode', opencodeTopicFromRecord), log)
   const opencodeRuntime = new HerdrOpencodeRuntime(
@@ -48,26 +46,18 @@ export function createOpencodeHarness({ api, sayIn, mayLockTopic }: HarnessPorts
     opencodeRuntime,
     {
       typing(topic) {
-        void api.sendChatAction(String(GROUP_CHAT_ID), 'typing', threadOf(topic)).catch(() => {})
+        void chat.typing(topic, 'text').catch(() => {})
       },
       async error(topic, text) {
         log(`OpenCode turn failed for topic ${topic}: ${text}`)
-        await api.sendMessage(
-          String(GROUP_CHAT_ID),
-          `⚠️ ${text.slice(0, MAX_CHUNK_LIMIT - 3)}`,
-          threadOf(topic),
-        )
+        await chat.send(topic, { text: `⚠️ ${text.slice(0, chat.capabilities.maxMessageLength - 3)}` })
       },
       repliedSince(topic, sinceMs) {
         return (opencodeLastSentAt.get(topic) ?? 0) >= sinceMs
       },
       async notice(topic, text) {
         log(`OpenCode reply backstop for topic ${topic}: ${text.slice(0, 80)}`)
-        await api.sendMessage(
-          String(GROUP_CHAT_ID),
-          `↩︎ ${text.slice(0, MAX_CHUNK_LIMIT - 2)}`,
-          threadOf(topic),
-        )
+        await chat.send(topic, { text: `↩︎ ${text.slice(0, chat.capabilities.maxMessageLength - 2)}` })
       },
     },
   )

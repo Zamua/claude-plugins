@@ -307,7 +307,9 @@ beforeAll(async () => {
     port: 0,
     async fetch(req) {
       if (new URL(req.url).pathname !== '/v1/images/generations') return new Response('no', { status: 404 })
-      generations.push(await req.json())
+      const asked = await req.json()
+      generations.push(asked)
+      if (String(asked.prompt).includes('boom')) return Response.json({ error: { message: 'the GPU exploded' } }, { status: 500 })
       return Response.json({ data: [{ b64_json: PNG }] })
     },
   })
@@ -544,7 +546,15 @@ describe('the proxy, end to end', () => {
     send(50, 'a red cube steps:2 seed:7')
     const asked = await until('the image request', () => generations[0])
     expect([asked.prompt, asked.steps, asked.seed]).toEqual(['a red cube', 2, 7])
-    await until('the photo', () => calls.find(c => c.method === 'sendPhoto'))
+    const photo = await until('the photo', () => calls.find(c => c.method === 'sendPhoto'))
+    expect(photo.body.message_thread_id).toBe('50')
+    expect(photo.body.caption).toMatch(/^seed 7 · 1024x1024 · 2 steps/)
+    expect(calls.some(c => c.method === 'sendChatAction' && c.body.message_thread_id === 50 && c.body.action === 'upload_photo')).toBeTrue()
+    send(50, 'a blue cube raw steps:2')
+    const raw = await until('the raw document', () => calls.find(c => c.method === 'sendDocument' && c.body.message_thread_id === '50'))
+    expect(raw.body.caption).toMatch(/· 2 steps/)
+    send(50, 'boom steps:2')
+    await until('the failure notice', () => said(50, /^⚠️ .*the GPU exploded/))
     send(50, '/model')
     await until('the model status', () => said(50, /Harness: localgen \(locked\)/))
     send(50, '/usage')
@@ -573,6 +583,8 @@ describe('the proxy, end to end', () => {
       return panes.find(p => p.argv.includes('-s') && p.argv.includes('ses_fake1'))
     }, 40_000)
     expect(resumed.label).toMatch(/^oc-.*-60$/)
+    expect(calls.some(c => c.method === 'sendChatAction' && c.body.message_thread_id === 60 && c.body.action === 'typing')).toBeTrue()
+    await until('the reply backstop', () => said(60, /^↩︎ OpenCode finished this turn without sending a reply\.$/), 30_000)
     expect(spawns().some(s => s.session.endsWith('-60'))).toBeFalse()
   }, 90_000)
 
