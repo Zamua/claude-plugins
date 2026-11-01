@@ -156,9 +156,8 @@ const FAILOVER_HOOK = join(PLUGIN_ROOT, 'hooks', 'rate-limit-failover.py')
 const CAPACITY_HOOK = join(PLUGIN_ROOT, 'hooks', 'provider-capacity-status.py')
 const ANTIGRAVITY_TOPICS_FILE = join(STATE_DIR, 'antigravity-topics.json')
 const LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-topic.sh')
-const ANTIGRAVITY_LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-antigravity-topic.sh')
+const HERDR_LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-herdr-topic.sh')
 const OPENCODE_TOPICS_FILE = join(STATE_DIR, 'opencode-topics.json')
-const OPENCODE_LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-opencode-topic.sh')
 const LOCALGEN_TOPICS_FILE = join(STATE_DIR, 'localgen-topics.json')
 const REMINDERS_FILE = join(STATE_DIR, 'reminders.json')
 // The token-bearing .env files. assertSendable refuses to ship these so a
@@ -1701,7 +1700,7 @@ const antigravityRepository = new JsonTopicRepository<AntigravityTopic>(
   ANTIGRAVITY_TOPICS_FILE, 'Antigravity', antigravityTopicFromRecord,
 )
 const antigravityRuntime = ANTIGRAVITY_ENABLED
-  ? new HerdrAntigravityRuntime(ANTIGRAVITY_BIN, SPAWN_DIR, ANTIGRAVITY_LAUNCH_SCRIPT, PROXY_URL)
+  ? new HerdrAntigravityRuntime(ANTIGRAVITY_BIN, SPAWN_DIR, HERDR_LAUNCH_SCRIPT, PROXY_URL)
   : new DisabledAntigravityRuntime()
 const antigravityService = new AntigravityTopicService(
   antigravityRepository,
@@ -1729,7 +1728,7 @@ const opencodeRepository = new JsonTopicRepository<OpencodeTopic>(OPENCODE_TOPIC
 const opencodeRuntime = new HerdrOpencodeRuntime(
   OPENCODE_BIN,
   OPENCODE_PROJECT_DIR,
-  OPENCODE_LAUNCH_SCRIPT,
+  HERDR_LAUNCH_SCRIPT,
   PROXY_URL,
   process.execPath,
   join(PLUGIN_ROOT, 'server.ts'),

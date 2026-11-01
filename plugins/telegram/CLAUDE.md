@@ -479,7 +479,7 @@ and skips the boot interop sync and usage polling, so nothing runs `agy`. That
 matters because an unauthenticated `agy` opens a browser sign-in on every call.
 
 The runtime is Google's official authenticated `agy` CLI, not the unofficial
-Claude provider bridge. `launch-antigravity-topic.sh` creates one visible Herdr
+Claude provider bridge. `launch-herdr-topic.sh` creates one visible Herdr
 workspace per topic (`agy-<slug>-<threadid>`) and runs a persistent interactive
 CLI under `--dangerously-skip-permissions`. `AntigravityTopicService` serializes
 Telegram turns and injects each one through `herdr agent prompt`; the operator
@@ -609,7 +609,7 @@ OpenCode 2.x does not load 1.x plugins, including 1.x TUI plugins such as a
 vim-mode plugin that would eat injected text.
 
 The Telegram MCP is injected through the environment, never through a config
-file: `launch-opencode-topic.sh` exports `OPENCODE_CONFIG_CONTENT` (the topic's
+file: `launch-herdr-topic.sh` exports `OPENCODE_CONFIG_CONTENT` (passed in `HX_ENV_JSON`; the topic's
 `model` plus an `mcp.servers.telegram-topics` local entry pointing at
 `bun server.ts`, merged last by OpenCode) plus `TELEGRAM_TOPIC_ID`, `TELEGRAM_PROXY_URL`, `TG_INBOUND_MODE=pane`,
 and `TELEGRAM_HARNESS=opencode` (a label for operators and scripts inspecting
@@ -923,12 +923,11 @@ there is no agent to relaunch.
   harness (prompt in, PNG out).
 - `scripts/launch-topic.sh`: the one-harness launcher (invoked by the proxy;
   `TG_MUX` picks only the multiplexer). Every pane executes `claude`.
-- `scripts/launch-antigravity-topic.sh`: creates a separate Herdr workspace and
-  launches/resumes the persistent interactive `agy` process with topic-bound,
-  outbound-only Telegram MCP environment.
-- `scripts/launch-opencode-topic.sh`: creates the `oc-<slug>-<tid>` Herdr
-  workspace and launches/resumes `opencode --standalone` with the env-injected,
-  topic-bound, outbound-only Telegram MCP.
+- `scripts/launch-herdr-topic.sh`: shared by Antigravity and OpenCode topics
+  (`HX_HARNESS`). Closes a restored pane whose agent is gone, creates the
+  topic's Herdr workspace (`agy-<slug>-<tid>` / `oc-<slug>-<tid>`), and starts
+  the agent (`HX_BIN` + `HX_ARGS_JSON`) with the topic-bound, outbound-only
+  Telegram MCP environment plus any `HX_ENV_JSON` exports.
 - `scripts/start-provider-proxy.sh`: starts the loopback compatibility bridge,
   enables safe Codex response continuation, and injects the existing OpenCode
   Go credential without duplicating it.
