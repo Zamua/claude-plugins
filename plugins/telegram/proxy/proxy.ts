@@ -57,11 +57,8 @@ import { readOpenCodeGoCapacity } from './adapters/opencode-go-capacity'
 import { claudeConversationExists } from './adapters/claude-transcript'
 import { installedClaudeVersion, liveClaudeSessions } from './adapters/claude-sessions'
 import { updateRestartAction } from './domain/claude-update'
-import { createMultiplexer } from './adapters/multiplexer'
-import type { MultiplexerPort } from './adapters/multiplexer'
 import { callbackHarness, callbackTopic, decodeCallback, encodeCallback, legacySwitchBack } from './adapters/telegram-callback'
 import { inboundModeForRoute, renderPaneTurn } from './domain/inbound-delivery'
-import type { InboundMessage } from './domain/inbound-delivery'
 import {
   auxiliaryModelForRoute,
   autoCompactWindow,
@@ -76,12 +73,10 @@ import {
   retainsExhaustedRoute,
   sameRoute,
   topicRoute,
-  topicRouteFromRecord,
 } from './domain/model-routing'
 import type {
   Effort,
   PickerReason,
-  PendingRouteChange,
   ProviderId,
   RouteChangeReason,
   TopicRoute,
@@ -89,7 +84,6 @@ import type {
 import { capacityTransition, nextResetAt, providerCapacity } from './domain/provider-capacity'
 import type { ProviderCapacity } from './domain/provider-capacity'
 import { environmentFlag } from './domain/env-flag'
-import { launchProfileNeedsRefresh } from './domain/launch-profile'
 import { missingConversationNotice, planRelaunch, spawnConversation, spawnFailureNotice } from './domain/topic-conversation'
 import { AntigravityTopicService } from './application/antigravity-topic-service'
 import { routeLabel as antigravityRouteLabel } from './adapters/antigravity-cli'
@@ -143,7 +137,6 @@ import type { AntigravityUsageWindow } from './application/antigravity-ports'
 import { InvalidReminder, LATE_AFTER_MS, dueReminders, reminderNotice, scheduleReminder } from './domain/reminder'
 import type { ReminderRequest } from './domain/reminder'
 import { JsonReminderRepository } from './adapters/json-reminder-repository'
-import { readRegistryFile, writeRegistryFile } from './adapters/registry-file'
 import {
   ADMIN_USER_ID,
   ANTIGRAVITY_BIN,
@@ -152,7 +145,6 @@ import {
   BOT_API_ROOT,
   CAPACITY_HOOK,
   CAPACITY_POLL_MS,
-  CONV_TTL_HOURS,
   DEFAULT_TOPIC_ROUTE,
   EFFECTIVE_SETTINGS_DIR,
   ENV_FILES,
@@ -166,7 +158,6 @@ import {
   LOCALGEN_URL,
   MARKETPLACE,
   MODEL,
-  MUX_KIND,
   OPENCODE_BIN,
   OPENCODE_GO_KEY_FILE,
   OPENCODE_MODEL,
@@ -179,7 +170,6 @@ import {
   PROVIDER_PROXY_BIN,
   PROVIDER_PROXY_URL,
   PROXY_URL,
-  REGISTRY_FILE,
   REMINDERS_FILE,
   SECRETS_DIR,
   SECRETS_USER_ID,
@@ -192,6 +182,12 @@ import {
   VOICE,
 } from './config'
 import { log } from './log'
+import { mux } from './topics/mux'
+import { PERMISSION_REPLY_RE, pendingPerms, prunePendingPerms, resolvePermission } from './topics/permissions'
+import { loadAndReconcileRegistry, saveRegistry } from './topics/registry'
+import { getTopic, legacySessionNameFor, sessionNameFor, topicNames, topics } from './topics/state'
+import type { InboundMsg, PermAnswer, TopicState } from './topics/state'
+import { convs, loadConvs, saveConvs } from './square/conversations'
 import {
   assertSendable,
   chunk,
@@ -202,7 +198,6 @@ import {
 } from './adapters/telegram-messages'
 import { telegramDownloader } from './adapters/telegram-files'
 import { transcribeVoice, VOICE_TAG } from './adapters/voice-transcription'
-import type { Registry } from './adapters/registry-file'
 
 // "/relaunch" in a topic kills that topic's agent and respawns it with the
 // same provider route and conversation, freshly loading MCP servers and settings
@@ -270,102 +265,6 @@ process.on('uncaughtException', err => {
   log(`uncaught exception: ${err}`)
 })
 
-// ---- per-topic state -------------------------------------------------------
-
-type InboundMsg = InboundMessage
-type PermAnswer = { request_id: string; behavior: 'allow' | 'deny' }
-
-type TopicState = {
-  queue: InboundMsg[]
-  waiters: Array<(m: InboundMsg | null) => void>
-  // Permission answers ride a SEPARATE queue + long-poll (GET /permission-poll)
-  // so a Telegram "yes <id>" reply is delivered ONLY to the topic-MCP that
-  // asked, never mixed into (or consumed by) the normal channel /poll stream.
-  permQueue: PermAnswer[]
-  permWaiters: Array<(a: PermAnswer | null) => void>
-  threadId?: number // undefined for "general"
-  name: string
-  session: string
-  spawnedAt: number
-  spawning: boolean
-  // The claude session id for this topic, minted on the FIRST spawn (passed via
-  // --session-id) and reused via --resume on every later spawn. This is what
-  // makes a topic one continuous conversation across kills / crashes / proxy
-  // restarts: all topics share one spawn dir, so bare --continue (most-recent
-  // session in a dir) cannot tell them apart - we track the id explicitly.
-  claudeSessionId?: string
-  // The provider/model/effort used when this Claude session starts or resumes.
-  // This is routing state, not a harness choice: every route runs Claude Code.
-  route?: TopicRoute
-  // Which launch-time environment/settings contract the live pane received.
-  // Missing means the pane predates versioned launch profiles.
-  launchProfileVersion?: number
-  // A proactive switch requested while Claude is inside a turn. It is applied
-  // by the next /poll, which is the observable safe turn boundary.
-  pendingRoute?: PendingRouteChange
-  // The latest route that exhausted quota for each provider. A conversation
-  // can cross several exhausted providers; retain each exact return route so
-  // every reset can offer a switch-back button.
-  exhaustedRoutes: TopicRoute[]
-  // One-time durable notice used by migrations and failed-turn recovery. It is
-  // removed only when a resumed Claude actually polls and receives it.
-  pendingResumeNotice?: string
-}
-
-const topics = new Map<string, TopicState>()
-// forum_topic_created names learned before a topic's session is spawned.
-const topicNames = new Map<string, string>()
-
-// The mux session name. Readable: `<prefix>-<slug>-<thread_id>` (e.g.
-// `claude-hostthis-34`), with the numeric thread id as a short, stable,
-// collision-proof suffix; the General topic (no thread id) is just
-// `<prefix>-general`. The prefix doubles as the harness marker
-// (`claude-` / `oc-`) so panes are self-describing. Computed from the topic's
-// LABEL at spawn time and then RECORDED in st.session (dedup/kill use the
-// recorded string, never re-derive) so a later rename can't orphan the
-// running session.
-function sessionNameFor(topic: string, label?: string, prefix = 'claude'): string {
-  if (topic === 'general') return `${prefix}-general`
-  const id = topic.replace(/[^A-Za-z0-9]/g, '')
-  const slug = topicSlug(label ?? '')
-  // Unknown/degenerate name (the label fell back to the numeric id, or slugified
-  // to the 'topic' placeholder) -> just `<prefix>-<id>`, not `<prefix>-<id>-<id>`.
-  if (slug === id || slug === 'topic') return `${prefix}-${id}`
-  return `${prefix}-${slug}-${id}`
-}
-
-// The pre-2026-07 `tg-<cid>-<tid>` name. Used ONLY by the migration bridge in
-// ensureSession to ADOPT a still-live old-scheme session (rather than spawning a
-// second one under the new name) - the launcher's has-session guard keys off the
-// NEW name so it cannot catch an old-named orphan. Removable once no `tg-*`
-// sessions remain in the wild.
-function legacySessionNameFor(topic: string): string {
-  const cid = String(GROUP_CHAT_ID).replace(/[^0-9]/g, '')
-  return `tg-${cid}-${topic.replace(/[^A-Za-z0-9]/g, '') || 'x'}`
-}
-
-function getTopic(topic: string): TopicState {
-  let st = topics.get(topic)
-  if (!st) {
-    st = {
-      queue: [],
-      waiters: [],
-      permQueue: [],
-      permWaiters: [],
-      threadId: topic === 'general' ? undefined : Number(topic),
-      name: '',
-      // Empty until the first spawn computes it from the resolved label; the
-      // reconcile / spawn paths fill it in. Dedup treats '' as "no live session".
-      session: '',
-      spawnedAt: 0,
-      spawning: false,
-      exhaustedRoutes: [],
-    }
-    topics.set(topic, st)
-  }
-  return st
-}
-
 function enqueue(topic: string, msg: InboundMsg): void {
   const st = getTopic(topic)
   if (inboundModeForRoute(currentRoute(st)) === 'pane') {
@@ -413,55 +312,11 @@ function killSession(st: TopicState, topic: string): boolean {
   return killed
 }
 
-// ---- permission relay -----------------------------------------------------
-//
-// A topic-Claude runs detached, so it cannot answer a permission prompt for
-// Bash/WebFetch/etc. Instead its MCP forwards the prompt here (POST
-// /permission-request); the proxy posts an approve/deny prompt INTO that
-// topic's Telegram thread and remembers request_id -> topic. When the user
-// answers (inline button or a "yes <id>" / "no <id>" text reply), the proxy
-// routes {request_id, behavior} back to the ORIGIN topic's /permission-poll,
-// and the MCP fires notifications/claude/channel/permission with it.
-
-type PendingPerm = { topic: string; createdAt: number }
-const pendingPerms = new Map<string, PendingPerm>() // key = request_id
-const PENDING_PERM_TTL_MS = 60 * 60 * 1000
-
-// Matches "yes <id>" / "no <id>" (also y/n). The <id> is matched loosely; the
-// pendingPerms lookup below is the real gate, so conversational "no thanks"
-// (token "thanks" is not a pending request) is never intercepted.
-const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+(\S+)\s*$/i
-
-// Drop stale unanswered requests so the map cannot grow unbounded. A pruned
-// entry only means a very late reply won't route; the origin session stays
-// blocked until answered or restarted (documented behavior).
-function prunePendingPerms(): void {
-  const now = Date.now()
-  for (const [id, p] of pendingPerms) {
-    if (now - p.createdAt > PENDING_PERM_TTL_MS) pendingPerms.delete(id)
-  }
-}
-
-// Deliver an answer to the topic that ASKED (pending.topic), regardless of
-// which thread the button/reply came from, and clear the pending entry.
-function resolvePermission(requestId: string, behavior: 'allow' | 'deny'): boolean {
-  const pending = pendingPerms.get(requestId)
-  if (!pending) return false
-  pendingPerms.delete(requestId)
-  const st = getTopic(pending.topic)
-  const answer: PermAnswer = { request_id: requestId, behavior }
-  const waiter = st.permWaiters.shift()
-  if (waiter) waiter(answer)
-  else st.permQueue.push(answer)
-  return true
-}
-
 // ---- multiplexer port -------------------------------------------------------
 //
 // The domain/application code depends only on this port. Concrete tmux and
 // herdr process control lives in adapters/multiplexer.ts.
 
-const mux: MultiplexerPort = createMultiplexer(MUX_KIND)
 
 type PanePumpState = {
   timer?: ReturnType<typeof setTimeout>
@@ -582,154 +437,6 @@ function pumpPane(topic: string): void {
 // ~2s of a pane's life). Generous enough to cover a slow boot, short enough that
 // a genuinely failed spawn is retried on the next message.
 const SPAWN_GRACE_MS = 30_000
-
-// ---- registry --------------------------------------------------------------
-
-function routeFromRegistry(value: unknown, fallback = DEFAULT_TOPIC_ROUTE): TopicRoute {
-  return topicRouteFromRecord(value) ?? fallback
-}
-
-function pendingRouteFromRegistry(value: unknown): PendingRouteChange | undefined {
-  const raw = value as any
-  if (!raw || !['manual', 'quota', 'reset', 'migration'].includes(raw.reason)) return undefined
-  const route = topicRouteFromRecord(raw.route)
-  if (!route) return undefined
-  return {
-    route,
-    reason: raw.reason,
-    requestedAt: Number(raw.requestedAt) || Date.now(),
-  }
-}
-
-function saveRegistry(): void {
-  const out: Registry = {}
-  for (const [topic, st] of topics) {
-    // Persist any topic that has been spawned at least once (has a Claude
-    // session id, needed to resume the SAME conversation on the next
-    // message) OR that has a known NAME with no session yet (a proxy-created
-    // topic, registered at creation time; without persisting it here a proxy
-    // restart would make it invisible again until a human messaged it).
-    if (!st.claudeSessionId && !st.name) continue
-    out[topic] = {
-      tmux_session: st.session,
-      thread_id: st.threadId ?? null,
-      name: st.name,
-      spawned_at: st.spawnedAt,
-      claude_session_id: st.claudeSessionId,
-      route: st.route ?? DEFAULT_TOPIC_ROUTE,
-      ...(st.launchProfileVersion !== undefined
-        ? { launch_profile_version: st.launchProfileVersion }
-        : {}),
-      ...(st.pendingRoute ? { pending_route: st.pendingRoute } : {}),
-      ...(st.exhaustedRoutes.length ? { exhausted_routes: st.exhaustedRoutes } : {}),
-      ...(st.pendingResumeNotice ? { pending_resume_notice: st.pendingResumeNotice } : {}),
-    }
-  }
-  writeRegistryFile(REGISTRY_FILE, out)
-}
-
-// Load the registry and RECONCILE against the live tmux sessions: re-adopt
-// entries whose session is still up (so a proxy restart re-adopts live
-// sessions) and forget the rest (dead sessions).
-function loadAndReconcileRegistry(): void {
-  const raw = readRegistryFile(REGISTRY_FILE, log)
-  const live = mux.liveSessions()
-  for (const [topic, entry] of Object.entries(raw)) {
-    const st = getTopic(topic)
-    st.threadId = entry.thread_id ?? undefined
-    st.name = entry.name
-    st.claudeSessionId = entry.claude_session_id ?? undefined
-    st.route = routeFromRegistry(entry.route)
-    st.launchProfileVersion = entry.launch_profile_version ?? undefined
-    st.pendingRoute = pendingRouteFromRegistry(entry.pending_route)
-    st.exhaustedRoutes = Array.isArray(entry.exhausted_routes)
-      ? entry.exhausted_routes.flatMap(route => {
-          const parsed = topicRouteFromRecord(route)
-          return parsed ? [parsed] : []
-        })
-      : []
-    st.pendingResumeNotice = entry.pending_resume_notice ?? undefined
-    if (entry.name) topicNames.set(topic, entry.name)
-    if (entry.tmux_session && live.has(entry.tmux_session)) {
-      st.session = entry.tmux_session
-      st.spawnedAt = entry.spawned_at
-      const refresh = launchProfileNeedsRefresh(
-        st.launchProfileVersion,
-        TOPIC_LAUNCH_PROFILE_VERSION,
-        entry.route,
-        st.route,
-      )
-      if (refresh && !st.pendingRoute) {
-        st.pendingRoute = {
-          route: st.route,
-          reason: 'migration',
-          requestedAt: Date.now(),
-        }
-        log(
-          `live topic ${topic} "${entry.name}" has a stale launch profile; ` +
-          `queued same-UUID refresh at the next safe turn boundary`,
-        )
-      } else {
-        log(`re-adopted live topic ${topic} "${entry.name}" (${entry.tmux_session})`)
-      }
-    } else {
-      // Session is dead, but KEEP the claude session id so the next message
-      // re-spawns and --resumes the SAME conversation instead of starting fresh.
-      st.session = ''
-      st.spawnedAt = 0
-      log(`topic ${topic} "${entry.name}" not live; will resume claude session ${entry.claude_session_id ?? '(none)'} on next message`)
-    }
-  }
-  saveRegistry()
-}
-
-// ---- conversations (the square's routing registry) ---------------------------
-//
-// Durable + rederivable, content-free. One JSON file beside registry.json,
-// atomic writes, bounded (LRU cap), TTL-pruned. The conv id is the root
-// message id in the square thread; every non-root square message carries
-// "#<conv>" in its header, so a lost file rebuilds lazily from
-// reply_to_message payloads as replies arrive (self-describing messages).
-
-type Conv = {
-  participants: string[] // topic keys ("34", "general"); the operator is an implicit participant of every conv
-  last_msg_id: number
-  origin_topic: string
-  depth: number // DELIVERED claude messages since the last human message. Logged, never enforced.
-  updated_at: number
-}
-
-const CONV_FILE = join(STATE_DIR, 'conversations.json')
-const CONV_CAP = 50
-const convs = new Map<string, Conv>()
-
-function pruneConvs(): void {
-  const cutoff = Date.now() - CONV_TTL_HOURS * 3600_000
-  for (const [id, c] of convs) if (c.updated_at < cutoff) convs.delete(id)
-  // LRU-close beyond the cap (oldest first).
-  if (convs.size > CONV_CAP) {
-    const sorted = [...convs.entries()].sort((a, b) => a[1].updated_at - b[1].updated_at)
-    for (const [id] of sorted.slice(0, convs.size - CONV_CAP)) convs.delete(id)
-  }
-}
-
-function saveConvs(): void {
-  pruneConvs()
-  try {
-    writeJsonAtomic(CONV_FILE, Object.fromEntries(convs))
-  } catch (e) {
-    log(`could not save conversations.json: ${e}`)
-  }
-}
-
-function loadConvs(): void {
-  try {
-    const raw = JSON.parse(readFileSync(CONV_FILE, 'utf8')) as Record<string, Conv>
-    for (const [id, c] of Object.entries(raw)) convs.set(id, c)
-    pruneConvs()
-    log(`loaded ${convs.size} conversation(s)`)
-  } catch {}
-}
 
 // ---- the square: directory, formatting, delivery ----------------------------
 
