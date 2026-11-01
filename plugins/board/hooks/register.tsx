@@ -1,16 +1,17 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
+import { parseBoardsConfig } from './config'
 import { messageOf } from './kit'
 import type { View } from './kit'
 import { PANE, paneWidth, selectView, setPaneFocused, setPaneWidth, showView, TITLE } from './pane'
 import { exportPng, PLAIN_ELS } from './png'
 import { fileBoard, fileStart, fileView } from './views/file'
-import type { FileBoard, FileBoardSpec, LinkPair } from './views/file'
+import type { FileBoard } from './views/file'
 import { prsHooks, prsStart, prsSync, prsView } from './views/prs'
 import { reviewStart, reviewSync, reviewView } from './views/review'
 import { rolloutBoard, rolloutStart, rolloutView } from './views/rollout'
-import type { RolloutBoard, RolloutSpec } from './views/rollout'
+import type { RolloutBoard } from './views/rollout'
 import { sessionHooks, sessionStart, sessionSync, sessionView } from './views/session'
 import { markWorkActive } from './work/cache'
 import { migrateFile, reportText } from './work/migrate'
@@ -29,7 +30,6 @@ import {
   workView,
   workViewHooks,
 } from './work/view'
-import type { PlacedBoard, WorkSpec } from './work/view'
 
 const CONFIG_PATH = '.config/board/boards.json'
 const BUILT_IN = ['session', 'prs', 'review']
@@ -40,26 +40,17 @@ const selected = atom({ plugin: 'board', key: 'selected' } as const, '')
 const isDismissed = atom({ plugin: 'board', key: 'isDismissed' } as const, false)
 const seenSession = atom({ plugin: 'board', key: 'sessionId' } as const, '')
 
-type Config = { boards?: unknown[]; link_labels?: Record<string, string>; link_pairs?: LinkPair[] }
-
 let fileBoards: FileBoard[] = []
 let rolloutBoards: RolloutBoard[] = []
 // The Item each board that names one belongs to, by board id
 let placedUnder = new Map<string, string>()
 
-const isSpec = (one: unknown): one is FileBoardSpec =>
-  typeof one === 'object' &&
-  one !== null &&
-  typeof (one as FileBoardSpec).id === 'string' &&
-  /^[a-z0-9-]+$/i.test((one as FileBoardSpec).id) &&
-  typeof (one as FileBoardSpec).path === 'string'
-
-async function readConfig($: EngineInterface, home: string): Promise<Config> {
+async function readConfig($: EngineInterface, home: string): Promise<unknown> {
   const path = (await $.env.get('BOARD_CONFIG')) || `${home}/${CONFIG_PATH}`
   try {
     if (!(await $.fs.exists(path))) return {}
 
-    return JSON.parse(await $.fs.read(path)) as Config
+    return JSON.parse(await $.fs.read(path)) as unknown
   } catch (err) {
     $.ui.toast(`Could not read ${path}: ${messageOf(err)}`)
 
@@ -145,37 +136,14 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const home = (await $.env.get('HOME')) ?? ''
-    const config = await readConfig($, home)
-    const shared = {
-      labels: config.link_labels ?? {},
-      pairs: Array.isArray(config.link_pairs) ? config.link_pairs : [],
-    }
-    const taken = new Set(BUILT_IN)
-    fileBoards = []
-    rolloutBoards = []
-    placedUnder = new Map()
-    const placed: PlacedBoard[] = []
-    let work: WorkSpec | undefined
-    for (const spec of Array.isArray(config.boards) ? config.boards : []) {
-      if (!isSpec(spec) || taken.has(spec.id)) continue
-      const under = (spec as { under?: unknown }).under
-      if (typeof under === 'string' && under !== '' && (spec as { layout?: string }).layout !== 'model') {
-        placedUnder.set(spec.id, under)
-        placed.push({ id: spec.id, title: spec.title ?? spec.id, under })
-      }
-      if ((spec as { layout?: string }).layout === 'rollout') {
-        rolloutBoards.push(rolloutBoard(spec as RolloutSpec, home, shared.labels))
-      } else if ((spec as { layout?: string }).layout === 'model') {
-        // One work model per person; a second model board is ignored rather than merged
-        if (work) continue
-        work = spec as unknown as WorkSpec
-      } else {
-        fileBoards.push(fileBoard(spec, shared, home))
-      }
-      taken.add(spec.id)
-    }
+    const config = parseBoardsConfig(await readConfig($, home), BUILT_IN)
+    const shared = { labels: config.labels, pairs: config.pairs }
+    const work = config.work
+    fileBoards = config.files.map(spec => fileBoard(spec, shared, home))
+    rolloutBoards = config.rollouts.map(spec => rolloutBoard(spec, home, shared.labels))
+    placedUnder = new Map(config.placed.map(one => [one.id, one.under]))
     configureWork(work, home, shared.labels, Object.fromEntries(fileBoards.map(one => [one.spec.id, one.path])))
-    placeBoards(placed)
+    placeBoards(config.placed)
     await sessionStart($)
     await prsStart($)
     await reviewStart($)
@@ -188,7 +156,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'board',
       description: 'Show or hide the board pane, open it on one view, or empty a view with clear',
-      argumentHint: `[${[...taken].join('|')}] [clear|migrate|png]`,
+      argumentHint: `[${config.ids.join('|')}] [clear|migrate|png]`,
       immediate: true,
     })
     // Countdowns and ages move even when no board does
