@@ -6,8 +6,8 @@
 #   SCRIPTS=<path> tests/run.sh      run against a different checkout
 #
 # Each case builds its own config, state and reviews root under mktemp and uses the
-# stub runtime, so nothing touches real state and no agent is launched. Some cases
-# call the GitHub API through `gh`, so an authenticated `gh` and network are needed.
+# stub runtime, so nothing touches real state and no agent is launched. A case that
+# needs GitHub answers uses the stand-in in fake-gh.sh, so no network is needed.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fails=0 ran=0

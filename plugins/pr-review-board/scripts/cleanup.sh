@@ -24,7 +24,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib.sh"
-source "$HERE/adapters/runtime-$(prb_get runtime herdr).sh"
+source "$HERE/adapters/runtime-$(prb_runtime_name).sh"
 
 # Accept a review key, a slug, a PR reference, or a pull request URL.
 _c_resolve() {  # <token> -> key

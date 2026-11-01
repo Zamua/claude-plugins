@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Scratch evidence for pr-review-board review claude-plugins-6-r2.
+# Claim under test: a pull request forced in with `poll.sh spawn` gets its own
+# review, never one an unrelated review already holds.
 #
-# Claim under test: because `poll.sh spawn` mis-reads the TSV row (see
+# If `poll.sh spawn` mis-reads the TSV row (see
 # test_spawn_tsv.sh), the pull request it forces in arrives at _match_review with
 # head="main" and base="false". The chain rule is
 #
@@ -13,7 +14,8 @@
 # renaming its directory and telling the live worker to move its checkout.
 #
 # Setup: one ACTIVE review 'other-99' covering a completely unrelated pull request
-# in a different repo, feature/other -> main. Then force Zamua/claude-plugins#6 in.
+# in a different repo, feature/other -> main. Then force acme/claude-plugins#6 in.
+# GitHub is a stand-in (fake-gh.sh), so the test needs no network.
 #
 # Expected: two separate reviews. #6 gets its own.
 #
@@ -21,15 +23,23 @@
 set -uo pipefail
 
 SCRIPTS="${SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)}"
-PR="Zamua/claude-plugins#6"
+PR="acme/claude-plugins#6"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fake-gh.sh"
 
 TD="$(mktemp -d)"; trap 'rm -rf "$TD"' EXIT
 export PR_REVIEW_BOARD_CONFIG="$TD/config.json"
 export PR_REVIEW_BOARD_STATE="$TD/state.json"
 export PR_REVIEW_BOARD_LOCK="$TD/.poll.lock"
 mkdir -p "$TD/reviews" "$TD/workspace"
+fake_gh "$TD/gh"
+cat > "$TD/gh/graphql.json" <<'GQL'
+{ "data": { "repository": { "defaultBranchRef": { "name": "main" },
+  "pullRequest": { "number": 6, "title": "pr-review-board: review a PR by reacting to it on GitHub",
+    "url": "https://github.com/acme/claude-plugins/pull/6", "isDraft": false,
+    "baseRefName": "main", "headRefName": "feat/pr-review-board" } } } }
+GQL
 cat > "$PR_REVIEW_BOARD_CONFIG" <<CFG
-{ "source": "github-reactions", "runtime": "stub", "orgs": ["Zamua"],
+{ "source": "github-reactions", "runtime": "stub", "orgs": ["acme"],
   "reviews_root": "$TD/reviews", "workspace_root": "$TD/workspace" }
 CFG
 
