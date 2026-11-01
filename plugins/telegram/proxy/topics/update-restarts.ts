@@ -50,7 +50,7 @@ export function createUpdateRestarts({
     const sessions = liveSessions()
     for (const [topic, st] of topics) {
       if (SQUARE_TOPIC && topic === SQUARE_TOPIC) continue
-      if (harnessLocked(topic) || st.spawning || !st.session || !st.claudeSessionId) continue
+      if (harnessLocked(topic) || st.agent.state !== 'running' || !st.claudeSessionId) continue
       const claude = sessions.get(st.claudeSessionId)
       const action = updateRestartAction({
         running: claude?.version,

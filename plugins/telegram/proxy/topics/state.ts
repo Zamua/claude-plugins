@@ -3,6 +3,7 @@ import { DEFAULT_TOPIC_ROUTE, GROUP_CHAT_ID } from '../config'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-routing'
 import { topicSlug } from '../shared/domain/topic-slug'
+import type { Agent } from './domain/agent'
 
 export type InboundMsg = InboundMessage
 export type PermAnswer = { request_id: string; behavior: 'allow' | 'deny' }
@@ -17,9 +18,7 @@ export type TopicState = {
   permWaiters: Array<(a: PermAnswer | null) => void>
   threadId?: number // undefined for "general"
   name: string
-  session: string
-  spawnedAt: number
-  spawning: boolean
+  agent: Agent
   // The claude session id for this topic, minted on the FIRST spawn (passed via
   // --session-id) and reused via --resume on every later spawn. This is what
   // makes a topic one continuous conversation across kills / crashes / proxy
@@ -29,9 +28,6 @@ export type TopicState = {
   // The provider/model/effort used when this Claude session starts or resumes.
   // This is routing state, not a harness choice: every route runs Claude Code.
   route?: TopicRoute
-  // Which launch-time environment/settings contract the live pane received.
-  // Missing means the pane predates versioned launch profiles.
-  launchProfileVersion?: number
   // A proactive switch requested while Claude is inside a turn. It is applied
   // by the next /poll, which is the observable safe turn boundary.
   pendingRoute?: PendingRouteChange
@@ -53,7 +49,7 @@ export const topicNames = new Map<string, string>()
 // collision-proof suffix; the General topic (no thread id) is just
 // `<prefix>-general`. The prefix doubles as the harness marker
 // (`claude-` / `oc-`) so panes are self-describing. Computed from the topic's
-// LABEL at spawn time and then RECORDED in st.session (dedup/kill use the
+// LABEL at spawn time and then RECORDED in the topic's agent (dedup/kill use the
 // recorded string, never re-derive) so a later rename can't orphan the
 // running session.
 export function sessionNameFor(topic: string, label?: string, prefix = 'claude'): string {
@@ -86,11 +82,7 @@ export function getTopic(topic: string): TopicState {
       permWaiters: [],
       threadId: topic === 'general' ? undefined : Number(topic),
       name: '',
-      // Empty until the first spawn computes it from the resolved label; the
-      // reconcile / spawn paths fill it in. Dedup treats '' as "no live session".
-      session: '',
-      spawnedAt: 0,
-      spawning: false,
+      agent: { state: 'stopped' },
       exhaustedRoutes: [],
     }
     topics.set(topic, st)

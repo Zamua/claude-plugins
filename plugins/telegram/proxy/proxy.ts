@@ -178,7 +178,7 @@ async function mayLockTopic(chatId: string, topic: string, fromId: string, harne
     byOperator: !!ADMIN_USER_ID && fromId === ADMIN_USER_ID,
     inSquare: !!SQUARE_TOPIC && topic === SQUARE_TOPIC,
     current: topicHarnessOf(topic),
-    ownsClaudeConversation: !!(claude.claudeSessionId || claude.session),
+    ownsClaudeConversation: !!claude.claudeSessionId || claude.agent.state === 'running',
   })
   if (refusal) await sayIn(chatId, topic, refusal)
   return !refusal

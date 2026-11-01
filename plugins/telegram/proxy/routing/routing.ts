@@ -52,6 +52,7 @@ import type { ProviderCapacity } from './domain/provider-capacity'
 import { readOpenCodeGoCapacity } from './opencode-go-capacity'
 import { permissionNotice } from './permission-notice'
 import { launchModel } from '../topics/claude-launch'
+import { sessionOf } from '../topics/domain/agent'
 import { catalogFromBridge, parseOpenCodeModels } from './provider-catalog'
 import type { ProviderCatalog, ProviderModel } from './provider-catalog'
 
@@ -201,11 +202,11 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
   }
 
   function topicRuntime(topic: string, st: TopicState): 'idle' | 'busy' {
-    const live = !!(st.session && mux.liveSessions().has(st.session))
-    if (!live) return 'idle'
+    const session = sessionOf(st.agent)
+    if (!session || !mux.liveSessions().has(session)) return 'idle'
     if (inboundModeForRoute(currentRoute(st)) === 'pane') {
       if (paneInFlight(topic)) return 'busy'
-      return mux.runtime(st.session) === 'idle' ? 'idle' : 'busy'
+      return mux.runtime(session) === 'idle' ? 'idle' : 'busy'
     }
     if (st.waiters.length > 0) return 'idle'
     return 'busy'
@@ -431,7 +432,7 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     const fromReplaced = b.ranOn
       ? b.ranOn.provider !== limitedRoute.provider || b.ranOn.model !== launchModel(limitedRoute)
       : Date.now() - (lastRouteChange.get(topic) ?? 0) < ROUTE_DEBOUNCE_MS
-    if (fromReplaced || (!st.session && alreadyReported && sameRoute(alreadyReported, returnRoute))) {
+    if (fromReplaced || (st.agent.state !== 'running' && alreadyReported && sameRoute(alreadyReported, returnRoute))) {
       return json({ ok: true, provider: limitedRoute.provider, awaiting_selection: true, duplicate: true })
     }
     const resetMs = b.resetAt !== undefined && b.resetAt * 1000 > Date.now()
