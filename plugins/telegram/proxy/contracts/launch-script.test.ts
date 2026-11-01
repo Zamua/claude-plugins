@@ -140,7 +140,7 @@ describe('launch-topic.sh', () => {
 
       test('a server started inside another Claude does not make the topic\'s Claude its child', () => {
         const run = launch(baseSpec({ muxKind: mux }))
-        expect([run.paneEnv.CLAUDECODE, run.paneEnv.CLAUDE_CODE_CHILD_SESSION, run.paneEnv.CLAUDE_CODE_SESSION_ID]).toEqual([undefined, undefined, undefined])
+        expect(['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID'].filter(k => k in run.paneEnv)).toEqual([])
       })
 
       test('Claude gets USER, which it finds its login by, from a server environment without one', () => {
