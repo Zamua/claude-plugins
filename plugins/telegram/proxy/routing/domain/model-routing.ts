@@ -207,3 +207,13 @@ export function providerLabel(provider: ProviderId): string {
 export function modelLabel(model: string): string {
   return model.replace(/^opencode-go\//, '')
 }
+
+/** A Codex model id as the bridge serves it, with its long-context suffix. */
+export function bridgeModel(model: string): string {
+  return /\[[^\]]+\]$/.test(model) ? model : `${model}[1m]`
+}
+
+/** The model a route's Claude runs as, which its pane carries as TG_MODEL. */
+export function launchModel(route: TopicRoute): string {
+  return route.provider === 'codex' ? bridgeModel(route.model) : route.model
+}

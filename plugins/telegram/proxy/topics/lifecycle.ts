@@ -6,7 +6,7 @@ import { spawnSync } from 'child_process'
 import type { Api } from 'grammy'
 import {
   CAPACITY_HOOK,
-  DEFAULT_TOPIC_ROUTE,
+  
   EFFECTIVE_SETTINGS_DIR,
   FAILOVER_HOOK,
   GROUP_CHAT_ID,
@@ -22,7 +22,7 @@ import {
 } from '../config'
 import { log, reason } from '../log'
 import { autoCompactWindow, auxiliaryModelForRoute } from '../routing/domain/model-routing'
-import type { RouteChangeReason, TopicRoute } from '../routing/domain/model-routing'
+import type { TopicRoute } from '../routing/domain/model-routing'
 import type { ProviderCatalog } from '../routing/provider-catalog'
 import { inboundModeForRoute, renderPaneTurn } from '../shared/domain/inbound-delivery'
 import { writeJsonAtomic } from '../shared/json-file'
@@ -48,7 +48,10 @@ export type TopicLifecyclePorts = {
   /** True when a harness other than Claude owns the topic. */
   harnessLocked: (topic: string) => boolean
   modelCatalog: () => ProviderCatalog
-  applyRouteNow: (topic: string, route: TopicRoute, reason: RouteChangeReason) => void
+  /** The running turn ended: a route change waiting for it applies now. */
+  turnEnded: (topic: string) => void
+  /** The resumed session received its resume notice. */
+  noticeDelivered: (topic: string) => void
 }
 
 // Every message to a topic that cannot start retries ensureSession, so its
@@ -102,7 +105,7 @@ type PanePumpState = {
   turn: PaneTurn
 }
 
-export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, applyRouteNow }: TopicLifecyclePorts) {
+export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, turnEnded, noticeDelivered }: TopicLifecyclePorts) {
   const panePumps = new Map<string, PanePumpState>()
   const lastSpawnNotice = new Map<string, number>()
   const lastRelaunch = new Map<string, number>()
@@ -166,8 +169,8 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
   }
 
   function pendingPaneMessage(topic: string, st: TopicState): { message: InboundMsg; resumeNotice: boolean } | undefined {
-    if (st.pendingResumeNotice) {
-      return { message: resumeNoticeTurn(topic, st.pendingResumeNotice), resumeNotice: true }
+    if (st.routing.resumeNotice) {
+      return { message: resumeNoticeTurn(topic, st.routing.resumeNotice), resumeNotice: true }
     }
     const message = st.queue[0]
     return message ? { message, resumeNotice: false } : undefined
@@ -193,10 +196,9 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
       return
     }
 
-    if (st.pendingRoute) {
+    if (st.routing.pending) {
       if (runtime === 'idle' || runtime === 'missing') {
-        const pending = st.pendingRoute
-        applyRouteNow(topic, pending.route, pending.reason)
+        turnEnded(topic)
       } else {
         schedulePanePump(topic, 500)
       }
@@ -218,8 +220,7 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     }
 
     if (pending.resumeNotice) {
-      st.pendingResumeNotice = undefined
-      saveRegistry()
+      noticeDelivered(topic)
     } else {
       st.queue.shift()
     }
@@ -233,7 +234,7 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     for (const [topic, st] of topics) {
       if (
         inboundModeForRoute(currentRoute(st)) === 'pane' &&
-        (st.queue.length > 0 || !!st.pendingResumeNotice || !!st.pendingRoute)
+        (st.queue.length > 0 || !!st.routing.resumeNotice || !!st.routing.pending)
       ) {
         schedulePanePump(topic)
       }
@@ -317,8 +318,7 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
       // first launch leaves no transcript to resume.
       const conversation = spawnConversation(st.claudeSessionId, () => crypto.randomUUID())
       const resuming = conversation.resume
-      const route = st.route ?? DEFAULT_TOPIC_ROUTE
-      st.route = route
+      const route = st.routing.route
       const name = sessionNameFor(topic, label)
       const settingsPath = resolveSettings(topic, route)
       const providerModels = modelCatalog()[route.provider]

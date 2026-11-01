@@ -109,7 +109,8 @@ const {
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
   harnessLocked,
   modelCatalog: () => modelCatalog(),
-  applyRouteNow: (topic, route, why) => applyRouteNow(topic, route, why),
+  turnEnded: topic => turnEnded(topic),
+  noticeDelivered: topic => noticeDelivered(topic),
 })
 const { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply, handleSquareUserMessage } = createSquare({
   api: bot.api,
@@ -186,7 +187,8 @@ async function mayLockTopic(chatId: string, topic: string, fromId: string, harne
 
 const {
   modelCatalog,
-  applyRouteNow,
+  turnEnded,
+  noticeDelivered,
   handleModelCommand,
   capacityText,
   refreshProviderCapacity,
@@ -265,7 +267,8 @@ const http = createHttpServer({
   outbound: createOutbound({ api: bot.api, downloadFile, sent: (topic, n) => harnessFor(topic)?.sent(topic, n) }),
   harnessOfKind,
   schedulePanePump,
-  applyRouteNow,
+  turnEnded,
+  noticeDelivered,
   routing: { handleRateLimit, handleCapacity, handleTurnFailed },
   square: { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply },
   reminders: { handleRemind, handleListReminders, handleCancelReminder },

@@ -1,7 +1,8 @@
 // Every topic's in-memory state: its inbound queues, its session, its route.
 import { DEFAULT_TOPIC_ROUTE, GROUP_CHAT_ID } from '../config'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
-import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-routing'
+import type { TopicRoute } from '../routing/domain/model-routing'
+import type { RouteFlow } from '../routing/domain/route-flow'
 import { topicSlug } from '../shared/domain/topic-slug'
 import type { Agent } from './domain/agent'
 
@@ -25,19 +26,10 @@ export type TopicState = {
   // restarts: all topics share one spawn dir, so bare --continue (most-recent
   // session in a dir) cannot tell them apart - we track the id explicitly.
   claudeSessionId?: string
-  // The provider/model/effort used when this Claude session starts or resumes.
-  // This is routing state, not a harness choice: every route runs Claude Code.
-  route?: TopicRoute
-  // A proactive switch requested while Claude is inside a turn. It is applied
-  // by the next /poll, which is the observable safe turn boundary.
-  pendingRoute?: PendingRouteChange
-  // The latest route that exhausted quota for each provider. A conversation
-  // can cross several exhausted providers; retain each exact return route so
-  // every reset can offer a switch-back button.
-  exhaustedRoutes: TopicRoute[]
-  // One-time durable notice used by migrations and failed-turn recovery. It is
-  // removed only when a resumed Claude actually polls and receives it.
-  pendingResumeNotice?: string
+  // The route this topic's Claude runs on, a change waiting for its turn to end,
+  // the routes that hit their limits, and the notice a resumed session owes.
+  // Every route runs Claude Code; only nextRoute changes it.
+  routing: RouteFlow
 }
 
 export const topics = new Map<string, TopicState>()
@@ -83,14 +75,14 @@ export function getTopic(topic: string): TopicState {
       threadId: topic === 'general' ? undefined : Number(topic),
       name: '',
       agent: { state: 'stopped' },
-      exhaustedRoutes: [],
+      routing: { route: DEFAULT_TOPIC_ROUTE, exhausted: [] },
     }
     topics.set(topic, st)
   }
   return st
 }
 
-/** The route a topic's Claude runs on: its own, or the default for a topic never routed. */
+/** The route a topic's Claude runs on. */
 export function currentRoute(st: TopicState): TopicRoute {
-  return st.route ?? DEFAULT_TOPIC_ROUTE
+  return st.routing.route
 }
