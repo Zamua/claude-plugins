@@ -795,6 +795,11 @@ there is no agent to relaunch.
 - **Nothing lost during spawn.** The inbound message is enqueued regardless; it
   waits in the topic queue until the freshly spawned MCP's first `/poll` drains
   it (~1-2s later).
+- **A failed launch is reported in the topic.** When the launcher fails, the
+  proxy posts the cause (at most once a minute per topic) and the message stays
+  queued; the next message or `/relaunch` retries. A topic is bound to a newly
+  minted conversation id only after its first launch succeeds, so a failed
+  first launch never reads as a missing conversation afterwards.
 - **Registry reconcile.** `~/.claude/channels/telegram-topics/registry.json`
   maps topic -> {tmux_session, thread_id, name, spawned_at, claude_session_id}.
   On boot the proxy re-adopts entries whose tmux session is still live so a proxy

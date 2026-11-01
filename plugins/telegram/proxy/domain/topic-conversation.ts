@@ -18,6 +18,16 @@ export function missingConversationNotice(sessionId: string): string {
   )
 }
 
+// Posted in the topic when its agent could not be started. The inbound message
+// stays queued, so the next message or /relaunch retries the start.
+export function spawnFailureNotice(detail: string): string {
+  const cause = detail.length > 300 ? `${detail.slice(0, 300)}…` : detail
+  return (
+    `Could not start this topic's agent: ${cause}\n` +
+    'Your message is queued and is delivered once the agent starts. Send another message or /relaunch to retry.'
+  )
+}
+
 export type RelaunchPlan = {
   // The topic's binding after the relaunch; undefined makes the next spawn start a new conversation.
   claudeSessionId?: string
