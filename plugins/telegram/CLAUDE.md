@@ -774,15 +774,14 @@ there is no agent to relaunch.
   `claude-general`. `sessionNameFor(topic, label)` slugifies the topic name
   (lowercase, non-alphanumeric -> `-`, trimmed, capped 24 chars; empty ->
   `topic`), so it is always tmux-safe (no `.`/`:`/whitespace). The name is
-  computed from the topic's LABEL at spawn and then RECORDED in `st.session`;
-  dedup + kill use that RECORDED string (`st.session && liveTmuxSessions().has(st.session)`),
-  they do NOT re-derive it - because the name now depends on the mutable label,
+  computed from the topic's LABEL at spawn and then RECORDED in the topic's
+  running agent; dedup + kill use that RECORDED string, they do NOT re-derive it - because the name now depends on the mutable label,
   re-deriving after a rename would miss the running (old-named) session and
   double-spawn. Renames are learned from `forum_topic_edited` (update `st.name` +
   `topicNames`, persist); a rename takes effect on the next RESPAWN (fresh name),
   never mid-life. An unknown name (label falls back to the numeric id) yields just
   `claude-<id>`, not `claude-<id>-<id>`. The thread-id suffix keeps names unique so
-  `st.session` maps 1:1 to a topic. **Migration (old scheme `tg-<cid>-<tid>`):**
+  a recorded session maps 1:1 to a topic. **Migration (old scheme `tg-<cid>-<tid>`):**
   registry-tracked live sessions are re-adopted by their old name on reconcile and
   renamed on their next respawn; for an UNtracked live old-scheme session (predates
   session-id tracking / registry lost) `ensureSession` has a migration bridge that
@@ -792,8 +791,16 @@ there is no agent to relaunch.
 - **Single-flight spawn.** `ensureSession` runs the launcher via `spawnSync`,
   which blocks the event loop for the whole (fast, detached) launch; grammy
   processes messages sequentially, so two rapid messages for a brand-new topic
-  cannot double-spawn. Plus a `spawning` flag, plus the live-session dedup,
-  plus the launcher's own `has-session` guard.
+  cannot double-spawn. Plus the live-session dedup, plus the launcher's own
+  `has-session` guard.
+- **One agent lifecycle.** A topic's agent is `stopped`, `running` (under its
+  recorded session, since its start, with its launch profile) or `failed` (the
+  last start failed, or its conversation is missing on disk). Only
+  `nextAgent(agent, event)` in `proxy/topics/domain/agent.ts` changes it; the
+  shell in `topics/lifecycle.ts` observes the multiplexer, sends the event, and
+  performs the effects it returns (start, report, drain long-polls, save). A
+  failed agent starts again on a message, `/relaunch` or a route change, never
+  on the pane pump's timer.
 - **Nothing lost during spawn.** The inbound message is enqueued regardless; it
   waits in the topic queue until the freshly spawned MCP's first `/poll` drains
   it (~1-2s later).
@@ -929,8 +936,9 @@ there is no agent to relaunch.
     `/relaunch`), in-memory state, the multiplexer
     (`multiplexer.ts`, tmux or herdr), registry.json (`registry.json` load,
     reconcile and save, `registry-file.ts`), the permission relay, Claude
-    launch profiles, settings, sessions and transcripts; `domain/` holds
-    resume vs. fresh start, launch-profile refresh and update-restart policy.
+    launch profiles, settings, sessions and transcripts; `domain/` holds the
+    agent lifecycle (`agent.ts`), resume vs. fresh start, launch-profile
+    refresh and update-restart policy.
   - `proxy/routing/`: provider/model routing below the Claude harness: the
     bridge model catalog, Codex app-server and OpenCode Go capacity clients,
     the permission notice; `domain/` holds routes and capacity transitions.

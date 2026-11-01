@@ -8,6 +8,7 @@ import { topicRouteFromRecord } from '../routing/domain/model-routing'
 import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-routing'
 import { log } from '../log'
 import { mux } from './mux'
+import { nextAgent } from './domain/agent'
 import { getTopic, topicNames, topics } from './state'
 
 function routeFromRegistry(value: unknown, fallback = DEFAULT_TOPIC_ROUTE): TopicRoute {
@@ -35,16 +36,15 @@ export function saveRegistry(): void {
     // topic, registered at creation time; without persisting it here a proxy
     // restart would make it invisible again until a human messaged it).
     if (!st.claudeSessionId && !st.name) continue
+    const running = st.agent.state === 'running' ? st.agent : undefined
     out[topic] = {
-      tmux_session: st.session,
+      tmux_session: running?.session ?? '',
       thread_id: st.threadId ?? null,
       name: st.name,
-      spawned_at: st.spawnedAt,
+      spawned_at: running?.since ?? 0,
       claude_session_id: st.claudeSessionId,
       route: st.route ?? DEFAULT_TOPIC_ROUTE,
-      ...(st.launchProfileVersion !== undefined
-        ? { launch_profile_version: st.launchProfileVersion }
-        : {}),
+      ...(running?.profile !== undefined ? { launch_profile_version: running.profile } : {}),
       ...(st.pendingRoute ? { pending_route: st.pendingRoute } : {}),
       ...(st.exhaustedRoutes.length ? { exhausted_routes: st.exhaustedRoutes } : {}),
       ...(st.pendingResumeNotice ? { pending_resume_notice: st.pendingResumeNotice } : {}),
@@ -65,7 +65,6 @@ export function loadAndReconcileRegistry(): void {
     st.name = entry.name
     st.claudeSessionId = entry.claude_session_id ?? undefined
     st.route = routeFromRegistry(entry.route)
-    st.launchProfileVersion = entry.launch_profile_version ?? undefined
     st.pendingRoute = pendingRouteFromRegistry(entry.pending_route)
     st.exhaustedRoutes = Array.isArray(entry.exhausted_routes)
       ? entry.exhausted_routes.flatMap(route => {
@@ -75,11 +74,17 @@ export function loadAndReconcileRegistry(): void {
       : []
     st.pendingResumeNotice = entry.pending_resume_notice ?? undefined
     if (entry.name) topicNames.set(topic, entry.name)
-    if (entry.tmux_session && live.has(entry.tmux_session)) {
-      st.session = entry.tmux_session
-      st.spawnedAt = entry.spawned_at
+    const isLive = !!entry.tmux_session && live.has(entry.tmux_session)
+    st.agent = nextAgent(st.agent, {
+      type: 'restored',
+      session: entry.tmux_session ?? '',
+      since: entry.spawned_at ?? 0,
+      ...(entry.launch_profile_version != null && { profile: entry.launch_profile_version }),
+      live: isLive,
+    }).agent
+    if (isLive) {
       const refresh = launchProfileNeedsRefresh(
-        st.launchProfileVersion,
+        entry.launch_profile_version ?? undefined,
         TOPIC_LAUNCH_PROFILE_VERSION,
         entry.route,
         st.route,
@@ -100,8 +105,6 @@ export function loadAndReconcileRegistry(): void {
     } else {
       // Session is dead, but KEEP the claude session id so the next message
       // re-spawns and --resumes the SAME conversation instead of starting fresh.
-      st.session = ''
-      st.spawnedAt = 0
       log(`topic ${topic} "${entry.name}" not live; will resume claude session ${entry.claude_session_id ?? '(none)'} on next message`)
     }
   }

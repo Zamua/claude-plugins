@@ -33,6 +33,8 @@ import type { ClaudeSpawnSpec } from './claude-launch'
 import { effectiveClaudeSettings } from './claude-settings'
 import { claudeConversationExists } from './claude-transcript'
 import { missingConversationNotice, planRelaunch, spawnConversation, spawnFailureNotice } from './domain/topic-conversation'
+import { nextAgent, sessionOf } from './domain/agent'
+import type { AgentEvent } from './domain/agent'
 import { mux } from './mux'
 import { saveRegistry } from './registry'
 import { currentRoute, getTopic, legacySessionNameFor, sessionNameFor, topicNames, topics } from './state'
@@ -47,9 +49,6 @@ export type TopicLifecyclePorts = {
   applyRouteNow: (topic: string, route: TopicRoute, reason: RouteChangeReason) => void
 }
 
-// How long after a spawn the topic counts as live although the multiplexer
-// sees no agent yet: herdr reports a new pane `unknown` for its first ~2s.
-const SPAWN_GRACE_MS = 30_000
 // Every message to a topic that cannot start retries ensureSession, so its
 // failure notice is posted at most once a minute per topic and kind.
 const SPAWN_NOTICE_MS = 60_000
@@ -107,8 +106,6 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
   const panePumps = new Map<string, PanePumpState>()
   const lastSpawnNotice = new Map<string, number>()
   const lastRelaunch = new Map<string, number>()
-  // Topics whose last start failed. A message, a relaunch or a route change tries again; the pane pump's timer does not.
-  const failedSpawns = new Set<string>()
 
   function enqueue(topic: string, msg: InboundMsg): void {
     const st = getTopic(topic)
@@ -135,12 +132,9 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
   // enqueue prefers a waiter to the queue, so a nudge enqueued right after a
   // bare mux.kill would be handed to the dying process and lost.
   function killSession(st: TopicState, topic: string): boolean {
-    const killed = !!(st.session && mux.liveSessions().has(st.session)) && mux.kill(st.session)
-    while (st.waiters.length) st.waiters.shift()?.(null)
-    while (st.permWaiters.length) st.permWaiters.shift()?.(null)
-    st.session = ''
-    st.spawnedAt = 0
-    st.launchProfileVersion = undefined
+    const session = sessionOf(st.agent)
+    const killed = !!session && mux.liveSessions().has(session) && mux.kill(session)
+    apply(topic, st, { type: 'stopped' })
     return killed
   }
 
@@ -183,9 +177,10 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     const st = getTopic(topic)
     if (inboundModeForRoute(currentRoute(st)) !== 'pane') return
 
-    if (!failedSpawns.has(topic)) ensureSession(topic)
+    ensureSession(topic, 'timer')
     const state = panePumpState(topic)
-    const runtime = st.session ? mux.runtime(st.session) : 'missing'
+    const session = sessionOf(st.agent)
+    const runtime = session ? mux.runtime(session) : 'missing'
 
     if (state.inFlight) {
       if (runtime === 'busy' || runtime === 'blocked' || runtime === 'starting') {
@@ -214,14 +209,14 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
 
     const pending = pendingPaneMessage(topic, st)
     if (!pending) return
-    if (runtime !== 'idle' || !st.session) {
+    if (runtime !== 'idle' || !session) {
       // The turn stays queued; whatever retries the start pumps it again
-      if (runtime === 'missing' && failedSpawns.has(topic)) return
+      if (runtime === 'missing' && st.agent.state === 'failed') return
       schedulePanePump(topic, 500)
       return
     }
 
-    if (!mux.prompt(st.session, renderPaneTurn(pending.message))) {
+    if (!mux.prompt(session, renderPaneTurn(pending.message))) {
       schedulePanePump(topic, 500)
       return
     }
@@ -235,7 +230,7 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     state.inFlight = true
     state.observedActive = false
     state.submittedAt = Date.now()
-    log(`delivered Telegram turn to proxied Claude pane ${st.session} for topic ${topic}`)
+    log(`delivered Telegram turn to proxied Claude pane ${session} for topic ${topic}`)
     schedulePanePump(topic, 150)
   }
 
@@ -264,52 +259,63 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     postSpawnNotice('missing-conversation', topic, missingConversationNotice(sessionId))
   }
 
-  // Ensures a live Claude session for a topic. Single-flight: spawnSync blocks
-  // the event loop for the whole launch, so two messages for a new topic cannot
-  // spawn two sessions; the spawning flag and the live-session dedup back it up.
-  function ensureSession(topic: string): SpawnOutcome {
+  // Moves the topic's agent through one event and performs what the step asks for.
+  function apply(topic: string, st: TopicState, event: AgentEvent): SpawnOutcome {
+    const { agent, effects } = nextAgent(st.agent, event)
+    st.agent = agent
+    let outcome: SpawnOutcome = agent.state === 'failed' ? 'failed' : 'running'
+    for (const effect of effects) {
+      switch (effect.type) {
+        case 'drain-waiters':
+          while (st.waiters.length) st.waiters.shift()?.(null)
+          while (st.permWaiters.length) st.permWaiters.shift()?.(null)
+          break
+        case 'save':
+          saveRegistry()
+          break
+        case 'report-missing-conversation':
+          reportMissingConversation(topic, st.claudeSessionId ?? '')
+          break
+        case 'start':
+          outcome = start(topic, st)
+          break
+        default: {
+          const unhandled: never = effect
+          throw new Error(`unhandled agent effect ${JSON.stringify(unhandled)}`)
+        }
+      }
+    }
+    return outcome
+  }
+
+  // Ensures a live Claude session for a topic. Single-flight: spawnSync blocks the event loop for the whole launch,
+  // so two messages for a new topic cannot start two sessions. Dedup is on the RECORDED session name.
+  function ensureSession(topic: string, by: 'event' | 'timer' = 'event'): SpawnOutcome {
     // A locked topic must never fall through to the Claude launcher.
     if (harnessLocked(topic)) return 'skipped'
     // The square hosts conversations, not a Claude of its own.
     if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return 'skipped'
     const st = getTopic(topic)
-    if (st.spawning) return 'running'
     const live = mux.liveSessions()
-    // Dedup on the RECORDED session name, never a re-derived one: the name
-    // follows the topic's label, so re-deriving after a rename would miss the
-    // running session and spawn a second. Anything spawned inside the grace
-    // window counts as live, so a message during boot cannot spawn a second.
-    const bootingGrace =
-      !!st.session && st.spawnedAt > 0 && Date.now() - st.spawnedAt < SPAWN_GRACE_MS
-    if (st.session && (live.has(st.session) || bootingGrace)) {
-      if (!st.spawnedAt) {
-        st.spawnedAt = Date.now()
-        saveRegistry()
-      }
-      return 'running'
+    const session = sessionOf(st.agent)
+    const legacy = legacySessionNameFor(topic)
+    const outcome = apply(topic, st, {
+      type: 'wanted',
+      by,
+      now: Date.now(),
+      live: !!session && live.has(session),
+      ...(live.has(legacy) && { legacy }),
+    })
+    if (!session && sessionOf(st.agent) === legacy) {
+      log(`adopted legacy-named session ${legacy} for topic ${topic}; renames on next respawn`)
     }
-    // A live, untracked session under the old `tg-<cid>-<tid>` name is adopted
-    // rather than doubled: the launcher's guard checks only the new name. It
-    // takes the new name on its next respawn.
-    if (!st.session) {
-      const legacy = legacySessionNameFor(topic)
-      if (live.has(legacy)) {
-        st.session = legacy
-        if (!st.spawnedAt) st.spawnedAt = Date.now()
-        saveRegistry()
-        log(`adopted legacy-named session ${legacy} for topic ${topic}; renames on next respawn`)
-        return 'running'
-      }
-    }
-    // A topic bound to a conversation must resume THAT conversation. If its file
-    // is gone, starting a fresh one would silently drop the topic's history;
-    // /relaunch is the explicit way out.
+    return outcome
+  }
+
+  function start(topic: string, st: TopicState): SpawnOutcome {
     if (st.claudeSessionId && !claudeConversationExists(st.claudeSessionId)) {
-      reportMissingConversation(topic, st.claudeSessionId)
-      failedSpawns.add(topic)
-      return 'failed'
+      return apply(topic, st, { type: 'conversation-missing', now: Date.now() })
     }
-    st.spawning = true
     try {
       const label = st.name || topicNames.get(topic) || topic
       st.name = label
@@ -356,10 +362,7 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
         throw new Error(`launcher exit ${r.status}: ${(r.stderr || '').trim()}`)
       }
       st.claudeSessionId = conversation.claudeSessionId
-      st.session = name
-      st.spawnedAt = Date.now()
-      st.launchProfileVersion = TOPIC_LAUNCH_PROFILE_VERSION
-      saveRegistry()
+      apply(topic, st, { type: 'started', session: name, now: Date.now(), profile: TOPIC_LAUNCH_PROFILE_VERSION })
       log(
         `${resuming ? 'resumed' : 'spawned'} topic ${topic} "${label}" ` +
         `(claude ${st.claudeSessionId}; ${route.provider}/${route.model}; ${route.effort}; ` +
@@ -367,15 +370,12 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
         `compact ${autoCompactWindow(route.provider, routeModel?.contextWindow) ?? 'auto'}) ` +
         `-> ${mux.kind} ${name}`,
       )
-      failedSpawns.delete(topic)
       return 'spawned'
     } catch (e) {
       log(`spawn failed for topic ${topic}: ${e}`)
       postSpawnNotice('spawn-failed', topic, spawnFailureNotice(reason(e)))
-      failedSpawns.add(topic)
+      apply(topic, st, { type: 'start-failed', now: Date.now() })
       return 'failed'
-    } finally {
-      st.spawning = false
     }
   }
 

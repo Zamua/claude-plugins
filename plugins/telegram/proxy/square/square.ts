@@ -33,7 +33,7 @@ export function createSquare({ api, harnessLocked, ensureSession, enqueue }: Squ
       if (topic === SQUARE_TOPIC || harnessLocked(topic)) continue
       const name = st.name || topicNames.get(topic) || ''
       const slug = topic === 'general' ? 'general' : topicSlug(name) !== 'topic' ? topicSlug(name) : topic
-      out.push({ slug, name: name || topic, topic, live: !!(st.session && live.has(st.session)) })
+      out.push({ slug, name: name || topic, topic, live: st.agent.state === 'running' && live.has(st.agent.session) })
     }
     return out
   }
