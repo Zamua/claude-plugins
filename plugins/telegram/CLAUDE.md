@@ -184,10 +184,15 @@ than inherit it:
 - **Links and the ask post.** Message links are `t.me/c/...`, and a bot cannot
   post as the operator, which is why an ask is posted as "You asked: ...".
 
-## Multiplexer backends (tmux | herdr)
+## Multiplexer backends (tmux | herdr | hc)
 
 The detached topic-Claudes are hosted by a terminal multiplexer, selectable via
 `TELEGRAM_TOPICS_MULTIPLEXER=tmux|herdr` (default `tmux`; read at proxy boot).
+The topics listed in `TELEGRAM_TOPICS_HC_TOPICS` run under herdr-core (`hc`)
+instead; `topics/topic-muxes.ts` picks each topic's backend, and a topic whose
+backend changed is stopped in the old one and resumed in the new one by
+`ensureSession`. hc's environment, permission and restart findings are in
+`docs/herdr-core.md`.
 The code follows a ports-and-adapters split so neither backend leaks into the
 core:
 
@@ -229,7 +234,19 @@ core:
     a SECOND poller round-robining the topic's queue.
     Bg sessions are identified by `CLAUDE_CODE_SESSION_KIND=bg`; they keep the
     outbound tools but never start the inbound/permission polls.
-  - The claude invocation (`PANE_CMD`) is byte-identical for both backends.
+  - hc: one terminal per topic, `tg-<thread id>`, labelled `session=` and
+    `topic=`, started with `hc run --bg --no-parent --no-notify` running the
+    same exported-variable script as herdr (an hc terminal also starts in the
+    core's environment). `HcMux` sends one JSON-RPC request per `hc connect`;
+    every hc call runs with a minimal environment, because a call that finds
+    no core starts one and the core hands its environment to every terminal.
+    Claude reports `done` after each turn, which hc's own `if: idle` send
+    condition refuses, so `HcMux.prompt` checks the boundary itself.
+  - The claude invocation (`PANE_CMD`) is byte-identical for all backends. It
+    unsets a parent Claude's identity variables and sets `USER` when missing: a
+    server started inside another Claude would make the topic's Claude its
+    child (no transcript, so no resume), and without `USER` Claude cannot find
+    its keychain login.
 
 **herdr prerequisites:** (1) the herdr server must be running - e.g. a launchd
 agent with `ProgramArguments: [herdr, server]`, `KeepAlive: true` (herdr is
@@ -1182,7 +1199,8 @@ there is no agent to relaunch.
   - `proxy/topics/`: Claude topics: the agent lifecycle (`lifecycle.ts`:
     spawn, the inbound queue, pane delivery on proxied routes, kill and
     `/relaunch`), in-memory state, the multiplexer
-    (`multiplexer.ts`, tmux or herdr), registry.json (`registry.json` load,
+    (`multiplexer.ts`, tmux or herdr; `hc-mux.ts`, herdr-core; `topic-muxes.ts`,
+    each topic's backend), registry.json (`registry.json` load,
     reconcile and save, `registry-file.ts`), the permission relay, Claude
     launch profiles, settings, sessions and transcripts; `domain/` holds the
     agent lifecycle (`agent.ts`), resume vs. fresh start, launch-profile
@@ -1285,7 +1303,8 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 `TELEGRAM_TOPICS_UPDATE_RESTART` (`on`|`off`, default `on`),
 `TELEGRAM_TOPICS_MODEL` (default the pinned `claude-opus-5-5`, see below),
 `TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
-backends" above; applies to Claude topics); `TELEGRAM_ANTIGRAVITY_BIN` (optional
+backends" above; applies to Claude topics); `TELEGRAM_TOPICS_HC_TOPICS` and
+`TELEGRAM_HC_BIN` (the topics run under herdr-core, and its binary); `TELEGRAM_ANTIGRAVITY_BIN` (optional
 path to official `agy`, defaults to the Nix per-user profile and then PATH);
 `TELEGRAM_OPENCODE_BIN` (the `opencode` 2.x CLI, default
 `/opt/homebrew/bin/opencode` then PATH; the OpenCode Go catalog reads

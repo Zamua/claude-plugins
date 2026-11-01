@@ -16,7 +16,7 @@ import { inboundModeForRoute } from '../shared/domain/inbound-delivery'
 import type { Action, ActionPress, Actions } from '../chat/domain/actions'
 import type { ChatPort } from '../chat/domain/chat-port'
 import { formatTime, legacySwitchBack, MODELS_PER_PAGE, PICKER_TTL_MS } from '../chat/domain/pickers'
-import { mux } from '../topics/mux'
+import { muxes } from '../topics/mux'
 import { saveRegistry } from '../topics/registry'
 import { currentRoute, getTopic, topics } from '../topics/state'
 import type { TopicState } from '../topics/state'
@@ -182,6 +182,7 @@ export function createRouting({ chat, sayIn, killSession, ensureSession, schedul
 
   function topicRuntime(topic: string, st: TopicState): 'idle' | 'busy' {
     const session = sessionOf(st.agent)
+    const mux = muxes.forTopic(topic)
     if (!session || !mux.liveSessions().has(session)) return 'idle'
     if (inboundModeForRoute(currentRoute(st)) === 'pane') {
       if (paneInFlight(topic)) return 'busy'

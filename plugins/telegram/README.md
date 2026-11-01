@@ -169,6 +169,8 @@ always wins over a `.env` file. Keys:
 | `TELEGRAM_OPENCODE_GO_KEY_FILE` | no | `~/keys/opencode-go-key` | plain-text OpenCode Go API key for usage probes and the bridge; without it they use the OpenCode Console login. Never copied into plugin state |
 | `TELEGRAM_ANTIGRAVITY_BIN` | no | Nix per-user `agy`, then `PATH` | official Antigravity CLI used by harness-locked topics |
 | `TELEGRAM_TOPICS_MULTIPLEXER` | no | `tmux` | `tmux` or `herdr` for Claude topics; Antigravity and localcode topics always use Herdr |
+| `TELEGRAM_TOPICS_HC_TOPICS` | no | empty | thread ids (or `general`) whose Claude runs under herdr-core instead; see `docs/herdr-core.md` |
+| `TELEGRAM_HC_BIN` | no | `~/.local/bin/hc` | the herdr-core binary |
 | `TELEGRAM_TOPICS_UPDATE_RESTART` | no | `on` | moves live topic sessions onto a newly installed Claude Code at their next idle turn boundary (an idle one resumes on its next message; a busy one is restarted once it goes idle) |
 | `TELEGRAM_TOPICS_MODEL` | no | `claude-opus-5-5` | initial model for topics without a persisted route; `/model` selections are persisted per topic |
 | `TELEGRAM_ASK_PORT` | no | `8791` | loopback port of the `/ask` listener, the only one to mount on a tailnet |

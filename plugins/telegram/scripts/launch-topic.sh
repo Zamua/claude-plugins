@@ -7,8 +7,8 @@
 # foreground Claude in its own detached session (a --bg agent silently drops
 # channel notifications). This mirrors the proven single-session bridge.
 #
-# TWO BACKENDS, selected by TG_MUX (set by the proxy from
-# TELEGRAM_TOPICS_MULTIPLEXER; default tmux):
+# THREE BACKENDS, selected by TG_MUX (set by the proxy per topic: hc for the
+# topics in TELEGRAM_TOPICS_HC_TOPICS, else TELEGRAM_TOPICS_MULTIPLEXER, default tmux):
 #   tmux   the original backend. Per-topic vars are handed to the new session
 #          EXPLICITLY via `new-session -e` (see the note in spawn_tmux) so the
 #          pane shell + the claude child + its MCP inherit them regardless of
@@ -18,7 +18,9 @@
 #          a herdr pane inherits the herdr SERVER's environment (often a
 #          minimal launchd one), never this launcher's. PATH is forwarded the
 #          same way so `claude` resolves under the server's env too.
-# The claude invocation itself (PANE_CMD below) is byte-identical for both.
+#   hc     herdr-core. Like herdr, a terminal starts in the core's environment,
+#          so the pane command runs from a script that exports every variable.
+# The claude invocation itself (PANE_CMD below) is byte-identical for all three.
 set -u
 
 # Schedulers / detached parents run with a minimal PATH; make claude/tmux/
@@ -92,6 +94,10 @@ TG_PATH="$PATH"
 # required (variadic, like --channels), and the disallowedTools SETTINGS key is
 # not honored for AskUserQuestion; only the CLI flag removes it.
 # `exec` so the pane dies with claude and the proxy's reconcile drops it.
+# A multiplexer server started from inside another Claude hands that Claude's
+# identity to every pane; the unset keeps the topic's Claude from running as its
+# child, which saves no transcript and so cannot be resumed. Claude finds its
+# login in the keychain by USER, which a server's environment may lack.
 #
 # Session continuity: a FIRST spawn uses --session-id <id> + the kickoff; a
 # re-spawn (TG_RESUME=1) uses --resume <id> and NO kickoff. TG_MODEL controls the
@@ -103,7 +109,11 @@ TG_PATH="$PATH"
 # but an Anthropic-authenticated session can otherwise restore its native route
 # before issuing an HTTP request.
 # Args use `set --` so a bracketed id stays one properly quoted argument.
-PANE_CMD='export PATH="$TG_PATH"; \
+PANE_CMD='unset CLAUDECODE CLAUDE_PID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID \
+   CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN \
+   CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH AI_AGENT; \
+ [ -n "${USER:-}" ] || export USER="$(id -un)"; \
+ export PATH="$TG_PATH"; \
  if [ -n "$TG_MODEL" ]; then \
    export CLAUDE_CODE_SUBAGENT_MODEL="$TG_MODEL"; \
  else \
@@ -170,6 +180,48 @@ PANE_CMD='export PATH="$TG_PATH"; \
 # the squashed phrase - immune to wrapping and indentation.
 DIALOG_SQUASHED='Iamusingthisforlocaldevelopment'
 WATCHER_TRIES=480
+
+# Writes the pane command, with every variable it needs exported, to a
+# short-lived script and prints its path. For a multiplexer whose sessions start
+# in the SERVER's environment (herdr, hc), never this launcher's: PATH included,
+# or `claude` may not resolve under a launchd-started server. The script deletes
+# itself on entry; bash holds the open fd, so the running copy is unaffected.
+write_spawn_script() {
+  local script
+  # NB no .sh suffix: BSD mktemp only substitutes X's at the END of the template
+  # and would otherwise hand back the literal name, colliding across spawns.
+  script=$(mktemp "${TMPDIR:-/tmp}/tg-topic-XXXXXX") || return 1
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'rm -f %q\n' "$script"
+    printf 'export PATH=%q\n' "$PATH"
+    printf 'export MCP_TIMEOUT=%q\n' "$MCP_TIMEOUT"
+    printf 'export TG_PATH=%q\n' "$TG_PATH"
+    printf 'export TG_CLAUDE_BIN=%q\n' "$TG_CLAUDE_BIN"
+    printf 'export TG_MARKETPLACE=%q\n' "$TG_MARKETPLACE"
+    printf 'export TG_SETTINGS=%q\n' "$TG_SETTINGS"
+    printf 'export TG_HOOK=%q\n' "$TG_HOOK"
+    printf 'export TG_FAILOVER_HOOK=%q\n' "$TG_FAILOVER_HOOK"
+    printf 'export TG_CAPACITY_HOOK=%q\n' "$TG_CAPACITY_HOOK"
+    printf 'export TG_PROVIDER=%q\n' "$TG_PROVIDER"
+    printf 'export TG_INBOUND_MODE=%q\n' "$TG_INBOUND_MODE"
+    printf 'export TG_PROVIDER_BASE_URL=%q\n' "$TG_PROVIDER_BASE_URL"
+    printf 'export TG_PROVIDER_AUTH_TOKEN=%q\n' "$TG_PROVIDER_AUTH_TOKEN"
+    printf 'export TG_AUTO_COMPACT_WINDOW=%q\n' "$TG_AUTO_COMPACT_WINDOW"
+    printf 'export TG_MODEL=%q\n' "$TG_MODEL"
+    printf 'export TG_AUX_MODEL=%q\n' "$TG_AUX_MODEL"
+    printf 'export TG_EFFORT=%q\n' "$TG_EFFORT"
+    printf 'export TG_DISALLOWED_TOOLS=%q\n' "$TG_DISALLOWED_TOOLS"
+    printf 'export TG_KICKOFF=%q\n' "$TG_KICKOFF"
+    printf 'export TG_CLAUDE_SESSION_ID=%q\n' "$TG_CLAUDE_SESSION_ID"
+    printf 'export TG_RESUME=%q\n' "$TG_RESUME"
+    printf 'export TELEGRAM_TOPIC_ID=%q\n' "$TELEGRAM_TOPIC_ID"
+    printf 'export TELEGRAM_PROXY_URL=%q\n' "$TELEGRAM_PROXY_URL"
+    printf '%s\n' "$PANE_CMD"
+  } > "$script"
+  chmod 700 "$script"
+  printf '%s' "$script"
+}
 
 spawn_tmux() {
   # Dedup: never spawn a second session for a topic. The '=' forces an EXACT
@@ -298,49 +350,14 @@ print("absent")
   # submit it half-parsed and anything past ~1500 chars is dropped without ever
   # being submitted. So the real invocation is written to a short-lived script
   # and the typed line is just `exec bash <path>` - exec so the pane dies with
-  # claude and the proxy's reconcile drops it.
-  #
-  # A herdr pane inherits the herdr SERVER's environment (not this launcher's),
-  # so every var - PATH included, or `claude` may not resolve under a
-  # launchd-started server - is exported by that script (the herdr equivalent of
-  # tmux's `new-session -e`). It deletes itself on entry; bash holds the open fd,
-  # so the running copy is unaffected.
+  # claude and the proxy's reconcile drops it. A herdr pane starts in the herdr
+  # SERVER's environment, so the script exports every variable (the herdr
+  # equivalent of tmux's `new-session -e`).
   local script
-  # NB no .sh suffix: BSD mktemp only substitutes X's at the END of the template
-  # and would otherwise hand back the literal name, colliding across spawns.
-  script=$(mktemp "${TMPDIR:-/tmp}/tg-topic-XXXXXX") || {
+  script=$(write_spawn_script) || {
     echo "telegram-topics: could not create the herdr spawn script" >&2
     exit 1
   }
-  {
-    printf '#!/usr/bin/env bash\n'
-    printf 'rm -f %q\n' "$script"
-    printf 'export PATH=%q\n' "$PATH"
-    printf 'export MCP_TIMEOUT=%q\n' "$MCP_TIMEOUT"
-    printf 'export TG_PATH=%q\n' "$TG_PATH"
-    printf 'export TG_CLAUDE_BIN=%q\n' "$TG_CLAUDE_BIN"
-    printf 'export TG_MARKETPLACE=%q\n' "$TG_MARKETPLACE"
-    printf 'export TG_SETTINGS=%q\n' "$TG_SETTINGS"
-    printf 'export TG_HOOK=%q\n' "$TG_HOOK"
-    printf 'export TG_FAILOVER_HOOK=%q\n' "$TG_FAILOVER_HOOK"
-    printf 'export TG_CAPACITY_HOOK=%q\n' "$TG_CAPACITY_HOOK"
-    printf 'export TG_PROVIDER=%q\n' "$TG_PROVIDER"
-    printf 'export TG_INBOUND_MODE=%q\n' "$TG_INBOUND_MODE"
-    printf 'export TG_PROVIDER_BASE_URL=%q\n' "$TG_PROVIDER_BASE_URL"
-    printf 'export TG_PROVIDER_AUTH_TOKEN=%q\n' "$TG_PROVIDER_AUTH_TOKEN"
-    printf 'export TG_AUTO_COMPACT_WINDOW=%q\n' "$TG_AUTO_COMPACT_WINDOW"
-    printf 'export TG_MODEL=%q\n' "$TG_MODEL"
-    printf 'export TG_AUX_MODEL=%q\n' "$TG_AUX_MODEL"
-    printf 'export TG_EFFORT=%q\n' "$TG_EFFORT"
-    printf 'export TG_DISALLOWED_TOOLS=%q\n' "$TG_DISALLOWED_TOOLS"
-    printf 'export TG_KICKOFF=%q\n' "$TG_KICKOFF"
-    printf 'export TG_CLAUDE_SESSION_ID=%q\n' "$TG_CLAUDE_SESSION_ID"
-    printf 'export TG_RESUME=%q\n' "$TG_RESUME"
-    printf 'export TELEGRAM_TOPIC_ID=%q\n' "$TELEGRAM_TOPIC_ID"
-    printf 'export TELEGRAM_PROXY_URL=%q\n' "$TELEGRAM_PROXY_URL"
-    printf '%s\n' "$PANE_CMD"
-  } > "$script"
-  chmod 700 "$script"
   if ! "$herdr_bin" pane run "$pane_id" "exec bash $script" >/dev/null 2>&1; then
     echo "telegram-topics: herdr pane run failed for $pane_id" >&2
     rm -f "$script"
@@ -370,11 +387,77 @@ print("absent")
   fi
 }
 
+# herdr-core (`hc`). Its CLI cannot pass an environment and a terminal starts in
+# the CORE's environment, so, as for herdr, the pane command runs from a script
+# that exports every variable. Every hc call here runs in a minimal environment:
+# a call that finds no core starts one, the core keeps the environment it was
+# started in, and every terminal inherits it, so the proxy's own variables (the
+# bot token among them) must never reach it.
+hc_cli() {
+  env -i HOME="$HOME" PATH="$PATH" USER="${USER:-}" LANG="${LANG:-en_US.UTF-8}" TMPDIR="${TMPDIR:-/tmp}" \
+    ${HC_SESSION:+HC_SESSION="$HC_SESSION"} ${HC_SOCKET:+HC_SOCKET="$HC_SOCKET"} \
+    ${XDG_STATE_HOME:+XDG_STATE_HOME="$XDG_STATE_HOME"} ${XDG_CONFIG_HOME:+XDG_CONFIG_HOME="$XDG_CONFIG_HOME"} \
+    "${TELEGRAM_HC_BIN:-hc}" "$@"
+}
+
+spawn_hc() {
+  # hc names are 1-32 of a-z 0-9 - _ . and unique among live terminals; the
+  # topic id makes this one unique. The session name, which can be longer, is a
+  # label: the proxy and the dedup below look sessions up by it.
+  local name="tg-${TELEGRAM_TOPIC_ID}" state address
+  # A finished terminal stays listed until removed, so this session's finished
+  # ones are cleared before it starts again, and do not pile up.
+  state=$(hc_cli ls --all --json --label "session=$TG_SESSION" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    terminals = json.load(sys.stdin).get("terminals", [])
+except Exception:
+    terminals = []
+if any(t.get("state") == "live" for t in terminals):
+    print("live")
+else:
+    print(" ".join(["finished"] + [t["address"] for t in terminals]))
+' 2>/dev/null) || state='finished'
+  if [ "$state" = live ]; then
+    echo "telegram-topics: session $TG_SESSION already exists; not spawning" >&2
+    exit 0
+  fi
+  for address in ${state#finished}; do
+    hc_cli rm "$address" >/dev/null 2>&1 || true
+  done
+
+  local script
+  script=$(write_spawn_script) || {
+    echo "telegram-topics: could not create the hc spawn script" >&2
+    exit 1
+  }
+  if ! hc_cli run --bg --json --no-parent --no-notify --name "$name" \
+      --label "session=$TG_SESSION" --label "topic=$TELEGRAM_TOPIC_ID" \
+      --cwd "$TG_SPAWN_DIR" bash "$script" >/dev/null 2>&1; then
+    echo "telegram-topics: hc could not start terminal $name for $TG_SESSION" >&2
+    rm -f "$script"
+    exit 1
+  fi
+
+  # Auto-confirm watcher, as for the other backends: read the screen, answer the
+  # dialog, exit.
+  (
+    for _ in $(seq 1 "$WATCHER_TRIES"); do
+      if hc_cli read "$name" 2>/dev/null | tr -d ' \t\n' | grep -q "$DIALOG_SQUASHED"; then
+        hc_cli keys "$name" 1 enter
+        break
+      fi
+      sleep 0.25
+    done
+  ) </dev/null >/dev/null 2>&1 &
+}
+
 case "$TG_MUX" in
   tmux) spawn_tmux ;;
   herdr) spawn_herdr ;;
+  hc) spawn_hc ;;
   *)
-    echo "telegram-topics: unknown TG_MUX '$TG_MUX' (expected tmux|herdr)" >&2
+    echo "telegram-topics: unknown TG_MUX '$TG_MUX' (expected tmux|herdr|hc)" >&2
     exit 1
     ;;
 esac
