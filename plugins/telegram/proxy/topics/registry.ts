@@ -111,3 +111,17 @@ export function loadAndReconcileRegistry(): void {
   }
   saveRegistry()
 }
+
+/**
+ * Records a topic's new name, from Telegram's rename or the app's. The session
+ * takes `claude-<new-slug>-<tid>` on its next respawn, never mid-life.
+ */
+export function learnTopicName(topic: string, name: string): void {
+  topicNames.set(topic, name)
+  const st = topics.get(topic)
+  if (st) {
+    st.name = name
+    saveRegistry()
+  }
+}
+

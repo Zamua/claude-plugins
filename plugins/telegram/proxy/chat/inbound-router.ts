@@ -12,7 +12,7 @@ import type { createSquare } from '../square/square'
 import { transcribeVoice, VOICE_TAG } from '../telegram/voice-transcription'
 import type { createTopicLifecycle } from '../topics/lifecycle'
 import { PERMISSION_REPLY_RE, pendingPerms, resolvePermission } from '../topics/permissions'
-import { saveRegistry } from '../topics/registry'
+import { learnTopicName } from '../topics/registry'
 import { topicNames, topics } from '../topics/state'
 import { intentHarness, intentTopic } from './domain/actions'
 import type { ActionPress } from './domain/actions'
@@ -130,12 +130,7 @@ export function createInboundRouter(ports: InboundPorts): (event: ChatEvent) => 
     if (message.service?.kind === 'renamed') {
       const nm = message.service.name
       if (nm) {
-        topicNames.set(topic, nm)
-        const st = topics.get(topic)
-        if (st) {
-          st.name = nm
-          saveRegistry()
-        }
+        learnTopicName(topic, nm)
         harness?.rename(topic, nm)
         log(`topic ${topic} renamed to "${nm}"`)
       }

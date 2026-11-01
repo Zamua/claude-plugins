@@ -58,6 +58,7 @@ export function mirroredChat(
     typing: (topic, activity) => chat.typing(topic, activity),
     download: (ref, nameHint) => chat.download(ref, nameHint),
     createTopic: name => chat.createTopic(name),
+    renameTopic: (topic, name) => chat.renameTopic(topic, name),
     setCommands: commands => chat.setCommands(commands),
     link: (topic, id) => chat.link(topic, id),
     messageId: raw => chat.messageId(raw),

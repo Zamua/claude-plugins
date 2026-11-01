@@ -34,6 +34,8 @@ type TelegramApi = Pick<
   | 'setMessageReaction'
   | 'sendChatAction'
   | 'createForumTopic'
+  | 'editForumTopic'
+  | 'editGeneralForumTopic'
   | 'setMyCommands'
 >
 
@@ -122,6 +124,10 @@ export function createTelegramChat(api: TelegramApi, chatId: string, download: D
     },
     download: (fileRef, nameHint) => download(fileRef, nameHint),
     createTopic: async name => String((await api.createForumTopic(chatId, name)).message_thread_id),
+    renameTopic: async (topic, name) => {
+      if (topic === 'general') await api.editGeneralForumTopic(chatId, name)
+      else await api.editForumTopic(chatId, Number(topic), { name })
+    },
     setCommands: async commands => {
       await api.setMyCommands(commands, { scope: { type: 'chat', chat_id: Number(chatId) } })
     },

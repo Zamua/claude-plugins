@@ -68,6 +68,12 @@ beforeEach(() => {
       relaunch: async topic => void controlled.push(`relaunch ${topic}`),
       interrupt: () => false,
       say: async () => {},
+      createTopic: async name => {
+        listed = [...listed, { id: '501', name, kind: 'claude', title: null, route: null, state: 'stopped' }]
+        return '501'
+      },
+      renameTopic: async (topic, name) => void (listed = listed.map(t => (t.id === topic ? { ...t, name } : t))),
+      setPrefs: (topic, prefs) => store.setPrefs(topic, prefs),
     }),
     notify: text => notices.push(text),
     deliver: async input => {
@@ -145,6 +151,9 @@ describe('reads', () => {
     store.append({ topic: '42', author: 'agent', origin: 'proxy', text: 'built', format: 'plain' })
     const body = await (await get('/v1/topics', device)).json()
     expect(body.cursor).toBe(1)
+    expect(body.history_since).toBe(store.historySince())
+    expect(typeof body.history_since).toBe('string')
+    expect(body.topics[1].last_message.format).toBe('plain')
     expect(body.topics.map((t: { id: string }) => t.id)).toEqual(['general', '42'])
     expect(Object.keys(body.topics[1]).sort()).toEqual(Object.keys(topicFixture).sort())
     expect(body.topics[1]).toMatchObject({ unread: 1, last_message: { preview: 'built', author: 'agent' }, pinned: false })
@@ -444,10 +453,30 @@ describe('signed writes', () => {
     expect((await (await get('/v1/routes', d.device)).json()).providers[0].models[0]).toMatchObject({ id: 'claude-opus-5-5', default_effort: 'xhigh' })
     expect(await (await get('/v1/usage', d.device)).json()).toEqual({ providers: [] })
   })
+
+  test('a topic is created, renamed, muted and pinned by signed writes, each in the ledger, answered with the topic now', async () => {
+    const d = await setupDevice()
+    const act = (method: 'POST' | 'PATCH', path: string, body: unknown, clientId: string) => {
+      const bytes = new TextEncoder().encode(JSON.stringify(body))
+      return fetch(`${base}${path}`, { method, body: bytes as unknown as BodyInit, headers: { 'X-Device': d.device, ...d.key.headers(method, path, clientId, bytes) } })
+    }
+    const created = await act('POST', '/v1/topics', { name: 'research' }, 'topic-00001')
+    expect(created.status).toBe(201)
+    expect(await created.json()).toMatchObject({ id: '501', name: 'research', pinned: false, muted: false })
+    const patched = await act('PATCH', '/v1/topics/42', { name: 'ci', muted: true, pinned: true }, 'topic-00002')
+    expect([patched.status, await patched.json()]).toEqual([200, expect.objectContaining({ id: '42', name: 'ci', muted: true, pinned: true })])
+    expect((await act('PATCH', '/v1/topics/42', { muted: 'no' }, 'topic-00003')).status).toBe(400)
+    expect((await act('PATCH', '/v1/topics/nope', { muted: true }, 'topic-00004')).status).toBe(404)
+    const topicsNow = (await (await get('/v1/topics', d.device)).json()).topics as Array<{ id: string; muted: boolean }>
+    expect(topicsNow.find(t => t.id === '42')?.muted).toBeTrue()
+    const ledger = readFileSync(join(dir, 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+    expect(ledger.filter(l => l.kind === 'topic').map(l => [l.action, l.topic ?? null, l.name ?? null])).toEqual([
+      ['create', null, 'research'], ['patch', '42', 'ci'], ['patch', '42', null],
+    ])
+  })
 })
 
 function readJson(name: string, over: Record<string, unknown> = {}): Record<string, unknown> {
   const f = JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'docs', 'conductor-v1', name), 'utf8'))
   return { ...f, ...over }
 }
-

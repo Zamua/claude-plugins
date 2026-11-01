@@ -92,7 +92,7 @@ import { createTelegramInbound } from './telegram/telegram-inbound'
 import { claimPidFile, releasePidFile } from './shared/pid-file'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
-import { loadAndReconcileRegistry } from './topics/registry'
+import { learnTopicName, loadAndReconcileRegistry } from './topics/registry'
 import { currentRoute, getTopic } from './topics/state'
 import { loadConvs } from './square/conversations'
 import { createSquare } from './square/square'
@@ -394,6 +394,13 @@ const conductor = conductorStore && conductorMode?.listener
           interrupt,
           // Unmirrored, like the app's own messages: the app already shows what it did.
           say: async (topic, text) => void (await telegramChat.send(topic, { text }).catch(noticeFailed('app command echo', topic))),
+          createTopic: name => createTopic(name, 'claude'),
+          renameTopic: async (topic, name) => {
+            await chat.renameTopic(topic, name)
+            learnTopicName(topic, name)
+            harnessFor(topic)?.rename(topic, name)
+          },
+          setPrefs: (topic, prefs) => conductorStore.setPrefs(topic, prefs),
         }),
         ...(hcTopics && {
           screen: (topic: string) => conductorScreen(topic, hcTopics),

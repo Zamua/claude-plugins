@@ -15,7 +15,7 @@ const deadToken = (reply: ApnsReply) => reply.status === 410 || (reply.status ==
 
 type PushPorts = {
   store: ConductorStore
-  /** The topics the app lists; a message anywhere else is not pushed. */
+  /** The topics the app lists; a message anywhere else, or in a muted one, is not pushed, nor counted in the badge. */
   topics: () => ReadonlyArray<{ id: string; name: string }>
   log: (line: string) => void
   now?: () => number
@@ -72,7 +72,7 @@ export function startPush(ports: PushPorts & { sender: ApnsSender }): { stop(): 
     if (pushed.size > REMEMBERED) pushed.delete(pushed.values().next().value as string)
     if (!pushable(message)) return
     try {
-      const topics = ports.topics()
+      const topics = ports.topics().filter(t => !store.prefs(t.id).muted)
       const topic = topics.find(t => t.id === message.topic)
       if (!topic) return
       const devices = store.pushTargets()

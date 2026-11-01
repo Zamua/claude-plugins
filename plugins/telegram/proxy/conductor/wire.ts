@@ -3,7 +3,7 @@
 import { PROVIDERS, providerLabel } from '../routing/domain/model-routing'
 import type { ProviderCapacity } from '../routing/domain/provider-capacity'
 import type { ProviderCatalog } from '../routing/provider-catalog'
-import type { StoredMessage } from './domain/message'
+import type { MessageFormat, StoredMessage } from './domain/message'
 import { offered } from './domain/route-choice'
 
 export type AgentState = 'starting' | 'idle' | 'working' | 'blocked' | 'stopped' | 'missing'
@@ -21,7 +21,7 @@ export type TopicView = {
   readSeq: number
   pendingApprovals: number
   route: { provider: string; model: string; effort: string } | null
-  lastMessage: { preview: string; author: string; at: string } | null
+  lastMessage: { preview: string; format: MessageFormat; author: string; at: string } | null
 }
 
 /** hc reports no cursor position, so screens carry none. */

@@ -132,4 +132,23 @@ describe('ConductorStore, for the API', () => {
     expect(s.eventsAfter(1).map(e => [e.cursor, e.type])).toEqual([[2, 'topic'], [3, 'message']])
     expect(s.latestCursor()).toBe(3)
   })
+
+  test('a topic\'s pin and mute are null until set, and each is set without touching the other', () => {
+    const { s } = store()
+    expect(s.prefs('7')).toEqual({ pinned: null, muted: null })
+    s.setPrefs('7', { muted: true })
+    s.setPrefs('7', { pinned: false })
+    expect(s.prefs('7')).toEqual({ pinned: false, muted: true })
+    s.setPrefs('7', { muted: false })
+    expect(s.prefs('7')).toEqual({ pinned: false, muted: false })
+  })
+
+  test('history begins at the oldest kept message, and is null before the first', () => {
+    const { s } = store()
+    expect(s.historySince()).toBeNull()
+    s.append({ ...say('7', 'later'), at: '2026-11-01T22:00:00.000Z' })
+    s.append({ ...say('8', 'earlier'), at: '2026-11-01T21:00:00.000Z' })
+    expect(s.historySince()).toBe('2026-11-01T21:00:00.000Z')
+  })
 })
+
