@@ -7,7 +7,7 @@ const spec = (over: Partial<ClaudeSpawnSpec> = {}): ClaudeSpawnSpec => ({
   label: 'hostthis',
   sessionName: 'claude-hostthis-34',
   muxKind: 'herdr',
-  spawnDir: '/Users/zamua/Dropbox/workspace/macmini',
+  spawnDir: '/tmp/workspace',
   proxyUrl: 'http://localhost:8790',
   squareTopic: '123',
   marketplace: 'plugin:telegram@zamua',
