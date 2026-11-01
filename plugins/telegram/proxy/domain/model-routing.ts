@@ -3,6 +3,8 @@ export const PROVIDERS = ['anthropic', 'codex', 'opencode-go'] as const
 export type ProviderId = (typeof PROVIDERS)[number]
 export type Effort = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type RouteChangeReason = 'manual' | 'quota' | 'reset' | 'migration'
+/** Why the operator is shown a model picker; a migration never asks. */
+export type PickerReason = Exclude<RouteChangeReason, 'migration'>
 
 export type TopicRoute = {
   provider: ProviderId

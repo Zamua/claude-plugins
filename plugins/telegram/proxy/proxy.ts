@@ -62,7 +62,7 @@ import { installedClaudeVersion, liveClaudeSessions } from './adapters/claude-se
 import { updateRestartAction } from './domain/claude-update'
 import { createMultiplexer } from './adapters/multiplexer'
 import type { MultiplexerPort } from './adapters/multiplexer'
-import { legacySwitchBackTarget, switchBackTarget } from './adapters/telegram-route-callback'
+import { callbackHarness, callbackTopic, decodeCallback, encodeCallback, legacySwitchBack } from './adapters/telegram-callback'
 import { inboundModeForRoute, renderPaneTurn } from './domain/inbound-delivery'
 import type { InboundMessage } from './domain/inbound-delivery'
 import {
@@ -85,6 +85,7 @@ import {
 } from './domain/model-routing'
 import type {
   Effort,
+  PickerReason,
   PendingRouteChange,
   ProviderId,
   RouteChangeReason,
@@ -112,7 +113,6 @@ import {
   antigravityTopicFromRecord,
 } from './domain/antigravity-topic'
 import type {
-  AntigravityEffort,
   AntigravityModel,
   AntigravityTopic,
 } from './domain/antigravity-topic'
@@ -120,7 +120,7 @@ import { OpencodeTopicService } from './application/opencode-topic-service'
 import { HerdrOpencodeRuntime } from './adapters/herdr-opencode-runtime'
 import { opencodeTopic, opencodeTopicFromRecord } from './domain/opencode-topic'
 import type { OpencodeTopic } from './domain/opencode-topic'
-import { callbackBelongsToHarness, callbackTopicTarget, lockRefusal } from './domain/topic-harness'
+import { lockRefusal } from './domain/topic-harness'
 import { topicSlug } from './domain/topic-slug'
 import type { LockedHarness, TopicHarness } from './domain/topic-harness'
 import { LocalgenTopicService } from './application/localgen-topic-service'
@@ -2230,14 +2230,14 @@ async function antigravityModelPicker(
   const safePage = Math.max(0, Math.min(page, pages - 1))
   const keyboard = new InlineKeyboard()
   for (const model of models.slice(safePage * MODELS_PER_PAGE, (safePage + 1) * MODELS_PER_PAGE)) {
-    keyboard.text(model.label, `agroute:m:${antigravitySelection(model, topic)}`).row()
+    keyboard.text(model.label, encodeCallback({ kind: 'antigravity-model', token: antigravitySelection(model, topic) })).row()
   }
   if (pages > 1) {
-    if (safePage > 0) keyboard.text('Previous', `agroute:models:${topic}:${safePage - 1}`)
-    if (safePage + 1 < pages) keyboard.text('Next', `agroute:models:${topic}:${safePage + 1}`)
+    if (safePage > 0) keyboard.text('Previous', encodeCallback({ kind: 'antigravity-models', topic, page: safePage - 1 }))
+    if (safePage + 1 < pages) keyboard.text('Next', encodeCallback({ kind: 'antigravity-models', topic, page: safePage + 1 }))
     keyboard.row()
   }
-  keyboard.text('Usage', `agroute:usage:${topic}`)
+  keyboard.text('Usage', encodeCallback({ kind: 'antigravity-usage', topic }))
   return {
     text: `Google / Antigravity subscription models${pages > 1 ? ` (${safePage + 1}/${pages})` : ''}:`,
     keyboard,
@@ -2275,7 +2275,7 @@ async function refreshAntigravityUsage(notifyResets: boolean): Promise<Antigravi
           {
             ...threadOf(topic.topic),
             reply_markup: new InlineKeyboard()
-              .text('Choose Antigravity model', `agroute:models:${topic.topic}:0`),
+              .text('Choose Antigravity model', encodeCallback({ kind: 'antigravity-models', topic: topic.topic, page: 0 })),
           },
         ).catch(error => log(`Antigravity reset notice failed for topic ${topic.topic}: ${error}`))
       }
@@ -2567,7 +2567,6 @@ async function handleRelaunch(chatId: string, topic: string, fromId: string): Pr
 // ---- provider routing application service + Telegram adapter ---------------
 
 const capacities = new Map<ProviderId, ProviderCapacity>()
-type PickerReason = 'manual' | 'quota' | 'reset'
 type ModelSelection = {
   topic: string
   provider: ProviderId
@@ -2582,14 +2581,6 @@ const MODELS_PER_PAGE = 8
 let catalogCache: { value: ProviderCatalog; at: number } | undefined
 let codexAccountModels: ProviderModel[] | undefined
 const resetTimers = new Map<ProviderId, ReturnType<typeof setTimeout>>()
-
-const providerCode = (provider: ProviderId): string =>
-  provider === 'anthropic' ? 'a' : provider === 'codex' ? 'c' : 'o'
-const providerFromCode = (code: string): ProviderId | undefined =>
-  code === 'a' ? 'anthropic' : code === 'c' ? 'codex' : code === 'o' ? 'opencode-go' : undefined
-const reasonCode = (reason: PickerReason): string => reason === 'manual' ? 'm' : reason === 'quota' ? 'q' : 'r'
-const reasonFromCode = (code: string): PickerReason | undefined =>
-  code === 'm' ? 'manual' : code === 'q' ? 'quota' : code === 'r' ? 'reset' : undefined
 
 function modelCatalog(): ProviderCatalog {
   if (catalogCache && Date.now() - catalogCache.at < 60_000) return catalogCache.value
@@ -2652,9 +2643,9 @@ function providerKeyboard(topic: string, reason: PickerReason, exclude?: Provide
   for (const provider of providers.filter(value => value !== exclude)) {
     const availability = capacities.get(provider)?.availability
     const suffix = availability === 'exhausted' ? ' · limit reached' : availability === 'available' ? ' · available' : ''
-    keyboard.text(`${providerLabel(provider)}${suffix}`, `tgroute:p:${providerCode(provider)}:${reasonCode(reason)}:${topic}`).row()
+    keyboard.text(`${providerLabel(provider)}${suffix}`, encodeCallback({ kind: 'provider', provider, reason, topic })).row()
   }
-  keyboard.text('Usage', `tgroute:usage:${topic}`)
+  keyboard.text('Usage', encodeCallback({ kind: 'usage', topic }))
   return keyboard
 }
 
@@ -2697,18 +2688,18 @@ function modelPicker(
   const keyboard = new InlineKeyboard()
   for (const model of models.slice(safePage * MODELS_PER_PAGE, (safePage + 1) * MODELS_PER_PAGE)) {
     const token = modelToken({ topic, provider, model, reason, expiresAt: Date.now() + PICKER_TTL_MS })
-    keyboard.text(`${model.label}${model.bridgeSupported === false ? ' · bridge update needed' : ''}`, `tgroute:m:${token}`).row()
+    keyboard.text(`${model.label}${model.bridgeSupported === false ? ' · bridge update needed' : ''}`, encodeCallback({ kind: 'model', token })).row()
   }
   if (pages > 1) {
     if (safePage > 0) {
-      keyboard.text('Previous', `tgroute:models:${providerCode(provider)}:${reasonCode(reason)}:${topic}:${safePage - 1}`)
+      keyboard.text('Previous', encodeCallback({ kind: 'models', provider, reason, topic, page: safePage - 1 }))
     }
     if (safePage + 1 < pages) {
-      keyboard.text('Next', `tgroute:models:${providerCode(provider)}:${reasonCode(reason)}:${topic}:${safePage + 1}`)
+      keyboard.text('Next', encodeCallback({ kind: 'models', provider, reason, topic, page: safePage + 1 }))
     }
     keyboard.row()
   }
-  keyboard.text('Back', `tgroute:providers:${reasonCode(reason)}:${topic}`)
+  keyboard.text('Back', encodeCallback({ kind: 'providers', reason, topic }))
   return {
     text: models.length
       ? `${providerLabel(provider)} models${pages > 1 ? ` (${safePage + 1}/${pages})` : ''}:` + permissionNotice(provider)
@@ -2831,11 +2822,11 @@ function capacityText(): string {
 
 function switchBackKeyboard(topic: string, route: TopicRoute): InlineKeyboard {
   return new InlineKeyboard()
-    .text(`Switch back to ${modelLabel(route.model)}`, `tgroute:return:${providerCode(route.provider)}:${topic}`)
+    .text(`Switch back to ${modelLabel(route.model)}`, encodeCallback({ kind: 'switch-back', provider: route.provider, topic }))
     .row()
-    .text(`Choose ${providerLabel(route.provider)} model`, `tgroute:p:${providerCode(route.provider)}:r:${topic}`)
+    .text(`Choose ${providerLabel(route.provider)} model`, encodeCallback({ kind: 'provider', provider: route.provider, reason: 'reset', topic }))
     .row()
-    .text('Dismiss', 'tgroute:dismiss')
+    .text('Dismiss', encodeCallback({ kind: 'dismiss' }))
 }
 
 async function applySwitchBackCallback(ctx: any, provider: ProviderId, topic: string): Promise<void> {
@@ -3188,14 +3179,17 @@ bot.on('message', async ctx => {
   enqueue(topic, { content: desc.content, meta })
 })
 
-// Inline-button answers for permission prompts. Callback data is
-// `tgperm:allow:<request_id>` / `tgperm:deny:<request_id>`. Access control is
-// the group gate: only members of the configured forum group can tap a button
-// that lives in that group's thread.
+// Inline-button answers. Route pickers are operator-only and bound to the topic
+// and harness that emitted them. A permission answer's access control is the
+// group gate: only members of the configured forum group can tap a button that
+// lives in that group's thread.
 bot.on('callback_query:data', async ctx => {
-  const data = ctx.callbackQuery.data ?? ''
-  const m = /^tgperm:(allow|deny):(.+)$/.exec(data)
-  if (!m) {
+  const cb = decodeCallback(ctx.callbackQuery.data ?? '')
+  if (!cb) {
+    await ctx.answerCallbackQuery().catch(() => {})
+    return
+  }
+  if (cb.kind !== 'permission') {
     const cbChatId = ctx.callbackQuery.message?.chat.id
     const fromId = String(ctx.callbackQuery.from.id)
     if (String(cbChatId) !== String(GROUP_CHAT_ID) || !ADMIN_USER_ID || fromId !== ADMIN_USER_ID) {
@@ -3203,25 +3197,26 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const callbackTopic = (ctx.callbackQuery.message as any)?.message_thread_id != null
+    const currentTopic = (ctx.callbackQuery.message as any)?.message_thread_id != null
       ? String((ctx.callbackQuery.message as any).message_thread_id)
       : 'general'
-    const callbackHarness = topicHarnessOf(callbackTopic)
-    const explicitCallbackTopic = callbackTopicTarget(data)
-    if (explicitCallbackTopic && explicitCallbackTopic !== callbackTopic) {
+    const currentHarness = topicHarnessOf(currentTopic)
+    const namedTopic = callbackTopic(cb)
+    if (namedTopic && namedTopic !== currentTopic) {
       await ctx.answerCallbackQuery({
         text: 'This control belongs to a different Telegram topic.',
         show_alert: true,
       }).catch(() => {})
       return
     }
-    if (!callbackBelongsToHarness(callbackHarness, data)) {
+    const emitter = callbackHarness(cb)
+    if (emitter && emitter !== currentHarness) {
       await ctx.answerCallbackQuery({
-        text: callbackHarness === 'antigravity'
+        text: currentHarness === 'antigravity'
           ? 'This topic is locked to Google / Antigravity. External provider routes are disabled.'
-          : callbackHarness === 'opencode'
+          : currentHarness === 'opencode'
             ? 'This topic is locked to OpenCode / local Qwen. Model and provider pickers are disabled.'
-            : callbackHarness === 'localgen'
+            : currentHarness === 'localgen'
               ? 'This topic is locked to localgen. Model and provider pickers are disabled.'
               : 'This picker belongs to an Antigravity-locked topic.',
         show_alert: true,
@@ -3229,15 +3224,14 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const antigravityPage = /^agroute:models:([^:]+):(\d+)$/.exec(data)
-    if (antigravityPage) {
-      const topic = antigravityPage[1]
-      if (topic !== callbackTopic || !antigravityService.isLocked(topic)) {
+    if (cb.kind === 'antigravity-models') {
+      const topic = cb.topic
+      if (topic !== currentTopic || !antigravityService.isLocked(topic)) {
         await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
         return
       }
       try {
-        const picker = await antigravityModelPicker(topic, Number(antigravityPage[2]))
+        const picker = await antigravityModelPicker(topic, cb.page)
         await ctx.editMessageText(picker.text, { reply_markup: picker.keyboard })
         await ctx.answerCallbackQuery()
       } catch (error) {
@@ -3246,24 +3240,23 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const antigravityModel = /^agroute:m:([a-f0-9]+)$/.exec(data)
-    if (antigravityModel) {
+    if (cb.kind === 'antigravity-model') {
       pruneAntigravitySelections()
-      const selection = antigravityModelSelections.get(antigravityModel[1])
+      const selection = antigravityModelSelections.get(cb.token)
       if (!selection) {
         await ctx.answerCallbackQuery({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
         return
       }
-      if (selection.topic !== callbackTopic || !antigravityService.isLocked(selection.topic)) {
+      if (selection.topic !== currentTopic || !antigravityService.isLocked(selection.topic)) {
         await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
         return
       }
       const keyboard = new InlineKeyboard()
       for (const effort of selection.model.efforts) {
         const suffix = effort === selection.model.defaultEffort ? ' · default' : ''
-        keyboard.text(`${effort}${suffix}`, `agroute:e:${antigravityModel[1]}:${effort}`).row()
+        keyboard.text(`${effort}${suffix}`, encodeCallback({ kind: 'antigravity-effort', token: cb.token, effort })).row()
       }
-      keyboard.text('Back', `agroute:models:${selection.topic}:0`)
+      keyboard.text('Back', encodeCallback({ kind: 'antigravity-models', topic: selection.topic, page: 0 }))
       await ctx.editMessageText(`${selection.model.label}: choose reasoning effort`, {
         reply_markup: keyboard,
       }).catch(() => {})
@@ -3271,16 +3264,15 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const antigravityEffort = /^agroute:e:([a-f0-9]+):(low|medium|high)$/.exec(data)
-    if (antigravityEffort) {
+    if (cb.kind === 'antigravity-effort') {
       pruneAntigravitySelections()
-      const selection = antigravityModelSelections.get(antigravityEffort[1])
-      const effort = antigravityEffort[2] as AntigravityEffort
+      const selection = antigravityModelSelections.get(cb.token)
+      const effort = cb.effort
       if (!selection || !selection.model.efforts.includes(effort)) {
         await ctx.answerCallbackQuery({ text: 'This effort picker expired. Run /model again.' }).catch(() => {})
         return
       }
-      if (selection.topic !== callbackTopic || !antigravityService.isLocked(selection.topic)) {
+      if (selection.topic !== currentTopic || !antigravityService.isLocked(selection.topic)) {
         await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
         return
       }
@@ -3289,7 +3281,7 @@ bot.on('callback_query:data', async ctx => {
         antigravityRoute(selection.model, effort),
       )
       const changed = result.topic
-      antigravityModelSelections.delete(antigravityEffort[1])
+      antigravityModelSelections.delete(cb.token)
       await ctx.editMessageText(
         `${result.pending ? 'Switch queued for the next idle boundary:' : 'Now using'} ${antigravityRouteLabel(result.pending ? antigravityRoute(selection.model, effort) : changed.route)} ` +
         `in the same Antigravity conversation (${changed.conversationId ?? 'starts on your first message'}).\n\n` +
@@ -3299,17 +3291,16 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const antigravityUsage = /^agroute:usage:(.+)$/.exec(data)
-    if (antigravityUsage) {
-      const topic = antigravityUsage[1]
-      if (topic !== callbackTopic || !antigravityService.isLocked(topic)) {
+    if (cb.kind === 'antigravity-usage') {
+      const topic = cb.topic
+      if (topic !== currentTopic || !antigravityService.isLocked(topic)) {
         await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
         return
       }
       try {
         const usage = antigravityUsageText(await refreshAntigravityUsage(true))
         await ctx.editMessageText(usage, {
-          reply_markup: new InlineKeyboard().text('Back', `agroute:models:${topic}:0`),
+          reply_markup: new InlineKeyboard().text('Back', encodeCallback({ kind: 'antigravity-models', topic, page: 0 })),
         })
         await ctx.answerCallbackQuery()
       } catch (error) {
@@ -3318,24 +3309,14 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const returnPick = switchBackTarget(data)
-    if (returnPick) {
-      await applySwitchBackCallback(ctx, returnPick.provider, returnPick.topic)
+    if (cb.kind === 'switch-back') {
+      await applySwitchBackCallback(ctx, cb.provider, cb.topic)
       return
     }
 
-    const providerPick = /^tgroute:p:([aco]):([mqr]):(.+)$/.exec(data)
-    const pagePick = /^tgroute:models:([aco]):([mqr]):([^:]+):(\d+)$/.exec(data)
-    if (providerPick || pagePick) {
-      const match = providerPick ?? pagePick!
-      const provider = providerFromCode(match[1])
-      const reason = reasonFromCode(match[2])
-      const topic = match[3]
-      const page = pagePick ? Number(match[4]) : 0
-      if (!provider || !reason) {
-        await ctx.answerCallbackQuery({ text: 'This picker is no longer valid.' }).catch(() => {})
-        return
-      }
+    if (cb.kind === 'provider' || cb.kind === 'models') {
+      const { provider, reason, topic } = cb
+      const page = cb.kind === 'models' ? cb.page : 0
       if (capacities.get(provider)?.availability === 'exhausted') {
         await ctx.answerCallbackQuery({
           text: `${providerLabel(provider)} is still at its usage limit. Use /usage for the reset time.`,
@@ -3349,11 +3330,8 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const back = /^tgroute:providers:([mqr]):(.+)$/.exec(data)
-    if (back) {
-      const reason = reasonFromCode(back[1])
-      const topic = back[2]
-      if (!reason) return
+    if (cb.kind === 'providers') {
+      const { reason, topic } = cb
       const st = getTopic(topic)
       const exclude = reason === 'quota' ? st.exhaustedRoutes.at(-1)?.provider : undefined
       await ctx.editMessageText('Choose a provider:', {
@@ -3363,12 +3341,11 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const modelPick = /^tgroute:m:([a-f0-9]+)$/.exec(data)
-    if (modelPick) {
+    if (cb.kind === 'model') {
       pruneModelSelections()
-      const selection = modelSelections.get(modelPick[1])
+      const selection = modelSelections.get(cb.token)
       if (!selection) {
-        const legacy = legacySwitchBackTarget(ctx.callbackQuery.message)
+        const legacy = legacySwitchBack(ctx.callbackQuery.message)
         if (legacy) {
           await applySwitchBackCallback(ctx, legacy.provider, legacy.topic)
           return
@@ -3394,7 +3371,7 @@ bot.on('callback_query:data', async ctx => {
       for (const effort of selection.model.efforts) {
         const label = effort === 'auto' ? 'Provider default' : effort
         const suffix = effort === selection.model.defaultEffort ? ' · default' : ''
-        keyboard.text(`${label}${suffix}`, `tgroute:e:${modelPick[1]}:${effort}`).row()
+        keyboard.text(`${label}${suffix}`, encodeCallback({ kind: 'effort', token: cb.token, effort })).row()
       }
       await ctx.editMessageText(`${selection.model.label}: choose reasoning effort`, {
         reply_markup: keyboard,
@@ -3403,19 +3380,18 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const effortPick = /^tgroute:e:([a-f0-9]+):(auto|low|medium|high|xhigh|max)$/.exec(data)
-    if (effortPick) {
+    if (cb.kind === 'effort') {
       pruneModelSelections()
-      const selection = modelSelections.get(effortPick[1])
-      const effort = effortPick[2] as Effort
+      const selection = modelSelections.get(cb.token)
+      const effort = cb.effort
       if (!selection || !selection.model.efforts.includes(effort)) {
         await ctx.answerCallbackQuery({ text: 'This effort picker expired.' }).catch(() => {})
         return
       }
       selection.effort = effort
-      const keyboard = new InlineKeyboard().text('Off', `tgroute:u:${effortPick[1]}:0`).row()
+      const keyboard = new InlineKeyboard().text('Off', encodeCallback({ kind: 'ultracode', token: cb.token, on: false })).row()
       if (selection.model.supportsUltracode) {
-        keyboard.text('On · forces xhigh + workflows', `tgroute:u:${effortPick[1]}:1`).row()
+        keyboard.text('On · forces xhigh + workflows', encodeCallback({ kind: 'ultracode', token: cb.token, on: true })).row()
       }
       const compact = autoCompactWindow(selection.provider, selection.model.contextWindow)
       await ctx.editMessageText(
@@ -3430,11 +3406,10 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const ultracodePick = /^tgroute:u:([a-f0-9]+):([01])$/.exec(data)
-    if (ultracodePick) {
+    if (cb.kind === 'ultracode') {
       pruneModelSelections()
-      const selection = modelSelections.get(ultracodePick[1])
-      const ultracode = ultracodePick[2] === '1'
+      const selection = modelSelections.get(cb.token)
+      const ultracode = cb.on
       if (!selection || !selection.effort) {
         await ctx.answerCallbackQuery({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
         return
@@ -3463,7 +3438,7 @@ bot.on('callback_query:data', async ctx => {
         ultracode,
       })
       const result = requestRouteChange(selection.topic, route, selection.reason)
-      modelSelections.delete(ultracodePick[1])
+      modelSelections.delete(cb.token)
       await ctx.editMessageText(
         (result === 'queued'
           ? `Queued ${routeSummary(route)}. It will switch when the current Claude turn finishes.`
@@ -3478,17 +3453,16 @@ bot.on('callback_query:data', async ctx => {
       return
     }
 
-    const usagePick = /^tgroute:usage:(.+)$/.exec(data)
-    if (usagePick) {
+    if (cb.kind === 'usage') {
       await refreshProviderCapacity()
       await ctx.editMessageText(capacityText(), {
-        reply_markup: new InlineKeyboard().text('Back', `tgroute:providers:m:${usagePick[1]}`),
+        reply_markup: new InlineKeyboard().text('Back', encodeCallback({ kind: 'providers', reason: 'manual', topic: cb.topic })),
       }).catch(() => {})
       await ctx.answerCallbackQuery().catch(() => {})
       return
     }
 
-    if (data === 'tgroute:dismiss') {
+    if (cb.kind === 'dismiss') {
       await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {})
       await ctx.answerCallbackQuery({ text: 'Dismissed.' }).catch(() => {})
       return
@@ -3502,8 +3476,7 @@ bot.on('callback_query:data', async ctx => {
     await ctx.answerCallbackQuery({ text: 'Not authorized.' }).catch(() => {})
     return
   }
-  const behavior = m[1] as 'allow' | 'deny'
-  const requestId = m[2]
+  const { behavior, requestId } = cb
   const delivered = resolvePermission(requestId, behavior)
   if (!delivered) {
     await ctx.answerCallbackQuery({ text: 'No longer pending.' }).catch(() => {})
@@ -3692,8 +3665,8 @@ async function handlePermissionRequest(req: Request): Promise<Response> {
     `🔐 Permission: ${tool}${preview}\n\n` +
     `Tap a button, or reply "yes ${requestId}" to allow / "no ${requestId}" to deny.`
   const keyboard = new InlineKeyboard()
-    .text('✅ Allow', `tgperm:allow:${requestId}`)
-    .text('❌ Deny', `tgperm:deny:${requestId}`)
+    .text('✅ Allow', encodeCallback({ kind: 'permission', behavior: 'allow', requestId }))
+    .text('❌ Deny', encodeCallback({ kind: 'permission', behavior: 'deny', requestId }))
   await bot.api.sendMessage(String(GROUP_CHAT_ID), text, {
     ...(threadId != null ? { message_thread_id: threadId } : {}),
     reply_markup: keyboard,

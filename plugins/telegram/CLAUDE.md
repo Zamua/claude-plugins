@@ -502,7 +502,9 @@ groups concrete `-low`/`-medium`/`-high` variants into model then effort steps,
 and emits only `agroute:*` callbacks. It has no provider step and no Ultracode.
 Conversely, the Claude picker emits only `tgroute:*`. The callback boundary
 checks both the callback namespace and Telegram thread id, so an old or forged
-Claude-route button cannot mutate an Antigravity topic (and vice versa).
+Claude-route button cannot mutate an Antigravity topic (and vice versa). Every
+callback string is built and parsed by `adapters/telegram-callback.ts`, whose
+decoder must keep accepting buttons already posted in chats.
 `/usage` runs Antigravity's native `/usage` command and reports only its
 subscription pools. `/relaunch` closes and recreates the Herdr process with the
 same conversation. A route switch does the same with the chosen model/effort.
