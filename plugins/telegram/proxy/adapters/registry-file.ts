@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
-import { dirname } from 'path'
+import { existsSync, readFileSync, renameSync } from 'fs'
+import { writeJsonAtomic } from './json-file'
 import type { PendingRouteChange, TopicRoute } from '../domain/model-routing'
 
 /** One topic's row in registry.json. Field values are coerced by the caller. */
@@ -8,7 +8,7 @@ export type RegistryEntry = {
   thread_id: number | null
   name: string
   spawned_at: number
-  claude_session_id: string | null
+  claude_session_id?: string | null
   route?: TopicRoute | null
   launch_profile_version?: number | null
   pending_route?: PendingRouteChange | null
@@ -50,10 +50,7 @@ export function readRegistryFile(file: string, log: (m: string) => void, now = D
 }
 
 export function writeRegistryFile(file: string, registry: Registry): void {
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  const tmp = file + '.tmp'
-  writeFileSync(tmp, JSON.stringify(registry, null, 2) + '\n')
-  renameSync(tmp, file)
+  writeJsonAtomic(file, registry)
 }
 
 const reason = (err: unknown) => (err instanceof Error ? err.message : String(err))

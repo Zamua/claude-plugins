@@ -1,17 +1,15 @@
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   readlinkSync,
-  renameSync,
   symlinkSync,
   unlinkSync,
-  writeFileSync,
 } from 'fs'
 import { join } from 'path'
+import { writeJsonAtomic } from './json-file'
 
 type ManagedLinks = { version: 1; links: Record<string, string> }
 
@@ -93,9 +91,6 @@ export function syncAntigravitySkills(
     linked.push(name)
   }
 
-  const temp = `${manifest}.${process.pid}.tmp`
-  writeFileSync(temp, `${JSON.stringify({ version: 1, links }, null, 2)}\n`, { mode: 0o600 })
-  chmodSync(temp, 0o600)
-  renameSync(temp, manifest)
+  writeJsonAtomic(manifest, { version: 1, links })
   return { linked, skipped }
 }

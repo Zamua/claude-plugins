@@ -541,8 +541,8 @@ classifier; the topic should be treated as an unreviewed local agent.
 TUI driving the local Qwen server (`qwen-local/Qwen3.8-27B`, the same thing the
 operator's `localcode` alias runs by hand). It is a separate bounded context
 (`proxy/domain/opencode-topic.ts`, `OpencodeTopicService`,
-`HerdrOpencodeRuntime`, `opencode-topics.json`) and shares no abstraction with
-Antigravity beyond the Telegram Bot API adapter. Same rules: admin only, a fresh
+`HerdrOpencodeRuntime`, `opencode-topics.json`) and shares only the Telegram
+Bot API adapter and the generic JSON topic repository with Antigravity. Same rules: admin only, a fresh
 topic with no Claude UUID/live pane, never the square, no unlock or conversion
 path. A topic locked to one harness refuses the other command, every Claude
 spawn/queue/notice path skips a locked topic, and a square delivery aimed at
@@ -908,15 +908,18 @@ there is no agent to relaunch.
   app-server client, OpenCode Go capacity client, official Antigravity catalog,
   persistent Herdr runtimes (`herdr-antigravity-runtime.ts`,
   `herdr-opencode-runtime.ts`), MCP config, JSON repositories, and
-  portable-skill interop. Tests sit beside them.
+  portable-skill interop. Every JSON state file is written through
+  `json-file.ts` (`writeJsonAtomic`: 0600 temp file renamed into place), and
+  the three harness-locked topic files share `json-topic-repository.ts`.
+  Tests sit beside them.
 - `proxy/application/antigravity-topic-service.ts`: serializes turns and keeps
   exact Antigravity conversation identity independent of Telegram and Herdr I/O.
 - `proxy/application/opencode-topic-service.ts` + `opencode-ports.ts`: the same
   shape for localcode topics (session id instead of conversation id; no
   route/usage).
 - `proxy/application/localgen-topic-service.ts` + `localgen-ports.ts`,
-  `proxy/domain/localgen-topic.ts`, `proxy/adapters/qwen-image-client.ts`,
-  `proxy/adapters/json-localgen-topic-repository.ts`: the agentless localgen
+  `proxy/domain/localgen-topic.ts`, `proxy/adapters/qwen-image-client.ts`:
+  the agentless localgen
   harness (prompt in, PNG out).
 - `scripts/launch-topic.sh`: the one-harness launcher (invoked by the proxy;
   `TG_MUX` picks only the multiplexer). Every pane executes `claude`.

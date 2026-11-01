@@ -100,7 +100,8 @@ import { routeLabel as antigravityRouteLabel } from './adapters/antigravity-cli'
 import { HerdrAntigravityRuntime } from './adapters/herdr-antigravity-runtime'
 import { syncAntigravityTelegramMcp } from './adapters/antigravity-mcp-config'
 import { ANTIGRAVITY_DISABLED_MESSAGE, DisabledAntigravityRuntime } from './adapters/disabled-antigravity-runtime'
-import { JsonAntigravityTopicRepository } from './adapters/json-antigravity-topic-repository'
+import { JsonTopicRepository } from './adapters/json-topic-repository'
+import { writeJsonAtomic } from './adapters/json-file'
 import {
   claudePluginSkillRoots,
   syncAntigravitySkills,
@@ -108,21 +109,23 @@ import {
 import {
   antigravityRoute,
   antigravityTopic,
+  antigravityTopicFromRecord,
 } from './domain/antigravity-topic'
 import type {
   AntigravityEffort,
   AntigravityModel,
+  AntigravityTopic,
 } from './domain/antigravity-topic'
 import { OpencodeTopicService } from './application/opencode-topic-service'
 import { HerdrOpencodeRuntime } from './adapters/herdr-opencode-runtime'
-import { JsonOpencodeTopicRepository } from './adapters/json-opencode-topic-repository'
-import { opencodeTopic } from './domain/opencode-topic'
+import { opencodeTopic, opencodeTopicFromRecord } from './domain/opencode-topic'
+import type { OpencodeTopic } from './domain/opencode-topic'
 import { callbackBelongsToHarness, callbackTopicTarget } from './domain/topic-harness'
 import type { TopicHarness } from './domain/topic-harness'
 import { LocalgenTopicService } from './application/localgen-topic-service'
 import { QwenImageClient } from './adapters/qwen-image-client'
-import { JsonLocalgenTopicRepository } from './adapters/json-localgen-topic-repository'
-import { localgenTopic } from './domain/localgen-topic'
+import { localgenTopic, localgenTopicFromRecord } from './domain/localgen-topic'
+import type { LocalgenTopic } from './domain/localgen-topic'
 import { antigravityResetPools } from './domain/antigravity-capacity'
 import { describeLocation, describeVenue } from './domain/location'
 import type { AntigravityUsageWindow } from './application/antigravity-ports'
@@ -309,7 +312,6 @@ const TOPIC_LAUNCH_PROFILE_VERSION = 4
 // ultracode override).
 function resolveSettings(topic: string, route: TopicRoute): string {
   try {
-    mkdirSync(EFFECTIVE_SETTINGS_DIR, { recursive: true, mode: 0o700 })
     const base = JSON.parse(readFileSync(OVERRIDE_SETTINGS, 'utf8'))
     const settings = effectiveClaudeSettings(base, route)
     const safeTopic = topic.replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -317,7 +319,7 @@ function resolveSettings(topic: string, route: TopicRoute): string {
     // NB the MODEL is NOT baked in here: a settings `model` is only a default and
     // is ignored by a --resume'd interactive session. The launcher passes MODEL as
     // the --model FLAG (via TG_MODEL) instead, which overrides even on resume.
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
+    writeJsonAtomic(settingsPath, settings)
     return settingsPath
   } catch (e) {
     log(`could not generate effective settings (${e}); using override-settings.json`)
@@ -946,10 +948,7 @@ function pruneConvs(): void {
 function saveConvs(): void {
   pruneConvs()
   try {
-    mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-    const tmp = CONV_FILE + '.tmp'
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(convs), null, 2) + '\n')
-    renameSync(tmp, CONV_FILE)
+    writeJsonAtomic(CONV_FILE, Object.fromEntries(convs))
   } catch (e) {
     log(`could not save conversations.json: ${e}`)
   }
@@ -1698,7 +1697,9 @@ const bot = new Bot(TOKEN)
 // Antigravity is a separate harness-bounded context. It shares only the one
 // Telegram Bot API adapter with Claude topics; its session identity, model
 // catalog, route, and persistence are deliberately separate.
-const antigravityRepository = new JsonAntigravityTopicRepository(ANTIGRAVITY_TOPICS_FILE)
+const antigravityRepository = new JsonTopicRepository<AntigravityTopic>(
+  ANTIGRAVITY_TOPICS_FILE, 'Antigravity', antigravityTopicFromRecord,
+)
 const antigravityRuntime = ANTIGRAVITY_ENABLED
   ? new HerdrAntigravityRuntime(ANTIGRAVITY_BIN, SPAWN_DIR, ANTIGRAVITY_LAUNCH_SCRIPT, PROXY_URL)
   : new DisabledAntigravityRuntime()
@@ -1724,7 +1725,7 @@ const antigravityService = new AntigravityTopicService(
 // OpenCode (localcode) is a third harness-bounded context: one local Qwen
 // model, no route or usage, persisted in its own file. It shares only the
 // Telegram Bot API adapter with the other two.
-const opencodeRepository = new JsonOpencodeTopicRepository(OPENCODE_TOPICS_FILE)
+const opencodeRepository = new JsonTopicRepository<OpencodeTopic>(OPENCODE_TOPICS_FILE, 'OpenCode', opencodeTopicFromRecord)
 const opencodeRuntime = new HerdrOpencodeRuntime(
   OPENCODE_BIN,
   OPENCODE_PROJECT_DIR,
@@ -1783,7 +1784,7 @@ for (const topic of opencodeService.list()) {
 // localgen is a fourth harness-bounded context with no agent at all: every
 // text message is an image prompt POSTed to the qwen-image server and the PNG
 // comes back into the same thread.
-const localgenRepository = new JsonLocalgenTopicRepository(LOCALGEN_TOPICS_FILE)
+const localgenRepository = new JsonTopicRepository<LocalgenTopic>(LOCALGEN_TOPICS_FILE, 'localgen', localgenTopicFromRecord)
 const localgenService = new LocalgenTopicService(
   localgenRepository,
   new QwenImageClient(LOCALGEN_URL, log),
