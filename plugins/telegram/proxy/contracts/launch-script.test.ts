@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir, userInfo } from 'os'
@@ -7,6 +7,11 @@ import { claudeSpawnEnv } from '../topics/claude-launch'
 import type { ClaudeSpawnSpec } from '../topics/claude-launch'
 
 const scriptPath = join(import.meta.dir, '..', '..', 'scripts', 'launch-topic.sh')
+
+// A socket that accepts connections, standing in for the hc session's running core.
+const coreSocket = join(mkdtempSync(join(tmpdir(), 'tg-core-')), 'core.sock')
+const core = Bun.listen({ unix: coreSocket, socket: { data() {} } })
+afterAll(() => core.stop(true))
 
 // Fakes on the launcher's PATH. Both multiplexers start the pane command
 // synchronously and without the launcher's environment, as a server that
@@ -89,7 +94,7 @@ const baseSpec = (over: Partial<ClaudeSpawnSpec> = {}): ClaudeSpawnSpec => ({
 // Variables the launcher consumes itself; every other one must reach the pane.
 const LAUNCHER_ONLY = new Set(['TG_SESSION', 'TG_MUX', 'TG_SPAWN_DIR'])
 
-function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false, terminals: unknown[] = []) {
+function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false, terminals: unknown[] = [], hcSocket = coreSocket) {
   const home = mkdtempSync(join(tmpdir(), 'tg-launch-'))
   const bin = join(home, '.local', 'bin')
   const fake = join(home, 'fake')
@@ -108,7 +113,7 @@ function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false, 
   const spawnEnv = claudeSpawnEnv(spec)
   const result = spawnSync('bash', [scriptPath], {
     encoding: 'utf8',
-    env: { HOME: home, USER: 'test', PATH: '/usr/bin:/bin', TMPDIR: home, TELEGRAM_BOT_TOKEN: 'bot-token', ...spawnEnv },
+    env: { HOME: home, USER: 'test', PATH: '/usr/bin:/bin', TMPDIR: home, TELEGRAM_BOT_TOKEN: 'bot-token', HC_SOCKET: hcSocket, ...spawnEnv },
   })
   const read = (file: string) => (existsSync(join(fake, file)) ? readFileSync(join(fake, file), 'utf8') : '')
   const paneEnv = Object.fromEntries(read('claude.env').split('\n').filter(Boolean).map(line => {
@@ -241,6 +246,13 @@ describe('launch-topic.sh', () => {
     expect(run.paneEnv.TELEGRAM_TOPIC_ID).toBe('34')
     expect(run.hcEnv).not.toContain('TELEGRAM_BOT_TOKEN')
     expect(run.hcEnv).not.toContain('TG_KICKOFF')
+  })
+
+  test('hc never starts a core: with the session\'s core down the launch fails before any hc call', () => {
+    const run = launch(baseSpec({ muxKind: 'hc' }), [], false, [], join(tmpdir(), `tg-no-core-${process.pid}.sock`))
+    expect(run.result.status).toBe(1)
+    expect(run.result.stderr).toContain('the hc core for session default is not running')
+    expect(run.calls).toEqual([])
   })
 
   test('an hc terminal that cannot start fails the launch, so the proxy reports it', () => {

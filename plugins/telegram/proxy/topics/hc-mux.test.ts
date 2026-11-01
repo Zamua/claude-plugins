@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { HcMux, hcEnvironment } from './hc-mux'
+import { HcMux, hcConnect, hcEnvironment, hcSocketPath } from './hc-mux'
 import type { HcCall } from './hc-mux'
 
 type Terminal = { address: string; state: 'live' | 'finished'; labels: Record<string, string>; reported?: boolean; status?: { state: string }; foreground?: { name: string } }
@@ -69,7 +69,26 @@ describe('HcMux', () => {
   })
 })
 
-test('hc gets only what picks its session, never the proxy\'s own variables', () => {
-  expect(hcEnvironment({ HOME: '/h', PATH: '/bin', HC_SESSION: 'lab', TELEGRAM_BOT_TOKEN: 'secret', TG_KICKOFF: 'k' }))
-    .toEqual({ HOME: '/h', PATH: '/bin', HC_SESSION: 'lab' })
+test('hc gets only what places its session, never the proxy\'s own variables', () => {
+  expect(hcEnvironment({ HOME: '/h', PATH: '/bin', HC_SESSION: 'mine', TELEGRAM_BOT_TOKEN: 'secret', TG_KICKOFF: 'k' }, 'topics'))
+    .toEqual({ HOME: '/h', PATH: '/bin', HC_SESSION: 'topics' })
+})
+
+test('the core\'s socket is found as the hc CLI finds it', () => {
+  expect(hcSocketPath({ HOME: '/h', HC_SESSION: 'topics' })).toBe('/h/.local/state/herdr-core/topics/topics.sock')
+  expect(hcSocketPath({ HOME: '/h', HC_SESSION: 'topics', XDG_STATE_HOME: '/s' })).toBe('/s/herdr-core/topics/topics.sock')
+  expect(hcSocketPath({ HOME: '/h', HC_SESSION: 'topics', HC_SOCKET: '/run/hc.sock' })).toBe('/run/hc.sock')
+})
+
+test('no hc call is made while the session\'s core is down, which would start one without its grant', () => {
+  const logged: string[] = []
+  let up = false
+  const call = hcConnect('/nonexistent/hc', 'topics', m => logged.push(m), () => up)
+  expect(call('terminal.list', {})).toBeNull()
+  expect(call('terminal.list', {})).toBeNull()
+  expect(logged).toEqual(['hc core for session topics is not running; its launchd agent starts it, so no hc call is made'])
+  up = true
+  expect(call('terminal.list', {})).toBeNull()
+  expect(logged[1]).toBe('hc core for session topics is running again')
+  expect(logged[2]).toStartWith('hc terminal.list failed')
 })

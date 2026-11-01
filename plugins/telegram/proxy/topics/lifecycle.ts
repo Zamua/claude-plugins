@@ -10,6 +10,7 @@ import {
   EFFECTIVE_SETTINGS_DIR,
   FAILOVER_HOOK,
   GROUP_CHAT_ID,
+  HC_SESSION,
   LAUNCH_SCRIPT,
   MARKETPLACE,
   OVERRIDE_SETTINGS,
@@ -359,6 +360,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
       const env = {
         ...process.env,
         ...claudeSpawnEnv(spec),
+        ...(spec.muxKind === 'hc' && { HC_SESSION }),
       }
       const r = spawnSync('bash', [LAUNCH_SCRIPT], { env, encoding: 'utf8' })
       if (r.status !== 0) {

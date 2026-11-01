@@ -240,6 +240,9 @@ core:
     core's environment). `HcMux` sends one JSON-RPC request per `hc connect`;
     every hc call runs with a minimal environment, because a call that finds
     no core starts one and the core hands its environment to every terminal.
+    For the same reason neither the proxy nor the launcher calls hc while the
+    session's socket accepts no connection: the core's launchd agent starts it,
+    with its own Full Disk Access grant.
     Claude reports `done` after each turn, which hc's own `if: idle` send
     condition refuses, so `HcMux.prompt` checks the boundary itself.
   - The claude invocation (`PANE_CMD`) is byte-identical for all backends. It
@@ -1303,8 +1306,10 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 `TELEGRAM_TOPICS_UPDATE_RESTART` (`on`|`off`, default `on`),
 `TELEGRAM_TOPICS_MODEL` (default the pinned `claude-opus-5-5`, see below),
 `TELEGRAM_TOPICS_MULTIPLEXER` (`tmux`|`herdr`, default `tmux`; see "Multiplexer
-backends" above; applies to Claude topics); `TELEGRAM_TOPICS_HC_TOPICS` and
-`TELEGRAM_HC_BIN` (the topics run under herdr-core, and its binary); `TELEGRAM_ANTIGRAVITY_BIN` (optional
+backends" above; applies to Claude topics); `TELEGRAM_TOPICS_HC_TOPICS`,
+`TELEGRAM_HC_BIN` and `TELEGRAM_HC_SESSION` (the topics run under herdr-core, its
+binary, and the hc session, default `topics`, whose core its own launchd agent
+starts); `TELEGRAM_ANTIGRAVITY_BIN` (optional
 path to official `agy`, defaults to the Nix per-user profile and then PATH);
 `TELEGRAM_OPENCODE_BIN` (the `opencode` 2.x CLI, default
 `/opt/homebrew/bin/opencode` then PATH; the OpenCode Go catalog reads

@@ -405,6 +405,15 @@ spawn_hc() {
   # topic id makes this one unique. The session name, which can be longer, is a
   # label: the proxy and the dedup below look sessions up by it.
   local name="tg-${TELEGRAM_TOPIC_ID}" state address
+  # Any hc call that finds no core starts one, and that core would hold this
+  # launcher's macOS privacy permissions instead of its own grant. The session's
+  # launchd agent starts the core; until then the launch fails and is retried.
+  local session="${HC_SESSION:-default}"
+  local socket="${HC_SOCKET:-${XDG_STATE_HOME:-$HOME/.local/state}/herdr-core/$session/$session.sock}"
+  if ! /usr/bin/perl -MIO::Socket::UNIX -e 'exit(IO::Socket::UNIX->new(Peer => $ARGV[0]) ? 0 : 1)' "$socket" 2>/dev/null; then
+    echo "telegram-topics: the hc core for session $session is not running; its launchd agent starts it" >&2
+    exit 1
+  fi
   # A finished terminal stays listed until removed, so this session's finished
   # ones are cleared before it starts again, and do not pile up.
   state=$(hc_cli ls --all --json --label "session=$TG_SESSION" 2>/dev/null | python3 -c '
