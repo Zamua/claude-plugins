@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Subprocess } from 'bun'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
 import { ANTIGRAVITY_DISABLED_MESSAGE } from './harness/antigravity/disabled-antigravity-runtime'
@@ -198,10 +198,16 @@ beforeAll(async () => {
 
   mkdirSync(join(home, '.local', 'bin'), { recursive: true })
   mkdirSync(join(home, 'fake'))
-  for (const [name, body] of [['tmux', FAKE_TMUX], ['claude', FAKE_CLAUDE], ['herdr', FAKE_HERDR], ['opencode', FAKE_OPENCODE]]) {
+  for (const [name, body] of [['tmux', FAKE_TMUX], ['herdr', FAKE_HERDR], ['opencode', FAKE_OPENCODE]]) {
     writeFileSync(join(home, '.local', 'bin', name), body)
     chmodSync(join(home, '.local', 'bin', name), 0o700)
   }
+  // Laid out as the native installer does: the launcher links to versions/<version>
+  const installed = join(home, '.local', 'share', 'claude', 'versions', '2.1.316')
+  mkdirSync(dirname(installed), { recursive: true })
+  writeFileSync(installed, FAKE_CLAUDE)
+  chmodSync(installed, 0o700)
+  symlinkSync(installed, join(home, '.local', 'bin', 'claude'))
   mkdirSync(join(home, '.claude', 'projects', 'p'), { recursive: true })
   writeFileSync(join(home, '.claude', 'projects', 'p', `${RESUMED}.jsonl`), '{}\n')
   writeFileSync(join(home, '.claude', 'projects', 'p', `${PROXIED}.jsonl`), '{}\n')
@@ -268,7 +274,7 @@ beforeAll(async () => {
       TELEGRAM_TOPICS_SPAWN_DIR: home,
       TELEGRAM_TOPICS_MULTIPLEXER: 'tmux',
       TELEGRAM_ANTIGRAVITY: 'off',
-      TELEGRAM_TOPICS_UPDATE_RESTART: 'off',
+      TELEGRAM_TOPICS_UPDATE_SWEEP_MS: '300',
       TELEGRAM_TOPICS_VOICE_TRANSCRIBE: 'off',
       TELEGRAM_TOPICS_SQUARE_TOPIC_ID: '900',
       TELEGRAM_TOPICS_SECRETS_USER_ID: String(OPERATOR),
@@ -572,4 +578,29 @@ describe('the proxy, end to end', () => {
     expect(res.status).toBe(400)
     expect((await res.json()).error).toContain('message_id')
   })
+
+  test('a topic on an older Claude Code waits out its turn, then resumes on the installed one', async () => {
+    send(47, 'hi')
+    const first = await until('topic 47 to spawn', () => spawns().find(s => s.session === 'claude-47'))
+    await fetch(`${proxyUrl}/poll?topic=47`)
+    // Claude Code's own record of the session; the test runner's pid stands in as a live process
+    const sessions = join(home, '.claude', 'sessions')
+    mkdirSync(sessions, { recursive: true })
+    const record = (status: string) => writeFileSync(join(sessions, `${process.pid}.json`), JSON.stringify({
+      pid: process.pid, sessionId: first.env.TG_CLAUDE_SESSION_ID, version: '2.1.300', status, statusUpdatedAt: Date.now(), startedAt: 1,
+    }))
+    record('busy')
+    const log = () => readFileSync(join(root, 'proxy.log'), 'utf8')
+    await until('the update to wait for the turn', () => /topic 47 .* runs claude 2\.1\.300 \(busy\); restarting onto 2\.1\.316 once idle/.test(log()))
+    expect(spawns().filter(s => s.session === 'claude-47')).toHaveLength(1)
+    record('idle')
+    await until('the update notice', () => said(47, /updated to Claude Code 2\.1\.316: same conversation/))
+    const again = await until('topic 47 to resume', () => spawns().filter(s => s.session === 'claude-47')[1])
+    expect(again.env.TG_RESUME).toBe('1')
+    expect(again.env.TG_CLAUDE_SESSION_ID).toBe(first.env.TG_CLAUDE_SESSION_ID)
+    // Once per installed version, although the record still names the old one
+    await Bun.sleep(1000)
+    expect(spawns().filter(s => s.session === 'claude-47')).toHaveLength(2)
+    expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).toContain('claude-47')
+  }, 30_000)
 })

@@ -174,3 +174,11 @@ export const VOICE: VoiceSettings = {
     ?? join(homedir(), '.local/share/whisper-models/ggml-large-v3-turbo-q5_0.bin'),
   glossary: process.env.TELEGRAM_TOPICS_WHISPER_PROMPT ?? DEFAULT_VOICE_GLOSSARY,
 }
+
+// Live topics move to a newly installed Claude Code at their next idle turn boundary.
+export const UPDATE_RESTART = environmentFlag(
+  process.env.TELEGRAM_TOPICS_UPDATE_RESTART,
+  true,
+  (value) => log(`TELEGRAM_TOPICS_UPDATE_RESTART="${value}" is not on/off; using on`),
+)
+export const UPDATE_SWEEP_MS = Number(process.env.TELEGRAM_TOPICS_UPDATE_SWEEP_MS || '60000')

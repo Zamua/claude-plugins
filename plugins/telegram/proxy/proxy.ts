@@ -40,8 +40,6 @@ import { execFileSync } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
 import { SECRET_CMD_RE } from './secrets/secret'
-import { installedClaudeVersion, liveClaudeSessions } from './topics/claude-sessions'
-import { updateRestartAction } from './topics/domain/claude-update'
 import {
   callbackHarness,
   callbackTopic,
@@ -49,7 +47,6 @@ import {
   encodeCallback,
 } from './telegram/telegram-callback'
 import { inboundModeForRoute } from './shared/domain/inbound-delivery'
-import { environmentFlag } from './shared/env-flag'
 import { lockRefusal } from './harness/domain/topic-harness'
 import { ROUTE } from './http/routes'
 import {
@@ -81,21 +78,24 @@ import {
   SQUARE_TOPIC,
   STATE_DIR,
   TOKEN,
+  UPDATE_RESTART,
+  UPDATE_SWEEP_MS,
   VOICE,
 } from './config'
-import { log, noticeFailed,  } from './log'
+import { log, noticeFailed } from './log'
 import type { TopicContext, TopicHarnessAdapter } from './harness/topic-harness-adapter'
 import { createLocalgenHarness } from './harness/localgen/localgen-harness'
 import { createOpencodeHarness } from './harness/opencode/opencode-harness'
 import { createAntigravityHarness } from './harness/antigravity/antigravity-harness'
 import { createRouting } from './routing/routing'
 import { createTopicLifecycle, resumeNoticeTurn } from './topics/lifecycle'
+import { createUpdateRestarts } from './topics/update-restarts'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
 import { PERMISSION_REPLY_RE, pendingPerms, prunePendingPerms, resolvePermission } from './topics/permissions'
 import { loadAndReconcileRegistry, saveRegistry } from './topics/registry'
 import { currentRoute, getTopic, topicNames, topics } from './topics/state'
-import type { InboundMsg, PermAnswer, TopicState } from './topics/state'
+import type { InboundMsg, PermAnswer } from './topics/state'
 import { loadConvs } from './square/conversations'
 import { createSquare } from './square/square'
 import { json } from './http/response'
@@ -953,77 +953,14 @@ for (const harness of HARNESSES) {
 void fireDueReminders()
 setInterval(() => void fireDueReminders(), 15_000).unref()
 
-// ---- Claude Code update restarts --------------------------------------------
-//
-// Claude Code updates itself, but a running session keeps the binary it started
-// with. Once a minute, a topic whose live Claude is older than the installed
-// one moves over at a turn boundary (domain/claude-update.ts): an idle one is
-// stopped and resumes on its next message; one that is mid-turn, running
-// background tasks, or waiting on the operator is left alone until it goes
-// idle, then restarted and resumed at once with a one-line notice. Background
-// processes left running for over an hour do not hold a topic back. Process
-// records come from Claude Code itself, so this needs no multiplexer query.
-const UPDATE_RESTART = environmentFlag(process.env.TELEGRAM_TOPICS_UPDATE_RESTART, true, value =>
-  log(`TELEGRAM_TOPICS_UPDATE_RESTART="${value}" is not on/off; using on`),
-)
-const updateDeferred = new Set<string>()
-const updateAttempted = new Map<string, string>()
-
-function proxyHoldsWork(topic: string, st: TopicState): boolean {
-  if (st.queue.length > 0 || paneInFlight(topic)) return true
-  for (const pending of pendingPerms.values()) if (pending.topic === topic) return true
-  return false
-}
-
-function claudeUpdateSweep(): void {
-  const installed = installedClaudeVersion()
-  if (!installed) return
-  const sessions = liveClaudeSessions()
-  for (const [topic, st] of topics) {
-    if (SQUARE_TOPIC && topic === SQUARE_TOPIC) continue
-    if (harnessLocked(topic) || st.spawning || !st.session || !st.claudeSessionId) continue
-    const claude = sessions.get(st.claudeSessionId)
-    const action = updateRestartAction({
-      running: claude?.version,
-      installed,
-      activity: claude?.activity,
-      activitySince: claude?.activitySince,
-      now: Date.now(),
-      proxyBusy: proxyHoldsWork(topic, st),
-      deferred: updateDeferred.has(topic),
-      attempted: updateAttempted.get(topic) === installed,
-    })
-    if (action === 'none') {
-      updateDeferred.delete(topic)
-      continue
-    }
-    if (action === 'wait') {
-      if (!updateDeferred.has(topic)) {
-        log(`update: topic ${topic} "${st.name}" runs claude ${claude?.version} (${claude?.activity}); restarting onto ${installed} once idle`)
-      }
-      updateDeferred.add(topic)
-      continue
-    }
-    updateDeferred.delete(topic)
-    updateAttempted.set(topic, installed)
-    killSession(st, topic)
-    if (action === 'restart') {
-      ensureSession(topic)
-      void sayIn(
-        String(GROUP_CHAT_ID),
-        topic,
-        `♻️ updated to Claude Code ${installed}: same conversation, resumed on the new version.`,
-      )
-    }
-    saveRegistry()
-    log(
-      `update: topic ${topic} "${st.name}" ${action === 'restart' ? 'restarted and resumed' : 'stopped; resumes on its next message'} ` +
-      `(claude ${claude?.version} -> ${installed})`,
-    )
-  }
-}
-
 if (UPDATE_RESTART) {
-  setInterval(claudeUpdateSweep, 60_000).unref()
+  const { sweep } = createUpdateRestarts({
+    sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
+    harnessLocked,
+    killSession,
+    ensureSession,
+    paneInFlight,
+  })
+  setInterval(sweep, UPDATE_SWEEP_MS).unref()
   log('update restarts enabled: live topics move to a newly installed Claude Code at their next idle turn boundary')
 }
