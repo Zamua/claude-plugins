@@ -51,6 +51,7 @@ import { capacityTransition, nextResetAt, providerCapacity } from './domain/prov
 import type { ProviderCapacity } from './domain/provider-capacity'
 import { readOpenCodeGoCapacity } from './opencode-go-capacity'
 import { permissionNotice } from './permission-notice'
+import { launchModel } from '../topics/claude-launch'
 import { catalogFromBridge, parseOpenCodeModels } from './provider-catalog'
 import type { ProviderCatalog, ProviderModel } from './provider-catalog'
 
@@ -425,10 +426,12 @@ export function createRouting({ api, sayIn, killSession, ensureSession, schedule
     const limitedRoute = st.route ?? DEFAULT_TOPIC_ROUTE
     const returnRoute = quotaReturnRoute(st.exhaustedRoutes, limitedRoute)
     const alreadyReported = exhaustedRouteFor(st.exhaustedRoutes, limitedRoute.provider)
-    // A resumed session cannot fail again inside the debounce window, so a report
-    // arriving then belongs to the process that was just replaced.
-    const justRerouted = Date.now() - (lastRouteChange.get(topic) ?? 0) < ROUTE_DEBOUNCE_MS
-    if (justRerouted || (!st.session && alreadyReported && sameRoute(alreadyReported, returnRoute))) {
+    // A report naming another route than the topic's came from a process a route
+    // change already replaced. A hook that names none leaves only the clock.
+    const fromReplaced = b.ranOn
+      ? b.ranOn.provider !== limitedRoute.provider || b.ranOn.model !== launchModel(limitedRoute)
+      : Date.now() - (lastRouteChange.get(topic) ?? 0) < ROUTE_DEBOUNCE_MS
+    if (fromReplaced || (!st.session && alreadyReported && sameRoute(alreadyReported, returnRoute))) {
       return json({ ok: true, provider: limitedRoute.provider, awaiting_selection: true, duplicate: true })
     }
     const resetMs = b.resetAt !== undefined && b.resetAt * 1000 > Date.now()

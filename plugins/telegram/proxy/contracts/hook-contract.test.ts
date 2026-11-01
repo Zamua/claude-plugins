@@ -6,6 +6,8 @@ import { join } from 'path'
 import { renderPaneTurn } from '../shared/domain/inbound-delivery'
 import { RELAUNCH_META, reminderMeta, SECRET_DROP_META, SQUARE_META } from '../shared/domain/turn-meta'
 import { ROUTE } from '../http/routes'
+import { parseRateLimit } from '../http/requests'
+import { claudeSpawnEnv } from '../topics/claude-launch'
 
 const hooks = join(import.meta.dir, '..', '..', 'hooks')
 
@@ -55,5 +57,33 @@ describe('Python hooks and the proxy routes', () => {
       expect(used.length).toBeGreaterThan(0)
       for (const route of used) expect([hook, served.has(route)]).toEqual([hook, true])
     }
+  })
+})
+
+describe('rate-limit-failover.py and the proxy', () => {
+  test('a limit report names the route the pane was launched on, as the proxy reads it', async () => {
+    const bodies: unknown[] = []
+    const server = Bun.serve({ port: 0, async fetch(req) { bodies.push(await req.json()); return Response.json({ ok: true }) } })
+    const pane = claudeSpawnEnv({
+      topic: '42', label: 'x', sessionName: 'claude-x-42', muxKind: 'tmux', spawnDir: '/tmp', proxyUrl: '', squareTopic: '',
+      marketplace: 'm', route: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', ultracode: false },
+      auxiliaryModel: 'gpt-5.6-luna', claudeSessionId: 'c', resume: true, settingsPath: '', stopHook: '', failoverHook: '',
+      capacityHook: '', providerProxyUrl: '',
+    })
+    const hook = Bun.spawn(['python3', join(hooks, 'rate-limit-failover.py')], {
+      stdin: new Blob([JSON.stringify({ error: 'rate_limit', error_details: 'limit reached' })]),
+      env: {
+        HOME: mkdtempSync(join(tmpdir(), 'tg-hook-')),
+        PATH: '/usr/bin:/bin:/opt/homebrew/bin',
+        TELEGRAM_TOPIC_ID: '42',
+        TELEGRAM_PROXY_URL: `http://127.0.0.1:${server.port}`,
+        TG_PROVIDER: pane.TG_PROVIDER ?? '',
+        TG_MODEL: pane.TG_MODEL ?? '',
+      },
+    })
+    await hook.exited
+    server.stop(true)
+    expect(bodies).toHaveLength(1)
+    expect(parseRateLimit(bodies[0]).ranOn).toEqual({ provider: 'codex', model: 'gpt-5.6-sol[1m]' })
   })
 })
