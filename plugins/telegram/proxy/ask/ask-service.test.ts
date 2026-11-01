@@ -8,13 +8,14 @@ import type { AskTarget } from './domain/ask'
 
 type Sent = { method: string; chatId: string; other: Record<string, unknown> }
 
-function harness(options: { target?: AskTarget | undefined; refuse?: string[]; transcript?: string | null } = {}) {
+function harness(options: { target?: AskTarget | undefined; refuse?: string[]; transcript?: string | null; createFails?: number } = {}) {
   const sent: Sent[] = []
   const created: string[] = []
   const routed: Array<[string, TopicRoute]> = []
   const queued: Array<[string, InboundMessage]> = []
   let stored: string | undefined
   let nextId = 500
+  let createFails = options.createFails ?? 0
   let onEnqueue: (topic: string, msg: InboundMessage) => void = () => {}
   const send = (method: string) => async (chatId: string, _what: unknown, other: Record<string, unknown> = {}) => {
     if (options.refuse?.includes(method)) throw new Error(`${method} refused`)
@@ -29,6 +30,7 @@ function harness(options: { target?: AskTarget | undefined; refuse?: string[]; t
     createTopic: async name => {
       created.push(name)
       await Bun.sleep(5)
+      if (createFails-- > 0) throw new Error('Bad Request: not enough rights to create a topic')
       return '77'
     },
     routeTopic: (topic, route) => routed.push([topic, route]),
@@ -78,9 +80,9 @@ describe('the ask topic', () => {
   })
 
   test('a malformed target or a topic that cannot take asks is refused', async () => {
-    await expect(harness({ target: undefined }).service.ask(asking())).rejects.toMatchObject({ status: 503 })
+    await expect(harness({ target: undefined }).service.ask(asking())).rejects.toMatchObject({ reason: 'unavailable' })
     const square = harness({ target: { kind: 'configured', topic: '900' } })
-    await expect(square.service.ask(asking())).rejects.toMatchObject({ status: 503 })
+    await expect(square.service.ask(asking())).rejects.toMatchObject({ reason: 'unavailable' })
     expect(square.sent).toEqual([])
   })
 })
@@ -107,9 +109,17 @@ describe('the post', () => {
     expect(alone.sent.map(s => s.method)).toEqual(['sendMessage'])
   })
 
+  test('a topic Telegram will not create fails the ask, and the next ask tries again', async () => {
+    const h = harness({ createFails: 1 })
+    await expect(h.service.ask(asking())).rejects.toMatchObject({ reason: 'unposted' })
+    expect(h.stored()).toBeUndefined()
+    expect((await h.service.ask(asking())).topic).toBe('77')
+    expect(h.created).toEqual(['ask', 'ask'])
+  })
+
   test('an ask that cannot be posted at all fails, and nothing is queued', async () => {
     const h = harness({ refuse: ['sendMessage'] })
-    await expect(h.service.ask(asking())).rejects.toMatchObject({ status: 502 })
+    await expect(h.service.ask(asking())).rejects.toMatchObject({ reason: 'unposted' })
     expect(h.queued).toEqual([])
   })
 })
@@ -126,7 +136,7 @@ describe('the question', () => {
     const h = harness({ transcript: null })
     const refused = await h.service.ask({ audio: new Uint8Array([1]), waitMs: 0 }).catch(e => e)
     expect(refused).toBeInstanceOf(AskRefused)
-    expect(refused.status).toBe(422)
+    expect(refused.reason).toBe('unintelligible')
     expect(h.sent).toEqual([])
     expect(h.created).toEqual([])
   })

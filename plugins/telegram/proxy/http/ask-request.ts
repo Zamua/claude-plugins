@@ -13,7 +13,7 @@ import {
 
 const MAX_URL_CHARS = 2048
 
-const bad = (message: string) => new AskRefused(message, 400)
+const bad = (message: string) => new AskRefused(message, 'invalid')
 
 function text(form: FormData, name: string): string | undefined {
   const value = form.get(name)
@@ -27,7 +27,7 @@ async function file(form: FormData, name: string, maxBytes: number): Promise<Uin
   if (value == null || value === '') return undefined
   if (typeof value === 'string') throw bad(`${name} must be a file`)
   if (value.size === 0) return undefined
-  if (value.size > maxBytes) throw new AskRefused(`${name} is over ${maxBytes / 1024 / 1024} MB`, 413)
+  if (value.size > maxBytes) throw new AskRefused(`${name} is over ${maxBytes / 1024 / 1024} MB`, 'too-large')
   return new Uint8Array(await value.arrayBuffer())
 }
 

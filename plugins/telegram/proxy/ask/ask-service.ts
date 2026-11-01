@@ -64,15 +64,15 @@ export function createAsk(ports: AskPorts) {
 
   async function questionOf(s: AskSubmission): Promise<{ text: string; transcribed: boolean }> {
     if (s.question) return { text: s.question, transcribed: false }
-    if (!s.audio) throw new AskRefused('a question or an audio recording is required', 400)
+    if (!s.audio) throw new AskRefused('a question or an audio recording is required', 'invalid')
     const text = (await ports.transcribe(s.audio))?.trim()
-    if (!text) throw new AskRefused('the audio could not be transcribed', 422)
+    if (!text) throw new AskRefused('the audio could not be transcribed', 'unintelligible')
     return { text: text.slice(0, MAX_QUESTION_CHARS), transcribed: true }
   }
 
   async function targetTopic(): Promise<string> {
     const target = ports.target
-    if (!target) throw new AskRefused('TELEGRAM_ASK_TOPIC is neither a thread id nor "general"', 503)
+    if (!target) throw new AskRefused('TELEGRAM_ASK_TOPIC is neither a thread id nor "general"', 'unavailable')
     if (target.kind === 'configured') return target.topic
     const known = store.topic()
     if (known) return known
@@ -84,7 +84,12 @@ export function createAsk(ports: AskPorts) {
   }
 
   async function createDedicated(): Promise<string> {
-    const topic = await ports.createTopic(DEDICATED_TOPIC_NAME)
+    let topic: string
+    try {
+      topic = await ports.createTopic(DEDICATED_TOPIC_NAME)
+    } catch (e) {
+      throw new AskRefused(`could not create the ask topic: ${e}`, 'unposted')
+    }
     store.save(topic)
     ports.routeTopic(topic, DEDICATED_TOPIC_ROUTE)
     log(`ask: created the dedicated ask topic ${topic}`)
@@ -110,7 +115,7 @@ export function createAsk(ports: AskPorts) {
     try {
       return (await api.sendMessage(chatId, caption, where)).message_id
     } catch (e) {
-      throw new AskRefused(`could not post the ask in Telegram: ${e}`, 502)
+      throw new AskRefused(`could not post the ask in Telegram: ${e}`, 'unposted')
     }
   }
 
@@ -136,7 +141,7 @@ export function createAsk(ports: AskPorts) {
     const question = await questionOf(s)
     const topic = await targetTopic()
     const refused = ports.refusal(topic)
-    if (refused) throw new AskRefused(refused, 503)
+    if (refused) throw new AskRefused(refused, 'unavailable')
     const imagePath = s.image ? ports.saveImage(s.image.bytes, s.image.kind) : undefined
     const messageId = await post(topic, askCaption(question.text, s.url), imagePath)
     const started = now()

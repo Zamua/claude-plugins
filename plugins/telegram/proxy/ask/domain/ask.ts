@@ -6,9 +6,15 @@ import type { TopicRoute } from '../../routing/domain/model-routing'
 import type { InboundMessage } from '../../shared/domain/inbound-delivery'
 import { ASK_META } from '../../shared/domain/turn-meta'
 
-/** An ask the proxy refuses: `status` is the HTTP status it answers with. */
+/**
+ * Why an ask is refused: a field is wrong (`invalid`) or over its limit
+ * (`too-large`), the recording gave no text (`unintelligible`), Telegram would not
+ * take the post (`unposted`), or asks cannot be taken now (`unavailable`).
+ */
+export type AskRefusal = 'invalid' | 'too-large' | 'unintelligible' | 'unposted' | 'unavailable'
+
 export class AskRefused extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly reason: AskRefusal) {
     super(message)
   }
 }

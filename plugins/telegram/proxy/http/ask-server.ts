@@ -4,10 +4,19 @@ import { createHash, timingSafeEqual } from 'crypto'
 import { readFileSync } from 'fs'
 import type { AskAnswer, AskSubmission } from '../ask/ask-service'
 import { AskRefused } from '../ask/domain/ask'
+import type { AskRefusal } from '../ask/domain/ask'
 import { parseAsk } from './ask-request'
 import { json } from './response'
 
 export const ASK_PATH = '/ask'
+
+const STATUS: Record<AskRefusal, number> = {
+  invalid: 400,
+  'too-large': 413,
+  unintelligible: 422,
+  unposted: 502,
+  unavailable: 503,
+}
 
 const digest = (value: string) => createHash('sha256').update(value).digest()
 
@@ -81,7 +90,7 @@ export function createAskServer({ port, tokenFile, images, ask, log }: AskServer
             try {
               return await route(req)
             } catch (e) {
-              if (e instanceof AskRefused) return json({ error: e.message }, e.status)
+              if (e instanceof AskRefused) return json({ error: e.message }, STATUS[e.reason])
               log(`ask failed: ${e}`)
               return json({ error: 'internal error' }, 500)
             }

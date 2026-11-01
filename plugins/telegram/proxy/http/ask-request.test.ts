@@ -29,7 +29,7 @@ describe('parseAsk', () => {
 
   test('a client names itself for the log, in a safe shape', async () => {
     expect((await parsed({ question: 'q', client: 'ios-app' })).client).toBe('ios-app')
-    expect(await refusal({ question: 'q', client: 'two words' })).toMatchObject({ status: 400 })
+    expect(await refusal({ question: 'q', client: 'two words' })).toMatchObject({ reason: 'invalid' })
   })
 
   test('the wait defaults, and is capped', async () => {
@@ -38,11 +38,11 @@ describe('parseAsk', () => {
   })
 
   test('refuses an ask with nothing to answer, a file that is not an image, a bad url or wait', async () => {
-    expect(await refusal({})).toMatchObject({ status: 400, message: 'question or audio required' })
-    expect(await refusal({ question: 'q', image: new Blob(['<svg/>']) })).toMatchObject({ status: 400 })
-    expect(await refusal({ question: 'q', url: 'javascript:alert(1)' })).toMatchObject({ status: 400 })
-    expect(await refusal({ question: 'q', wait: 'soon' })).toMatchObject({ status: 400 })
-    expect(await refusal({ question: 'q', image: 'not a file' })).toMatchObject({ status: 400 })
+    expect(await refusal({})).toMatchObject({ reason: 'invalid', message: 'question or audio required' })
+    expect(await refusal({ question: 'q', image: new Blob(['<svg/>']) })).toMatchObject({ reason: 'invalid' })
+    expect(await refusal({ question: 'q', url: 'javascript:alert(1)' })).toMatchObject({ reason: 'invalid' })
+    expect(await refusal({ question: 'q', wait: 'soon' })).toMatchObject({ reason: 'invalid' })
+    expect(await refusal({ question: 'q', image: 'not a file' })).toMatchObject({ reason: 'invalid' })
   })
 
   test('with screenshots off, one sent is ignored, unchecked, and the ask goes ahead', async () => {
@@ -55,7 +55,7 @@ describe('parseAsk', () => {
   test('refuses a screenshot over the size limit', async () => {
     const big = new Uint8Array(20 * 1024 * 1024 + 1)
     big.set(PNG)
-    expect(await refusal({ question: 'q', image: new Blob([big]) })).toMatchObject({ status: 413 })
+    expect(await refusal({ question: 'q', image: new Blob([big]) })).toMatchObject({ reason: 'too-large' })
   })
 })
 
