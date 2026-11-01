@@ -167,7 +167,7 @@ const { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply, handle
   ensureSession,
   enqueue,
 })
-const { handleRemind, handleListReminders, handleCancelReminder, fireDueReminders } = createReminders({
+const { handleRemind, handleListReminders, handleCancelReminder, fireDueReminders, addReminder, topicReminders, cancelReminder } = createReminders({
   chat: chatFor('proxy', 'reminder'),
   topicDirectory,
   harnessLocked,
@@ -401,6 +401,14 @@ const conductor = conductorStore && conductorMode?.listener
             harnessFor(topic)?.rename(topic, name)
           },
           setPrefs: (topic, prefs) => conductorStore.setPrefs(topic, prefs),
+          listed: topic => conductorTopicList().some(t => t.id === topic),
+          secretsOn: () => secrets.secretsOn(),
+          listSecrets: () => secrets.listSecrets(),
+          storeSecret: (name, value, replace, topic) => secrets.storeFromApp(name, value, replace, topic),
+          deleteSecret: (name, topic) => secrets.deleteFromApp(name, topic),
+          topicReminders,
+          addReminder,
+          cancelReminder: id => cancelReminder(id),
         }),
         ...(hcTopics && {
           screen: (topic: string) => conductorScreen(topic, hcTopics),

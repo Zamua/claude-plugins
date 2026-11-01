@@ -8,9 +8,9 @@ adds a store, an authenticated API and push, and later lets Telegram go.
 Status: contract version 1. Built: the store and mirror, the listener with
 identity, enrollment, the reads and the stream, signed writes (sending a
 message, read markers), push for messages, the ledger `verify.py` checks, and
-live agent states with screens for hc topics, and the route switch, usage,
-relaunch and interrupt commands (`docs/conductor-plan.md` C1 to C5, C8, and C6
-in part). Approval pushes come with approvals (C7), and the rest follows the
+live agent states with screens for hc topics, and the commands: route switch,
+usage, relaunch, interrupt, topics, secrets and reminders (`docs/conductor-plan.md`
+C1 to C6 and C8). Approval pushes come with approvals (C7), and the rest follows the
 plan. The golden
 fixtures and signing vectors in `conductor-v1/` are part of the contract: the
 server's tests encode them and the app's tests decode them.
@@ -216,12 +216,12 @@ All under `/v1`. "Signed" marks a write that needs the device headers.
 | `GET /routes` | | the model catalog: providers, the models the bridge can run, their efforts and default |
 | `GET /usage` | | quota windows and resets of the providers observed so far |
 | `PUT /topics/{id}/route` | signed | `provider`, `model`, `effort` (default: the model's); returns the route and `applied`, `queued` (after the current turn) or `unchanged` |
-| `GET /secrets` | | names, sizes, dates |
-| `POST /secrets` | signed | `name`, `value`, `replace`, `topic`; returns `path`, `bytes`, `replaced` |
+| `GET /secrets` | | `{secrets}`: names, sizes, dates |
+| `POST /secrets` | signed | `name`, `value` (at most 64 KB), `replace`, `topic`; returns `path`, `bytes`, `replaced`; `409` when it exists and `replace` is not true |
 | `DELETE /secrets/{name}` | signed | remove one |
 | `GET /topics/{id}/reminders` | | `{reminders}`: the topic's pending reminders, soonest first; no cursor, since reminders are not stream events |
-| `POST /topics/{id}/reminders` | signed | `at` (with a zone offset), `text`, `prompt` |
-| `DELETE /reminders/{id}` | signed | cancel one |
+| `POST /topics/{id}/reminders` | signed | `at` (with a zone offset), `text`, `prompt`; returns the reminder |
+| `DELETE /reminders/{id}` | signed | cancel one; returns it |
 | `POST /ask` | signed | the `/ask` fields; returns the message's `topic` and `seq` |
 
 A secret's value appears in no event, log, message, push or ledger entry.
@@ -267,6 +267,14 @@ state change. The client also pings.
   sending the chosen keys to the terminal.
 - **A permission request** from the channel MCP's permission relay, when it is
   active.
+
+A secret from the app goes through the same store as the `/secret` drop: written
+0600 to the secrets directory, acked in the topic it names (general when none),
+and that topic's agent is told the path, never the value. Its ledger entry
+names it and never holds the value; the request log names only the path. Secrets
+are off (`503`) unless the operator configured them for the Telegram drop.
+Reminders use the proxy's own reminder store, so one set from the app fires like
+any other.
 
 A route switch and a command run through the same routing and lifecycle as
 Telegram's `/model` and `/relaunch`, are written to the ledger before they run,

@@ -218,7 +218,8 @@ hc CLI, so it cannot start a core) and keeps its snapshot current through
 title and screen (`domain/agent-state.ts`), and `topic-tracker.ts` makes each
 change of state, title, name or route a `topic` event in the store.
 `control.ts` serves the app's commands (route switch, usage, relaunch,
-interrupt, topic create and rename) through routing's `requestRoute`, the one
+interrupt, topic create and rename, secrets through the `/secret` drop's own
+store, reminders through the reminder store) through routing's `requestRoute`, the one
 path the `/model` picker also takes, the lifecycle and the chat port; each is a
 ledger entry before it runs. Pin and mute are the store's own (`topic_prefs`). Each topic's place in the
 session tree (`topics/domain/session-tree.ts`: general the root, an

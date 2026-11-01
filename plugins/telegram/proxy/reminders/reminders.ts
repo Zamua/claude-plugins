@@ -7,7 +7,7 @@ import { GROUP_CHAT_ID, REMINDERS_FILE, SQUARE_TOPIC } from '../config'
 import { JsonReminderRepository } from './json-reminder-repository'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import { InvalidReminder, LATE_AFTER_MS, dueReminders, reminderNotice, scheduleReminder } from './domain/reminder'
-import type { ReminderRequest } from './domain/reminder'
+import type { Reminder, ReminderRequest } from './domain/reminder'
 import { reminderMeta } from '../shared/domain/turn-meta'
 import { parseCancelReminder } from '../http/requests'
 import { json } from '../http/response'
@@ -31,16 +31,33 @@ export function createReminders({ chat, topicDirectory, harnessLocked, ensureSes
   let firingReminders = false
 
 
-  async function handleRemind(req: Request): Promise<Response> {
-    const b = (await req.json()) as ReminderRequest
-    const topic = String(b.topic ?? '')
+  /** Schedules a reminder for a topic in the directory; throws InvalidReminder for anything else. */
+  function addReminder(req: ReminderRequest): Reminder {
+    const topic = String(req.topic ?? '')
     // A reminder wakes its topic, and ensureSession would spawn an agent for a
     // topic that does not exist.
-    if (!topicDirectory().some(e => e.topic === topic)) return new Response(`unknown topic: ${topic}`, { status: 400 })
+    if (!topicDirectory().some(e => e.topic === topic)) throw new InvalidReminder(`unknown topic: ${topic}`)
+    const r = scheduleReminder(req, Date.now(), crypto.randomUUID().replace(/-/g, '').slice(0, 8))
+    reminders.add(r)
+    log(`reminder ${r.id} set for topic ${topic} at ${r.atText}`)
+    return r
+  }
+
+  /** A topic's pending reminders, soonest first. */
+  const topicReminders = (topic: string): Reminder[] => reminders.list().filter(r => r.topic === topic).sort((a, b) => a.at - b.at)
+
+  /** Cancels a reminder, in `topic` when one is named; gives it, or undefined when there is none. */
+  function cancelReminder(id: string, topic?: string): Reminder | undefined {
+    const r = reminders.list().find(x => x.id === id)
+    if (!r || (topic !== undefined && r.topic !== topic)) return undefined
+    reminders.remove(id)
+    log(`reminder ${id} cancelled`)
+    return r
+  }
+
+  async function handleRemind(req: Request): Promise<Response> {
     try {
-      const r = scheduleReminder(b, Date.now(), crypto.randomUUID().replace(/-/g, '').slice(0, 8))
-      reminders.add(r)
-      log(`reminder ${r.id} set for topic ${topic} at ${r.atText}`)
+      const r = addReminder((await req.json()) as ReminderRequest)
       return json({ id: r.id, at: r.atText })
     } catch (err) {
       if (err instanceof InvalidReminder) return new Response(err.message, { status: 400 })
@@ -49,22 +66,14 @@ export function createReminders({ chat, topicDirectory, harnessLocked, ensureSes
   }
 
   function handleListReminders(url: URL): Response {
-    const topic = url.searchParams.get('topic') ?? ''
-    const mine = reminders
-      .list()
-      .filter(r => r.topic === topic)
-      .sort((a, b) => a.at - b.at)
+    const mine = topicReminders(url.searchParams.get('topic') ?? '')
       .map(r => ({ id: r.id, at: r.atText, text: r.text, ...(r.prompt ? { prompt: r.prompt } : {}) }))
     return json({ reminders: mine })
   }
 
   async function handleCancelReminder(req: Request): Promise<Response> {
     const { topic, id } = parseCancelReminder(await req.json())
-    const r = reminders.list().find(x => x.id === id)
-    if (!r || r.topic !== topic) return new Response(`no reminder ${id} in this topic`, { status: 404 })
-    reminders.remove(id)
-    log(`reminder ${id} cancelled`)
-    return json({ cancelled: id })
+    return cancelReminder(id, topic) ? json({ cancelled: id }) : new Response(`no reminder ${id} in this topic`, { status: 404 })
   }
 
   async function fireDueReminders(): Promise<void> {
@@ -109,5 +118,5 @@ export function createReminders({ chat, topicDirectory, harnessLocked, ensureSes
     }
   }
 
-  return { handleRemind, handleListReminders, handleCancelReminder, fireDueReminders }
+  return { handleRemind, handleListReminders, handleCancelReminder, fireDueReminders, addReminder, topicReminders, cancelReminder }
 }

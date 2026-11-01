@@ -5,6 +5,9 @@ import { join } from 'path'
 import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from 'crypto'
 import { createConductorApi } from './api'
 import { conductorControl } from './control'
+import { scheduleReminder } from '../reminders/domain/reminder'
+import type { Reminder } from '../reminders/domain/reminder'
+import { SecretExists, SecretMissing } from '../secrets/secret'
 import type { DeliverAppMessage, TopicSummary } from './api'
 import type { ScreenView } from './wire'
 import type { Peer } from './domain/identity'
@@ -29,6 +32,9 @@ let listed: TopicSummary[]
 let screenOf: (topic: string) => ScreenView | undefined
 let topicsChanged: () => void
 let controlled: string[]
+let logged: string[]
+let kept: Map<string, string>
+let reminderList: Reminder[]
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'conductor-api-'))
@@ -44,6 +50,9 @@ beforeEach(() => {
   screenOf = () => undefined
   topicsChanged = () => {}
   controlled = []
+  logged = []
+  kept = new Map()
+  reminderList = []
   api = createConductorApi({
     store,
     ledger: new Ledger(join(dir, 'ledger.jsonl')),
@@ -74,13 +83,39 @@ beforeEach(() => {
       },
       renameTopic: async (topic, name) => void (listed = listed.map(t => (t.id === topic ? { ...t, name } : t))),
       setPrefs: (topic, prefs) => store.setPrefs(topic, prefs),
+      listed: topic => listed.some(t => t.id === topic),
+      secretsOn: () => true,
+      listSecrets: () => [...kept.entries()].map(([name, value]) => ({ name, bytes: value.length, mtime: new Date('2026-11-01T20:25:37.123Z') })),
+      storeSecret: async (name, value, replace) => {
+        if (kept.has(name) && !replace) throw new SecretExists(kept.get(name)!.length)
+        const replaced = kept.has(name)
+        kept.set(name, value)
+        return { path: `/home/op/keys/${name}`, bytes: value.length, replaced }
+      },
+      deleteSecret: async name => {
+        if (!kept.has(name)) throw new SecretMissing()
+        const bytes = kept.get(name)!.length
+        kept.delete(name)
+        return { bytes }
+      },
+      topicReminders: topic => reminderList.filter(r => r.topic === topic),
+      addReminder: request => {
+        const r = scheduleReminder(request, Date.parse('2026-11-01T20:25:37.123Z'), `rm_${reminderList.length + 1}`)
+        reminderList.push(r)
+        return r
+      },
+      cancelReminder: id => {
+        const found = reminderList.find(r => r.id === id)
+        reminderList = reminderList.filter(r => r.id !== id)
+        return found
+      },
     }),
     notify: text => notices.push(text),
     deliver: async input => {
       deliveries.push(input)
       return deliverOutcome
     },
-    log: () => {},
+    log: line => void logged.push(line),
     version: '1.0.0-test',
   })
   server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: api.fetch, websocket: api.websocket })
@@ -474,9 +509,51 @@ describe('signed writes', () => {
       ['create', null, 'research'], ['patch', '42', 'ci'], ['patch', '42', null],
     ])
   })
+
+  test('a secret from the app is stored and listed by name; its value is in no ledger entry, log line or kept answer', async () => {
+    const d = await setupDevice()
+    const VALUE = 'sk-live-THIS-MUST-NOT-LEAK-0123456789'
+    const act = (method: 'POST' | 'DELETE', path: string, body: unknown, clientId: string) => {
+      const bytes = body === undefined ? new Uint8Array() : new TextEncoder().encode(JSON.stringify(body))
+      return fetch(`${base}${path}`, { method, body: bytes as unknown as BodyInit, headers: { 'X-Device': d.device, ...d.key.headers(method, path, clientId, bytes) } })
+    }
+    const stored = await act('POST', '/v1/secrets', { name: 'service-token', value: VALUE, topic: '42' }, 'secret-0001')
+    expect([stored.status, Object.keys(await stored.json()).sort()]).toEqual([200, Object.keys(readJson('secret-stored.json')).sort()])
+    expect((await act('POST', '/v1/secrets', { name: 'service-token', value: 'other' }, 'secret-0002')).status).toBe(409)
+    expect((await act('POST', '/v1/secrets', { name: '../etc', value: 'x' }, 'secret-0003')).status).toBe(400)
+    const listedSecrets = await (await get('/v1/secrets', d.device)).json()
+    const secretFixture = (readJson('secrets-list.json').secrets as Array<Record<string, unknown>>)[0]
+    expect(Object.keys(listedSecrets.secrets[0]).sort()).toEqual(Object.keys(secretFixture).sort())
+    expect(listedSecrets.secrets.map((x: { name: string }) => x.name)).toEqual(['service-token'])
+    expect((await act('DELETE', '/v1/secrets/service-token', undefined, 'secret-0004')).status).toBe(200)
+    expect((await act('DELETE', '/v1/secrets/service-token', undefined, 'secret-0005')).status).toBe(404)
+    const ledger = readFileSync(join(dir, 'ledger.jsonl'), 'utf8')
+    expect(ledger.split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(l => l.kind === 'secret').map(l => [l.action, l.name]))
+      .toEqual([['store', 'service-token'], ['store', 'service-token'], ['store', '../etc'], ['delete', 'service-token'], ['delete', 'service-token']])
+    expect(ledger).not.toContain(VALUE)
+    expect(logged.join('\n')).not.toContain(VALUE)
+    expect(store.earlierWrite(d.device, 'secret-0001')?.response).not.toContain(VALUE)
+  })
+
+  test('a reminder from the app is set on a listed topic, listed soonest first, and cancelled by id', async () => {
+    const d = await setupDevice()
+    const act = (method: 'POST' | 'DELETE', path: string, body: unknown, clientId: string) => {
+      const bytes = body === undefined ? new Uint8Array() : new TextEncoder().encode(JSON.stringify(body))
+      return fetch(`${base}${path}`, { method, body: bytes as unknown as BodyInit, headers: { 'X-Device': d.device, ...d.key.headers(method, path, clientId, bytes) } })
+    }
+    const set = await act('POST', '/v1/topics/42/reminders', { at: '2026-11-02T09:00:00.000-05:00', text: 'stretch' }, 'remind-0001')
+    expect([set.status, await set.json()]).toEqual([200, readJson('reminder.json', { id: 'rm_1', topic: '42', created_at: '2026-11-01T20:25:37.123Z' })])
+    expect((await act('POST', '/v1/topics/42/reminders', { at: '2026-11-02T09:00', text: 'no zone' }, 'remind-0002')).status).toBe(400)
+    expect((await act('POST', '/v1/topics/nope/reminders', { at: '2026-11-02T09:00:00Z', text: 'x' }, 'remind-0003')).status).toBe(404)
+    expect(await (await get('/v1/topics/42/reminders', d.device)).json()).toEqual({ reminders: [expect.objectContaining({ id: 'rm_1' })] })
+    expect((await act('DELETE', '/v1/reminders/rm_1', undefined, 'remind-0004')).status).toBe(200)
+    expect((await act('DELETE', '/v1/reminders/rm_1', undefined, 'remind-0005')).status).toBe(404)
+    expect(await (await get('/v1/topics/42/reminders', d.device)).json()).toEqual({ reminders: [] })
+  })
 })
 
 function readJson(name: string, over: Record<string, unknown> = {}): Record<string, unknown> {
   const f = JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'docs', 'conductor-v1', name), 'utf8'))
   return { ...f, ...over }
 }
+

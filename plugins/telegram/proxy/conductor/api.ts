@@ -363,6 +363,37 @@ export function createConductorApi(ports: ConductorApiPorts) {
     return listed ? Response.json(wireTopic(topicView(listed)), { status: topic === undefined ? 201 : 200 }) : fail(502, 'not_listed', 'the topic was changed but is not listed')
   }
 
+  /**
+   * A secret or a reminder, recorded in the ledger before it is done. A
+   * secret's entry names it and never holds its value.
+   */
+  async function keptAct(
+    act: 'secret-store' | 'secret-delete' | 'reminder-add' | 'reminder-cancel',
+    target: string,
+    device: Device,
+    body: Uint8Array,
+    write: SignedWrite,
+  ): Promise<Response> {
+    const control = ports.control
+    if (!control) return fail(503, 'not_available', 'commands are not wired on this server')
+    const fields = act === 'secret-store' || act === 'reminder-add' ? jsonBody(body) : {}
+    if (fields instanceof Response) return fields
+    if (act === 'reminder-add' && !ports.topics().some(t => t.id === target)) return fail(404, 'not_found', 'no such topic')
+    const [kind, action] = act.split('-') as ['secret' | 'reminder', string]
+    const what = act === 'secret-store'
+      ? { name: String(fields.name ?? ''), replace: fields.replace === true, ...(typeof fields.topic === 'string' ? { topic: fields.topic } : {}) }
+      : act === 'secret-delete' ? { name: target }
+      : act === 'reminder-add' ? { topic: target, at: String(fields.at ?? ''), text: String(fields.text ?? '') }
+      : { id: target }
+    ports.ledger.append({ kind, action, device: device.id, ...what, ...signed(write) })
+    switch (act) {
+      case 'secret-store': return answer(await control.storeSecret(fields))
+      case 'secret-delete': return answer(await control.deleteSecret(target))
+      case 'reminder-add': return answer(control.addReminder(target, fields))
+      case 'reminder-cancel': return answer(control.cancelReminder(target))
+    }
+  }
+
   async function markRead(topic: string, body: Uint8Array): Promise<Response> {
     let seq: unknown
     try {
@@ -429,6 +460,22 @@ export function createConductorApi(ports: ConductorApiPorts) {
         write[2] === 'messages' ? sendMessage(req, topic, device, body, signed) : markRead(topic, body))
     }
     if (req.method === 'POST' && url.pathname === '/v1/topics') return signedWrite(req, url, device, (body, signedBy) => topicAct(undefined, device, body, signedBy))
+    if (req.method === 'POST' && url.pathname === '/v1/secrets') return signedWrite(req, url, device, (body, by) => keptAct('secret-store', '', device, body, by))
+    const secretPath = url.pathname.match(/^\/v1\/secrets\/([^/]+)$/)
+    if (req.method === 'DELETE' && secretPath) {
+      const name = decodeURIComponent(secretPath[1])
+      return signedWrite(req, url, device, (body, by) => keptAct('secret-delete', name, device, body, by))
+    }
+    const remindersPath = url.pathname.match(/^\/v1\/topics\/([^/]+)\/reminders$/)
+    if (req.method === 'POST' && remindersPath) {
+      const topic = decodeURIComponent(remindersPath[1])
+      return signedWrite(req, url, device, (body, by) => keptAct('reminder-add', topic, device, body, by))
+    }
+    const reminderPath = url.pathname.match(/^\/v1\/reminders\/([^/]+)$/)
+    if (req.method === 'DELETE' && reminderPath) {
+      const id = decodeURIComponent(reminderPath[1])
+      return signedWrite(req, url, device, (body, by) => keptAct('reminder-cancel', id, device, body, by))
+    }
     const topicPath = url.pathname.match(/^\/v1\/topics\/([^/]+)$/)
     if (req.method === 'PATCH' && topicPath) {
       const topic = decodeURIComponent(topicPath[1])
@@ -446,6 +493,14 @@ export function createConductorApi(ports: ConductorApiPorts) {
     if (req.method !== 'GET') return fail(405, 'method_not_allowed', 'not yet served')
     if (url.pathname === '/v1/me') return Response.json({ device: wireDevice(device), server_version: ports.version, contract: 'v1' })
     if (url.pathname === '/v1/topics') return topics()
+    if (url.pathname === '/v1/secrets' || remindersPath) {
+      const control = ports.control
+      if (!control) return fail(503, 'not_available', 'commands are not wired on this server')
+      if (!remindersPath) return answer(control.secrets())
+      const topic = decodeURIComponent(remindersPath[1])
+      if (!ports.topics().some(t => t.id === topic)) return fail(404, 'not_found', 'no such topic')
+      return Response.json(control.reminders(topic))
+    }
     if (['/v1/commands', '/v1/routes', '/v1/usage'].includes(url.pathname)) {
       const control = ports.control
       if (!control) return fail(503, 'not_available', 'commands are not wired on this server')

@@ -2,7 +2,7 @@
 // deleted from the chat, and never enqueued, so no transcript holds a value.
 import type { ChatPort } from '../chat/domain/chat-port'
 import { join } from 'path'
-import { SECRETS_DIR, SECRETS_USER_ID, SQUARE_TOPIC } from '../config'
+import { GROUP_CHAT_ID, SECRETS_DIR, SECRETS_USER_ID, SQUARE_TOPIC } from '../config'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import { SECRET_DROP_META } from '../shared/domain/turn-meta'
 import { log, noticeFailed, reason, tilde } from '../log'
@@ -17,7 +17,7 @@ import {
   SecretMissing,
   storeSecret,
 } from './secret'
-import type { FlowResult, Pending } from './secret'
+import type { FlowResult, Pending, StoredSecret } from './secret'
 
 export type SecretDropPorts = {
   chat: Pick<ChatPort, 'send' | 'delete' | 'messageId'>
@@ -214,5 +214,37 @@ export function createSecretDrop({ chat, sayIn, harnessLocked, ensureSession, en
     })
   }
 
-  return { handleSecretDrop, pendingSecretFlow, handleSecretStep }
+  // From the app: the same files and notices as a drop, acked in the topic the
+  // app named (general when none) so Telegram stays the record. The value is
+  // only ever written to the file.
+  async function storeFromApp(name: string, value: string, replace: boolean, topic?: string): Promise<StoredSecret> {
+    const stored = storeSecret(SECRETS_DIR, name, value, replace)
+    const note = `${stored.replaced ? 'replaced' : 'stored'} ${tilde(stored.path)} (${stored.bytes} bytes) from the app`
+    log(`secret drop: ${note}`)
+    const chatId = String(GROUP_CHAT_ID)
+    await sayIn(chatId, topic ?? 'general', `🔐 ${note}.`)
+    if (topic) notifyTopic(chatId, topic, `the operator ${note}. Read the file when a task needs it; the value was deliberately never sent to you.`)
+    return stored
+  }
+
+  async function deleteFromApp(name: string, topic?: string): Promise<{ bytes: number }> {
+    const gone = deleteSecret(SECRETS_DIR, name)
+    const shown = tilde(join(SECRETS_DIR, name))
+    log(`secret drop: deleted ${shown} from the app`)
+    const chatId = String(GROUP_CHAT_ID)
+    await sayIn(chatId, topic ?? 'general', `🔐 deleted ${shown} (${gone.bytes} bytes) from the app.`)
+    if (topic) notifyTopic(chatId, topic, `the operator deleted the secret ${shown}.`)
+    return gone
+  }
+
+  return {
+    handleSecretDrop,
+    pendingSecretFlow,
+    handleSecretStep,
+    /** Secrets are on only with an operator configured for them, as for the Telegram drop. */
+    secretsOn: () => !!SECRETS_USER_ID,
+    listSecrets: () => listSecrets(SECRETS_DIR),
+    storeFromApp,
+    deleteFromApp,
+  }
 }
