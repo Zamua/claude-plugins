@@ -19,6 +19,7 @@ import {
 import { opencodeTopic, opencodeTopicFromRecord } from './domain/opencode-topic'
 import type { OpencodeTopic } from './domain/opencode-topic'
 import { log, reason } from '../../log'
+import { openOrSetAside } from '../../shared/state-file'
 import { saveRegistry } from '../../topics/registry'
 import { getTopic, topicNames } from '../../topics/state'
 import type { HarnessPorts, TopicHarnessAdapter } from '../topic-harness-adapter'
@@ -26,7 +27,8 @@ import type { HarnessPorts, TopicHarnessAdapter } from '../topic-harness-adapter
 const LOCALCODE_RE = /^\/localcode(?:@\w+)?\s*$/
 
 export function createOpencodeHarness({ api, sayIn, mayLockTopic }: HarnessPorts): TopicHarnessAdapter {
-  const opencodeRepository = new JsonTopicRepository<OpencodeTopic>(OPENCODE_TOPICS_FILE, 'OpenCode', opencodeTopicFromRecord)
+  const opencodeRepository = openOrSetAside('OpenCode topics', OPENCODE_TOPICS_FILE, () =>
+    new JsonTopicRepository<OpencodeTopic>(OPENCODE_TOPICS_FILE, 'OpenCode', opencodeTopicFromRecord), log)
   const opencodeRuntime = new HerdrOpencodeRuntime(
     OPENCODE_BIN,
     OPENCODE_PROJECT_DIR,

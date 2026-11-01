@@ -3,7 +3,6 @@
 // operator even if the agent cannot start, then wakes the agent for any
 // follow-up it asked for.
 import type { Api } from 'grammy'
-import { renameSync } from 'fs'
 import { GROUP_CHAT_ID, REMINDERS_FILE, SQUARE_TOPIC } from '../config'
 import { JsonReminderRepository } from './json-reminder-repository'
 import { threadOf } from '../telegram/telegram-messages'
@@ -14,6 +13,7 @@ import { reminderMeta } from '../shared/domain/turn-meta'
 import { parseCancelReminder } from '../http/requests'
 import { json } from '../http/response'
 import { log, reason } from '../log'
+import { openOrSetAside } from '../shared/state-file'
 
 export type ReminderPorts = {
   api: Pick<Api, 'sendMessage'>
@@ -28,20 +28,9 @@ export function createReminders({ api, topicDirectory, harnessLocked, ensureSess
   // An agent's own scheduler dies with its session, so reminders live here. At
   // fire time the proxy posts the text itself, which reaches the operator even if
   // the agent cannot start, then wakes the agent for any follow-up it asked for.
-  const reminders = loadReminders()
+  const reminders = openOrSetAside('reminders', REMINDERS_FILE, () => new JsonReminderRepository(REMINDERS_FILE), log)
   let firingReminders = false
 
-  // An unreadable file must not take the whole bridge down: set it aside, loudly.
-  function loadReminders(): JsonReminderRepository {
-    try {
-      return new JsonReminderRepository(REMINDERS_FILE)
-    } catch (err) {
-      const aside = `${REMINDERS_FILE}.unreadable-${Date.now()}`
-      try { renameSync(REMINDERS_FILE, aside) } catch {}
-      log(`reminders: could not load ${REMINDERS_FILE} (${reason(err)}); moved to ${aside}, starting empty`)
-      return new JsonReminderRepository(REMINDERS_FILE)
-    }
-  }
 
   async function handleRemind(req: Request): Promise<Response> {
     const b = (await req.json()) as ReminderRequest

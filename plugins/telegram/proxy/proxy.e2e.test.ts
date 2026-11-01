@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Subprocess } from 'bun'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
 import { ANTIGRAVITY_DISABLED_MESSAGE } from './harness/antigravity/disabled-antigravity-runtime'
@@ -171,6 +171,8 @@ beforeAll(async () => {
   mkdirSync(join(home, '.claude', 'projects', 'p'), { recursive: true })
   writeFileSync(join(home, '.claude', 'projects', 'p', `${RESUMED}.jsonl`), '{}\n')
   mkdirSync(state, { recursive: true })
+  // A harness topic file that cannot be read must not keep the proxy from booting
+  writeFileSync(join(state, 'localgen-topics.json'), '{"version":1,"topics":[')
   writeFileSync(join(state, 'registry.json'), JSON.stringify({
     '43': { tmux_session: 'claude-resumed-43', thread_id: 43, name: 'resumed', spawned_at: 1, claude_session_id: RESUMED },
     '44': { tmux_session: 'claude-gone-44', thread_id: 44, name: 'gone', spawned_at: 1, claude_session_id: MISSING },
@@ -266,6 +268,12 @@ describe('the proxy, end to end', () => {
     expect(health.ok).toBeTrue()
     expect(health.topics).toEqual(expect.arrayContaining(['43', '44']))
   }, 20_000)
+
+  test('boots past an unreadable harness topic file, keeping its bytes beside it', () => {
+    const aside = readdirSync(state).find(f => f.startsWith('localgen-topics.json.unreadable-'))
+    expect(aside).toBeDefined()
+    expect(readFileSync(join(state, aside!), 'utf8')).toBe('{"version":1,"topics":[')
+  })
 
   test('a first message in a new topic spawns a fresh conversation and records it', async () => {
     send(42, 'hello')

@@ -31,6 +31,7 @@ import { antigravityResetPools } from './domain/antigravity-capacity'
 import { antigravityRoute, antigravityTopic, antigravityTopicFromRecord } from './domain/antigravity-topic'
 import type { AntigravityModel, AntigravityTopic } from './domain/antigravity-topic'
 import { log, reason } from '../../log'
+import { openOrSetAside } from '../../shared/state-file'
 import { saveRegistry } from '../../topics/registry'
 import { getTopic, topicNames } from '../../topics/state'
 import type { HarnessPorts, TopicHarnessAdapter } from '../topic-harness-adapter'
@@ -39,9 +40,8 @@ import type { HarnessPorts, TopicHarnessAdapter } from '../topic-harness-adapter
 const ANTIGRAVITY_RE = /^\/antigravity(?:@\w+)?\s*$/
 
 export function createAntigravityHarness({ api, sayIn, mayLockTopic }: HarnessPorts) {
-  const antigravityRepository = new JsonTopicRepository<AntigravityTopic>(
-    ANTIGRAVITY_TOPICS_FILE, 'Antigravity', antigravityTopicFromRecord,
-  )
+  const antigravityRepository = openOrSetAside('Antigravity topics', ANTIGRAVITY_TOPICS_FILE, () =>
+    new JsonTopicRepository<AntigravityTopic>(ANTIGRAVITY_TOPICS_FILE, 'Antigravity', antigravityTopicFromRecord), log)
   const antigravityRuntime = ANTIGRAVITY_ENABLED
     ? new HerdrAntigravityRuntime(ANTIGRAVITY_BIN, SPAWN_DIR, HERDR_LAUNCH_SCRIPT, PROXY_URL, HERDR_BIN)
     : new DisabledAntigravityRuntime()
