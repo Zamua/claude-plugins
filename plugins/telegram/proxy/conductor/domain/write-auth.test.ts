@@ -22,7 +22,10 @@ const request = (over: Partial<{ clientId: string; timestamp: string; signature:
 
 describe('checkSignedWrite', () => {
   test('a write signed by the device\'s key within the window is accepted, with its body hash', () => {
-    expect(request()).toEqual({ clientId: vector.client_id, timestamp: vector.timestamp, signature: vector.signature, bodySha256: vector.body_sha256 })
+    expect(request()).toEqual({
+      method: vector.method, path: vector.path, clientId: vector.client_id, timestamp: vector.timestamp,
+      signature: vector.signature, bodySha256: vector.body_sha256,
+    })
   })
 
   test('the app\'s own Secure Enclave signature is accepted with its key', () => {

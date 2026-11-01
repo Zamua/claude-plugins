@@ -6,7 +6,8 @@ import { canonicalBytes, devicePublicKey, sha256Hex, signatureValid } from './si
 
 export const SKEW_MS = 120_000
 
-export type SignedWrite = { clientId: string; timestamp: number; signature: string; bodySha256: string }
+/** What the device signed, kept whole so the ledger can show it to a verifier. */
+export type SignedWrite = { method: string; path: string; clientId: string; timestamp: number; signature: string; bodySha256: string }
 
 export type WriteRefusal = { status: 400 | 401 | 409; code: string; message: string }
 
@@ -33,7 +34,7 @@ export function checkSignedWrite(input: {
   if (!key || !signature || !signatureValid(key, canonical, signature)) {
     return { status: 401, code: 'signature_invalid', message: 'the request signature does not verify' }
   }
-  return { clientId, timestamp, signature, bodySha256: sha256Hex(input.body) }
+  return { method: input.method, path: input.pathWithQuery, clientId, timestamp, signature, bodySha256: sha256Hex(input.body) }
 }
 
 export type EarlierWrite = { bodySha256: string; status: number; response: string }

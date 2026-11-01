@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { createHash, generateKeyPairSync, sign } from 'crypto'
+import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from 'crypto'
 import { createConductorApi } from './api'
 import type { DeliverAppMessage } from './api'
 import type { Peer } from './domain/identity'
@@ -178,6 +178,9 @@ describe('the stream', () => {
   })
 })
 
+// The DER prefix that makes a 65-byte P-256 point a SubjectPublicKeyInfo.
+const SPKI_P256 = Buffer.from('3059301306072a8648ce3d020106082a8648ce3d030107034200', 'hex')
+
 // A device key the tests hold, like the app's Secure Enclave key.
 function signer() {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
@@ -238,7 +241,13 @@ describe('signed writes', () => {
     expect(message).toMatchObject({ topic: '42', seq: 1, author: 'operator', origin: 'app', text: 'run the tests', client_id: 'client-0001', delivery: 'delivered' })
     const ledger = readFileSync(join(dir, 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
     expect(ledger.map(l => l.kind)).toEqual(['enroll', 'message'])
-    expect(ledger[1]).toMatchObject({ device: d.device, topic: '42', seq: 1, client_id: 'client-0001' })
+    expect(ledger[0]).toMatchObject({ device: d.device, name: 'iPhone', public_key: d.key.point })
+    expect(ledger[1]).toMatchObject({ device: d.device, topic: '42', seq: 1, method: 'POST', path: '/v1/topics/42/messages', client_id: 'client-0001' })
+    const signed = readFileSync(join(dir, 'signed-bodies', ledger[1].body_sha256))
+    expect(createHash('sha256').update(signed).digest('hex')).toBe(ledger[1].body_sha256)
+    const canonical = ['v1', ledger[1].method, ledger[1].path, ledger[1].client_id, ledger[1].body_sha256, String(ledger[1].timestamp)].join('\n')
+    const key = createPublicKey({ key: Buffer.concat([SPKI_P256, Buffer.from(ledger[0].public_key, 'base64')]), format: 'der', type: 'spki' })
+    expect(verify('sha256', Buffer.from(canonical), { key, dsaEncoding: 'der' }, Buffer.from(ledger[1].signature, 'base64'))).toBeTrue()
     expect(deliveries).toHaveLength(1)
     expect(deliveries[0]).toMatchObject({ topic: '42', deviceId: d.device, ledgerHash: ledger[1].hash })
   })

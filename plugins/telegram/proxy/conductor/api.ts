@@ -5,7 +5,7 @@ import type { Server, ServerWebSocket, WebSocketHandler } from 'bun'
 import { admit } from './domain/identity'
 import type { IdentityPolicy, Peer } from './domain/identity'
 import type { StoredEvent, StoredMessage } from './domain/message'
-import { devicePublicKey, sha256Hex } from './domain/signing'
+import { devicePublicKey } from './domain/signing'
 import { checkSignedWrite, replay } from './domain/write-auth'
 import type { SignedWrite } from './domain/write-auth'
 import type { Ledger } from './ledger'
@@ -105,7 +105,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
     const { device, created } = store.enroll({ name, publicKey, nodeId, ...push })
     if (device.nodeId !== nodeId) return fail(409, 'device_on_another_node', 'this key is enrolled from another node')
     if (created) {
-      ports.ledger.append({ kind: 'enroll', device: device.id, node: nodeId, public_key_sha256: sha256Hex(publicKey) })
+      ports.ledger.append({ kind: 'enroll', device: device.id, name, node: nodeId, public_key: publicKey })
       ports.notify(`📱 A device enrolled with the conductor: ${name}. If you did not just enroll it, revoke it.`)
       ports.log(`conductor: enrolled device ${device.id} (${name}) from node ${nodeId}`)
     }
@@ -195,9 +195,10 @@ export function createConductorApi(ports: ConductorApiPorts) {
       ...(typeof replyTo === 'string' && replyTo ? { replyTo } : {}),
       clientId: write.clientId, delivery: 'accepted',
     })
+    ports.ledger.keepSignedBody(body)
     const ledgerHash = ports.ledger.append({
-      kind: 'message', device: device.id, topic, seq: message.seq, client_id: write.clientId,
-      body_sha256: write.bodySha256, signature: write.signature, timestamp: write.timestamp,
+      kind: 'message', device: device.id, topic, seq: message.seq, method: write.method, path: write.path,
+      client_id: write.clientId, body_sha256: write.bodySha256, signature: write.signature, timestamp: write.timestamp,
     })
     const outcome = await ports.deliver({ topic, message, images, ledgerHash, deviceId: device.id })
     const final = outcome.delivered
