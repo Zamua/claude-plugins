@@ -20,6 +20,13 @@ export type TopicView = {
   lastMessage: { preview: string; author: string; at: string } | null
 }
 
+/** hc reports no cursor position, so screens carry none. */
+export type ScreenView = { topic: string; rows: string[]; cols: number; working: boolean }
+
+export function wireScreen(s: ScreenView): Record<string, unknown> {
+  return { topic: s.topic, rows: s.rows, cols: s.cols, cursor: null, working: s.working }
+}
+
 export type Device = {
   id: string
   name: string

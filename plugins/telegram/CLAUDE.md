@@ -210,7 +210,13 @@ lifecycle's own `enqueue`, so it is not stored twice. Push (`push-service.ts`,
 `apns.ts`, payloads in `domain/push.ts`) sends each new agent or proxy message
 once to every device with an APNs token, over one HTTP/2 session per Apple
 environment with an ES256 token renewed every 50 minutes, and drops tokens Apple
-calls dead; it needs the four `CONDUCTOR_APNS_*` settings and the listener. With
+calls dead; it needs the four `CONDUCTOR_APNS_*` settings and the listener.
+With the listener on and hc topics configured, `hc-watch.ts` holds one
+`events.subscribe` connection straight to the topics core's socket (never the
+hc CLI, so it cannot start a core) and keeps its snapshot current through
+`shared/hc-events.ts`; `topic-source.ts` turns it into each hc topic's state,
+title and screen (`domain/agent-state.ts`), and `topic-tracker.ts` makes each
+change of state, title, name or route a `topic` event in the store. With
 `CONDUCTOR_LISTEN` set, `mirroredChat` wraps the
 chat port each service gets, so every message sent to a topic is also kept in
 SQLite (author `agent` for the MCP's `/send`, `proxy` for everything else, with

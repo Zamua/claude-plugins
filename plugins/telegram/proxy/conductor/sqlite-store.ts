@@ -88,6 +88,13 @@ export class ConductorStore {
     return stored.message
   }
 
+  /** Records that a topic changed, for clients to read it again. */
+  topicChanged(topic: string): number {
+    const cursor = Number(this.db.query("INSERT INTO events (type, topic, ref) VALUES ('topic', ?, ?)").run(topic, topic).lastInsertRowid)
+    for (const listener of this.listeners) listener({ cursor, type: 'topic', topic })
+    return cursor
+  }
+
   /** Records whether an app message reached its agent, and announces the message again. */
   setDelivery(id: string, delivery: 'delivered' | 'failed', failure?: string): StoredMessage | undefined {
     const stored = this.db.transaction(() => {
@@ -217,10 +224,11 @@ export class ConductorStore {
   eventsAfter(cursor: number, limit = 500): StoredEvent[] {
     const rows = this.db
       .query('SELECT cursor, type, ref FROM events WHERE cursor > ? ORDER BY cursor LIMIT ?')
-      .all(cursor, limit) as Array<{ cursor: number; type: 'message'; ref: string }>
-    return rows.flatMap(row => {
+      .all(cursor, limit) as Array<{ cursor: number; type: StoredEvent['type']; ref: string }>
+    return rows.flatMap((row): StoredEvent[] => {
+      if (row.type === 'topic') return [{ cursor: row.cursor, type: 'topic', topic: row.ref }]
       const message = this.message(row.ref)
-      return message ? [{ cursor: row.cursor, type: row.type, message }] : []
+      return message ? [{ cursor: row.cursor, type: 'message', message }] : []
     })
   }
 

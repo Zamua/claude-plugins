@@ -43,7 +43,10 @@ export type StoredMessage = Required<Omit<NewMessage, 'replyTo' | 'chatIds' | 'c
   failure: string | null
 }
 
-export type StoredEvent = { cursor: number; type: 'message'; message: StoredMessage }
+/** A stored message, or news about a topic (its state, title, name or route), which a client reads as the topic now. */
+export type StoredEvent =
+  | { cursor: number; type: 'message'; message: StoredMessage }
+  | { cursor: number; type: 'topic'; topic: string }
 
 const MIME_BY_EXTENSION: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',

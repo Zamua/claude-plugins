@@ -10,10 +10,11 @@ import { checkSignedWrite, replay } from './domain/write-auth'
 import type { SignedWrite } from './domain/write-auth'
 import type { Ledger } from './ledger'
 import type { ConductorStore } from './sqlite-store'
-import { wireDevice, wireMessage, wireTopic } from './wire'
-import type { AgentState, Device, TopicView } from './wire'
+import { topicTracker } from './topic-tracker'
+import { wireDevice, wireMessage, wireScreen, wireTopic } from './wire'
+import type { AgentState, Device, ScreenView, TopicView } from './wire'
 
-export type TopicSummary = { id: string; name: string; kind: string; route: TopicView['route']; state: AgentState }
+export type TopicSummary = { id: string; name: string; kind: string; title: string | null; route: TopicView['route']; state: AgentState }
 
 export type AppImage = { bytes: Uint8Array; mime: 'image/jpeg' | 'image/png' }
 
@@ -36,20 +37,26 @@ export type ConductorApiPorts = {
   /** An operator-facing notice, outside the API. */
   notify: (text: string) => void
   deliver: DeliverAppMessage
+  /** A topic's screen now; undefined for a topic with none to show. Absent, no topic has a screen. */
+  screen?: (topic: string) => Promise<ScreenView | undefined>
+  /** Calls back whenever something the topic list reports may have changed. */
+  watchTopics?: (changed: () => void) => void
   log: (message: string) => void
   version: string
   now?: () => number
 }
 
-type SocketData = { deviceId: string; ready: boolean }
+type SocketData = { deviceId: string; ready: boolean; screens: Set<string> }
 
 const HEARTBEAT_MS = 20_000
 const REPLAY_PAGE = 500
+/** Topic changes the list cannot announce (the lifecycle's own) are found by looking this often. */
+const TOPIC_SWEEP_MS = 2_000
+/** A watched screen is read at most twice a second. */
+const SCREEN_MS = 500
 
 const fail = (status: number, code: string, message: string) =>
   Response.json({ error: { code, message } }, { status })
-
-const wireEvent = (event: StoredEvent) => ({ type: event.type, cursor: event.cursor, message: wireMessage(event.message) })
 
 const TEXT_MAX_BYTES = 64 * 1024
 const IMAGES_MAX = 10
@@ -79,14 +86,102 @@ export function createConductorApi(ports: ConductorApiPorts) {
   const now = ports.now ?? Date.now
   const sockets = new Set<ServerWebSocket<SocketData>>()
   const inFlight = new Map<string, Promise<Response>>()
+  const tracker = topicTracker({ topics: ports.topics, store, now })
+
+  function topicView(t: TopicSummary): TopicView {
+    const { last, unread, readSeq } = store.summary(t.id)
+    return {
+      ...t,
+      pinned: t.id === 'general',
+      muted: false,
+      stateSince: tracker.since(t.id),
+      unread,
+      readSeq,
+      pendingApprovals: 0,
+      lastMessage: last ? { preview: last.text.slice(0, 200), author: last.author, at: last.at } : null,
+    }
+  }
+
+  /** The event as the stream sends it; a topic event carries the topic as it is now, and none for a topic no longer listed. */
+  function wireEvent(event: StoredEvent): Record<string, unknown> | undefined {
+    if (event.type === 'message') return { type: 'message', cursor: event.cursor, message: wireMessage(event.message) }
+    const listed = ports.topics().find(t => t.id === event.topic)
+    return listed ? { type: 'topic', cursor: event.cursor, topic: wireTopic(topicView(listed)) } : undefined
+  }
+
+  // Screens: one reader per watched topic, sending only what changed.
+  const screens = new Map<string, { timer: ReturnType<typeof setInterval>; last?: string; reading: boolean }>()
+
+  const screenWatchers = (topic: string) => [...sockets].filter(s => s.data.screens.has(topic))
+
+  function noScreen(socket: ServerWebSocket<SocketData>, topic: string) {
+    socket.data.screens.delete(topic)
+    socket.send(JSON.stringify({ type: 'error', screen: topic, error: { code: 'no_screen', message: 'this topic has no screen to show' } }))
+  }
+
+  function unwatch(topic: string) {
+    if (screenWatchers(topic).length) return
+    clearInterval(screens.get(topic)?.timer)
+    screens.delete(topic)
+  }
+
+  async function readScreen(topic: string, force = false) {
+    const watching = screens.get(topic)
+    if (!watching || watching.reading || !ports.screen) return
+    watching.reading = true
+    try {
+      const screen = await ports.screen(topic)
+      if (!screen) {
+        for (const socket of screenWatchers(topic)) noScreen(socket, topic)
+        unwatch(topic)
+        return
+      }
+      const frame = JSON.stringify({ type: 'screen', screen: wireScreen(screen) })
+      if (!force && frame === watching.last) return
+      watching.last = frame
+      for (const socket of screenWatchers(topic)) socket.send(frame)
+    } finally {
+      watching.reading = false
+    }
+  }
+
+  function watchScreen(socket: ServerWebSocket<SocketData>, topic: unknown) {
+    if (typeof topic !== 'string' || !ports.screen || !ports.topics().some(t => t.id === topic)) {
+      noScreen(socket, String(topic))
+      return
+    }
+    socket.data.screens.add(topic)
+    const watching = screens.get(topic)
+    if (watching?.last) socket.send(watching.last)
+    if (watching) return
+    screens.set(topic, { timer: setInterval(() => void readScreen(topic), SCREEN_MS), reading: false })
+    void readScreen(topic, true)
+  }
 
   store.onEvent(event => {
-    const frame = JSON.stringify(wireEvent(event))
-    for (const socket of sockets) if (socket.data.ready) socket.send(frame)
+    const wire = wireEvent(event)
+    if (wire) {
+      const frame = JSON.stringify(wire)
+      for (const socket of sockets) if (socket.data.ready) socket.send(frame)
+    }
+    // Every state change is also a fresh screen.
+    if (event.type === 'topic' && screens.has(event.topic)) void readScreen(event.topic, true)
   })
   const heartbeat = setInterval(() => {
     for (const socket of sockets) if (socket.data.ready) socket.send('{"type":"heartbeat"}')
   }, HEARTBEAT_MS)
+
+  tracker.refresh()
+  let refreshQueued = false
+  ports.watchTopics?.(() => {
+    if (refreshQueued) return
+    refreshQueued = true
+    setTimeout(() => {
+      refreshQueued = false
+      tracker.refresh()
+    }, 50)
+  })
+  const sweep = setInterval(() => tracker.refresh(), TOPIC_SWEEP_MS)
 
   /** The device a read names, if it was enrolled from the node now calling. */
   function deviceFor(req: Request, nodeId: string): Device | undefined {
@@ -219,20 +314,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
   }
 
   function topics(): Response {
-    const listed = ports.topics().map(t => {
-      const { last, unread, readSeq } = store.summary(t.id)
-      return {
-        ...t,
-        title: null,
-        pinned: t.id === 'general',
-        muted: false,
-        stateSince: null,
-        unread,
-        readSeq,
-        pendingApprovals: 0,
-        lastMessage: last ? { preview: last.text.slice(0, 200), author: last.author, at: last.at } : null,
-      }
-    })
+    const listed = ports.topics().map(topicView)
     listed.sort((a, b) => Number(b.pinned) - Number(a.pinned) || (b.lastMessage?.at ?? '').localeCompare(a.lastMessage?.at ?? ''))
     return Response.json({ cursor: store.latestCursor(), topics: listed.map(wireTopic) })
   }
@@ -266,7 +348,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
     store.touchDevice(device.id)
 
     if (url.pathname === '/v1/stream') {
-      return server.upgrade(req, { data: { deviceId: device.id, ready: false } })
+      return server.upgrade(req, { data: { deviceId: device.id, ready: false, screens: new Set<string>() } })
         ? undefined
         : fail(400, 'not_websocket', 'the stream is a WebSocket')
     }
@@ -299,7 +381,10 @@ export function createConductorApi(ports: ConductorApiPorts) {
       }
       let cursor = since as number
       for (let page = store.eventsAfter(cursor, REPLAY_PAGE); page.length; page = store.eventsAfter(cursor, REPLAY_PAGE)) {
-        for (const event of page) socket.send(JSON.stringify(wireEvent(event)))
+        for (const event of page) {
+          const wire = wireEvent(event)
+          if (wire) socket.send(JSON.stringify(wire))
+        }
         cursor = page[page.length - 1].cursor
       }
     }
@@ -309,17 +394,34 @@ export function createConductorApi(ports: ConductorApiPorts) {
 
   const websocket: WebSocketHandler<SocketData> = {
     open: socket => void sockets.add(socket),
-    close: socket => void sockets.delete(socket),
+    close(socket) {
+      sockets.delete(socket)
+      for (const topic of socket.data.screens) unwatch(topic)
+    },
     message(socket, raw) {
-      let frame: { type?: unknown; since?: unknown }
+      let frame: { type?: unknown; since?: unknown; screen?: unknown }
       try {
         frame = JSON.parse(String(raw))
       } catch {
         return
       }
       if (frame.type === 'hello') hello(socket, frame.since)
+      else if (frame.type === 'subscribe') watchScreen(socket, frame.screen)
+      else if (frame.type === 'unsubscribe' && typeof frame.screen === 'string') {
+        socket.data.screens.delete(frame.screen)
+        unwatch(frame.screen)
+      }
     },
   }
 
-  return { fetch, websocket, stop: () => clearInterval(heartbeat) }
+  return {
+    fetch,
+    websocket,
+    stop() {
+      clearInterval(heartbeat)
+      clearInterval(sweep)
+      for (const { timer } of screens.values()) clearInterval(timer)
+      screens.clear()
+    },
+  }
 }

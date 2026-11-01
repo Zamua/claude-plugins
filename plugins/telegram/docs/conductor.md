@@ -7,8 +7,9 @@ adds a store, an authenticated API and push, and later lets Telegram go.
 
 Status: contract version 1. Built: the store and mirror, the listener with
 identity, enrollment, the reads and the stream, signed writes (sending a
-message, read markers), push for messages, and the ledger `verify.py` checks
-(`docs/conductor-plan.md` C1 to C4 and C8). Approval pushes come with approvals (C7), and the rest follows the
+message, read markers), push for messages, the ledger `verify.py` checks, and
+live agent states with screens for hc topics (`docs/conductor-plan.md` C1 to
+C5 and C8). Approval pushes come with approvals (C7), and the rest follows the
 plan. The golden
 fixtures and signing vectors in `conductor-v1/` are part of the contract: the
 server's tests encode them and the app's tests decode them.
@@ -174,8 +175,9 @@ the internal API read as `agent` until they get named tokens.
 `created_at`, `resolved` (`choice`, `by`, `at`) once answered or expired. A
 notification's approve and deny actions answer with the choice of that role.
 
-**Screen:** `topic`, `rows` (plain strings), `cols`, `cursor` (`row`, `col`),
-`working`. Not stored.
+**Screen:** `topic`, `rows` (plain strings, without trailing blank rows),
+`cols`, `cursor` (`row`, `col`, or `null` when the terminal does not report it,
+as hc does not), `working`. Not stored.
 
 **Device:** `id`, `name`, `public_key` (base64 of the 65-byte uncompressed
 point), `apns_token`, `apns_env` (`sandbox`, `production`), `enrolled_at`,
@@ -241,7 +243,12 @@ Events, each with `type` and `cursor`, carry whole objects:
 The client sends `{"type": "subscribe", "screen": "<topic>"}` and
 `{"type": "unsubscribe", "screen": "<topic>"}`; `screen` events (a whole screen
 object, no cursor, never replayed) go only to subscribed connections, at most
-twice a second, and once on every state change. The client also pings.
+twice a second and only when the screen changed, and once on every state
+change. A topic with no screen to show (not on hc, its agent not running, or
+not listed) answers a subscription with
+`{"type": "error", "screen": "<topic>", "error": {"code": "no_screen", ...}}`
+and is unsubscribed; the client may subscribe again after the topic's next
+state change. The client also pings.
 
 ## Approvals
 
@@ -280,10 +287,25 @@ pushes: iOS throttles them.
 
 ## States and the screen
 
-The conductor holds one `events.subscribe` connection to the hc core for agent
-states (and a second for requests), and resubscribes when the core restarts.
-Screens are `terminal.read`, rendered to plain rows. It never starts a core:
-with none listening, hc topics read `missing`.
+The conductor holds one `events.subscribe` connection to the hc core of the
+topics' session, straight to its socket, and keeps the snapshot current from
+the events after it (`shared/hc-events.ts`). A `missed` notice, a closed
+connection or 45 s without a heartbeat resubscribes, retrying from 1 s up to
+30 s. It never starts a core: with none listening, hc topics read `missing`.
+Screens are `terminal.read` on a connection of their own, rendered to plain
+rows.
+
+A topic on hc takes its state from its terminal: `done`, `idle` and `error`
+read `idle`, `working` `working`, `blocked` `blocked`, no report yet
+`starting`, and no terminal (or only a shell left) `missing`. Its `title` is the
+terminal's title. Any other topic knows only the proxy's lifecycle: `idle`
+while its agent runs, `stopped`, or `missing` after a failed start. A failed or
+stopped agent reads that way on hc too. `state_since` is when the conductor saw
+the state begin, `null` for a state that held when it started.
+
+The topic list is compared with what was last seen whenever hc reports a
+change and every 2 s (for the lifecycle's own changes); a changed state, title,
+name or route, or a new topic, is a `topic` event.
 
 ## Coexistence and rollout
 

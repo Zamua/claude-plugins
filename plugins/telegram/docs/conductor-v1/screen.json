@@ -3,13 +3,9 @@
   "rows": [
     "❯ bun test",
     " 485 pass",
-    " 0 fail",
-    ""
+    " 0 fail"
   ],
   "cols": 120,
-  "cursor": {
-    "row": 3,
-    "col": 0
-  },
+  "cursor": null,
   "working": false
 }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import type { StoredEvent } from './domain/message'
 import { ConductorStore } from './sqlite-store'
 
 const open: ConductorStore[] = []
@@ -12,6 +13,7 @@ const store = (dir = mkdtempSync(join(tmpdir(), 'conductor-'))) => {
 }
 afterEach(() => open.splice(0).forEach(s => s.close()))
 
+const label = (e: StoredEvent) => (e.type === 'message' ? e.message.text : `topic ${e.topic}`)
 const say = (topic: string, text: string) => ({ topic, text, author: 'agent' as const, origin: 'proxy' as const, format: 'plain' as const })
 
 describe('ConductorStore', () => {
@@ -21,8 +23,8 @@ describe('ConductorStore', () => {
     const b1 = s.append(say('42', 'two'))
     const a2 = s.append(say('general', 'three'))
     expect([a1.seq, b1.seq, a2.seq]).toEqual([1, 1, 2])
-    expect(s.eventsAfter(0).map(e => [e.cursor, e.message.text])).toEqual([[1, 'one'], [2, 'two'], [3, 'three']])
-    expect(s.eventsAfter(2).map(e => e.message.id)).toEqual([a2.id])
+    expect(s.eventsAfter(0).map(e => [e.cursor, label(e)])).toEqual([[1, 'one'], [2, 'two'], [3, 'three']])
+    expect(s.eventsAfter(2).map(e => e.type === 'message' && e.message.id)).toEqual([a2.id])
   })
 
   test('history pages newest first, before a seq', () => {
@@ -67,7 +69,7 @@ describe('ConductorStore, for the API', () => {
   test('each stored message is announced with its cursor, and the latest cursor follows', () => {
     const { s } = store()
     const seen: Array<[number, string]> = []
-    s.onEvent(e => seen.push([e.cursor, e.message.text]))
+    s.onEvent(e => seen.push([e.cursor, label(e)]))
     s.append(say('general', 'one'))
     s.append(say('42', 'two'))
     expect(seen).toEqual([[1, 'one'], [2, 'two']])
@@ -117,5 +119,17 @@ describe('ConductorStore, for the API', () => {
     s.markRead('7', 2)
     expect(s.unreadIn(['7', '8'])).toBe(2)
     expect(s.unreadIn([])).toBe(0)
+  })
+
+  test('a topic change is an event in the same cursor order as messages, announced like one', () => {
+    const { s } = store()
+    const seen: string[] = []
+    s.onEvent(e => void seen.push(e.type === 'topic' ? label(e) : `message ${label(e)}`))
+    s.append(say('7', 'one'))
+    expect(s.topicChanged('7')).toBe(2)
+    s.append(say('7', 'two'))
+    expect(seen).toEqual(['message one', 'topic 7', 'message two'])
+    expect(s.eventsAfter(1).map(e => [e.cursor, e.type])).toEqual([[2, 'topic'], [3, 'message']])
+    expect(s.latestCursor()).toBe(3)
   })
 })
