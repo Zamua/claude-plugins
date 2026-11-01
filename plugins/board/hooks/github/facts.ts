@@ -58,12 +58,24 @@ const startOf = (check: GqlCheck) =>
   check.startedAt ?? (check.status === 'COMPLETED' ? check.completedAt : undefined) ?? check.createdAt ?? '\uffff'
 const workflowOf = (run: WorkflowRun) => `${run.workflow.databaseId} ${run.event}`
 
+const isFailed = (check: GqlCheck) =>
+  check.__typename === 'CheckRun' ? FAILED_RUNS.includes(check.conclusion ?? '') : check.state === 'FAILURE' || check.state === 'ERROR'
+const runKeyOf = (check: GqlCheck) => {
+  const run = check.checkSuite?.workflowRun
+
+  return run ? `${workflowOf(run)} ${run.runNumber}` : undefined
+}
+
 /**
  * CI as GitHub's checks list shows it, by the latest run of each workflow and the latest run of each check. The
  * commit's rollup state counts every run, so a run a newer one replaced keeps it failed: a workflow run its
  * concurrency group cancelled leaves cancelled jobs the newer run has not reached yet.
+ *
+ * On a draft, a job that starts after its run skipped other jobs and fails with nothing else in its run failing is
+ * a gate holding CI until the pull request is ready, so CI reads skipped. A job that fails first and has the jobs after
+ * it skipped is a real failure.
  */
-function ciOf(rollup: GqlPr['commits']['nodes'][number]['commit']['statusCheckRollup']) {
+function ciOf(rollup: GqlPr['commits']['nodes'][number]['commit']['statusCheckRollup'], isDraft: boolean) {
   if (!rollup) return { ci: 'none' as CiState, failing: [] }
   const newest = new Map<string, number>()
   for (const check of rollup.contexts.nodes) {
@@ -79,17 +91,20 @@ function ciOf(rollup: GqlPr['commits']['nodes'][number]['commit']['statusCheckRo
     if (!seen || startOf(check) >= startOf(seen)) latest.set(name, check)
   }
   const checks = [...latest]
-  const failing = checks
-    .filter(([, check]) =>
-      check.__typename === 'CheckRun'
-        ? FAILED_RUNS.includes(check.conclusion ?? '')
-        : check.state === 'FAILURE' || check.state === 'ERROR',
-    )
-    .map(([name]) => name)
+  const isGate = (check: GqlCheck) => {
+    const run = runKeyOf(check)
+    if (!isDraft || !run || check.__typename !== 'CheckRun') return false
+    const inRun = checks.map(([, one]) => one).filter(one => one !== check && runKeyOf(one) === run)
+    const isSkippedBefore = (one: GqlCheck) => one.conclusion === 'SKIPPED' && (one.completedAt ?? '') <= (check.startedAt ?? '')
+
+    return inRun.some(isSkippedBefore) && !inRun.some(isFailed)
+  }
+  const failed = checks.filter(([, check]) => isFailed(check))
+  const failing = failed.filter(([, check]) => !isGate(check)).map(([name]) => name)
   const isRunning = checks.some(([, check]) =>
     check.__typename === 'CheckRun' ? check.status !== 'COMPLETED' : check.state === 'PENDING' || check.state === 'EXPECTED',
   )
-  const ci: CiState = failing.length > 0 ? 'fail' : isRunning ? 'pending' : 'pass'
+  const ci: CiState = failing.length > 0 ? 'fail' : isRunning ? 'pending' : failed.length > 0 ? 'skipped' : 'pass'
 
   return { ci, failing }
 }
@@ -121,7 +136,7 @@ export function factsOf(pr: GqlPr, viewer: string): PrFacts {
     review: pr.reviewDecision ?? '',
     approvedBy: reviewers('APPROVED'),
     changesRequestedBy: reviewers('CHANGES_REQUESTED'),
-    ...ciOf(pr.commits.nodes[0]?.commit.statusCheckRollup ?? null),
+    ...ciOf(pr.commits.nodes[0]?.commit.statusCheckRollup ?? null, pr.isDraft),
     author,
     head: pr.headRefName,
     base: pr.baseRefName,

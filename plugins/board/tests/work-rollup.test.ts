@@ -24,7 +24,7 @@ const SECTIONED = {
 
 /** The shared GitHub cache holding each pull request's facts as just fetched, so nothing asks GitHub. */
 function cacheOf(prs: ReturnType<typeof trackedPr>[]) {
-  const entries = Object.fromEntries(prs.map(p => [p.key, { facts: p.facts, at: NOW, v: 4 }]))
+  const entries = Object.fromEntries(prs.map(p => [p.key, { facts: p.facts, at: NOW, v: 5 }]))
 
   return { [CACHE_FILE]: json({ prs: entries, viewer: 'me' }) }
 }

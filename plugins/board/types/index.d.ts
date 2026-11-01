@@ -24,7 +24,7 @@ export type SessionBoard = {
   legacyImported?: boolean
 }
 
-export type CiState = 'pass' | 'fail' | 'pending' | 'none'
+export type CiState = 'pass' | 'fail' | 'pending' | 'none' | 'skipped'
 
 export type PrFacts = {
   title: string

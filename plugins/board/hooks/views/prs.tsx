@@ -72,7 +72,7 @@ const STATE_WIDTH = 8
 const MAX_AUTHOR = 12
 const cutTo = (text: string, room: number) => ([...text].length <= room ? text : `${[...text].slice(0, room - 1).join('')}…`)
 
-const CI_WORDS: Record<CiState, string> = { pass: 'passing', fail: 'failing', pending: 'running', none: 'not run' }
+const CI_WORDS: Record<CiState, string> = { pass: 'passing', fail: 'failing', pending: 'running', none: 'not run', skipped: 'skipped (draft)' }
 
 type Ref = Pick<TrackedPr, 'key' | 'owner' | 'repo' | 'number' | 'url'>
 type Entry = { pr: string; note?: string; stack?: string }

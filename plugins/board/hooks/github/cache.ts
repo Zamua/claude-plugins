@@ -19,7 +19,7 @@ type Cached = { facts?: PrFacts; at: number; v?: number }
 
 // Raised when facts are derived from GitHub differently: an entry a session on an older board wrote is fetched again
 // rather than shown
-const FACTS_VERSION = 4
+const FACTS_VERSION = 5
 type Cache = { prs: Record<string, Cached>; viewer?: string; pausedUntil?: number; pauseReason?: string }
 type Budget = { remaining: number; resetAt: string }
 

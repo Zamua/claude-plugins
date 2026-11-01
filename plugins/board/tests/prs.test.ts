@@ -171,6 +171,45 @@ test('CI goes by the latest run of each workflow and check, as GitHub lists them
   await ui.unmount()
 })
 
+test("a draft's CI gate failing over the jobs its run skipped reads as skipped; a build failing before its run skips the rest stays failed", async ($, on) => {
+  const job = (name: string, conclusion: string, startedAt: string, completedAt: string) => ({
+    __typename: 'CheckRun',
+    name,
+    status: 'COMPLETED',
+    conclusion,
+    startedAt,
+    completedAt,
+    checkSuite: { workflowRun: { runNumber: 9, event: 'pull_request', workflow: { databaseId: 7 } } },
+  })
+  const held = [
+    job('build', 'SKIPPED', '2026-10-27T11:00:00Z', '2026-10-27T11:00:00Z'),
+    job('deploy', 'SKIPPED', '2026-10-27T11:00:00Z', '2026-10-27T11:00:00Z'),
+    job('secrets', 'SUCCESS', '2026-10-27T11:00:01Z', '2026-10-27T11:01:00Z'),
+    job('summary', 'FAILURE', '2026-10-27T11:01:05Z', '2026-10-27T11:01:10Z'),
+  ]
+  const broken = [
+    job('build', 'FAILURE', '2026-10-27T11:00:00Z', '2026-10-27T11:05:00Z'),
+    job('deploy', 'SKIPPED', '2026-10-27T11:05:01Z', '2026-10-27T11:05:01Z'),
+  ]
+  const prs: Record<number, Pr> = {
+    6021: pr({ isDraft: true, rollup: 'FAILURE', checks: held }),
+    6022: pr({ isDraft: true, rollup: 'FAILURE', checks: broken }),
+    6023: pr({ isDraft: false, rollup: 'FAILURE', checks: held }),
+  }
+  engine(on, gh(prs), NOW)
+  await start($)
+  await $.tool.call({ tool: TOOL, add: Object.keys(prs).map(n => ({ pr: `https://github.com/acme/api/pull/${n}` })) })
+  const sum = String((await $.tool.call({ tool: TOOL })).result)
+  expect(sum).toMatch(/acme\/api#6021 [^\n]*\n\s+draft, by [^,]+, CI skipped \(draft\)$/m)
+  expect(sum).toMatch(/acme\/api#6022 [^\n]*\n\s+draft, by [^,]+, CI failing: build/m)
+  expect(sum).toMatch(/acme\/api#6023 [^\n]*\n\s+CI fail, by [^,]+, CI failing: summary/m)
+
+  const ui = await open($, 'prs')
+  expect(await ui.find({ key: 'flag-acme/api#6021', text: '!' })).toBeUndefined()
+  expect(await ui.find({ key: 'flag-acme/api#6022', text: '!' })).toBeDefined()
+  await ui.unmount()
+})
+
 test("someone else's pull request is flagged only for a reply in a thread you are in, your own for anything", async ($, on) => {
   const prs: Record<number, Pr> = {
     6011: pr({ isDraft: false, rollup: 'FAILURE', failing: ['build'] }),
