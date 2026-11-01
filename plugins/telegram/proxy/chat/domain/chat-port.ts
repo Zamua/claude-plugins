@@ -2,6 +2,7 @@
 // keys the proxy already uses ("general" or a thread id), messages are opaque ids
 // only the adapter makes, and each transport states what it can do so callers
 // adapt to it instead of assuming Telegram.
+import type { Actions } from './actions'
 
 declare const messageIdBrand: unique symbol
 /**
@@ -34,6 +35,8 @@ export type OutgoingText = {
   replyTo?: MessageId
   /** Opens the reader's reply box on this message, with a hint in it. */
   forceReply?: { placeholder: string }
+  /** Buttons under the message; on a split text, under its last part. */
+  actions?: Actions
 }
 
 export type OutgoingFile = {
