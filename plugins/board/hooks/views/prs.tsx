@@ -2,25 +2,20 @@ import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, On, RenderNode } from 'claude-code'
 
 import type { CiState, PrBoard, PrFacts, TrackedPr } from '../../types'
-import { ago, messageOf, prMark, prRow, span, stamp } from '../kit'
+import { ago, messageOf, prMark, prRow, stamp } from '../kit'
 import type { Els, View } from '../kit'
 import { PANE, paneFocused, showView } from '../pane'
+import { fetchFacts } from '../github/cache'
+import { isConflicted, reviewOf, transitions } from '../github/facts'
 import { legacyBoard, loadBoard, saveBoard, storedBoard } from '../store'
+import { belowOf, chainsOf, groupsOf } from './stacks'
+import type { Stack } from './stacks'
 
 export const PRS_TOOL = 'mcp__board__prs'
 
 const REFRESH_MS = 60_000
-// GitHub times out with HTTP 504 on one query covering a few dozen pull requests
-const BATCH = 8
-// Every session reads and writes what it fetched here, so a pull request several sessions track is asked about once
-const CACHE_PATH = '.cache/board/github.json'
-const FRESH_MS = 3 * 60_000
-const KEEP_MS = 24 * 3600_000
 // A session nobody has used for this long stops asking GitHub until the person comes back to it
 const IDLE_MS = 30 * 60_000
-// GitHub allows 5000 GraphQL points an hour across everything signed in as the person, agents and pollers included
-const BUDGET_FLOOR = 1000
-const PAUSE_MS = 10 * 60_000
 
 const TOOL_DESCRIPTION = `Track the pull requests this session raised on the prs view of the board pane beside the chat. The view shows GitHub's live state for each: draft or ready, merged or closed, CI, conflicts, review, and review threads waiting on the person.
 - add: a pull request this session opened or owns, by URL or owner/repo#N. Ones opened here with gh pr create or gh stack submit join on their own.
@@ -78,63 +73,13 @@ const MAX_AUTHOR = 12
 const cutTo = (text: string, room: number) => ([...text].length <= room ? text : `${[...text].slice(0, room - 1).join('')}…`)
 
 const CI_WORDS: Record<CiState, string> = { pass: 'passing', fail: 'failing', pending: 'running', none: 'not run' }
-const FAILED_RUNS = ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']
-
-const PR_FIELDS = `title state isDraft mergeable mergeStateStatus reviewDecision
-  headRefName baseRefName headRefOid author { login }
-  commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes {
-    __typename ... on CheckRun { name status conclusion startedAt completedAt
-      checkSuite { workflowRun { runNumber event workflow { databaseId } } } } ... on StatusContext { context state createdAt } } } } } } }
-  reviewThreads(first: 100) { nodes { isResolved comments(last: 50) { nodes { author { login } url } } } }
-  latestReviews(first: 20) { nodes { author { login } state } }`
 
 type Ref = Pick<TrackedPr, 'key' | 'owner' | 'repo' | 'number' | 'url'>
 type Entry = { pr: string; note?: string; stack?: string }
 type Input = { add?: Entry[]; update?: Entry[]; remove?: string[] }
 type Applied = { board: PrBoard; added: string[] } | { error: string }
-/** A group of pull requests: `chains` holds each git stack bottom first, a lone pull request as a chain of one. */
-type Stack = { title: string; prs: TrackedPr[]; chains: TrackedPr[][] }
 type Need = { text: string; href?: string }
 type Word = { text: string; color?: Color; isDim?: boolean }
-
-type Login = { login: string } | null
-type GqlCheck = {
-  __typename: string
-  name?: string
-  status?: string
-  conclusion?: string | null
-  startedAt?: string | null
-  completedAt?: string | null
-  context?: string
-  state?: string
-  createdAt?: string
-  checkSuite?: { workflowRun: WorkflowRun | null } | null
-}
-type WorkflowRun = { runNumber: number; event: string; workflow: { databaseId: number } }
-type GqlPr = {
-  title: string
-  state: PrFacts['state']
-  isDraft: boolean
-  mergeable: string
-  mergeStateStatus: string
-  reviewDecision: string | null
-  headRefName: string
-  baseRefName: string
-  headRefOid: string
-  author: Login
-  commits: {
-    nodes: {
-      commit: {
-        statusCheckRollup: { state: string; contexts: { nodes: GqlCheck[] } } | null
-      }
-    }[]
-  }
-  reviewThreads: {
-    nodes: { isResolved: boolean; comments: { nodes: { author: Login; url: string }[] } }[]
-  }
-  latestReviews: { nodes: { author: Login; state: string }[] }
-}
-type GqlAnswer = { data?: Record<string, unknown>; errors?: { message: string }[] }
 
 const emptyBoard = (sessionId: string): PrBoard => ({
   sessionId,
@@ -258,185 +203,6 @@ function apply(current: PrBoard, input: Input): Applied {
 
 // Graphite's check stays in progress until the pull requests below it in its stack merge: an order to merge in, which
 // the stack drawing shows, not CI
-const NOT_CI = new Set(['Graphite / mergeability_check'])
-
-// A run not started yet is the newest of its check
-const startOf = (check: GqlCheck) =>
-  check.startedAt ?? (check.status === 'COMPLETED' ? check.completedAt : undefined) ?? check.createdAt ?? '\uffff'
-const workflowOf = (run: WorkflowRun) => `${run.workflow.databaseId} ${run.event}`
-
-/**
- * CI as GitHub's checks list shows it, by the latest run of each workflow and the latest run of each check. The
- * commit's rollup state counts every run, so a run a newer one replaced keeps it failed: a workflow run its
- * concurrency group cancelled leaves cancelled jobs the newer run has not reached yet.
- */
-function ciOf(rollup: GqlPr['commits']['nodes'][number]['commit']['statusCheckRollup']) {
-  if (!rollup) return { ci: 'none' as CiState, failing: [] }
-  const newest = new Map<string, number>()
-  for (const check of rollup.contexts.nodes) {
-    const run = check.checkSuite?.workflowRun
-    if (run) newest.set(workflowOf(run), Math.max(newest.get(workflowOf(run)) ?? 0, run.runNumber))
-  }
-  const latest = new Map<string, GqlCheck>()
-  for (const check of rollup.contexts.nodes) {
-    const name = check.name ?? check.context ?? 'a check'
-    const run = check.checkSuite?.workflowRun
-    if (NOT_CI.has(name) || (run && run.runNumber < (newest.get(workflowOf(run)) ?? 0))) continue
-    const seen = latest.get(name)
-    if (!seen || startOf(check) >= startOf(seen)) latest.set(name, check)
-  }
-  const checks = [...latest]
-  const failing = checks
-    .filter(([, check]) =>
-      check.__typename === 'CheckRun'
-        ? FAILED_RUNS.includes(check.conclusion ?? '')
-        : check.state === 'FAILURE' || check.state === 'ERROR',
-    )
-    .map(([name]) => name)
-  const isRunning = checks.some(([, check]) =>
-    check.__typename === 'CheckRun' ? check.status !== 'COMPLETED' : check.state === 'PENDING' || check.state === 'EXPECTED',
-  )
-  const ci: CiState = failing.length > 0 ? 'fail' : isRunning ? 'pending' : 'pass'
-
-  return { ci, failing }
-}
-
-/**
- * An open thread whose last comment is someone else's waits on the pull request's author. On someone else's pull
- * request it waits on the viewer only when they commented in it; the rest are between its author and other reviewers.
- */
-function factsOf(pr: GqlPr, viewer: string): PrFacts {
-  const author = pr.author?.login ?? ''
-  const isOwn = !viewer || author.toLowerCase() === viewer.toLowerCase()
-  const waiting = pr.reviewThreads.nodes
-    .filter(thread => !thread.isResolved)
-    .map(thread => thread.comments.nodes)
-    .filter(comments => isOwn || comments.some(comment => comment.author?.login === viewer))
-    .map(comments => comments.at(-1))
-    .filter(last => last && last.author?.login !== viewer)
-  const reviewers = (state: string) =>
-    pr.latestReviews.nodes
-      .filter(review => review.state === state && review.author)
-      .map(review => (review.author as { login: string }).login)
-
-  return {
-    title: pr.title,
-    state: pr.state,
-    isDraft: pr.isDraft,
-    mergeable: pr.mergeable,
-    mergeState: pr.mergeStateStatus,
-    review: pr.reviewDecision ?? '',
-    approvedBy: reviewers('APPROVED'),
-    changesRequestedBy: reviewers('CHANGES_REQUESTED'),
-    ...ciOf(pr.commits.nodes[0]?.commit.statusCheckRollup ?? null),
-    author,
-    head: pr.headRefName,
-    base: pr.baseRefName,
-    headSha: pr.headRefOid,
-    waiting: waiting.length,
-    ...(waiting[0] && { waitingUrl: waiting[0].url }),
-  }
-}
-
-const isConflicted = (f: PrFacts) => f.mergeable === 'CONFLICTING' || f.mergeState === 'DIRTY'
-
-/**
- * GitHub's review decision, or in a repo that requires no review, where GitHub gives none, the one the latest reviews
- * make. Read here rather than stored, since sessions of every version share the facts they fetch.
- */
-function reviewOf(f: PrFacts): string {
-  if (f.review) return f.review
-  if (f.changesRequestedBy.length > 0) return 'CHANGES_REQUESTED'
-
-  return f.approvedBy.length > 0 ? 'APPROVED' : ''
-}
-
-function transitions(p: TrackedPr, now: PrFacts): string[] {
-  const was = p.facts
-  if (!was) return []
-  const name = `#${p.number}`
-  const out: string[] = []
-  if (was.state !== now.state && now.state === 'MERGED') out.push(`${name} merged`)
-  if (was.state !== now.state && now.state === 'CLOSED') out.push(`${name} was closed`)
-  if (was.ci !== 'fail' && now.ci === 'fail') {
-    out.push(`${name} CI failed: ${now.failing[0] ?? 'a check'}`)
-  }
-  if (was.ci === 'pending' && now.ci === 'pass') out.push(`${name} CI passed`)
-  if (!isConflicted(was) && isConflicted(now)) out.push(`${name} has conflicts`)
-  if (now.waiting > was.waiting) out.push(`${name} has a new thread waiting on you`)
-  if (reviewOf(was) !== reviewOf(now) && reviewOf(now) === 'APPROVED') out.push(`${name} approved`)
-  if (reviewOf(was) !== reviewOf(now) && reviewOf(now) === 'CHANGES_REQUESTED') {
-    out.push(`${name} has changes requested`)
-  }
-
-  return out
-}
-
-const repoOf = (p: TrackedPr) => `${p.owner}/${p.repo}`.toLowerCase()
-const branchKey = (p: TrackedPr, branch: string) => `${repoOf(p)}:${branch}`
-
-/** The tracked pull request whose head branch this one is based on. */
-function belowOf(p: TrackedPr, prs: readonly TrackedPr[]): TrackedPr | undefined {
-  if (!p.facts) return undefined
-  const base = branchKey(p, p.facts.base)
-
-  return prs.find(other => other !== p && other.facts && branchKey(other, other.facts.head) === base)
-}
-
-/**
- * Each git stack as one run from its bottom up, in the order its bottom was tracked, then the lone pull requests. A
- * branch that two layers are based on keeps both above it in the one run.
- */
-function chainsOf(members: TrackedPr[]): TrackedPr[][] {
-  const below = new Map(members.map(p => [p, belowOf(p, members)]))
-  const above = (p: TrackedPr) => members.filter(other => below.get(other) === p)
-  const seen = new Set<TrackedPr>()
-  const run = (p: TrackedPr): TrackedPr[] => {
-    if (seen.has(p)) return []
-    seen.add(p)
-
-    return [p, ...above(p).flatMap(run)]
-  }
-  const bottoms = members.filter(p => !below.get(p))
-  const stacks = bottoms.filter(p => above(p).length > 0).map(run)
-  // Layers whose bases loop have no bottom; each loop is drawn as a run of its own
-  const looped = members.filter(p => below.get(p) && !seen.has(p)).map(run).filter(one => one.length > 0)
-  const lone = bottoms.filter(p => above(p).length === 0).map(p => [p])
-
-  return [...stacks, ...looped, ...lone]
-}
-
-/** Stacked branches and pull requests sharing a stack name each form one stack, bottom first. */
-function stacksOf(prs: readonly TrackedPr[]): Stack[] {
-  const parent = new Map(prs.map(p => [p.key, p.key]))
-  const find = (key: string): string => {
-    let at = key
-    while (parent.get(at) !== at) at = parent.get(at) as string
-    return at
-  }
-  const join = (a: string, b: string) => parent.set(find(a), find(b))
-  const firstNamed = new Map<string, string>()
-  for (const p of prs) {
-    const below = belowOf(p, prs)
-    if (below) join(p.key, below.key)
-    if (!p.stack) continue
-    const first = firstNamed.get(p.stack)
-    if (first) join(p.key, first)
-    else firstNamed.set(p.stack, p.key)
-  }
-  const groups = new Map<string, TrackedPr[]>()
-  for (const p of prs) {
-    const root = find(p.key)
-    groups.set(root, [...(groups.get(root) ?? []), p])
-  }
-
-  return [...groups.values()].map(members => {
-    const chains = chainsOf(members)
-
-    return { title: members.find(p => p.stack)?.stack ?? '', prs: chains.flat(), chains }
-  })
-}
-
 /** What a pull request waits on the person for, one line each; none once it merged or closed. */
 export function needsOf(p: TrackedPr): Need[] {
   if (p.error) return [{ text: `could not be read: ${p.error}` }]
@@ -507,18 +273,6 @@ function healthOf(p: TrackedPr): Color {
   return f.ci === 'pass' ? 'success' : 'inactive'
 }
 
-/** Headed stacks first, then the pull requests in none, under "Other" once anything is headed. */
-function groupsOf(prs: readonly TrackedPr[]): Stack[] {
-  const stacks = stacksOf(prs)
-  const headed = stacks
-    .filter(stack => stack.title !== '' || stack.prs.length > 1)
-    .map(stack => ({ ...stack, title: stack.title || 'Stack' }))
-  const loose = stacks.filter(stack => stack.title === '' && stack.prs.length === 1).flatMap(stack => stack.prs)
-  if (loose.length === 0) return headed
-
-  return [...headed, { title: headed.length > 0 ? 'Other' : '', prs: loose, chains: loose.map(p => [p]) }]
-}
-
 const checkedLine = (b: PrBoard, now: number) => {
   if (b.error) return `GitHub check failed: ${b.error}`
 
@@ -558,150 +312,6 @@ async function change($: EngineInterface, fn: (current: PrBoard) => Applied): Pr
   })
 
   return out.applied ?? { error: 'The board did not change.' }
-}
-
-type Cached = { facts?: PrFacts; at: number; v?: number }
-
-// Raised when facts are derived from GitHub differently: an entry a session on an older board wrote is fetched again
-// rather than shown
-const FACTS_VERSION = 4
-type Cache = { prs: Record<string, Cached>; viewer?: string; pausedUntil?: number; pauseReason?: string }
-type Budget = { remaining: number; resetAt: string }
-
-const RATE_LIMITED = /rate limit/i
-
-async function cachePath($: EngineInterface) {
-  return `${await $.env.get('HOME')}/${CACHE_PATH}`
-}
-
-async function readCache($: EngineInterface, path: string): Promise<Cache> {
-  try {
-    if (!(await $.fs.exists(path))) return { prs: {} }
-    const cache = JSON.parse(await $.fs.read(path)) as Cache
-
-    return { ...cache, prs: cache.prs ?? {} }
-  } catch {
-    // Another session may be mid-write; what it wrote is fetched again rather than waited for
-    return { prs: {} }
-  }
-}
-
-/** The facts every session has cached, by pull request key, and the GitHub login they were read as. */
-export async function cachedFacts($: EngineInterface): Promise<{ facts: Map<string, PrFacts>; viewer: string }> {
-  const cache = await readCache($, await cachePath($))
-  const facts = new Map(Object.entries(cache.prs).flatMap(([key, one]) => (one.facts ? [[key, one.facts] as const] : [])))
-
-  return { facts, viewer: cache.viewer ?? '' }
-}
-
-/** Reads the file again just before writing, so what other sessions wrote meanwhile stays. */
-async function writeCache($: EngineInterface, path: string, change: (cache: Cache) => Cache) {
-  try {
-    await $.fs.write(path, JSON.stringify(change(await readCache($, path))))
-  } catch {
-    // An unwritten cache only means another session asks GitHub again
-  }
-}
-
-/** Facts for one batch of pull requests, keyed by pull request; undefined for one GitHub no longer has. */
-async function fetchBatch($: EngineInterface, prs: readonly TrackedPr[], viewer: string) {
-  const parts = prs.map(
-    (p, at) =>
-      `p${at}: repository(owner: ${JSON.stringify(p.owner)}, name: ${JSON.stringify(p.repo)}) { pullRequest(number: ${p.number}) { ...F } }`,
-  )
-  const query = `query { rateLimit { remaining resetAt } viewer { login } ${parts.join(' ')} } fragment F on PullRequest { ${PR_FIELDS} }`
-  const ran = await $.process.run(['gh', 'api', 'graphql', '-f', `query=${query}`], {
-    timeoutMs: 30_000,
-  })
-  let answer: GqlAnswer = {}
-  try {
-    answer = JSON.parse(ran.stdout) as GqlAnswer
-  } catch {
-    // gh printed no JSON; its stderr says why
-  }
-  const data = answer.data
-  if (!data) {
-    const why = ran.stderr.trim().split('\n')[0] || answer.errors?.[0]?.message
-    throw new Error(why || `gh exited ${ran.exitCode}`)
-  }
-  const login = (data.viewer as { login?: string } | undefined)?.login ?? viewer
-  const found = new Map(
-    prs.map((p, at) => {
-      const node = data[`p${at}`] as { pullRequest: GqlPr | null } | null | undefined
-      return [p.key, node?.pullRequest ? factsOf(node.pullRequest, login) : undefined] as const
-    }),
-  )
-
-  return { viewer: login, found, budget: data.rateLimit as Budget | undefined }
-}
-
-/**
- * Every pull request's facts: from the shared cache while fresh, else from GitHub in batches. A merged pull request
- * no longer changes, so it keeps the facts it has. A batch GitHub fails leaves its pull requests as they were and says
- * so in `error`, and while the rate limit runs low no session asks at all.
- */
-async function fetchFacts($: EngineInterface, b: { prs: readonly TrackedPr[]; viewer: string }, mayAsk = true) {
-  const path = await cachePath($)
-  const cache = await readCache($, path)
-  const now = await $.clock.now()
-  const found = new Map<string, PrFacts | undefined>()
-  let oldest = now
-  for (const p of b.prs) {
-    const cached = cache.prs[p.key]
-    const isFinal = cached?.facts?.state === 'MERGED'
-    if (!cached || (!isFinal && (now - cached.at >= FRESH_MS || cached.v !== FACTS_VERSION))) continue
-    found.set(p.key, cached.facts)
-    // A merged pull request's facts are final however old, so only the ones that can change date the check
-    if (!isFinal) oldest = Math.min(oldest, cached.at)
-  }
-  const due = b.prs.filter(p => !found.has(p.key) && p.facts?.state !== 'MERGED')
-  const viewer = cache.viewer || b.viewer
-  if (due.length === 0 || !mayAsk) return { viewer, found, error: '', checkedAt: oldest }
-  if ((cache.pausedUntil ?? 0) > now) {
-    const error = `${cache.pauseReason ?? 'rate limit low'}, retrying in ${span(cache.pausedUntil as number - now)}`
-
-    return { viewer, found, error, checkedAt: oldest }
-  }
-
-  const batches: TrackedPr[][] = []
-  for (let at = 0; at < due.length; at += BATCH) batches.push(due.slice(at, at + BATCH))
-  const settled = await Promise.allSettled(batches.map(batch => fetchBatch($, batch, viewer)))
-  const fetched = new Map<string, PrFacts | undefined>()
-  let login = viewer
-  let missed = 0
-  let why = ''
-  let budget: Budget | undefined
-  settled.forEach((one, at) => {
-    if (one.status === 'fulfilled') {
-      login = one.value.viewer
-      budget = one.value.budget ?? budget
-      for (const [key, facts] of one.value.found) fetched.set(key, facts)
-      return
-    }
-    missed += batches[at]?.length ?? 0
-    why ||= messageOf(one.reason)
-  })
-  const resetAt = budget ? Date.parse(budget.resetAt) : NaN
-  const pause =
-    budget && budget.remaining < BUDGET_FLOOR && !Number.isNaN(resetAt)
-      ? { pausedUntil: resetAt, pauseReason: 'rate limit low' }
-      : RATE_LIMITED.test(why)
-        ? { pausedUntil: now + PAUSE_MS, pauseReason: 'rate limit reached' }
-        : undefined
-  await writeCache($, path, current => {
-    const prs: Record<string, Cached> = {}
-    for (const [key, entry] of Object.entries(current.prs)) if (now - entry.at < KEEP_MS) prs[key] = entry
-    for (const [key, facts] of fetched) prs[key] = facts ? { facts, at: now, v: FACTS_VERSION } : { at: now, v: FACTS_VERSION }
-    const { pausedUntil, pauseReason, ...rest } = current
-    const held = (pausedUntil ?? 0) > now ? { pausedUntil, pauseReason } : {}
-
-    return { ...rest, ...held, ...pause, prs, viewer: login }
-  })
-  for (const [key, facts] of fetched) found.set(key, facts)
-  if (missed > 0 && missed === due.length) throw new Error(why)
-  const error = missed > 0 ? `${why}, ${missed} of ${due.length} pull requests not refreshed` : ''
-
-  return { viewer: login, found, error, checkedAt: fetched.size > 0 ? oldest : now }
 }
 
 async function refreshNow($: EngineInterface) {

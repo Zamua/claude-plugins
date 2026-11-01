@@ -1,6 +1,6 @@
 import type { Color, EngineInterface, On, RenderNode } from 'claude-code'
 
-import { ago, dayOf, dueOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, span, spans } from '../kit'
+import { ago, dayOf, fitLine, fixed, link, openUrl, refreshJson, sourceLabel, span, spans } from '../kit'
 import type { Els, Part, View } from '../kit'
 import { PANE, paneFocused, paneWidth, selectView } from '../pane'
 import { buildTree, followSessions, inPeriod, isLate, mergeItems, needsTotal, pathTo, qualify, rank, sectionsOf, SESSION_STATES } from './model'
