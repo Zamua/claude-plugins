@@ -8,6 +8,7 @@ import {
 } from '../domain/opencode-topic'
 import type {
   OpencodeTopic,
+  RunningOpencodeTopic,
   OpencodeTopicRepository,
 } from '../domain/opencode-topic'
 import type { InboundMessage } from '../domain/inbound-delivery'
@@ -141,8 +142,8 @@ export class OpencodeTopicService {
   private async executeTurn(topicId: string, message: InboundMessage): Promise<void> {
     try {
       const ready = await this.ensureReady(topicId)
-      await this.runtime.inject(ready.sessionName!, renderOpencodeTurn(message))
-      this.watchSettle(topicId, ready.sessionName!, ready.opencodeSessionId, this.now())
+      await this.runtime.inject(ready.sessionName, renderOpencodeTurn(message))
+      this.watchSettle(topicId, ready.sessionName, ready.opencodeSessionId, this.now())
     } catch (error) {
       await this.reportError(topicId, error)
     }
@@ -220,7 +221,7 @@ export class OpencodeTopicService {
     }
   }
 
-  private async ensureReady(topicId: string): Promise<OpencodeTopic> {
+  private async ensureReady(topicId: string): Promise<RunningOpencodeTopic> {
     const current = this.required(topicId)
     const sessionName = current.sessionName ?? opencodeSessionName(current.topic, current.name)
     const identity = await this.runtime.ensureSession({

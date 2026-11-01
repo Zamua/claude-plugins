@@ -10,6 +10,7 @@ import {
 import type {
   AntigravityRoute,
   AntigravityTopic,
+  RunningAntigravityTopic,
   AntigravityTopicRepository,
 } from '../domain/antigravity-topic'
 import type { InboundMessage } from '../domain/inbound-delivery'
@@ -120,7 +121,7 @@ export class AntigravityTopicService {
       this.outbound.typing(topicId)
       const typing = setInterval(() => this.outbound.typing(topicId), 4_000)
       try {
-        await this.runtime.prompt(ready.sessionName!, renderAntigravityTurn(message))
+        await this.runtime.prompt(ready.sessionName, renderAntigravityTurn(message))
       } finally {
         clearInterval(typing)
       }
@@ -130,7 +131,7 @@ export class AntigravityTopicService {
     }
   }
 
-  private async ensureReady(topicId: string): Promise<AntigravityTopic> {
+  private async ensureReady(topicId: string): Promise<RunningAntigravityTopic> {
     const current = this.required(topicId)
     const sessionName = current.sessionName ?? antigravitySessionName(current.topic, current.name)
     const identity = await this.runtime.ensureSession({
