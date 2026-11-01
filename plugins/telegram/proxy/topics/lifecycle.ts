@@ -3,7 +3,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { spawnSync } from 'child_process'
-import type { Api } from 'grammy'
+import type { ChatPort } from '../chat/domain/chat-port'
 import {
   CAPACITY_HOOK,
   
@@ -27,7 +27,6 @@ import type { ProviderCatalog } from '../routing/provider-catalog'
 import { inboundModeForRoute, renderPaneTurn } from '../shared/domain/inbound-delivery'
 import { writeJsonAtomic } from '../shared/json-file'
 import { RELAUNCH_META } from '../shared/domain/turn-meta'
-import { threadOf } from '../telegram/telegram-messages'
 import { claudeSpawnEnv } from './claude-launch'
 import type { ClaudeSpawnSpec } from './claude-launch'
 import { effectiveClaudeSettings } from './claude-settings'
@@ -43,7 +42,7 @@ import { currentRoute, getTopic, legacySessionNameFor, sessionNameFor, topicName
 import type { InboundMsg, TopicState } from './state'
 
 export type TopicLifecyclePorts = {
-  api: Api
+  chat: Pick<ChatPort, 'send'>
   sayIn: (chatId: string, topic: string, text: string) => Promise<unknown>
   /** True when a harness other than Claude owns the topic. */
   harnessLocked: (topic: string) => boolean
@@ -105,7 +104,7 @@ type PanePumpState = {
   turn: PaneTurn
 }
 
-export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, turnEnded, noticeDelivered }: TopicLifecyclePorts) {
+export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog, turnEnded, noticeDelivered }: TopicLifecyclePorts) {
   const panePumps = new Map<string, PanePumpState>()
   const lastSpawnNotice = new Map<string, number>()
   const lastRelaunch = new Map<string, number>()
@@ -245,7 +244,7 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     const key = `${kind}:${topic}`
     if (Date.now() - (lastSpawnNotice.get(key) ?? 0) < SPAWN_NOTICE_MS) return
     lastSpawnNotice.set(key, Date.now())
-    api.sendMessage(String(GROUP_CHAT_ID), text, threadOf(topic))
+    chat.send(topic, { text })
       .catch(e => log(`${kind} notice failed for topic ${topic}: ${e}`))
   }
 

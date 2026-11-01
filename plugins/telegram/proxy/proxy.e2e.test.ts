@@ -270,7 +270,10 @@ beforeAll(async () => {
   api = Bun.serve({
     port: 0,
     async fetch(req) {
-      const method = new URL(req.url).pathname.split('/').at(-1) ?? ''
+      const path = new URL(req.url).pathname
+      // A file the bot downloads after getFile named it
+      if (path.startsWith('/file/')) return new Response('downloaded bytes')
+      const method = path.split('/').at(-1) ?? ''
       let body: Record<string, any> = {}
       if ((req.headers.get('content-type') ?? '').startsWith('multipart/form-data')) {
         for (const [key, value] of await req.formData()) body[key] = typeof value === 'string' ? value : { bytes: value.size }
@@ -285,6 +288,7 @@ beforeAll(async () => {
         if (pending.length === 0) await Bun.sleep(200)
         return ok(pending.splice(0))
       }
+      if (method === 'getFile') return ok({ file_id: body.file_id, file_unique_id: 'u1', file_path: 'documents/f1.txt' })
       if (method === 'createForumTopic') return ok({ message_thread_id: body.name === 'ask' ? 78 : 77, name: body.name, icon_color: 0 })
       if (method === 'sendPhoto' || method === 'sendDocument') {
         return ok({ message_id: messageId++, date: 0, chat: { id: Number(GROUP), type: 'supergroup' } })
@@ -736,7 +740,34 @@ describe('the proxy, end to end', () => {
     const edited = await out('/edit', { chat_id: GROUP, message_id: 5, text: 'better' })
     expect(await edited.json()).toEqual({ message_id: 5 })
     expect(calls.findLast(c => c.method === 'editMessageText')?.body).toMatchObject({ text: 'better' })
+    expect(calls.findLast(c => c.method === 'editMessageText')?.body.parse_mode).toBeUndefined()
   }, 20_000)
+
+  test('MarkdownV2 reaches Telegram when asked for, a document goes into its thread as a reply, and a download lands in the inbox', async () => {
+    const out = (path: string, body: unknown) =>
+      fetch(`${proxyUrl}${path}`, { method: 'POST', body: JSON.stringify(body) })
+    const before = calls.length
+    expect((await out('/send', { chat_id: GROUP, topic: '42', text: '*hi*', format: 'markdownv2' })).status).toBe(200)
+    expect(calls.slice(before).find(c => c.method === 'sendMessage')?.body.parse_mode).toBe('MarkdownV2')
+    expect((await out('/edit', { chat_id: GROUP, message_id: 5, text: '*b*', format: 'markdownv2' })).status).toBe(200)
+    expect(calls.findLast(c => c.method === 'editMessageText')?.body.parse_mode).toBe('MarkdownV2')
+
+    const notes = join(root, 'notes.txt')
+    writeFileSync(notes, 'n')
+    const docAt = calls.length
+    expect((await out('/send', { chat_id: GROUP, topic: '42', files: [notes], reply_to: 9 })).status).toBe(200)
+    const doc = calls.slice(docAt).find(c => c.method === 'sendDocument')
+    expect(doc?.body.message_thread_id).toBe('42')
+    expect(JSON.parse(doc?.body.reply_parameters)).toEqual({ message_id: 9 })
+
+    const { path } = await out('/download', { topic: '42', file_id: 'file-1' }).then(r => r.json())
+    expect(dirname(path)).toBe(join(state, 'inbox'))
+    expect(readFileSync(path, 'utf8')).toBe('downloaded bytes')
+  }, 20_000)
+
+  test('the command menu is set for the group alone', () => {
+    expect(calls.find(c => c.method === 'setMyCommands')?.body.scope).toEqual({ type: 'chat', chat_id: Number(GROUP) })
+  })
 
   test('outbound refuses another chat and the proxy\'s own state files', async () => {
     const out = (body: unknown) => fetch(`${proxyUrl}/send`, { method: 'POST', body: JSON.stringify(body) })

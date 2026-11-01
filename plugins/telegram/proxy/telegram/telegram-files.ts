@@ -4,14 +4,18 @@ import type { Api } from 'grammy'
 
 export type Downloader = (fileId: string, uniqueHint?: string) => Promise<string | null>
 
-/** Saves a Telegram file into `inboxDir` and gives its path, or null when it cannot. */
+/**
+ * Saves a Telegram file into `inboxDir` and gives its path, or null when it cannot.
+ * `apiRoot` is the Bot API server the bot itself talks to.
+ */
 export function telegramDownloader(
   api: Pick<Api, 'getFile'>,
   token: string,
   inboxDir: string,
   log: (m: string) => void,
+  apiRoot = 'https://api.telegram.org',
 ): Downloader {
-  return async (fileId, uniqueHint) => downloadFile(api, token, inboxDir, log, fileId, uniqueHint)
+  return async (fileId, uniqueHint) => downloadFile(api, token, inboxDir, log, apiRoot, fileId, uniqueHint)
 }
 
 async function downloadFile(
@@ -19,13 +23,14 @@ async function downloadFile(
   token: string,
   inboxDir: string,
   log: (m: string) => void,
+  apiRoot: string,
   fileId: string,
   uniqueHint?: string,
 ): Promise<string | null> {
   try {
     const file = await api.getFile(fileId)
     if (!file.file_path) return null
-    const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`
+    const url = `${apiRoot}/file/bot${token}/${file.file_path}`
     const res = await fetch(url)
     if (!res.ok) return null
     const buf = Buffer.from(await res.arrayBuffer())

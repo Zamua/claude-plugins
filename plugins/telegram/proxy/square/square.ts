@@ -1,13 +1,12 @@
 // The square: one forum topic hosting every agent-to-agent conversation. It
 // delivers to participants or tagged topics only, never broadcast.
-import type { Api } from 'grammy'
-import { GROUP_CHAT_ID, SQUARE_TOPIC } from '../config'
+import type { ChatPort } from '../chat/domain/chat-port'
+import { SQUARE_TOPIC } from '../config'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import { topicSlug } from '../shared/domain/topic-slug'
 import { SQUARE_META } from '../shared/domain/turn-meta'
 import { parseSquareReply, parseSquareTag } from '../http/requests'
 import { json } from '../http/response'
-import { messageLink, threadIdForTopic } from '../telegram/telegram-messages'
 import { log } from '../log'
 import { mux } from '../topics/mux'
 import { topicNames, topics } from '../topics/state'
@@ -15,7 +14,7 @@ import { convs, saveConvs } from './conversations'
 
 /** What the square needs from the rest of the proxy. */
 export type SquarePorts = {
-  api: Pick<Api, 'sendMessage'>
+  chat: Pick<ChatPort, 'send' | 'link' | 'messageId'>
   /** True for a topic another harness owns, which takes no square deliveries. */
   harnessLocked: (topic: string) => boolean
   /** Wakes a dormant topic's agent; a tag counts as a first message. */
@@ -23,7 +22,7 @@ export type SquarePorts = {
   enqueue: (topic: string, message: InboundMessage) => void
 }
 
-export function createSquare({ api, harnessLocked, ensureSession, enqueue }: SquarePorts) {
+export function createSquare({ chat, harnessLocked, ensureSession, enqueue }: SquarePorts) {
   // Topic directory: every known topic (live or dormant) addressable by slug.
   // The square itself and never-spawned unnamed topics are excluded.
   function topicDirectory(): Array<{ slug: string; name: string; topic: string; live: boolean }> {
@@ -51,7 +50,6 @@ export function createSquare({ api, harnessLocked, ensureSession, enqueue }: Squ
     return topic
   }
 
-  const squareLink = (msgId: number) => messageLink(String(GROUP_CHAT_ID), SQUARE_TOPIC, msgId)
 
   // The standing per-delivery norm (the "pre-message hook"): conversation
   // discipline is behavioral, not enforced - see the design doc. Appended to
@@ -129,13 +127,11 @@ export function createSquare({ api, harnessLocked, ensureSession, enqueue }: Squ
     const callerSlug = callerIsReal ? slugForTopic(caller) : caller.replace(/[^a-z0-9-]/gi, '').slice(0, 24) || 'operator' 
     const peerSlug = slugForTopic(peer)
     const header = `🤖 ${callerSlug} → @${peerSlug}`
-    const sent = await api.sendMessage(String(GROUP_CHAT_ID), `${header}\n${text}`, {
-      message_thread_id: Number(SQUARE_TOPIC),
-    })
-    const conv = String(sent.message_id)
+    const [root] = await chat.send(SQUARE_TOPIC, { text: `${header}\n${text}` })
+    const conv = String(root)
     convs.set(conv, {
       participants: callerIsReal ? [...new Set([caller, peer])] : [peer],
-      last_msg_id: sent.message_id,
+      last_msg_id: root,
       origin_topic: caller,
       depth: 1,
       updated_at: Date.now(),
@@ -144,23 +140,20 @@ export function createSquare({ api, harnessLocked, ensureSession, enqueue }: Squ
 
     // Breadcrumb in the caller's own room (real claude callers only), with a deep link.
     if (callerIsReal) {
-      const tid = threadIdForTopic(caller)
-      api
-        .sendMessage(String(GROUP_CHAT_ID), `↪️ asked @${peerSlug} in #square: ${squareLink(sent.message_id) ?? 'the square'}`, {
-          ...(tid != null ? { message_thread_id: tid } : {}),
-        })
+      chat
+        .send(caller, { text: `↪️ asked @${peerSlug} in #square: ${chat.link(SQUARE_TOPIC, root) ?? 'the square'}` })
         .catch(e => log(`breadcrumb failed for ${caller}: ${e}`))
     }
 
     deliverSquare([peer], `(square conversation #${conv}, opened by ${callerSlug}) ${text}`, {
       conv,
-      reply_token: sent.message_id,
+      reply_token: root,
       from: callerSlug,
       origin_topic: caller,
       depth: 1,
     })
     log(`square: ${callerSlug} tagged ${peerSlug} -> conv ${conv}`)
-    return json({ conv, message_id: sent.message_id })
+    return json({ conv, message_id: root })
   }
 
   // POST /square/reply {topic, conv, reply_token?, text} - continue a
@@ -182,13 +175,10 @@ export function createSquare({ api, harnessLocked, ensureSession, enqueue }: Squ
     }
     if (!text) return new Response('text required', { status: 400 })
 
-    const replyTo = b.replyToken ?? Number(conv)
+    const replyTo = chat.messageId(b.replyToken ?? conv)
     const callerSlug = caller === 'operator' ? 'operator' : slugForTopic(caller)
-    const sent = await api.sendMessage(String(GROUP_CHAT_ID), `🤖 ${callerSlug} · #${conv}\n${text}`, {
-      message_thread_id: Number(SQUARE_TOPIC),
-      reply_parameters: { message_id: replyTo },
-    })
-    c.last_msg_id = sent.message_id
+    const [posted] = await chat.send(SQUARE_TOPIC, { text: `🤖 ${callerSlug} · #${conv}\n${text}`, ...(replyTo ? { replyTo } : {}) })
+    c.last_msg_id = posted
     c.depth += 1
     c.updated_at = Date.now()
     saveConvs()
@@ -196,13 +186,13 @@ export function createSquare({ api, harnessLocked, ensureSession, enqueue }: Squ
     const recipients = c.participants.filter(t => t !== caller)
     deliverSquare(recipients, text, {
       conv,
-      reply_token: sent.message_id,
+      reply_token: posted,
       from: callerSlug,
       origin_topic: c.origin_topic,
       depth: c.depth,
     })
     log(`square: ${callerSlug} replied in conv ${conv} (depth ${c.depth})`)
-    return json({ message_id: sent.message_id })
+    return json({ message_id: posted })
   }
 
   // Inbound handling for USER messages posted in the square topic. Reply-chain

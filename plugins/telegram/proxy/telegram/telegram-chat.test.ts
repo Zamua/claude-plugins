@@ -111,6 +111,10 @@ describe('the rest of the port', () => {
     for (const raw of [0, -1, 1.5, '12a', '', null, undefined, {}]) expect(chat.messageId(raw)).toBeUndefined()
   })
 
+  test('links a message in its topic', () => {
+    expect(chatOver().chat.link('78', id(16901))).toBe('https://t.me/c/7770000001/78/16901')
+  })
+
   test('says what Telegram can do', () => {
     expect(chatOver().chat.capabilities).toMatchObject({ buttons: true, maxMessageLength: 4096, markdown: 'telegram-markdownv2' })
   })

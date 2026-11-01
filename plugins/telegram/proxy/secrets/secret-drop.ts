@@ -1,9 +1,8 @@
 // Secrets dropped into a topic with /secret: stored to the secrets directory,
 // deleted from the chat, and never enqueued, so no transcript holds a value.
-import type { Api } from 'grammy'
+import type { ChatPort } from '../chat/domain/chat-port'
 import { join } from 'path'
 import { SECRETS_DIR, SECRETS_USER_ID, SQUARE_TOPIC } from '../config'
-import { threadOf } from '../telegram/telegram-messages'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import { SECRET_DROP_META } from '../shared/domain/turn-meta'
 import { log, noticeFailed, reason, tilde } from '../log'
@@ -21,14 +20,14 @@ import {
 import type { FlowResult, Pending } from './secret'
 
 export type SecretDropPorts = {
-  api: Pick<Api, 'sendMessage' | 'deleteMessage'>
+  chat: Pick<ChatPort, 'send' | 'delete' | 'messageId'>
   sayIn: (chatId: string, topic: string, text: string) => Promise<unknown>
   harnessLocked: (topic: string) => boolean
   ensureSession: (topic: string) => void
   enqueue: (topic: string, message: InboundMessage) => void
 }
 
-export function createSecretDrop({ api, sayIn, harnessLocked, ensureSession, enqueue }: SecretDropPorts) {
+export function createSecretDrop({ chat, sayIn, harnessLocked, ensureSession, enqueue }: SecretDropPorts) {
   // A "/secret <name>" message is stored to SECRETS_DIR and deleted from the
   // chat without ever being enqueued: a topic-Claude's transcript persists every
   // inbound message in plaintext, so the value must not reach one. The ack names
@@ -38,14 +37,9 @@ export function createSecretDrop({ api, sayIn, harnessLocked, ensureSession, enq
     chatId: string, topic: string, msgId: number, fromId: string, text: string,
   ): Promise<void> {
     const say = (t: string) =>
-      api.sendMessage(chatId, t, threadOf(topic)).catch(noticeFailed('secret notice', topic))
+      chat.send(topic, { text: t }).catch(noticeFailed('secret notice', topic))
     // Delete before validating: a refused name must not leave the value on screen.
-    let deleted = true
-    try {
-      await api.deleteMessage(chatId, msgId)
-    } catch {
-      deleted = false
-    }
+    const deleted = await remove(msgId)
     const undeleted = deleted ? '' : ' Could NOT delete your message; remove it yourself.'
     if (!SECRETS_USER_ID || fromId !== SECRETS_USER_ID) {
       log(`secret drop refused from user ${fromId}`)
@@ -104,13 +98,10 @@ export function createSecretDrop({ api, sayIn, harnessLocked, ensureSession, enq
     chatId: string, topic: string, fromId: string, result: FlowResult, prompts: number[],
   ): Promise<void> {
     if (result.kind !== 'prompt') return
-    const sent = await api
-      .sendMessage(chatId, result.text, {
-        ...threadOf(topic),
-        reply_markup: { force_reply: true, input_field_placeholder: result.placeholder },
-      })
+    const sent = await chat
+      .send(topic, { text: result.text, forceReply: { placeholder: result.placeholder } })
       .catch(() => null)
-    if (sent) prompts.push(sent.message_id)
+    if (sent) prompts.push(sent[0])
     pendingSecrets.set(flowKey(fromId, topic), { pending: result.next, prompts, at: Date.now() })
   }
 
@@ -119,11 +110,23 @@ export function createSecretDrop({ api, sayIn, harnessLocked, ensureSession, enq
     const flow = pendingSecrets.get(key)
     if (!flow) return
     pendingSecrets.delete(key)
-    await deleteMessages(chatId, flow.prompts)
+    await deleteMessages(flow.prompts)
   }
 
-  async function deleteMessages(chatId: string, ids: number[]): Promise<void> {
-    for (const id of ids) await api.deleteMessage(chatId, id).catch(() => {})
+  async function deleteMessages(ids: number[]): Promise<void> {
+    for (const id of ids) await remove(id)
+  }
+
+  // Whether the message is gone: a value left on screen must be reported, never assumed deleted.
+  async function remove(id: number): Promise<boolean> {
+    const message = chat.messageId(id)
+    if (!message) return false
+    try {
+      await chat.delete(message)
+      return true
+    } catch {
+      return false
+    }
   }
 
   // One step of the flow. The user's message is deleted first whatever it holds.
@@ -131,19 +134,14 @@ export function createSecretDrop({ api, sayIn, harnessLocked, ensureSession, enq
     chatId: string, topic: string, msgId: number, fromId: string, text: string, flow: PendingFlow,
   ): Promise<void> {
     pendingSecrets.delete(flowKey(fromId, topic))
-    let deleted = true
-    try {
-      await api.deleteMessage(chatId, msgId)
-    } catch {
-      deleted = false
-    }
+    const deleted = await remove(msgId)
     const undeleted = deleted ? '' : ' Could NOT delete your message; remove it yourself.'
     const r = advanceSecretFlow(flow.pending, text, name => secretExists(SECRETS_DIR, name))
     if (r.kind === 'prompt') {
       await promptSecret(chatId, topic, fromId, r, flow.prompts)
       return
     }
-    await deleteMessages(chatId, flow.prompts)
+    await deleteMessages(flow.prompts)
     if (r.kind === 'cancelled') {
       await sayIn(chatId, topic, `🔐 cancelled.${undeleted}`)
       return

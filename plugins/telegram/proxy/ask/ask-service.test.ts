@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { MessageId } from '../chat/domain/chat-port'
 import type { TopicRoute } from '../routing/domain/model-routing'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import { createAsk } from './ask-service'
@@ -6,7 +7,7 @@ import type { AskPorts, AskSubmission } from './ask-service'
 import { AskRefused } from './domain/ask'
 import type { AskTarget } from './domain/ask'
 
-type Sent = { method: string; chatId: string; other: Record<string, unknown> }
+type Sent = { method: string; topic: string; text?: string; caption?: string; path?: string }
 
 function harness(options: { target?: AskTarget | undefined; refuse?: string[]; transcript?: string | null; createFails?: number } = {}) {
   const sent: Sent[] = []
@@ -17,13 +18,19 @@ function harness(options: { target?: AskTarget | undefined; refuse?: string[]; t
   let nextId = 500
   let createFails = options.createFails ?? 0
   let onEnqueue: (topic: string, msg: InboundMessage) => void = () => {}
-  const send = (method: string) => async (chatId: string, _what: unknown, other: Record<string, unknown> = {}) => {
-    if (options.refuse?.includes(method)) throw new Error(`${method} refused`)
-    sent.push({ method, chatId, other })
-    return { message_id: nextId++ }
+  const post = (s: Sent) => {
+    if (options.refuse?.includes(s.method)) throw new Error(`${s.method} refused`)
+    sent.push(s)
+    return nextId++ as MessageId
+  }
+  const chat: AskPorts['chat'] = {
+    send: async (topic, message) => [post({ method: 'text', topic, text: message.text })],
+    sendFile: async (topic, file) =>
+      post({ method: file.kind, topic, ...(file.caption ? { caption: file.caption } : {}), ...('path' in file.file ? { path: file.file.path } : {}) }),
+    link: (topic, id) => `link:${topic}/${id}`,
   }
   const ports: AskPorts = {
-    api: { sendPhoto: send('sendPhoto'), sendDocument: send('sendDocument'), sendMessage: send('sendMessage') } as unknown as AskPorts['api'],
+    chat,
     chatId: '-1007770000001',
     target: 'target' in options ? options.target : { kind: 'dedicated' },
     store: { topic: () => stored, save: t => { stored = t } },
@@ -76,7 +83,7 @@ describe('the ask topic', () => {
     expect(answered.topic).toBe('general')
     expect(h.created).toEqual([])
     expect(h.routed).toEqual([])
-    expect(h.sent[0].other.message_thread_id).toBeUndefined()
+    expect(h.sent[0].topic).toBe('general')
   })
 
   test('a malformed target or a topic that cannot take asks is refused', async () => {
@@ -92,22 +99,23 @@ describe('the post', () => {
     const h = harness()
     const answered = await h.service.ask(asking({ image, url: 'https://example.com/p' }))
     expect(h.sent).toEqual([{
-      method: 'sendPhoto',
-      chatId: '-1007770000001',
-      other: { message_thread_id: 77, caption: 'You asked: what is this?\nhttps://example.com/p' },
+      method: 'photo',
+      topic: '77',
+      caption: 'You asked: what is this?\nhttps://example.com/p',
+      path: '/inbox/1-ask.png',
     }])
     const [, turn] = h.queued[0]
     expect(turn.meta).toMatchObject({ ask: '1', message_id: String(answered.messageId), image_path: '/inbox/1-ask.png' })
-    expect(answered.link).toBe(`https://t.me/c/7770000001/77/${answered.messageId}`)
+    expect(answered.link).toBe(`link:77/${answered.messageId}`)
   })
 
   test('a screenshot Telegram refuses goes as a document, then the question alone', async () => {
-    const asDocument = harness({ refuse: ['sendPhoto'] })
+    const asDocument = harness({ refuse: ['photo'] })
     await asDocument.service.ask(asking({ image }))
-    expect(asDocument.sent.map(s => s.method)).toEqual(['sendDocument'])
-    const alone = harness({ refuse: ['sendPhoto', 'sendDocument'] })
+    expect(asDocument.sent.map(s => s.method)).toEqual(['document'])
+    const alone = harness({ refuse: ['photo', 'document'] })
     await alone.service.ask(asking({ image }))
-    expect(alone.sent.map(s => s.method)).toEqual(['sendMessage'])
+    expect(alone.sent.map(s => s.method)).toEqual(['text'])
   })
 
   test('a topic Telegram will not create fails the ask, and the next ask tries again', async () => {
@@ -119,7 +127,7 @@ describe('the post', () => {
   })
 
   test('an ask that cannot be posted at all fails, and nothing is queued', async () => {
-    const h = harness({ refuse: ['sendMessage'] })
+    const h = harness({ refuse: ['text'] })
     await expect(h.service.ask(asking())).rejects.toMatchObject({ reason: 'unposted' })
     expect(h.queued).toEqual([])
   })

@@ -78,6 +78,30 @@ server.ts (the MCP, one per multiplexer session)
                    long-poll GET /permission-poll -> notifications/claude/channel/permission
 ```
 
+## The chat port
+
+The proxy talks to the chat through `ChatPort` (`proxy/chat/domain/chat-port.ts`),
+which names no vendor: callers pass topic keys ("general" or a thread id), never a
+chat id; message ids are an opaque `MessageId` that only the adapter mints (from
+what it sent, or `chat.messageId(raw)` for a value a caller holds), stored as the
+numbers they are today; and `ChatCapabilities` says what the transport can do
+(buttons, edits, threads, reactions, forced replies, the length it splits text at,
+and its markdown dialect). `telegram/telegram-chat.ts` is the Telegram adapter:
+MarkdownV2, the 4096-character split, forum threads, ForceReply, the group-scoped
+command menu, `t.me/c` links and file downloads stay there, and
+`telegram-chat.test.ts` pins each Bot API call it makes.
+
+Plain outbound traffic goes through the port: the MCP's outbound routes, every
+proxy notice (`sayIn`), spawn notices, reminders, the square, the `/secret` drop,
+`/ask`, topic creation and the command menu. Still on grammy directly: the
+inline-keyboard pickers and their callbacks (routing, Antigravity, the permission
+relay), the harness fronts' typing indicators and photos, and inbound updates.
+
+The MCP's `format: "markdownv2"` is the Telegram dialect the agent writes itself;
+the port carries it as `format: 'markdown'`, and the adapter's capabilities name
+the dialect. `server.ts` is a separate process, so its tool descriptions still say
+MarkdownV2 rather than reading the dialect from the proxy.
+
 ## Multiplexer backends (tmux | herdr)
 
 The detached topic-Claudes are hosted by a terminal multiplexer, selectable via
@@ -1093,13 +1117,16 @@ there is no agent to relaunch.
     adapters and `domain/` aggregate.
   - `proxy/square/`: the agent-to-agent square and its conversation registry.
   - `proxy/reminders/`: reminders; `domain/reminder.ts` validates.
+  - `proxy/chat/`: the chat port (`domain/chat-port.ts`): what the proxy
+    asks of a chat transport, with no vendor in it.
   - `proxy/sent/`: the messages each topic's agent sent, kept so it can
     delete its own (`delete_message`) and nothing else.
   - `proxy/ask/`: asks from the phone (`POST /ask`); `domain/ask.ts` holds
     the target, the caption and the turn with its rules.
   - `proxy/secrets/`: the `/secret` drop (`secret.ts` parses and stores,
     `secret-drop.ts` runs the Telegram exchange).
-  - `proxy/telegram/`: the Bot API edge: inbound routing of every group
+  - `proxy/telegram/`: the Bot API edge: the chat port's Telegram adapter
+    (`telegram-chat.ts`), inbound routing of every group
     message and button answer, and the "/" menu (`inbound.ts`); the poll
     loop (`polling.ts`); message
     description, the callback codec, file download, voice transcription,
