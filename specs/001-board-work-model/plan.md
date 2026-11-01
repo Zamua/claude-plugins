@@ -77,7 +77,9 @@ plugins/board/
 │   │   ├── file.tsx             # stays for the oncall board and other file boards
 │   │   ├── session.tsx          # gains the breadcrumb and root mark (story 4)
 │   │   ├── prs.tsx              # unchanged; its cache feeds the github Source
-│   │   └── review.tsx           # unchanged
+│   │   ├── review.tsx           # the review view: finds the review, polls its board, draws it
+│   │   ├── review-board.ts      # board.json's shape and the rules read off it, no `$`
+│   │   └── review-parts.tsx     # the review view's header, stacks, comments, report and pick bar
 │   └── work/
 │       ├── model.ts             # core types, tree build, rollup, alias matching; no `$`, no tool names
 │       ├── board.ts             # the configured board: its file, tree, Period, refresh
