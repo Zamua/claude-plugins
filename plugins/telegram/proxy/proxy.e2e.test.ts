@@ -273,6 +273,8 @@ beforeAll(async () => {
         return ok({ message_id: messageId++, date: 0, chat: { id: Number(GROUP), type: 'supergroup' } })
       }
       if (method === 'sendMessage') {
+        // A post Telegram is slow to take, held long enough for something to happen meanwhile
+        if (typeof body.text === 'string' && body.text.includes('slowly')) await Bun.sleep(1_500)
         return ok({ message_id: messageId++, date: 0, chat: { id: Number(GROUP), type: 'supergroup' }, text: body.text })
       }
       return ok(true)
@@ -481,6 +483,19 @@ describe('the proxy, end to end', () => {
     const left = await fetch(`${proxyUrl}/reminders?topic=42`).then(r => r.json())
     expect(left.reminders).toEqual([])
   }, 30_000)
+
+  test('a reminder cancelled while an earlier one is still posting is not posted', async () => {
+    const post = (path: string, body: unknown) =>
+      fetch(`${proxyUrl}${path}`, { method: 'POST', body: JSON.stringify(body) })
+    const at = Date.now() + 1_000
+    expect((await post('/remind', { topic: '42', at: new Date(at).toISOString(), text: 'stand up slowly' })).status).toBe(200)
+    const second = await post('/remind', { topic: '42', at: new Date(at + 1).toISOString(), text: 'drink water' }).then(r => r.json())
+    await until('the first reminder to be posting', () =>
+      calls.find(c => c.method === 'sendMessage' && c.body.text === '⏰ stand up slowly'), 25_000)
+    expect((await post('/reminder/cancel', { topic: '42', id: second.id })).status).toBe(200)
+    await Bun.sleep(2_500)
+    expect(calls.some(c => c.method === 'sendMessage' && c.body.text === '⏰ drink water')).toBeFalse()
+  }, 35_000)
 
   const said = (thread: number, pattern: RegExp) =>
     calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === thread && pattern.test(c.body.text))

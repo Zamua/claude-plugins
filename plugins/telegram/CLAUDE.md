@@ -330,7 +330,9 @@ topic first, so the operator is reached even when the agent cannot start
 `enqueue`) with a notice carrying the optional `prompt`, meta `reminder="act"`,
 or meta `reminder="notice"` when there is no prompt, which the reply guard
 accepts as silence. A failed post leaves the reminder for the next tick; a
-reminder overdue at boot fires then and the notice says how late. A reminder
+reminder overdue at boot fires then and the notice says how late. Delivery is
+at least once: a proxy that dies between the post and the removal posts it again
+at boot. A reminder cancelled while an earlier one is posting is not posted. A reminder
 can only target a topic in the directory, because waking one spawns its agent.
 
 ## Provider/model routing and quota recovery

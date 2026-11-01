@@ -74,11 +74,18 @@ export function createReminders({ api, topicDirectory, harnessLocked, ensureSess
     try {
       const chatId = String(GROUP_CHAT_ID)
       const now = Date.now()
+      // Each post awaits Telegram, and a cancel can land meanwhile, so every step re-checks the reminder is still set
+      const isSet = (id: string) => reminders.list().some(x => x.id === id)
       for (const r of dueReminders(reminders.list(), now)) {
+        if (!isSet(r.id)) continue
         try {
           await api.sendMessage(chatId, `⏰ ${r.text}`, threadOf(r.topic))
         } catch (err) {
           log(`reminder ${r.id}: post failed, retrying next tick: ${reason(err)}`)
+          continue
+        }
+        if (!isSet(r.id)) {
+          log(`reminder ${r.id} cancelled while posting; its agent is not woken`)
           continue
         }
         if (!(SQUARE_TOPIC && r.topic === SQUARE_TOPIC) && !harnessLocked(r.topic)) {
