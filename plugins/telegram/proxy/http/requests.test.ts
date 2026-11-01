@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   BadRequest,
   parseCancelReminder,
+  parseDelete,
   parseEdit,
   parsePermissionRequest,
   parseRateLimit,
@@ -80,4 +81,10 @@ describe('proxy HTTP request bodies', () => {
   test('a failed-turn error label is capped', () => {
     expect(parseTurnFailed({ topic: '42', error: 'x'.repeat(100) }).error).toHaveLength(40)
   })
+})
+
+test('a delete names the message and the calling topic', () => {
+  expect(parseDelete({ chat_id: '-100', topic: '42', message_id: '7' })).toEqual({ chatId: '-100', topic: '42', messageId: 7 })
+  expect(() => parseDelete({ chat_id: '-100', message_id: 7 })).toThrow('topic required')
+  expect(() => parseDelete({ chat_id: '-100', topic: '42', message_id: 'x' })).toThrow('message_id must be an integer')
 })

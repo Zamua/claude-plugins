@@ -362,6 +362,7 @@ Loopback only (`127.0.0.1:8790`).
 | `POST /send` | `{topic, chat_id, text, reply_to?, files?, format?}` | `{message_ids: number[]}` |
 | `POST /react` | `{topic, chat_id, message_id, emoji}` | `{ok: true}` |
 | `POST /edit` | `{topic, chat_id, message_id, text, format?}` | `{message_id}` |
+| `POST /delete` | `{topic, chat_id, message_id}` | `{deleted}`, or `403` unless that topic sent the message in the last 48 h |
 | `POST /download` | `{topic, file_id}` | `{path}` |
 | `POST /permission-request` | `{topic, request_id, tool, input}` | `{ok: true}` |
 | `POST /rate-limit` | `{topic, error, details, reset_at?}` | pauses the exhausted route and opens the Telegram picker |

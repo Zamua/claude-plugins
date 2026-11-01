@@ -15,16 +15,18 @@ import {
   PHOTO_EXTS,
   threadIdForTopic,
 } from '../telegram/telegram-messages'
-import { parseDownload, parseEdit, parseReact, parseSend } from './requests'
+import { parseDelete, parseDownload, parseEdit, parseReact, parseSend } from './requests'
 import { json } from './response'
 
 /** A reply that has gone out in a topic. */
-export type SentReply = { topic: string; messages: number; text: string; replyTo?: number }
+export type SentReply = { topic: string; ids: number[]; text: string; replyTo?: number }
 
 export type OutboundPorts = {
   api: Api
   downloadFile: Downloader
   sent: (reply: SentReply) => void
+  /** The messages each topic's agent sent; an agent may delete only its own. */
+  sentMessages: { sentBy(topic: string, id: number): boolean; forget(topic: string, id: number): void }
 }
 
 function assertGroup(chatId: unknown): void {
@@ -33,7 +35,7 @@ function assertGroup(chatId: unknown): void {
   }
 }
 
-export function createOutbound({ api, downloadFile, sent }: OutboundPorts) {
+export function createOutbound({ api, downloadFile, sent, sentMessages }: OutboundPorts) {
   async function handleSend(req: Request): Promise<Response> {
     const { chatId, topic, text, replyTo, files, markdown } = parseSend(await req.json())
     assertGroup(chatId)
@@ -72,7 +74,7 @@ export function createOutbound({ api, downloadFile, sent }: OutboundPorts) {
       ids.push(message.message_id)
     }
 
-    sent({ topic, messages: ids.length, text, ...(replyTo != null ? { replyTo } : {}) })
+    sent({ topic, ids, text, ...(replyTo != null ? { replyTo } : {}) })
     return json({ message_ids: ids })
   }
 
@@ -99,11 +101,24 @@ export function createOutbound({ api, downloadFile, sent }: OutboundPorts) {
     return json({ message_id: id })
   }
 
+  // Only a message this topic's agent sent, inside Telegram's delete window: the bot
+  // is a group admin, so Telegram alone would let it delete the operator's messages.
+  async function handleDelete(req: Request): Promise<Response> {
+    const { chatId, topic, messageId } = parseDelete(await req.json())
+    assertGroup(chatId)
+    if (!sentMessages.sentBy(topic, messageId)) {
+      return json({ error: `message ${messageId} was not sent from this topic in the last 48 hours` }, 403)
+    }
+    await api.deleteMessage(chatId, messageId)
+    sentMessages.forget(topic, messageId)
+    return json({ deleted: messageId })
+  }
+
   async function handleDownload(req: Request): Promise<Response> {
     const path = await downloadFile(parseDownload(await req.json()).fileId)
     if (!path) throw new Error('download failed (file may have expired)')
     return json({ path })
   }
 
-  return { handleSend, handleReact, handleEdit, handleDownload }
+  return { handleSend, handleReact, handleEdit, handleDelete, handleDownload }
 }

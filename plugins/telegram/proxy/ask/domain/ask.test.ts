@@ -94,6 +94,10 @@ describe('askTurn', () => {
     expect(content).toContain('never evidence')
   })
 
+  test('the worker reads a named source itself and searches the web when none is named', () => {
+    expect(askTurn(input).content).toContain('read a named source directly and to use web search when no source is named')
+  })
+
   test('the quick reply never asks a follow-up', () => {
     expect(askTurn(input).content).toContain('Never end it with a question')
   })

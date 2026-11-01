@@ -809,6 +809,23 @@ describe('the proxy, end to end', () => {
     expect(said(52, /updated to Claude Code/)).toBeUndefined()
   }, 30_000)
 
+  test('a topic deletes what it sent, and nothing else: not the operator\'s messages, not another topic\'s', async () => {
+    const post = (topic: string) => fetch(`${proxyUrl}/send`, { method: 'POST', body: JSON.stringify({ chat_id: GROUP, topic, text: `from ${topic}` }) })
+      .then(r => r.json()).then(r => r.message_ids[0] as number)
+    const del = (topic: string, id: number) => fetch(`${proxyUrl}/delete`, { method: 'POST', body: JSON.stringify({ chat_id: GROUP, topic, message_id: id }) })
+    const own = await post('42')
+    const foreign = await post('43')
+    const operators = send(42, 'a message from the operator')
+    const before = calls.length
+    expect((await del('42', foreign)).status).toBe(403)
+    expect((await del('42', operators)).status).toBe(403)
+    expect(calls.slice(before).some(c => c.method === 'deleteMessage')).toBeFalse()
+    const deleted = await del('42', own)
+    expect(await deleted.json()).toEqual({ deleted: own })
+    expect(calls.slice(before).filter(c => c.method === 'deleteMessage').map(c => c.body.message_id)).toEqual([own])
+    expect((await del('42', own)).status).toBe(403)
+  }, 15_000)
+
   const ask = (fields: Record<string, string | Blob>, token?: string) => {
     const form = new FormData()
     for (const [key, value] of Object.entries(fields)) form.append(key, value)

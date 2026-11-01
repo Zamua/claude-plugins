@@ -185,6 +185,19 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
       },
     },
     {
+      name: 'delete_message',
+      description:
+        'Delete a message you sent with the reply tool in this topic, within 48 hours of sending it (for example one that carried a credential). Only your own replies can be deleted: never the operator\'s messages or another topic\'s.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_id: { type: 'string' },
+          message_id: { type: 'string', description: 'An id the reply tool returned' },
+        },
+        required: ['chat_id', 'message_id'],
+      },
+    },
+    {
       name: 'list_topics',
       description:
         'Directory of peer Claude topics (for the #square). Returns each topic\'s slug (use with square_tag), display name, and whether its Claude is currently live. Dormant peers are fine to tag — a tag wakes them.',
@@ -333,6 +346,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         })
         const id = data?.message_id ?? args.message_id
         return { content: [{ type: 'text', text: `edited (id: ${id})` }] }
+      }
+      case 'delete_message': {
+        const data = await postJSON(ROUTE.deleteMessage, { topic: TOPIC, chat_id: args.chat_id, message_id: args.message_id })
+        return { content: [{ type: 'text', text: `deleted (id: ${data.deleted})` }] }
       }
       case 'list_topics': {
         const res = await fetch(`${PROXY}${ROUTE.topics}`)

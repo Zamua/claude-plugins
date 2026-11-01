@@ -17,6 +17,7 @@ export const ROUTE = {
   send: '/send',
   react: '/react',
   edit: '/edit',
+  deleteMessage: '/delete',
   download: '/download',
   permissionRequest: '/permission-request',
 } as const
