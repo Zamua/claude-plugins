@@ -34,6 +34,8 @@ export interface TopicHarnessAdapter {
   sent(topic: string, messages: number): void
   /** Readies a new topic before Telegram creates it; the returned step locks it once it exists. */
   prepareTopic(name: string): Promise<(topic: string) => Promise<void>>
+  /** Run every two seconds: applies a relaunch or route change queued until its topic went idle. */
+  reconcile?(): Promise<unknown>
 }
 
 /** What every harness's Telegram front end needs from the proxy. */
