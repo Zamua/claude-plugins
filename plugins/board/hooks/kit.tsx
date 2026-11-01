@@ -240,7 +240,8 @@ export type PrRowSpec = {
   mark?: { glyph: string; color: Color }
   /** The second column: a warning mark while it waits on the person. */
   isFlagged: boolean
-  dot: Color
+  /** CI and mergeability as one dot, left out where the state word says it. */
+  dot?: Color
   /** Columns after the dot that keep their width, such as a state word or an author. */
   columns?: RenderNode[]
   /** The pull request it sits on, when that is not the row above. */
@@ -278,7 +279,7 @@ export function prRow(els: Els, spec: PrRowSpec) {
         `prnum-${id}`,
         spec.url ? link(els, spec.url, `#${spec.number}`) : <Text dimColor>{`#${spec.number}`}</Text>,
       )}
-      {fixed(els, `dot-${id}`, <Text color={spec.dot}>●</Text>)}
+      {spec.dot && fixed(els, `dot-${id}`, <Text color={spec.dot}>●</Text>)}
       {spec.columns}
       {spec.on !== undefined && fixed(els, `base-${id}`, <Text dimColor>{`on #${spec.on}`}</Text>)}
       {spec.title !== undefined && spec.title !== '' && (

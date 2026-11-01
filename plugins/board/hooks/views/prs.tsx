@@ -254,12 +254,13 @@ export function needsYou(p: TrackedPr, viewer: string): boolean {
   return isOwn ? needsOf(p).length > 0 : f.state === 'OPEN' && f.waiting > 0
 }
 
-function stateOf(p: TrackedPr): Word {
+/** With `isDraftLast`, a draft's conflicts and CI outrank its being a draft, so the word alone says what the dot would. */
+function stateOf(p: TrackedPr, isDraftLast = false): Word {
   const f = p.facts
   if (!f) return { text: '', isDim: true }
   if (f.state === 'MERGED') return { text: 'merged', color: 'merged' }
   if (f.state === 'CLOSED') return { text: 'closed', isDim: true }
-  if (f.isDraft) return { text: 'draft', isDim: true }
+  if (f.isDraft && !(isDraftLast && (isConflicted(f) || f.ci === 'fail' || f.ci === 'pending'))) return { text: 'draft', isDim: true }
   if (isConflicted(f)) return { text: 'conflict', color: 'error' }
   if (f.ci === 'fail') return { text: 'CI fail', color: 'error' }
   if (f.ci === 'pending') return { text: 'CI run', color: 'warning' }
@@ -407,13 +408,15 @@ export type PrGroup = { key: string; heading?: RenderNode; prs: readonly Tracked
  * Each group under its heading, one line per pull request: where it sits in its git stack, a check once approved, a
  * mark while it needs the person, its number, a dot for CI and mergeability, its state, its author and its title. A
  * layer based on something other than the row above names its base. The columns line up across groups. `titleOf`
- * gives a view's own short title in place of GitHub's.
+ * gives a view's own short title in place of GitHub's. `isCompact` drops the dot for a state word that carries it,
+ * and names an author only on someone else's pull request whose author differs from the row above.
  */
 export function prTable(
   els: Els,
   groups: readonly PrGroup[],
   viewer: string,
   titleOf: (p: TrackedPr) => string | undefined = () => undefined,
+  isCompact = false,
 ): RenderNode[] {
   const { Box, Text } = els
   const laid = groups.map(group => {
@@ -422,7 +425,14 @@ export function prTable(
     return { group, chains, prs: chains.flat() }
   })
   const hasChains = laid.some(one => one.chains.some(run => run.length > 1))
-  const authors = laid.flatMap(one => one.prs.map(p => [...(p.facts?.author ?? '')].length))
+  const isMine = (p: TrackedPr) => Boolean(viewer) && p.facts?.author.toLowerCase() === viewer.toLowerCase()
+  const authorOf = (prs: readonly TrackedPr[], row: number) => {
+    const p = prs[row] as TrackedPr
+    if (!isCompact) return p.facts?.author ?? ''
+
+    return isMine(p) || prs[row - 1]?.facts?.author === p.facts?.author ? '' : (p.facts?.author ?? '')
+  }
+  const authors = laid.flatMap(one => one.prs.map((_, row) => [...authorOf(one.prs, row)].length))
   const authorWidth = Math.min(MAX_AUTHOR, Math.max(0, ...authors))
 
   return laid.map(({ group, chains, prs }, at) => (
@@ -431,7 +441,7 @@ export function prTable(
       {prs.map((p, row) => {
         const below = belowOf(p, prs)
         const named = below && prs[row - 1] !== below ? below : undefined
-        const state = stateOf(p)
+        const state = stateOf(p, isCompact)
         const mark = prMark(p.facts?.state, p.facts ? reviewOf(p.facts) === 'APPROVED' : false)
 
         return prRow(els, {
@@ -441,7 +451,7 @@ export function prTable(
           ...(hasChains && { chain: CHAIN_GLYPHS[chainOf(chains, p)] }),
           ...(mark && { mark }),
           isFlagged: needsYou(p, viewer),
-          dot: healthOf(p),
+          ...(!isCompact && { dot: healthOf(p) }),
           columns: [
             <Box key={`state-${p.key}`} width={STATE_WIDTH} flexShrink={0}>
               <Text color={state.color} dimColor={state.isDim}>
@@ -451,7 +461,7 @@ export function prTable(
             ...(authorWidth > 0
               ? [
                   <Box key={`author-${p.key}`} width={authorWidth} flexShrink={0}>
-                    <Text dimColor>{cutTo(p.facts?.author ?? '', authorWidth)}</Text>
+                    <Text dimColor>{cutTo(authorOf(prs, row), authorWidth).padEnd(authorWidth)}</Text>
                   </Box>,
                 ]
               : []),

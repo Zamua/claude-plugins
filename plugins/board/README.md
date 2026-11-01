@@ -153,31 +153,34 @@ The root session's switcher adds two views drawn from the tree, each with a tab 
 Responsibilities without sections, and a heading per top-level Item in it. A tab's count is what in it waits on you.
 
 ```
- Goals 1 · Side · Misc
+ Goals 1 · Side · Misc                 checked 2m ago
 ╭────────────────────────────────────────────╮
 │ Grow the partner network                   │
-│   ! #7502 ● CI fail  me  ABC-809 adds the… │
-│     #7600 ● review   lee ABC-809 adds a h… │
+│   ! #7502 CI fail      ABC-809 adds the f… │
+│     #7600 review   lee ABC-809 adds a hook │
 ╰────────────────────────────────────────────╯
  ▸ ✓ 14 merged or closed
 ```
 
 ```
- Goals 1 · Code review
+ Goals 1 · Code review                  polled 1m ago
 Grow the partner network
-▸ to pick   Partner stack      2 open  3/11 PRs   3d ●
-▸ approved  Fee lookup                  1/1 PRs   5d ●
+▸   Partner stack         12 threads   3 PRs   3d ●
+▸   Fee lookup             1 to pick    1 PR   5d ●
+▸ ✓ Legacy removal                      1 PR   5d ●
 ```
 
-- `all prs` holds every pull request the tree places, whoever wrote it, each with the prs view's live state and its
-  author; what needs you comes first, and the merged and closed fold behind a count. Open ones placed nowhere get an
-  Unplaced tab. While it is shown it asks GitHub for them through the prs view's shared cache.
+- `all prs` holds every pull request the tree places, whoever wrote it, with the prs view's live state; what needs
+  you comes first, and the merged and closed fold behind a count. Open ones placed nowhere get an Unplaced tab. While
+  it is shown it asks GitHub for them through the prs view's shared cache.
 - `all reviews` holds every running [pr-review-board](../pr-review-board/) review and every board a session wrote by
-  hand, read from that plugin's own files: where it stands (comments to pick, waiting on its author, reviewing,
-  posted, approved or merged), how many of its comments and your other threads on its open pull requests wait on
-  their author, its open pull requests of all, and how long since it changed. A review sits in the tab of its
-  session's Item, or else of its first pull request the tree places. Pressing one opens its open pull requests; its
-  mark brings its session to the front.
+  hand, read from that plugin's own files. A line marks a review ✓ once its open pull requests are approved and ◆ once
+  they merged, then says what it waits on: comments for you to pick, or its comments and your other threads on its
+  open pull requests that wait on their author, `reviewing` while nothing is posted. Then its open pull requests, how
+  long since it changed, and a dot that brings its session to the front. A review sits in the tab of its session's
+  Item, or else of its first pull request the tree places. Pressing one opens its open pull requests.
+- Both draw a pull request's state as one word that also carries its CI, and name an author only for someone else's
+  pull request, and only where it differs from the row above.
 - The tabs come from the tree, so the tool's `link`, `hide` and `sections` move a pull request to another tab, leave it
   out, or rename and reorder the tabs.
 

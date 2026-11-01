@@ -1,7 +1,7 @@
-import type { EngineInterface, RenderNode } from 'claude-code'
+import type { Color, EngineInterface, RenderNode } from 'claude-code'
 
 import type { PrFacts, TrackedPr } from '../../types'
-import { fitLine, fixed, span, spans, stamp } from '../kit'
+import { fitLine, fixed, span, spans } from '../kit'
 import type { Els, Part, View } from '../kit'
 import { paneWidth } from '../pane'
 import { storedValues } from '../store'
@@ -19,20 +19,25 @@ const POLL_MS = 60_000
 // GitHub is asked only while someone looks at a rollup
 const SHOWN_MS = 2 * 60_000
 
-const REVIEW_WORDS: Record<ReviewState, string> = {
-  pick: 'to pick',
-  waiting: 'waiting',
-  reviewing: 'reviewing',
-  posted: 'posted',
-  approved: 'approved',
-  finished: 'merged',
+// A review's state as the prs rows mark a pull request's, where a mark says it better than its counts
+const REVIEW_MARKS: Partial<Record<ReviewState, { glyph: string; color: Color }>> = {
+  approved: { glyph: '✓', color: 'success' },
+  finished: { glyph: '◆', color: 'merged' },
 }
-const WORD_WIDTH = Math.max(...Object.values(REVIEW_WORDS).map(word => word.length))
-// A review line's right side is fixed columns: its unanswered threads, its open pull requests, its age and its session
-const THREADS_WIDTH = '99 open'.length
-const PRS_WIDTH = '99/99 PRs'.length
-const AGE_WIDTH = 4
-const COLUMNS_WIDTH = 1 + THREADS_WIDTH + 1 + PRS_WIDTH + 1 + AGE_WIDTH + 2
+// A review line's right side is fixed columns: what waits, its open pull requests, its age and its session
+const STATUS_WIDTH = '99 threads'.length
+const PRS_WIDTH = '99 PRs'.length
+const AGE_WIDTH = 3
+const COLUMNS_WIDTH = 1 + STATUS_WIDTH + 2 + PRS_WIDTH + 2 + AGE_WIDTH + 2
+const counted = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
+
+/** What a review waits on: comments for the person to pick, else threads on its authors, else nothing while it is under way. */
+function statusOf(r: ReviewDigest): Part {
+  if (r.toPick > 0) return { text: `${r.toPick} to pick`, color: 'warning' }
+  if (r.unanswered > 0) return { text: counted(r.unanswered, 'thread'), dimColor: true }
+
+  return { text: r.state === 'reviewing' ? 'reviewing' : '', dimColor: true }
+}
 
 /** One tab: a section of the work view, each top-level Item in it that holds rows a part under its title. */
 type Tab<T> = { title: string; parts: { key: string; heading: string; rows: T[] }[] }
@@ -62,8 +67,18 @@ function tabsOf<T>(tree: Tree, byTop: Map<Node, T[]>, loose: T[]): Tab<T>[] {
 const chosenOf = <T,>(tabs: Tab<T>[], chosen: string, needs: (tab: Tab<T>) => number) =>
   tabs.find(tab => tab.title === chosen) ?? tabs.find(tab => needs(tab) > 0) ?? tabs[0]
 
-/** A button per tab with what in it waits on the person; pressing one shows that tab. */
-function tabBar<T>(els: Els, prefix: string, tabs: Tab<T>[], shown: Tab<T>, needs: (tab: Tab<T>) => number, choose: (title: string) => void) {
+type Fresh = { text: string; isError: boolean }
+
+/** A button per tab with what in it waits on the person, pressed to show that tab, and how fresh the view is at the right. */
+function tabBar<T>(
+  els: Els,
+  prefix: string,
+  tabs: Tab<T>[],
+  shown: Tab<T>,
+  needs: (tab: Tab<T>) => number,
+  choose: (title: string) => void,
+  fresh: Fresh,
+) {
   const { Box, Button, Text } = els
 
   return (
@@ -86,6 +101,11 @@ function tabBar<T>(els: Els, prefix: string, tabs: Tab<T>[], shown: Tab<T>, need
           </Button>,
         ]
       })}
+      <Box key={`${prefix}stamp`} flexGrow={1} justifyContent="flex-end">
+        <Text color={fresh.isError ? 'error' : undefined} dimColor={!fresh.isError || undefined}>
+          {fresh.text}
+        </Text>
+      </Box>
     </Box>
   )
 }
@@ -227,7 +247,10 @@ export function rollupPrsView($: EngineInterface): View {
           </Text>
         )
       }
-      const fresh = githubError ? `GitHub check failed: ${githubError}` : checkedAt > 0 ? `GitHub checked ${span(now - checkedAt)} ago` : ''
+      const fresh = {
+        text: githubError ? `GitHub check failed: ${githubError}` : checkedAt > 0 ? `checked ${span(now - checkedAt)} ago` : '',
+        isError: Boolean(githubError),
+      }
       // What needs the person leads each part, then the open ones; the merged and closed fold behind a count
       const sorted = shown.parts.map(part => ({
         ...part,
@@ -256,14 +279,21 @@ export function rollupPrsView($: EngineInterface): View {
 
       return (
         <Box key="rollup-prs" flexDirection="column">
-          {fresh && stamp(els, fresh, Boolean(githubError))}
-          {tabBar(els, 'rp', tabs, shown, tabNeeds, title => {
-            prTab = title
-            $.ui.invalidate('ui.render')
-          })}
+          {tabBar(
+            els,
+            'rp',
+            tabs,
+            shown,
+            tabNeeds,
+            title => {
+              prTab = title
+              $.ui.invalidate('ui.render')
+            },
+            fresh,
+          )}
           {groups.length > 0 && (
             <Box key="rprs" flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
-              {prTable(els, groups, viewer)}
+              {prTable(els, groups, viewer, undefined, true)}
             </Box>
           )}
           {done > 0 && (
@@ -344,16 +374,23 @@ export function rollupReviewsView($: EngineInterface): View {
           </Text>
         )
       }
-      const fresh = reviewError || (Number.isNaN(polledAt) ? '' : `Polled ${span(now - polledAt)} ago`)
+      const fresh = { text: reviewError || (Number.isNaN(polledAt) ? '' : `polled ${span(now - polledAt)} ago`), isError: Boolean(reviewError) }
       const columns = paneWidth() - 2
 
       return (
         <Box key="rollup-reviews" flexDirection="column" paddingRight={1}>
-          {fresh && stamp(els, fresh, Boolean(reviewError))}
-          {tabBar(els, 'rr', tabs, shown, reviewTabNeeds, title => {
-            reviewTab = title
-            $.ui.invalidate('ui.render')
-          })}
+          {tabBar(
+            els,
+            'rr',
+            tabs,
+            shown,
+            reviewTabNeeds,
+            title => {
+              reviewTab = title
+              $.ui.invalidate('ui.render')
+            },
+            fresh,
+          )}
           {shown.parts.map((part, at) => (
             <Box key={`rrpart-${part.key}`} flexDirection="column" marginTop={at > 0 ? 1 : 0}>
               {part.heading && (
@@ -372,24 +409,24 @@ export function rollupReviewsView($: EngineInterface): View {
   }
 
   /**
-   * One line per review, pressed to open its open pull requests: where it stands and its title cut to the room left,
-   * then fixed columns at the right edge, every cell written as spaces where empty: its unanswered threads, its open
-   * pull requests of all, how long since it last changed, and a mark that brings its session to the front.
+   * One line per review, pressed to open its open pull requests: a mark once approved or merged and its title cut to
+   * the room left, then fixed columns at the right edge, every cell written as spaces where empty: what it waits on,
+   * its open pull requests, how long since it last changed, and a dot that brings its session to the front.
    */
   function reviewLines(els: Els, tree: Tree, r: ReviewDigest, now: number, columns: number): RenderNode[] {
     const { Box, Button, Text } = els
     const isShown = opened.has(r.key)
     const session = sessionOf(tree, r)
+    const mark = REVIEW_MARKS[r.state]
     const parts: Part[] = [
       { text: isShown ? '▾' : '▸', dimColor: true },
-      r.state === 'pick'
-        ? { text: REVIEW_WORDS[r.state].padEnd(WORD_WIDTH), color: 'warning' }
-        : { text: REVIEW_WORDS[r.state].padEnd(WORD_WIDTH), dimColor: true },
+      mark ? { text: mark.glyph, color: mark.color } : { text: ' ' },
     ]
     const room = columns - COLUMNS_WIDTH
     const line = fitLine(parts, { text: r.title, dimColor: r.state === 'finished' }, room)
     const pad = Math.max(0, room - line.reduce((n, part, at) => n + [...part.text].length + (at > 0 ? 1 : 0), 0))
-    const threads = r.unanswered > 0 ? `${r.unanswered} open` : ''
+    const status = statusOf(r)
+    const prs = r.openPrs > 0 ? counted(r.openPrs, 'PR') : ''
     const age = Number.isNaN(r.updatedAt) ? '' : span(now - r.updatedAt)
     const out: RenderNode[] = [
       <Box key={`rrrow-${r.key}`} flexDirection="row">
@@ -407,7 +444,8 @@ export function rollupReviewsView($: EngineInterface): View {
         </Button>
         {pad > 0 && fixed(els, `rrpad-${r.key}`, <Text>{' '.repeat(pad)}</Text>)}
         <Box key={`rrfact-${r.key}`} flexDirection="row" flexShrink={0}>
-          <Text dimColor>{` ${threads.padStart(THREADS_WIDTH)} ${`${r.openPrs}/${r.prs.length} PRs`.padStart(PRS_WIDTH)} ${age.padStart(AGE_WIDTH)} `}</Text>
+          <Text color={status.color} dimColor={status.dimColor || undefined}>{` ${status.text.padStart(STATUS_WIDTH)}`}</Text>
+          <Text dimColor>{`  ${prs.padStart(PRS_WIDTH)}  ${age.padStart(AGE_WIDTH)} `}</Text>
         </Box>
         {session ? (
           fixed(
@@ -428,8 +466,7 @@ export function rollupReviewsView($: EngineInterface): View {
     const titles = new Map(r.prs.flatMap(p => (p.title ? [[p.pr.toLowerCase(), p.title] as const] : [])))
     out.push(
       <Box key={`rrprs-${r.key}`} flexDirection="column" marginLeft={2}>
-        {open.length > 0 && prTable(els, [{ key: `rrgroup-${r.key}`, prs: open, chains: open.map(p => [p]) }], viewer, p => titles.get(p.key))}
-        {listed.length > open.length && <Text dimColor>{`✓ ${listed.length - open.length} merged or closed`}</Text>}
+        {prTable(els, [{ key: `rrgroup-${r.key}`, prs: open, chains: open.map(p => [p]) }], viewer, p => titles.get(p.key), true)}
       </Box>,
     )
 

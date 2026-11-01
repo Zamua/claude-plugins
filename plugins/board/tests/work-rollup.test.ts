@@ -100,7 +100,7 @@ const REVIEWS = {
       { pr: 'acme/api#7701', number: 7701, title: 'Client' },
     ],
     comments: [
-      { n: 1, pr: 'acme/api#7700', status: 'proposed', summary: 'A gap.' },
+      { n: 1, pr: 'acme/api#7700', status: 'dropped', summary: 'A gap.' },
       { n: 2, pr: 'acme/api#7700', status: 'posted', addressed: false, posted_url: 'https://github.com/acme/api/pull/7700#discussion_r1' },
       { n: 3, pr: 'acme/api#7700', status: 'posted', addressed: true, posted_url: 'https://github.com/acme/api/pull/7700#discussion_r5' },
       { n: 4, pr: 'acme/api#7701', status: 'posted', addressed: false, posted_url: 'https://github.com/acme/api/pull/7701#discussion_r6' },
@@ -119,7 +119,11 @@ const REVIEWS = {
     comments: [{ n: 1, pr: 'acme/api#8288', status: 'posted', addressed: true }],
   }),
   [`${META}/one-8/github.json`]: json({ prs: { 'acme/api#8288': { state: 'OPEN', approved: true, threads: [thread(3, { resolved: true })] } } }),
-  [`${META}/manual-h-r3/board.json`]: json({ title: 'Architecture watch', prs: [{ pr: 'acme/api#7502', number: 7502 }], comments: [] }),
+  [`${META}/manual-h-r3/board.json`]: json({
+    title: 'Architecture watch',
+    prs: [{ pr: 'acme/api#7502', number: 7502 }],
+    comments: [{ n: 1, pr: 'acme/api#7502', status: 'proposed', summary: 'A seam.' }],
+  }),
 }
 
 test("the root's review rollup says where each review stands, in the tab of its session's Item or its pull request's", async ($, on) => {
@@ -136,19 +140,19 @@ test("the root's review rollup says where each review stands, in the tab of its 
   const ui = await open($, 'allreviews')
   expect(await ui.find({ key: 'tab-allreviews', text: 'all reviews 1' })).toBeDefined()
   expect(await ui.find({ key: 'rrtab-goals', text: 'Goals 1' })).toBeDefined()
-  expect(await ui.find({ key: 'rollup-reviews', text: /^Polled 2m ago/ })).toBeDefined()
+  expect(await ui.find({ key: 'rrtabs', text: /Goals 1·Side\s*polled 2m ago$/ })).toBeDefined()
   // Comment 2 waits on its author and thread 4 is another of the operator's; 3 is addressed and 6 sits on a merged one
-  expect(await ui.find({ key: 'rrrow-stack-1', text: /to pick\s+Nova stack\s+2 open\s+1\/2 PRs\s+10m/ })).toBeDefined()
-  expect(await ui.find({ key: 'rrrow-manual-h-r3', text: /reviewing\s+Architecture watch\s+1\/1 PRs/ })).toBeDefined()
+  expect(await ui.find({ key: 'rrrow-stack-1', text: /^▸\s+Nova stack\s+2 threads\s+1 PR\s+10m/ })).toBeDefined()
+  expect(await ui.find({ key: 'rrrow-manual-h-r3', text: /Architecture watch\s+1 to pick\s+1 PR\s/ })).toBeDefined()
   expect(await ui.find({ key: 'rrrow-old-1' })).toBeUndefined()
 
   await ui.press({ key: 'rrtoggle-stack-1' })
   expect(await ui.find({ key: 'prrow-acme/api#7700', text: /Adapter/ })).toBeDefined()
-  expect(await ui.find({ key: 'rrprs-stack-1', text: /✓ 1 merged or closed/ })).toBeDefined()
+  expect(await ui.find({ key: 'prrow-acme/api#7701' })).toBeUndefined()
   await ui.press({ key: 'rrmark-stack-1' })
   expect(w.runs).toContainEqual(['herdr', '--session', 'default', 'workspace', 'focus', 'w2'])
 
   await ui.press({ key: 'rrtab-side' })
-  expect(await ui.find({ key: 'rrrow-one-8', text: /approved\s+Legacy removal\s+1\/1 PRs\s+2d/ })).toBeDefined()
+  expect(await ui.find({ key: 'rrrow-one-8', text: /^▸ ✓ Legacy removal\s+1 PR\s+2d/ })).toBeDefined()
   await ui.unmount()
 })
