@@ -8,7 +8,7 @@ import type { TopicHarnessAdapter } from '../harness/topic-harness-adapter'
 import { log } from '../log'
 import { spawnedNode } from './domain/session-tree'
 import { saveRegistry } from './registry'
-import { getTopic, topicNames, topics } from './state'
+import { getTopic, topicNames } from './state'
 
 export type TopicCreationPorts = {
   chat: Pick<ChatPort, 'createTopic'>
@@ -17,16 +17,15 @@ export type TopicCreationPorts = {
 
 export function createTopicCreation({ chat, harnessOfKind }: TopicCreationPorts) {
   /**
-   * Creates and registers a forum topic, locked to `harness` unless that is
-   * Claude, and gives its id. `by` is who asked: "operator", "proxy", or the
-   * topic whose agent did, under which the new topic then hangs.
+   * Creates and registers a forum topic, a new project under the root, locked
+   * to `harness` unless that is Claude, and gives its id. `by` is who asked.
    */
   return async function createTopic(name: string, harness: TopicHarness, by: string): Promise<string> {
     const lockNewTopic = harness === 'claude' ? undefined : await harnessOfKind(harness).prepareTopic(name)
     const topic = await chat.createTopic(name)
     const st = getTopic(topic)
     st.name = name
-    st.session = spawnedNode(topic, by, id => topics.has(id), new Date().toISOString())
+    st.session = spawnedNode(topic, by, new Date().toISOString())
     topicNames.set(topic, name)
     saveRegistry()
     if (lockNewTopic) await lockNewTopic(topic)

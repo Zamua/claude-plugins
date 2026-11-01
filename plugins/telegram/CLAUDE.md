@@ -221,11 +221,12 @@ change of state, title, name or route a `topic` event in the store.
 interrupt, topic create and rename, secrets through the `/secret` drop's own
 store, reminders through the reminder store) through routing's `requestRoute`, the one
 path the `/model` picker also takes, the lifecycle and the chat port; each is a
-ledger entry before it runs. Pin and mute are the store's own (`topic_prefs`). Each topic's place in the
-session tree (`topics/domain/session-tree.ts`: general the root, an
-agent-created topic under its creator's) is recorded at creation in the
-registry's `session` field and served as `parent_id`, `spawned_by` and
-`spawned_at`.
+ledger entry before it runs. Pin and mute are the store's own (`topic_prefs`). The session tree
+(`topics/domain/session-tree.ts`: general the root, every other topic a
+project with its session as coordinator, workers under a coordinator, nothing
+deeper) is recorded at creation in the registry's `session` field and served
+as `role`, `project_id`, `parent_id`, `spawned_by` and `spawned_at`; only the
+root and the operator make projects, so `/topic/create` refuses another topic.
 `approvals.ts` opens an approval while an hc topic's session is blocked on a
 dialog (choices parsed from its screen by `domain/approval.ts`) and expires it
 when the session moves on; nothing answers one yet. Every admitted request and

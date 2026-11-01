@@ -35,7 +35,7 @@ describe('the wire matches the contract fixtures', () => {
     expect(wireTopic({
       id: f.id, name: f.name, kind: f.kind, title: f.title, pinned: f.pinned, muted: f.muted, state: f.state,
       stateSince: f.state_since, unread: f.unread, readSeq: f.read_seq, pendingApprovals: f.pending_approvals,
-      route: f.route, lastMessage: f.last_message, parentId: f.parent_id, spawnedBy: f.spawned_by, spawnedAt: f.spawned_at,
+      route: f.route, lastMessage: f.last_message, role: f.role, projectId: f.project_id, parentId: f.parent_id, spawnedBy: f.spawned_by, spawnedAt: f.spawned_at,
     })).toEqual(f)
   })
 
@@ -79,17 +79,14 @@ test('usage.json: the observed windows, with a reset as a time and an unknown sh
     .toEqual({ providers: [{ id: 'codex', windows: [{ name: 'week', used_percent: null, resets_at: null }] }] })
 })
 
-test('topics-tree.json: one root, every other topic under a listed parent, no cycles', () => {
-  const { topics } = fixture('topics-tree.json') as { topics: Array<{ id: string; parent_id: string | null }> }
+test('topics-projects.json: one root, every project under it, every worker under its project\'s coordinator, nothing deeper', () => {
+  const { topics } = fixture('topics-projects.json') as { topics: Array<{ id: string; role: string; project_id: string | null; parent_id: string | null }> }
   const byId = new Map(topics.map(t => [t.id, t]))
-  expect(topics.filter(t => t.parent_id === null).map(t => t.id)).toEqual(['general'])
-  for (const t of topics) {
-    const seen = new Set<string>()
-    for (let at: string | null = t.id; at !== null; at = byId.get(at)?.parent_id ?? null) {
-      expect(seen.has(at)).toBeFalse()
-      seen.add(at)
-      if (at !== t.id && at !== 'general') expect(byId.has(at)).toBeTrue()
-    }
+  expect(topics.filter(t => t.role === 'root').map(t => [t.id, t.parent_id, t.project_id])).toEqual([['general', null, null]])
+  for (const t of topics.filter(t => t.role === 'coordinator')) expect([t.parent_id, t.project_id]).toEqual(['general', t.id])
+  for (const t of topics.filter(t => t.role === 'worker')) {
+    expect(byId.get(t.parent_id as string)?.role).toBe('coordinator')
+    expect(t.project_id).toBe(t.parent_id)
   }
 })
 

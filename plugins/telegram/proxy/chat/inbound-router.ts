@@ -121,7 +121,7 @@ export function createInboundRouter(ports: InboundPorts): (event: ChatEvent) => 
       const st = topics.get(topic)
       if (st && !st.name) st.name = nm
       if (st && !st.session) {
-        st.session = spawnedNode(topic, message.sender.role === 'operator' ? 'operator' : String(message.sender.id), id => topics.has(id), new Date(message.at).toISOString())
+        st.session = spawnedNode(topic, message.sender.role === 'operator' ? 'operator' : String(message.sender.id), new Date(message.at).toISOString())
         saveRegistry()
       }
       harness?.rename(topic, nm)

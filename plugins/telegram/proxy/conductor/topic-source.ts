@@ -3,7 +3,7 @@
 // what the proxy's lifecycle knows.
 import { currentRoute, topicNames, topics } from '../topics/state'
 import type { TopicSummary } from './api'
-import { sessionNode } from '../topics/domain/session-tree'
+import { projectOf, sessionNode, topicRole } from '../topics/domain/session-tree'
 import { agentState } from './domain/agent-state'
 import type { HcWatch } from './hc-watch'
 import type { ScreenView } from './wire'
@@ -25,7 +25,10 @@ export function conductorTopics(hidden: (topic: string) => boolean, kindOf: (top
       const terminal = hcTerminal(topic, hc)
       const onHc = hc?.topics.has(topic) ? { core: hc.watch.connected(), terminal } : undefined
       const node = sessionNode(topic, st.session)
+      const role = topicRole(topic)
       return {
+        role,
+        projectId: projectOf(role, topic, node.parent),
         parentId: node.parent,
         spawnedBy: node.spawnedBy,
         spawnedAt: node.spawnedAt,
