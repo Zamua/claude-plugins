@@ -1,5 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
-import { dirname } from 'path'
+import { existsSync, readFileSync } from 'fs'
+import { writeJsonAtomic } from './json-file'
 import type { Reminder } from '../domain/reminder'
 
 type StoredReminders = {
@@ -35,11 +35,7 @@ export class JsonReminderRepository {
   }
 
   private persist(): void {
-    mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 })
-    const temp = `${this.file}.${process.pid}.${Date.now()}.tmp`
     const state: StoredReminders = { version: 1, reminders: [...this.reminders.values()] }
-    writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
-    chmodSync(temp, 0o600)
-    renameSync(temp, this.file)
+    writeJsonAtomic(this.file, state)
   }
 }
