@@ -1027,6 +1027,28 @@ describe('the proxy, end to end', () => {
     expect(readdirSync(join(state, 'inbox')).filter(f => f.includes('audio'))).toEqual([])
   }, 20_000)
 
+  for (const [where, thread] of [['a topic', 65], ['general', undefined]] as const) test(`a photo in ${where} reaches its Claude as a turn naming the downloaded image`, async () => {
+    const id = messageId
+    pending.push({
+      update_id: updateId++,
+      message: {
+        message_id: messageId++,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: Number(GROUP), type: 'supergroup', title: 'topics', is_forum: true },
+        from: { id: OPERATOR, is_bot: false, first_name: 'Operator' },
+        ...(thread ? { message_thread_id: thread, is_topic_message: true } : {}),
+        photo: [
+          { file_id: 'small', file_unique_id: 'us', width: 90, height: 90 },
+          { file_id: 'large', file_unique_id: 'ul', width: 900, height: 900 },
+        ],
+      },
+    })
+    const turn = await fetch(`${proxyUrl}/poll?topic=${thread ?? 'general'}`, { signal: AbortSignal.timeout(5_000) }).then(r => r.json())
+    expect(turn.meta.message_id).toBe(String(id))
+    expect(dirname(turn.meta.image_path)).toBe(join(state, 'inbox'))
+    expect(readFileSync(turn.meta.image_path, 'utf8')).toBe('downloaded bytes')
+  }, 20_000)
+
   const hcCalls = () => (existsSync(join(home, 'fake', 'hc.calls')) ? readFileSync(join(home, 'fake', 'hc.calls'), 'utf8') : '')
   const hcTerminals = () => JSON.parse(readFileSync(join(home, 'fake', 'hc.json'), 'utf8')).terminals as Array<{ name: string; state: string; labels: Record<string, string> }>
 
