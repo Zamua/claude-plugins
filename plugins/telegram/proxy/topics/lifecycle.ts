@@ -403,7 +403,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
       meta: {
         chat_id: chatId,
         user: 'telegram-topics-proxy',
-        user_id: fromId,
+        user_id: '',
         ts: new Date().toISOString(),
         ...(topic !== 'general' ? { message_thread_id: topic } : {}),
         ...RELAUNCH_META,

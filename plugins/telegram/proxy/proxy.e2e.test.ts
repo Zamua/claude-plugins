@@ -375,6 +375,9 @@ afterAll(() => {
 })
 
 describe('the proxy, end to end', () => {
+  // A turn the proxy made itself never carries a user id, so none can read as the operator
+  const expectProxyMade = (turn: { meta: Record<string, string> }) => expect(turn.meta.user_id ?? '').toBe('')
+
   test('reports health with the topics it reloaded from the registry', async () => {
     const health = await fetch(`${proxyUrl}/health`).then(r => r.json())
     expect(health.ok).toBeTrue()
@@ -468,6 +471,7 @@ describe('the proxy, end to end', () => {
     if (polled.meta.square !== '1') polled = await fetch(`${proxyUrl}/poll?topic=43`).then(r => r.json())
     expect(polled.meta.square).toBe('1')
     expect(polled.content).toContain('can you check the build?')
+    expectProxyMade(polled)
 
     const reply = await fetch(`${proxyUrl}/square/reply`, {
       method: 'POST',
@@ -493,6 +497,7 @@ describe('the proxy, end to end', () => {
     }
     expect(notice.meta.secret_drop).toBe('1')
     expect(notice.content).not.toContain('sk-test-123')
+    expectProxyMade(notice)
   }, 20_000)
 
   test('a bare /secret asks for the name, then the value, and stores it', async () => {
@@ -522,6 +527,11 @@ describe('the proxy, end to end', () => {
       calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 42 && c.body.text === '⏰ stretch'), 25_000)
     const left = await fetch(`${proxyUrl}/reminders?topic=42`).then(r => r.json())
     expect(left.reminders).toEqual([])
+    // Earlier tests' turns for topic 42 are still queued ahead of the reminder's
+    let woken = await fetch(`${proxyUrl}/poll?topic=42`).then(r => r.json())
+    for (let i = 0; i < 10 && woken.meta.reminder === undefined; i++) woken = await fetch(`${proxyUrl}/poll?topic=42`).then(r => r.json())
+    expect(woken.meta.reminder).toBe('notice')
+    expectProxyMade(woken)
   }, 30_000)
 
   test('a reminder cancelled while an earlier one is still posting is not posted', async () => {
@@ -718,6 +728,7 @@ describe('the proxy, end to end', () => {
     }
     expect(polled.meta.relaunch).toBe('1')
     expect(polled.content).toContain('the operator relaunched this session')
+    expectProxyMade(polled)
     send(42, '/relaunch')
     await until('the debounce answer', () => said(42, /already relaunching/))
   }, 20_000)
