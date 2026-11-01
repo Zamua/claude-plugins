@@ -5,7 +5,7 @@ import type { CiState, PrBoard, PrFacts, TrackedPr } from '../../types'
 import { ago, messageOf, prMark, prRow, span, stamp } from '../kit'
 import type { Els, View } from '../kit'
 import { PANE, paneFocused, showView } from '../pane'
-import { legacyValue, loadBoard, saveBoard, storedBoard } from '../store'
+import { legacyBoard, loadBoard, saveBoard, storedBoard } from '../store'
 
 export const PRS_TOOL = 'mcp__board__prs'
 
@@ -177,15 +177,8 @@ async function syncBoard($: EngineInterface) {
 async function importLegacy($: EngineInterface) {
   const current = await read($, board)
   if (current.legacyImported) return
-  let held: unknown
-  try {
-    held = await legacyValue($, 'my-pr-board', `board:${current.sessionId}`)
-  } catch {
-    return
-  }
-  const old = (held as { shape?: string; value?: PrBoard } | undefined)?.shape === SHAPE
-    ? (held as { value: PrBoard }).value
-    : undefined
+  const old = await legacyBoard<PrBoard>($, 'my-pr-board', SHAPE, current.sessionId)
+  if (old === null) return
   await update($, board, now => (now.sessionId === current.sessionId ? withLegacy(now, old) : now))
   if (old) await saveBoard($, PREFIX, SHAPE, await read($, board))
 }
