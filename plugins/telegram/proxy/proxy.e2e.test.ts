@@ -3,7 +3,7 @@ import type { Subprocess } from 'bun'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
-import { ANTIGRAVITY_DISABLED_MESSAGE } from './adapters/disabled-antigravity-runtime'
+import { ANTIGRAVITY_DISABLED_MESSAGE } from './harness/antigravity/disabled-antigravity-runtime'
 
 // The proxy as a whole, booted from a copy of the plugin (so no .env of the
 // checkout reaches it) against a stand-in Bot API and a stand-in tmux and

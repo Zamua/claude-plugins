@@ -3,9 +3,9 @@
 import type { Api } from 'grammy'
 import { join } from 'path'
 import { SECRETS_DIR, SECRETS_USER_ID, SQUARE_TOPIC } from '../config'
-import { threadOf } from '../adapters/telegram-messages'
-import type { InboundMessage } from '../domain/inbound-delivery'
-import { SECRET_DROP_META } from '../domain/turn-meta'
+import { threadOf } from '../telegram/telegram-messages'
+import type { InboundMessage } from '../shared/domain/inbound-delivery'
+import { SECRET_DROP_META } from '../shared/domain/turn-meta'
 import { log, noticeFailed, reason, tilde } from '../log'
 import {
   advanceSecretFlow,
@@ -17,8 +17,8 @@ import {
   SecretExists,
   SecretMissing,
   storeSecret,
-} from '../secret'
-import type { FlowResult, Pending } from '../secret'
+} from './secret'
+import type { FlowResult, Pending } from './secret'
 
 export type SecretDropPorts = {
   api: Pick<Api, 'sendMessage' | 'deleteMessage'>

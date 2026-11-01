@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { writeJsonAtomic } from '../adapters/json-file'
+import { writeJsonAtomic } from '../shared/json-file'
 import { CONV_TTL_HOURS, STATE_DIR } from '../config'
 import { log } from '../log'
 

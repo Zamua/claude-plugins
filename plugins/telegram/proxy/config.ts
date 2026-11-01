@@ -3,10 +3,10 @@
 import { chmodSync, existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join, sep } from 'path'
-import { DEFAULT_VOICE_GLOSSARY } from './adapters/voice-transcription'
-import type { VoiceSettings } from './adapters/voice-transcription'
-import { environmentFlag } from './domain/env-flag'
-import { DEFAULT_MODEL, DEFAULT_ROUTE, topicRoute } from './domain/model-routing'
+import { DEFAULT_VOICE_GLOSSARY } from './telegram/voice-transcription'
+import type { VoiceSettings } from './telegram/voice-transcription'
+import { environmentFlag } from './shared/env-flag'
+import { DEFAULT_MODEL, DEFAULT_ROUTE, topicRoute } from './routing/domain/model-routing'
 import { log } from './log'
 
 // ---- paths -----------------------------------------------------------------

@@ -1,6 +1,6 @@
 // Request bodies of the proxy's HTTP API, checked where they enter. A malformed
 // body is a 400 naming the field, never a NaN id or a phantom topic downstream.
-import type { TopicHarness } from '../domain/topic-harness'
+import type { TopicHarness } from '../harness/domain/topic-harness'
 
 export class BadRequest extends Error {}
 
