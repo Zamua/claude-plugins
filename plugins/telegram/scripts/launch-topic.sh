@@ -209,7 +209,10 @@ spawn_tmux() {
     -e TG_RESUME="$TG_RESUME" \
     -e TELEGRAM_TOPIC_ID="$TELEGRAM_TOPIC_ID" \
     -e TELEGRAM_PROXY_URL="$TELEGRAM_PROXY_URL" \
-    "$PANE_CMD"
+    "$PANE_CMD" || {
+    echo "telegram-topics: tmux could not create session $TG_SESSION" >&2
+    exit 1
+  }
 
   # Auto-confirm watcher. NB: pane-target commands (capture-pane/send-keys) do
   # NOT accept the "=name" exact-match prefix that has-session does; an exact

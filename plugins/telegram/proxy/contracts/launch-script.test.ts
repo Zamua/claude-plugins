@@ -27,6 +27,7 @@ printf '%s\\n' "$*" >> "$HOME/fake/calls"
 case "$1" in
   has-session) exit 1 ;;
   new-session)
+    [ -e "$HOME/fake/no-server" ] && { echo 'no server running' >&2; exit 1; }
     shift; envs=(); cmd=''
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -70,7 +71,7 @@ const baseSpec = (over: Partial<ClaudeSpawnSpec> = {}): ClaudeSpawnSpec => ({
 // Variables the launcher consumes itself; every other one must reach the pane.
 const LAUNCHER_ONLY = new Set(['TG_SESSION', 'TG_MUX', 'TG_SPAWN_DIR'])
 
-function launch(spec: ClaudeSpawnSpec, panes: unknown[] = []) {
+function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false) {
   const home = mkdtempSync(join(tmpdir(), 'tg-launch-'))
   const bin = join(home, '.local', 'bin')
   const fake = join(home, 'fake')
@@ -81,6 +82,7 @@ function launch(spec: ClaudeSpawnSpec, panes: unknown[] = []) {
     chmodSync(join(bin, name), 0o700)
   }
   writeFileSync(join(fake, 'panes.json'), JSON.stringify({ result: { panes } }))
+  if (tmuxDown) writeFileSync(join(fake, 'no-server'), '')
   const spawnEnv = claudeSpawnEnv(spec)
   const result = spawnSync('bash', [scriptPath], {
     encoding: 'utf8',
@@ -165,6 +167,12 @@ describe('launch-topic.sh', () => {
     const run = launch(baseSpec())
     expect(run.calls).toContain('workspace create --cwd /tmp/spawn dir --label hostthis-34 --no-focus')
     expect(run.calls).toContain('pane rename p1 claude-hostthis-34')
+  })
+
+  test('a tmux session that cannot be created fails the launch, so the proxy reports it', () => {
+    const run = launch(baseSpec({ muxKind: 'tmux' }), [], true)
+    expect(run.result.status).toBe(1)
+    expect(run.result.stderr).toContain('tmux could not create session claude-hostthis-34')
   })
 
   test('herdr leaves a live agent alone and replaces a restored dead pane', () => {
