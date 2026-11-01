@@ -69,6 +69,7 @@ import { ConductorStore } from './conductor/sqlite-store'
 import { listenMode, startConductor } from './conductor/conductor'
 import { Ledger } from './conductor/ledger'
 import { tailscaleCli } from './conductor/tailscale'
+import { conductorControl } from './conductor/control'
 import { conductorScreen, conductorTopics } from './conductor/topic-source'
 import type { HcTopics } from './conductor/topic-source'
 import { watchHc } from './conductor/hc-watch'
@@ -92,7 +93,7 @@ import { claimPidFile, releasePidFile } from './shared/pid-file'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
 import { loadAndReconcileRegistry } from './topics/registry'
-import { getTopic } from './topics/state'
+import { currentRoute, getTopic } from './topics/state'
 import { loadConvs } from './square/conversations'
 import { createSquare } from './square/square'
 import { telegramDownloader, writeInboxFile } from './telegram/telegram-files'
@@ -150,6 +151,7 @@ const {
   paneInFlight,
   resumePendingPanes,
   relaunch,
+  interrupt,
 } = createTopicLifecycle({
   chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
@@ -244,6 +246,9 @@ const {
   handleCapacity,
   handleTurnFailed,
   handleRouteAction,
+  requestRoute,
+  routeChangeText,
+  capacitySnapshot,
 } = createRouting({
   chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
@@ -370,6 +375,25 @@ const conductor = conductorStore && conductorMode?.listener
           enqueue,
           // Unmirrored: the store already holds the operator's message.
           echo: async (topic, text) => (await telegramChat.send(topic, { text }))[0],
+        }),
+        control: conductorControl({
+          catalog: () => modelCatalog(),
+          capacities: () => capacitySnapshot(),
+          refreshCapacity: () => refreshProviderCapacity(),
+          usageText: () => capacityText(),
+          ultracode: topic => currentRoute(getTopic(topic)).ultracode,
+          requestRoute: (topic, choice) => requestRoute(topic, choice, 'manual'),
+          routeChangeText: request => routeChangeText(request.outcome, request.route),
+          noAgent: topic => (SQUARE_TOPIC && topic === SQUARE_TOPIC ? 'the square has no agent of its own' : undefined),
+          locked: topic => (harnessLocked(topic) ? 'this topic is locked to another harness; use Telegram' : undefined),
+          relaunch: async topic => {
+            const harness = harnessFor(topic)
+            if (harness) await harness.relaunch({ chatId: String(GROUP_CHAT_ID), topic, fromId: ADMIN_USER_ID })
+            else await relaunch(String(GROUP_CHAT_ID), topic, ADMIN_USER_ID)
+          },
+          interrupt,
+          // Unmirrored, like the app's own messages: the app already shows what it did.
+          say: async (topic, text) => void (await telegramChat.send(topic, { text }).catch(noticeFailed('app command echo', topic))),
         }),
         ...(hcTopics && {
           screen: (topic: string) => conductorScreen(topic, hcTopics),

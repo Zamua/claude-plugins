@@ -1,6 +1,10 @@
 // The conductor's objects as the API sends them: docs/conductor.md, with the
 // golden fixtures in docs/conductor-v1/ as the exact shapes.
+import { PROVIDERS, providerLabel } from '../routing/domain/model-routing'
+import type { ProviderCapacity } from '../routing/domain/provider-capacity'
+import type { ProviderCatalog } from '../routing/provider-catalog'
 import type { StoredMessage } from './domain/message'
+import { offered } from './domain/route-choice'
 
 export type AgentState = 'starting' | 'idle' | 'working' | 'blocked' | 'stopped' | 'missing'
 
@@ -89,3 +93,30 @@ export function wireDevice(d: Device): Record<string, unknown> {
     last_seen: d.lastSeen,
   }
 }
+
+/** The model catalog as the app picks from it: every provider, the models the bridge can run. */
+export function wireRoutes(catalog: ProviderCatalog): Record<string, unknown> {
+  return {
+    providers: PROVIDERS.map(id => ({
+      id,
+      label: providerLabel(id),
+      models: offered(catalog, id).map(m => ({ id: m.id, label: m.label, efforts: m.efforts, default_effort: m.defaultEffort })),
+    })),
+  }
+}
+
+/** Quota windows of the providers observed so far. */
+export function wireUsage(capacities: readonly ProviderCapacity[]): Record<string, unknown> {
+  const order = (c: ProviderCapacity) => PROVIDERS.indexOf(c.provider)
+  return {
+    providers: [...capacities].sort((a, b) => order(a) - order(b)).map(c => ({
+      id: c.provider,
+      windows: c.windows.map(w => ({
+        name: w.name,
+        used_percent: w.usedPercent ?? null,
+        resets_at: w.resetsAt ? new Date(w.resetsAt).toISOString() : null,
+      })),
+    })),
+  }
+}
+

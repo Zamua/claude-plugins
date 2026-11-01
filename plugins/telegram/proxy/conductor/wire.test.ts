@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import type { StoredMessage } from './domain/message'
-import { wireDevice, wireMessage, wireScreen, wireTopic } from './wire'
+import { wireDevice, wireMessage, wireRoutes, wireScreen, wireTopic, wireUsage } from './wire'
 
 const fixture = (name: string) =>
   JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'docs', 'conductor-v1', name), 'utf8'))
@@ -58,3 +58,24 @@ test('screen.json: hc reports no cursor, so a screen carries none', () => {
   const f = fixture('screen.json')
   expect(wireScreen({ topic: f.topic, rows: f.rows, cols: f.cols, working: f.working })).toEqual(f)
 })
+
+test('routes.json: each provider with the models it can run, as the picker offers them', () => {
+  const f = fixture('routes.json')
+  const opus = f.providers[0].models[0]
+  const wire = wireRoutes({
+    anthropic: [{ id: opus.id, label: opus.label, efforts: opus.efforts, defaultEffort: opus.default_effort }, { id: 'old', label: 'Old', efforts: ['low'], defaultEffort: 'low', bridgeSupported: false }],
+    codex: [],
+    'opencode-go': [],
+  }) as { providers: unknown[] }
+  expect(wire.providers[0]).toEqual(f.providers[0])
+  expect(wire.providers.map(p => (p as { id: string }).id)).toEqual(['anthropic', 'codex', 'opencode-go'])
+})
+
+test('usage.json: the observed windows, with a reset as a time and an unknown share as null', () => {
+  const f = fixture('usage.json')
+  const w = f.providers[0].windows[0]
+  expect(wireUsage([{ provider: 'anthropic', availability: 'available', observedAt: 0, windows: [{ name: w.name, usedPercent: w.used_percent, resetsAt: Date.parse(w.resets_at), availability: 'available' }] }])).toEqual(f)
+  expect(wireUsage([{ provider: 'codex', availability: 'unknown', observedAt: 0, windows: [{ name: 'week', availability: 'unknown' }] }]))
+    .toEqual({ providers: [{ id: 'codex', windows: [{ name: 'week', used_percent: null, resets_at: null }] }] })
+})
+

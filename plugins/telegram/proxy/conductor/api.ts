@@ -8,6 +8,7 @@ import type { StoredEvent, StoredMessage } from './domain/message'
 import { devicePublicKey } from './domain/signing'
 import { checkSignedWrite, replay } from './domain/write-auth'
 import type { SignedWrite } from './domain/write-auth'
+import type { ConductorControl, ControlResult } from './control'
 import type { Ledger } from './ledger'
 import type { ConductorStore } from './sqlite-store'
 import { topicTracker } from './topic-tracker'
@@ -39,6 +40,8 @@ export type ConductorApiPorts = {
   deliver: DeliverAppMessage
   /** A topic's screen now; undefined for a topic with none to show. Absent, no topic has a screen. */
   screen?: (topic: string) => Promise<ScreenView | undefined>
+  /** The operator's commands: routes, usage, relaunch, interrupt. Absent, those paths answer 503. */
+  control?: ConductorControl
   /** Calls back whenever something the topic list reports may have changed. */
   watchTopics?: (changed: () => void) => void
   log: (message: string) => void
@@ -57,6 +60,24 @@ const SCREEN_MS = 500
 
 const fail = (status: number, code: string, message: string) =>
   Response.json({ error: { code, message } }, { status })
+
+const answer = (result: ControlResult) =>
+  'ok' in result ? Response.json(result.ok) : fail(result.refused.status, result.refused.code, result.refused.message)
+
+/** What the device signed, as every act's ledger entry carries it. */
+const signed = (write: SignedWrite) => ({
+  method: write.method, path: write.path, client_id: write.clientId, body_sha256: write.bodySha256,
+  signature: write.signature, timestamp: write.timestamp,
+})
+
+function jsonBody(body: Uint8Array): Record<string, unknown> | Response {
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(body))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fail(400, 'bad_json', 'the body must be a JSON object')
+  } catch {
+    return fail(400, 'bad_json', 'the body must be JSON')
+  }
+}
 
 const TEXT_MAX_BYTES = 64 * 1024
 const IMAGES_MAX = 10
@@ -291,15 +312,26 @@ export function createConductorApi(ports: ConductorApiPorts) {
       clientId: write.clientId, delivery: 'accepted',
     })
     ports.ledger.keepSignedBody(body)
-    const ledgerHash = ports.ledger.append({
-      kind: 'message', device: device.id, topic, seq: message.seq, method: write.method, path: write.path,
-      client_id: write.clientId, body_sha256: write.bodySha256, signature: write.signature, timestamp: write.timestamp,
-    })
+    const ledgerHash = ports.ledger.append({ kind: 'message', device: device.id, topic, seq: message.seq, ...signed(write) })
     const outcome = await ports.deliver({ topic, message, images, ledgerHash, deviceId: device.id })
     const final = outcome.delivered
       ? store.setDelivery(message.id, 'delivered')
       : store.setDelivery(message.id, 'failed', outcome.reason)
     return Response.json(wireMessage(final ?? message), { status: 201 })
+  }
+
+  /** A route switch or a command: recorded in the ledger before it runs. */
+  async function operatorAct(kind: 'route' | 'command', topic: string, device: Device, body: Uint8Array, write: SignedWrite): Promise<Response> {
+    const control = ports.control
+    if (!control) return fail(503, 'not_available', 'commands are not wired on this server')
+    if (!ports.topics().some(t => t.id === topic)) return fail(404, 'not_found', 'no such topic')
+    const fields = jsonBody(body)
+    if (fields instanceof Response) return fields
+    const what = kind === 'command'
+      ? { name: String(fields.name ?? '') }
+      : { provider: String(fields.provider ?? ''), model: String(fields.model ?? ''), effort: String(fields.effort ?? '') }
+    ports.ledger.append({ kind, device: device.id, topic, ...what, ...signed(write) })
+    return answer(kind === 'route' ? await control.route(topic, fields) : await control.command(topic, fields))
   }
 
   async function markRead(topic: string, body: Uint8Array): Promise<Response> {
@@ -358,6 +390,11 @@ export function createConductorApi(ports: ConductorApiPorts) {
       return signedWrite(req, url, device, (body, signed) =>
         write[2] === 'messages' ? sendMessage(req, topic, device, body, signed) : markRead(topic, body))
     }
+    const act = url.pathname.match(/^\/v1\/topics\/([^/]+)\/(route|commands)$/)
+    if (act && ((act[2] === 'route' && req.method === 'PUT') || (act[2] === 'commands' && req.method === 'POST'))) {
+      const topic = decodeURIComponent(act[1])
+      return signedWrite(req, url, device, (body, signedBy) => operatorAct(act[2] === 'route' ? 'route' : 'command', topic, device, body, signedBy))
+    }
     const pushPath = url.pathname.match(/^\/v1\/devices\/([^/]+)\/push$/)
     if (req.method === 'PUT' && pushPath) {
       return signedWrite(req, url, device, body => setPush(device, decodeURIComponent(pushPath[1]), body))
@@ -365,6 +402,12 @@ export function createConductorApi(ports: ConductorApiPorts) {
     if (req.method !== 'GET') return fail(405, 'method_not_allowed', 'not yet served')
     if (url.pathname === '/v1/me') return Response.json({ device: wireDevice(device), server_version: ports.version, contract: 'v1' })
     if (url.pathname === '/v1/topics') return topics()
+    if (['/v1/commands', '/v1/routes', '/v1/usage'].includes(url.pathname)) {
+      const control = ports.control
+      if (!control) return fail(503, 'not_available', 'commands are not wired on this server')
+      if (url.pathname === '/v1/commands') return Response.json(control.commands())
+      return Response.json(url.pathname === '/v1/routes' ? control.routes() : await control.usage())
+    }
     const messages = url.pathname.match(/^\/v1\/topics\/([^/]+)\/messages$/)
     if (messages) return history(decodeURIComponent(messages[1]), url)
     const blobPath = url.pathname.match(/^\/v1\/blobs\/(blob_[0-9a-f]+)$/)

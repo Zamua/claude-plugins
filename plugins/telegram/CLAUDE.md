@@ -216,7 +216,10 @@ With the listener on and hc topics configured, `hc-watch.ts` holds one
 hc CLI, so it cannot start a core) and keeps its snapshot current through
 `shared/hc-events.ts`; `topic-source.ts` turns it into each hc topic's state,
 title and screen (`domain/agent-state.ts`), and `topic-tracker.ts` makes each
-change of state, title, name or route a `topic` event in the store. With
+change of state, title, name or route a `topic` event in the store.
+`control.ts` serves the app's commands (route switch, usage, relaunch,
+interrupt) through routing's `requestRoute`, the one path the `/model` picker
+also takes, and the lifecycle; each is a ledger entry before it runs. With
 `CONDUCTOR_LISTEN` set, `mirroredChat` wraps the
 chat port each service gets, so every message sent to a topic is also kept in
 SQLite (author `agent` for the MCP's `/send`, `proxy` for everything else, with
@@ -238,7 +241,7 @@ The code follows a ports-and-adapters split so neither backend leaks into the
 core:
 
 - **The port** (`proxy/topics/multiplexer.ts`): `interface MultiplexerPort
-  { kind; liveSessions(); runtime(); prompt(); kill() }`. `runtime` and `prompt`
+  { kind; liveSessions(); runtime(); prompt(); interrupt(); kill() }`. `runtime` and `prompt`
   provide safe idle-turn delivery for custom provider routes. `TmuxMux` shells
   to `tmux`; `HerdrMux`
   shells to `herdr pane list` (JSON; the pane `label` is our session name) /

@@ -47,6 +47,11 @@ import { sessionOf } from '../topics/domain/agent'
 import { catalogFromBridge, parseOpenCodeModels } from './provider-catalog'
 import type { ProviderCatalog, ProviderModel } from './provider-catalog'
 
+/** A route the operator picked: a catalog model, one of its efforts, and Ultracode. */
+export type RouteChoice = { provider: ProviderId; model: ProviderModel; effort: Effort; ultracode: boolean }
+export type RouteRefusal = 'ultracode-unsupported' | 'provider-exhausted' | 'too-soon'
+export type RouteRequest = { refused: RouteRefusal } | { outcome: RouteOutcome; route: TopicRoute }
+
 export type RoutingPorts = {
   chat: Pick<ChatPort, 'send'>
   sayIn: (chatId: string, topic: string, text: string) => Promise<unknown>
@@ -359,6 +364,33 @@ export function createRouting({ chat, sayIn, killSession, ensureSession, schedul
     log(`switch-back callback for topic ${topic}: ${provider}/${route.model} (${result.outcome})`)
   }
 
+  /**
+   * The operator's choice of route for a topic, whether the picker's last step
+   * or the app makes it. Refused for Ultracode on a model without it, for a
+   * provider at its limit, and right after another change.
+   */
+  function requestRoute(topic: string, choice: RouteChoice, reason: PickerReason): RouteRequest {
+    if (choice.ultracode && !choice.model.supportsUltracode) return { refused: 'ultracode-unsupported' }
+    if (capacities.get(choice.provider)?.availability === 'exhausted') return { refused: 'provider-exhausted' }
+    const route = topicRoute({ provider: choice.provider, model: choice.model.id, effort: choice.effort, ultracode: choice.ultracode })
+    const { outcome } = step(topic, { type: 'requested', route, reason, busy: busy(topic), byOperator: true, now: Date.now() })
+    return outcome === 'too-soon' ? { refused: 'too-soon' } : { outcome, route }
+  }
+
+  function refusalText(refusal: RouteRefusal, provider: ProviderId): string {
+    if (refusal === 'ultracode-unsupported') return 'Ultracode is not supported by this model.'
+    if (refusal === 'provider-exhausted') return `${providerLabel(provider)} is still at its usage limit.`
+    return 'A route change just ran. Wait a moment.'
+  }
+
+  /** What a route request did, as the topic is told it. */
+  function routeChangeText(outcome: RouteOutcome, route: TopicRoute): string {
+    return changeText(outcome, route) +
+      permissionNotice(route.provider) +
+      (outcome === 'unchanged' && route.provider === 'codex'
+        ? '\nRun /relaunch to apply the launch settings to this existing session.' : '')
+  }
+
   function changeText(outcome: RouteOutcome, route: TopicRoute): string {
     return outcome === 'queued'
       ? `Queued ${routeSummary(route)}. It will switch when the current Claude turn finishes.`
@@ -625,40 +657,18 @@ export function createRouting({ chat, sayIn, killSession, ensureSession, schedul
         await press.answer({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
         return true
       }
-      if (ultracode && !selection.model.supportsUltracode) {
-        await press.answer({ text: 'Ultracode is not supported by this model.', alert: true }).catch(() => {})
-        return true
-      }
-      if (capacities.get(selection.provider)?.availability === 'exhausted') {
-        await press.answer({ text: `${providerLabel(selection.provider)} is still at its usage limit.`, alert: true }).catch(() => {})
-        return true
-      }
-      const route = topicRoute({
-        provider: selection.provider,
-        model: selection.model.id,
-        effort: selection.effort,
-        ultracode,
-      })
-      const { outcome: result } = step(selection.topic, {
-        type: 'requested',
-        route,
-        reason: selection.reason,
-        busy: busy(selection.topic),
-        byOperator: true,
-        now: Date.now(),
-      })
-      if (result === 'too-soon') {
-        await press.answer({ text: 'A route change just ran. Wait a moment.' }).catch(() => {})
+      const request = requestRoute(
+        selection.topic,
+        { provider: selection.provider, model: selection.model, effort: selection.effort, ultracode },
+        selection.reason,
+      )
+      if ('refused' in request) {
+        await press.answer({ text: refusalText(request.refused, selection.provider), alert: request.refused !== 'too-soon' }).catch(() => {})
         return true
       }
       modelSelections.delete(cb.token)
-      await press.update(
-        changeText(result, route) +
-        permissionNotice(route.provider) +
-        (result === 'unchanged' && route.provider === 'codex'
-          ? '\nRun /relaunch to apply the launch settings to this existing session.' : ''),
-      ).catch(() => {})
-      await press.answer({ text: result === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
+      await press.update(routeChangeText(request.outcome, request.route)).catch(() => {})
+      await press.answer({ text: request.outcome === 'queued' ? 'Switch queued.' : 'Route updated.' }).catch(() => {})
       return true
     }
 
@@ -679,6 +689,10 @@ export function createRouting({ chat, sayIn, killSession, ensureSession, schedul
 
   return {
     modelCatalog,
+    requestRoute,
+    refusalText,
+    routeChangeText,
+    capacitySnapshot: (): ProviderCapacity[] => [...capacities.values()],
     turnEnded,
     noticeDelivered,
     routeTopic,
