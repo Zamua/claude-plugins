@@ -1,0 +1,21 @@
+{
+  "providers": [
+    {
+      "id": "anthropic",
+      "label": "Anthropic",
+      "models": [
+        {
+          "id": "claude-opus-5-5",
+          "label": "Opus 5.5",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "default_effort": "xhigh"
+        }
+      ]
+    }
+  ]
+}

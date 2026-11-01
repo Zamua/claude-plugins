@@ -6,11 +6,18 @@
   "choices": [
     {
       "id": "1",
-      "label": "Yes"
+      "label": "Yes",
+      "role": "approve"
     },
     {
       "id": "2",
-      "label": "No"
+      "label": "Yes, and don't ask again",
+      "role": null
+    },
+    {
+      "id": "3",
+      "label": "No",
+      "role": "deny"
     }
   ],
   "created_at": "2026-11-01T20:25:37.123Z",

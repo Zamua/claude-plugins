@@ -90,12 +90,17 @@ bound to that device, usable only when unlocked, never exported.
   The canonical bytes, joined with `\n`:
   `v1`, the method, the path with its query, the client id, the lowercase hex
   SHA-256 of the exact body bytes (of the empty string when there is no body),
-  and the timestamp. A request is refused when the signature does not verify,
-  the timestamp is more than 120 s off, or the client id was used before by that
-  device.
+  and the timestamp. A request is refused when the signature does not verify
+  or its timestamp is more than 120 s off.
+- **Retries are safe.** An app resends a write with the same client id (and a
+  fresh timestamp and signature) until it gets an answer. A client id the device
+  used before with the same body SHA-256 returns the first result and does
+  nothing new; with a different body it is refused with 409 `client_id_reused`.
+  This holds for every signed write.
 - **Reads are not signed.** Topics, history, blobs and the stream need only an
-  allow-listed node and a known device id, because the notification service
-  extension fetches a message while the phone may be locked.
+  allow-listed node and a known device id in the `X-Device` header (on the
+  WebSocket upgrade request too), because the notification service extension
+  fetches a message while the phone may be locked.
 
 **The ledger.** An append-only file of operator acts, one JSON object per line,
 each carrying the hash of the line before it: topic, seq, device, the body's
@@ -134,15 +139,20 @@ Each has a golden fixture in `conductor-v1/`.
 (`provider`, `model`, `effort`), `last_message` (`preview`, `author`, `at`).
 
 **Message:** `id`, `topic`, `seq`, `author` (`operator`, `agent`, `proxy`),
-`origin` (`app`, `telegram`, `proxy`), `text`, `format`, `blobs` (`id`, `mime`,
-`bytes`, `width`, `height`), `reply_to` (a message id), `at`. Operator messages
-also carry `client_id` and `delivery` (`accepted`, `delivered`, `failed`), and
-`failure` when failed. A reminder firing is a message with `author: proxy` and
-`kind: reminder`.
+`origin` (`app`, `telegram`, `proxy`), `kind` (`null`, `reminder` or `ask`),
+`text`, `format`, `blobs` (`id`, `mime`, `bytes`, `width`, `height`),
+`reply_to` (a message id), `at`, `edited_at` (`null` until edited) and
+`reactions` (`[{"emoji": "👀"}]`). Operator messages also carry `client_id` and
+`delivery` (`accepted`, `delivered`, `failed`), and `failure` when failed. A
+reminder firing is a proxy message of kind `reminder`; an ask is posted as a
+proxy message of kind `ask`, which the app shows as the operator's own question
+and which never counts as an operator act. Posts from service callers through
+the internal API read as `agent` until they get named tokens.
 
 **Approval:** `id`, `topic`, `kind` (`permission`, `question`, `auth`),
-`prompt`, `choices` (`id`, `label`), `created_at`, `resolved` (`choice`,
-`by`, `at`) once answered or expired.
+`prompt`, `choices` (`id`, `label`, `role`: `approve`, `deny` or `null`),
+`created_at`, `resolved` (`choice`, `by`, `at`) once answered or expired. A
+notification's approve and deny actions answer with the choice of that role.
 
 **Screen:** `topic`, `rows` (plain strings), `cols`, `cursor` (`row`, `col`),
 `working`. Not stored.
@@ -160,10 +170,10 @@ All under `/v1`. "Signed" marks a write that needs the device headers.
 | `GET /me` | | the device, the server version |
 | `POST /devices` | enrollment | `public_key`, `name`, `apns_token`, `apns_env`; returns the device |
 | `PUT /devices/{id}/push` | signed | a new APNs token or environment |
-| `GET /topics` | | every topic |
+| `GET /topics` | | `{cursor, topics}`: every topic, and the cursor they are current to |
 | `POST /topics` | signed | create: `name` |
 | `PATCH /topics/{id}` | signed | `name`, `pinned`, `muted` |
-| `GET /topics/{id}/messages?before_seq=&limit=` | | history, newest first, at most 100 |
+| `GET /topics/{id}/messages?before_seq=&limit=` | | `{cursor, messages}`: history, newest first, at most 100 |
 | `POST /topics/{id}/messages` | signed | multipart: `text` (at most 64 KB), `client_id`, `reply_to`, `image[]` (JPEG or PNG, at most 10, 20 MB each); returns the message with `delivery: accepted`; a repeated `client_id` returns the first result |
 | `POST /topics/{id}/read` | signed | `seq`; read state is shared by every device |
 | `GET /blobs/{id}?w=` | | a blob's bytes, or a thumbnail at most `w` pixels wide |
@@ -189,16 +199,20 @@ migration.
 
 ## The stream: `GET /v1/stream` (WebSocket)
 
-The client opens it with `{"type": "hello", "since": <cursor>}`. The server
-replays every event after that cursor, in order, then streams live events. If
-the cursor is older than what the server keeps, it sends `{"type": "reset"}`,
-and the client refetches topics and history. Reconnecting with `since` is the
-normal path: a suspended app loses its socket within seconds.
+The client opens it with `{"type": "hello", "since": <cursor>}`, usually the
+cursor of its last fetch or event. The server replays every event after that
+cursor, in order, then sends `{"type": "ready", "cursor": <latest>}` and streams
+live events. A `hello` without `since` replays nothing and gets `ready` at once.
+If the cursor is older than what the server keeps, it sends
+`{"type": "reset"}`, and the client refetches topics and history. Reconnecting
+with `since` is the normal path: a suspended app loses its socket within
+seconds. Because `GET /topics` and history carry the cursor they are current to,
+fetching and then streaming from that cursor misses nothing.
 
 Events, each with `type` and `cursor`, carry whole objects:
 
 - `message`: a stored message, and again when an operator message's `delivery`
-  changes
+  changes, or when it is edited or reacted to
 - `topic`: a topic created, renamed, re-routed, or its state, unread or pins
   changed
 - `approval`: an approval opened or resolved
@@ -226,12 +240,14 @@ Straight to Apple (APNs, HTTP/2, token authentication with a `.p8` key, its key
 id and team id). The APNs topic is the app's bundle id. There are no silent
 pushes: iOS throttles them.
 
-- **Agent message:** `alert` (`title`: topic name, `body`: about 200 characters),
-  `thread-id`: topic id, `badge`: total unread, `mutable-content: 1`, and
-  custom `topic` and `seq`, so the service extension can fetch the message and
-  its thumbnail.
+- **Agent message:** `alert` (`title`: topic name, `body`: the message's text,
+  as much as fits the 4 KB payload), `thread-id`: topic id, `badge`: total
+  unread, `mutable-content: 1`, and custom `topic` and `seq`, so the service
+  extension can fetch the rest and the thumbnails. Full text goes through Apple
+  by the operator's choice; a secret never does.
 - **Approval:** category `APPROVAL` (approve and deny actions, authentication
-  required), `interruption-level: time-sensitive`.
+  required), `interruption-level: time-sensitive`, and custom `topic` and
+  `approval` (its id).
 - **Reminder:** category `REMINDER`, `time-sensitive`.
 - No push for edits, for the operator's own messages, or for muted topics.
 - Delivery times are logged, to compare with Telegram's before Telegram retires.

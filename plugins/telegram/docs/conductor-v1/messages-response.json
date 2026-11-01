@@ -1,0 +1,49 @@
+{
+  "cursor": 1209,
+  "messages": [
+    {
+      "id": "msg_01JC6Z9B",
+      "topic": "16832",
+      "seq": 43,
+      "author": "operator",
+      "origin": "app",
+      "kind": null,
+      "text": "run the tests",
+      "format": "plain",
+      "blobs": [
+        {
+          "id": "blob_9d2e",
+          "mime": "image/jpeg",
+          "bytes": 183044,
+          "width": 1179,
+          "height": 2556
+        }
+      ],
+      "reply_to": "msg_01JC6Z9A",
+      "at": "2026-11-01T20:25:37.123Z",
+      "client_id": "01JC6Z8Q2V5W9N3K7F4D1B0XAE",
+      "delivery": "accepted",
+      "edited_at": null,
+      "reactions": []
+    },
+    {
+      "id": "msg_01JC6Z9A",
+      "topic": "16832",
+      "seq": 42,
+      "author": "agent",
+      "origin": "proxy",
+      "kind": null,
+      "text": "Running the suite now\\.",
+      "format": "markdownv2",
+      "blobs": [],
+      "reply_to": null,
+      "at": "2026-11-01T20:25:37.123Z",
+      "edited_at": null,
+      "reactions": [
+        {
+          "emoji": "👀"
+        }
+      ]
+    }
+  ]
+}

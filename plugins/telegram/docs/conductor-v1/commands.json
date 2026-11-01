@@ -1,0 +1,19 @@
+{
+  "commands": [
+    {
+      "name": "relaunch",
+      "description": "restart this topic's agent, same conversation",
+      "args_hint": null
+    },
+    {
+      "name": "interrupt",
+      "description": "stop the current turn (esc)",
+      "args_hint": null
+    },
+    {
+      "name": "usage",
+      "description": "quota windows and resets",
+      "args_hint": null
+    }
+  ]
+}
