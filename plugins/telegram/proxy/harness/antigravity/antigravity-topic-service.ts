@@ -68,8 +68,8 @@ export class AntigravityTopicService {
     return this.runtime.usage()
   }
 
-  async start(topicId: string): Promise<AntigravityTopic> {
-    return this.ensureReady(topicId)
+  start(topicId: string): Promise<AntigravityTopic> {
+    return this.serialize(topicId, () => this.ensureReady(topicId))
   }
 
   async requestRoute(topicId: string, route: AntigravityRoute): Promise<AntigravityChangeResult> {
@@ -96,13 +96,19 @@ export class AntigravityTopicService {
   }
 
   submitTurn(topicId: string, message: InboundMessage): Promise<void> {
+    return this.serialize(topicId, () => this.executeTurn(topicId, message))
+  }
+
+  // One per-topic queue for turns, starts, and pending changes, so a relaunch can
+  // never race a turn's ensureReady or another relaunch.
+  private serialize<T>(topicId: string, task: () => Promise<T>): Promise<T> {
     const prior = this.queues.get(topicId) ?? Promise.resolve()
-    const queued = prior.catch(() => {}).then(() => this.executeTurn(topicId, message))
-    this.queues.set(topicId, queued)
-    const clean = () => {
-      if (this.queues.get(topicId) === queued) this.queues.delete(topicId)
-    }
-    void queued.then(clean, clean)
+    const queued = prior.catch(() => {}).then(task)
+    const tracked = queued.then(() => {}, () => {})
+    this.queues.set(topicId, tracked)
+    void tracked.then(() => {
+      if (this.queues.get(topicId) === tracked) this.queues.delete(topicId)
+    })
     return queued
   }
 
@@ -173,7 +179,7 @@ export class AntigravityTopicService {
     if (state === 'busy' || state === 'starting' || state === 'blocked') {
       return { topic: current, pending: true }
     }
-    return { topic: await this.applyPendingNow(topicId), pending: false }
+    return { topic: await this.serialize(topicId, () => this.applyPendingNow(topicId)), pending: false }
   }
 
   private async applyPendingAfterOwnedTurn(topicId: string): Promise<void> {
@@ -182,11 +188,13 @@ export class AntigravityTopicService {
     await this.applyPendingNow(topicId)
   }
 
+  // Runs inside the per-topic queue. Applying the change before the stop makes a
+  // second queued application a no-op instead of a second relaunch.
   private async applyPendingNow(topicId: string): Promise<AntigravityTopic> {
     const current = this.required(topicId)
+    if (!current.pendingRoute && !current.restartPending) return current
+    this.repository.save(applyAntigravityPending(current, this.now()))
     if (current.sessionName) await this.runtime.stop(current.sessionName)
-    const applied = applyAntigravityPending(current, this.now())
-    this.repository.save(applied)
     return this.ensureReady(topicId)
   }
 

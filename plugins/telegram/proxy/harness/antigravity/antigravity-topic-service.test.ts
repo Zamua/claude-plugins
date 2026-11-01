@@ -52,6 +52,36 @@ class MemoryRuntime implements AntigravityRuntimePort {
   }
 }
 
+// A runtime whose stop waits for `release`, counting how many stops and launches overlap.
+class GatedRuntime extends MemoryRuntime {
+  private open: Array<() => void> = []
+  active = 0
+  mostAtOnce = 0
+  release() {
+    for (const go of this.open.splice(0)) go()
+  }
+  private async span<T>(run: () => Promise<T>): Promise<T> {
+    this.active++
+    this.mostAtOnce = Math.max(this.mostAtOnce, this.active)
+    try {
+      return await run()
+    } finally {
+      this.active--
+    }
+  }
+  override async stop(sessionName: string) {
+    return this.span(async () => {
+      await new Promise<void>(go => this.open.push(go))
+      return super.stop(sessionName)
+    })
+  }
+  override async ensureSession(input: AntigravitySessionSpec) {
+    return this.span(() => super.ensureSession(input))
+  }
+}
+
+const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+
 describe('AntigravityTopicService', () => {
   test('launches one persistent Herdr session and injects later Telegram turns into it', async () => {
     const repository = new MemoryRepository()
@@ -160,5 +190,37 @@ describe('AntigravityTopicService', () => {
     expect(runtime.stops).toEqual(['agy-pilot-42'])
     expect(runtime.launches.at(-1)?.conversationId).toBe('conv-1')
     expect(repository.get('42')?.restartPending).toBeUndefined()
+  })
+
+  test('a route requested while a relaunch is stopping the pane applies after it, one change at a time', async () => {
+    const repository = new MemoryRepository()
+    repository.save({
+      ...antigravityTopic('42', 'pilot', antigravityRoute(model, 'medium'), 10),
+      conversationId: 'conv-1', sessionName: 'agy-pilot-42',
+    })
+    const runtime = new GatedRuntime()
+    runtime.currentStatus = 'idle'
+    const service = new AntigravityTopicService(repository, runtime, { typing() {}, async error() {} })
+    const first = service.requestRoute('42', antigravityRoute({ ...model, id: 'first', label: 'First' }, 'medium'))
+    await settle()
+    // The operator picks again, and the reconcile tick runs, while the first change is still stopping the pane
+    const second = service.requestRoute('42', antigravityRoute({ ...model, id: 'second', label: 'Second' }, 'medium'))
+    const tick = service.reconcilePending()
+    const drain = async (work: Promise<unknown>) => {
+      for (let i = 0; i < 10; i++) {
+        runtime.release()
+        await settle()
+      }
+      await work
+    }
+    await drain(Promise.all([first, second, tick]))
+    expect(repository.get('42')?.pendingRoute?.model).toBe('second')
+    // The next tick finds the pane idle and applies the second change
+    await drain(service.reconcilePending())
+
+    expect(runtime.mostAtOnce).toBe(1)
+    expect(runtime.stops).toHaveLength(2)
+    expect(repository.get('42')?.route.model).toBe('second')
+    expect(repository.get('42')?.pendingRoute).toBeUndefined()
   })
 })
