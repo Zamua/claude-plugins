@@ -160,6 +160,12 @@ export const HC_TOPICS: ReadonlySet<string> = new Set(
 
 export const PROXY_URL = `http://localhost:${PORT}`
 
+// The conductor (docs/conductor.md): the address its API will listen on. Set, the
+// proxy also keeps every topic's messages in the conductor's store; unset, the
+// conductor is off and nothing changes.
+export const CONDUCTOR_LISTEN = (process.env.CONDUCTOR_LISTEN ?? '').trim()
+export const CONDUCTOR_DIR = join(STATE_DIR, 'conductor')
+
 // ---- asks from the phone -----------------------------------------------------
 // POST /ask listens on its own loopback port, the only one mounted on the tailnet.
 export const ASK_PORT = parseInt(process.env.TELEGRAM_ASK_PORT || '8791', 10)

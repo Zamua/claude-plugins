@@ -184,6 +184,19 @@ than inherit it:
 - **Links and the ask post.** Message links are `t.me/c/...`, and a bot cannot
   post as the operator, which is why an ask is posted as "You asked: ...".
 
+## The conductor
+
+`docs/conductor.md` specifies the proxy's second front end, an API for the
+operator's own apps; `docs/conductor-plan.md` is the build plan, and
+`docs/conductor-v1/` the contract's fixtures. Built so far: the store
+(`proxy/conductor/`). With `CONDUCTOR_LISTEN` set, `mirroredChat` wraps the
+chat port each service gets, so every message sent to a topic is also kept in
+SQLite (author `agent` for the MCP's `/send`, `proxy` for everything else, with
+`kind` reminder or ask for those services), and `recordingOperatorTurns` wraps
+the router's `enqueue` to keep each turn carrying the operator's id. A secret
+drop never becomes a turn, so its value never reaches the store, and a failed
+store write is logged, never thrown. Unset, nothing is wrapped.
+
 ## Multiplexer backends (tmux | herdr | hc)
 
 The detached topic-Claudes are hosted by a terminal multiplexer, selectable via

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Subprocess } from 'bun'
+import { Database } from 'bun:sqlite'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
@@ -419,6 +420,7 @@ beforeAll(async () => {
       TELEGRAM_TOPICS_WHISPER_MODEL: join(home, 'fake', 'whisper.bin'),
       TELEGRAM_ASK_PORT: String(askPort),
       TELEGRAM_ASK_IMAGES: 'on',
+      CONDUCTOR_LISTEN: 'store-only',
       TELEGRAM_TOPICS_SQUARE_TOPIC_ID: '900',
       TELEGRAM_TOPICS_SECRETS_USER_ID: String(OPERATOR),
       TELEGRAM_TOPICS_SECRETS_DIR: join(root, 'keys'),
@@ -1056,6 +1058,24 @@ describe('the proxy, end to end', () => {
     expect(turn.meta.message_id).toBe(String(id))
     expect(dirname(turn.meta.image_path)).toBe(join(state, 'inbox'))
     expect(readFileSync(turn.meta.image_path, 'utf8')).toBe('downloaded bytes')
+  }, 20_000)
+
+  test('with the conductor on, a topic keeps its messages: the operator\'s, the agent\'s reply, never a secret', async () => {
+    send(67, 'hello store')
+    await fetch(`${proxyUrl}/poll?topic=67`, { signal: AbortSignal.timeout(5_000) })
+    const reply = await fetch(`${proxyUrl}/send`, { method: 'POST', body: JSON.stringify({ chat_id: GROUP, topic: '67', text: 'agent answer' }) })
+    expect(reply.status).toBe(200)
+    send(67, '/secret conductor-check\ns3cr3t-value-123')
+    await until('the secret ack', () => calls.find(c => c.method === 'sendMessage' && /conductor-check/.test(c.body.text ?? '')))
+    const db = new Database(join(state, 'conductor', 'conductor.db'), { readonly: true })
+    const topic = db.query("SELECT author, origin, seq, text FROM messages WHERE topic = '67' ORDER BY seq").all()
+    const everything = db.query('SELECT text FROM messages').all()
+    db.close()
+    expect(topic.slice(0, 2)).toEqual([
+      { author: 'operator', origin: 'telegram', seq: 1, text: 'hello store' },
+      { author: 'agent', origin: 'proxy', seq: 2, text: 'agent answer' },
+    ])
+    expect(JSON.stringify(everything)).not.toContain('s3cr3t-value-123')
   }, 20_000)
 
   const hcCalls = () => (existsSync(join(home, 'fake', 'hc.calls')) ? readFileSync(join(home, 'fake', 'hc.calls'), 'utf8') : '')

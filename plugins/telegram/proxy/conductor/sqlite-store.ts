@@ -1,0 +1,118 @@
+// The conductor's store: every message in every topic, numbered gaplessly per
+// topic, and an event log whose cursor a client resumes from. Blobs are kept by
+// content, so the same image stored twice is one file.
+import { Database } from 'bun:sqlite'
+import { createHash, randomUUID } from 'crypto'
+import { existsSync, mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import type { BlobRef, NewMessage, StoredEvent, StoredMessage } from './domain/message'
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  topic TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  author TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  kind TEXT,
+  text TEXT NOT NULL,
+  format TEXT NOT NULL,
+  reply_to TEXT,
+  chat_ids TEXT NOT NULL,
+  at TEXT NOT NULL,
+  edited_at TEXT,
+  reactions TEXT NOT NULL DEFAULT '[]',
+  UNIQUE (topic, seq)
+);
+CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, mime TEXT NOT NULL, bytes INTEGER NOT NULL, width INTEGER, height INTEGER);
+CREATE TABLE IF NOT EXISTS message_blobs (message_id TEXT NOT NULL, blob_id TEXT NOT NULL, ord INTEGER NOT NULL, PRIMARY KEY (message_id, ord));
+CREATE TABLE IF NOT EXISTS events (cursor INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, topic TEXT NOT NULL, ref TEXT NOT NULL);
+`
+
+type MessageRow = {
+  id: string; topic: string; seq: number; author: string; origin: string; kind: string | null; text: string
+  format: string; reply_to: string | null; chat_ids: string; at: string; edited_at: string | null; reactions: string
+}
+
+export class ConductorStore {
+  private readonly db: Database
+  private readonly blobDir: string
+
+  constructor(dir: string) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    this.blobDir = join(dir, 'blobs')
+    mkdirSync(this.blobDir, { recursive: true, mode: 0o700 })
+    this.db = new Database(join(dir, 'conductor.db'), { create: true })
+    this.db.exec('PRAGMA journal_mode = WAL')
+    this.db.exec(SCHEMA)
+  }
+
+  /** Stores the message and its event in one transaction, taking the topic's next seq. */
+  append(message: NewMessage): StoredMessage {
+    return this.db.transaction(() => {
+      const { next } = this.db
+        .query('SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM messages WHERE topic = ?')
+        .get(message.topic) as { next: number }
+      const id = `msg_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      const at = message.at ?? new Date().toISOString()
+      this.db
+        .query('INSERT INTO messages (id, topic, seq, author, origin, kind, text, format, reply_to, chat_ids, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, message.topic, next, message.author, message.origin, message.kind ?? null, message.text, message.format,
+          message.replyTo ?? null, JSON.stringify(message.chatIds ?? []), at)
+      ;(message.blobs ?? []).forEach((blob, ord) =>
+        this.db.query('INSERT INTO message_blobs (message_id, blob_id, ord) VALUES (?, ?, ?)').run(id, blob.id, ord))
+      this.db.query("INSERT INTO events (type, topic, ref) VALUES ('message', ?, ?)").run(message.topic, id)
+      return this.message(id) as StoredMessage
+    })()
+  }
+
+  /** Keeps the bytes once, named by their hash, and gives the reference a message carries. */
+  addBlob(bytes: Uint8Array, mime: string): BlobRef {
+    const id = `blob_${createHash('sha256').update(bytes).digest('hex').slice(0, 32)}`
+    const path = join(this.blobDir, id)
+    if (!existsSync(path)) writeFileSync(path, bytes, { mode: 0o600 })
+    this.db.query('INSERT OR IGNORE INTO blobs (id, mime, bytes) VALUES (?, ?, ?)').run(id, mime, bytes.length)
+    return { id, mime, bytes: bytes.length, width: null, height: null }
+  }
+
+  /** A topic's messages, newest first, before `beforeSeq` when given. */
+  history(topic: string, limit: number, beforeSeq?: number): StoredMessage[] {
+    const rows = this.db
+      .query('SELECT * FROM messages WHERE topic = ? AND seq < ? ORDER BY seq DESC LIMIT ?')
+      .all(topic, beforeSeq ?? Number.MAX_SAFE_INTEGER, Math.min(Math.max(limit, 1), 100)) as MessageRow[]
+    return rows.map(row => this.fromRow(row))
+  }
+
+  /** Every event after `cursor`, oldest first. */
+  eventsAfter(cursor: number, limit = 500): StoredEvent[] {
+    const rows = this.db
+      .query('SELECT cursor, type, ref FROM events WHERE cursor > ? ORDER BY cursor LIMIT ?')
+      .all(cursor, limit) as Array<{ cursor: number; type: 'message'; ref: string }>
+    return rows.flatMap(row => {
+      const message = this.message(row.ref)
+      return message ? [{ cursor: row.cursor, type: row.type, message }] : []
+    })
+  }
+
+  close(): void {
+    this.db.close()
+  }
+
+  private message(id: string): StoredMessage | undefined {
+    const row = this.db.query('SELECT * FROM messages WHERE id = ?').get(id) as MessageRow | null
+    return row ? this.fromRow(row) : undefined
+  }
+
+  private fromRow(row: MessageRow): StoredMessage {
+    const blobs = this.db
+      .query('SELECT b.id, b.mime, b.bytes, b.width, b.height FROM message_blobs m JOIN blobs b ON b.id = m.blob_id WHERE m.message_id = ? ORDER BY m.ord')
+      .all(row.id) as BlobRef[]
+    return {
+      id: row.id, topic: row.topic, seq: row.seq,
+      author: row.author as StoredMessage['author'], origin: row.origin as StoredMessage['origin'],
+      kind: row.kind as StoredMessage['kind'], text: row.text, format: row.format as StoredMessage['format'],
+      blobs, replyTo: row.reply_to, chatIds: JSON.parse(row.chat_ids), at: row.at,
+      editedAt: row.edited_at, reactions: JSON.parse(row.reactions),
+    }
+  }
+}
