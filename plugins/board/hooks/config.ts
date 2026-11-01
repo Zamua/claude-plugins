@@ -1,6 +1,6 @@
 import type { FileBoardSpec, LinkPair } from './views/file'
 import type { RolloutSpec } from './views/rollout'
-import type { PlacedBoard, WorkSpec } from './work/view'
+import type { PlacedBoard, WorkSpec } from './work/board'
 
 /** `boards.json`, sorted into the boards each layout draws. */
 export type BoardsConfig = {

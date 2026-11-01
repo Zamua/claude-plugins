@@ -80,7 +80,9 @@ plugins/board/
 │   │   └── review.tsx           # unchanged
 │   └── work/
 │       ├── model.ts             # core types, tree build, rollup, alias matching; no `$`, no tool names
-│       ├── view.tsx             # the work view: fold state, lines, freshness
+│       ├── board.ts             # the configured board: its file, tree, Period, refresh
+│       ├── view.tsx             # the work view: fold state, head, breadcrumb, Period list
+│       ├── lines.tsx            # one line per Item, Session, Artifact and placed board
 │       ├── tool.tsx             # mcp__board__work: validation and file writes
 │       ├── migrate.ts           # version 1 to version 2
 │       ├── sources/
