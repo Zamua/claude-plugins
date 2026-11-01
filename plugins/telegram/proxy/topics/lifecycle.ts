@@ -35,6 +35,8 @@ import { claudeConversationExists } from './claude-transcript'
 import { missingConversationNotice, planRelaunch, spawnConversation, spawnFailureNotice } from './domain/topic-conversation'
 import { nextAgent, sessionOf } from './domain/agent'
 import type { AgentEvent } from './domain/agent'
+import { nextTurn } from './domain/pane-turn'
+import type { PaneTurn } from './domain/pane-turn'
 import { mux } from './mux'
 import { saveRegistry } from './registry'
 import { currentRoute, getTopic, legacySessionNameFor, sessionNameFor, topicNames, topics } from './state'
@@ -97,9 +99,7 @@ export type SpawnOutcome = 'running' | 'spawned' | 'failed' | 'skipped'
 
 type PanePumpState = {
   timer?: ReturnType<typeof setTimeout>
-  inFlight: boolean
-  observedActive: boolean
-  submittedAt: number
+  turn: PaneTurn
 }
 
 export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, applyRouteNow }: TopicLifecyclePorts) {
@@ -135,13 +135,15 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     const session = sessionOf(st.agent)
     const killed = !!session && mux.liveSessions().has(session) && mux.kill(session)
     apply(topic, st, { type: 'stopped' })
+    const pump = panePumps.get(topic)
+    if (pump) pump.turn = nextTurn(pump.turn, { type: 'stopped' })
     return killed
   }
 
   function panePumpState(topic: string): PanePumpState {
     let state = panePumps.get(topic)
     if (!state) {
-      state = { inFlight: false, observedActive: false, submittedAt: 0 }
+      state = { turn: { state: 'settled' } }
       panePumps.set(topic, state)
     }
     return state
@@ -158,7 +160,10 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     }, delayMs)
   }
 
-  const paneInFlight = (topic: string): boolean => !!panePumps.get(topic)?.inFlight
+  const paneInFlight = (topic: string): boolean => {
+    const turn = panePumps.get(topic)?.turn
+    return !!turn && turn.state !== 'settled'
+  }
 
   function pendingPaneMessage(topic: string, st: TopicState): { message: InboundMsg; resumeNotice: boolean } | undefined {
     if (st.pendingResumeNotice) {
@@ -182,19 +187,10 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     const session = sessionOf(st.agent)
     const runtime = session ? mux.runtime(session) : 'missing'
 
-    if (state.inFlight) {
-      if (runtime === 'busy' || runtime === 'blocked' || runtime === 'starting') {
-        state.observedActive = true
-      }
-      // A very short turn can finish between samples; five seconds after an
-      // accepted prompt, an idle pane is done even if its busy edge was missed.
-      if (runtime === 'idle' && (state.observedActive || Date.now() - state.submittedAt >= 5000)) {
-        state.inFlight = false
-        state.observedActive = false
-      } else {
-        schedulePanePump(topic, 250)
-        return
-      }
+    state.turn = nextTurn(state.turn, { type: 'sampled', runtime, now: Date.now() })
+    if (state.turn.state !== 'settled') {
+      schedulePanePump(topic, 250)
+      return
     }
 
     if (st.pendingRoute) {
@@ -227,9 +223,7 @@ export function createTopicLifecycle({ api, sayIn, harnessLocked, modelCatalog, 
     } else {
       st.queue.shift()
     }
-    state.inFlight = true
-    state.observedActive = false
-    state.submittedAt = Date.now()
+    state.turn = nextTurn(state.turn, { type: 'submitted', now: Date.now() })
     log(`delivered Telegram turn to proxied Claude pane ${session} for topic ${topic}`)
     schedulePanePump(topic, 150)
   }
