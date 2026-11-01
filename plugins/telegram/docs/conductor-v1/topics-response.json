@@ -7,6 +7,11 @@
       "name": "build",
       "kind": "claude",
       "title": "Fix the flaky upload test",
+      "role": "coordinator",
+      "project_id": "16832",
+      "parent_id": "general",
+      "spawned_by": "operator",
+      "spawned_at": "2026-10-30T14:02:11.000Z",
       "pinned": false,
       "muted": false,
       "state": "working",
@@ -24,10 +29,7 @@
         "format": "plain",
         "author": "agent",
         "at": "2026-11-01T20:25:37.123Z"
-      },
-      "parent_id": "general",
-      "spawned_by": "operator",
-      "spawned_at": "2026-10-30T14:02:11.000Z"
+      }
     }
   ]
 }

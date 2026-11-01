@@ -7,6 +7,11 @@
       "name": "General",
       "kind": "claude",
       "title": null,
+      "role": "root",
+      "project_id": null,
+      "parent_id": null,
+      "spawned_by": null,
+      "spawned_at": null,
       "pinned": true,
       "muted": false,
       "state": "idle",
@@ -24,43 +29,18 @@
         "format": "plain",
         "author": "agent",
         "at": "2026-11-01T20:25:37.123Z"
-      },
-      "parent_id": null,
-      "spawned_by": null,
-      "spawned_at": null
+      }
     },
     {
       "id": "16832",
       "name": "build",
       "kind": "claude",
       "title": "Fix the flaky upload test",
-      "pinned": false,
-      "muted": false,
-      "state": "working",
-      "state_since": "2026-11-01T20:25:37.123Z",
-      "unread": 0,
-      "read_seq": 0,
-      "pending_approvals": 0,
-      "route": {
-        "provider": "anthropic",
-        "model": "claude-opus-5-5",
-        "effort": "xhigh"
-      },
-      "last_message": {
-        "preview": "Running the suite now.",
-        "format": "plain",
-        "author": "agent",
-        "at": "2026-11-01T20:25:37.123Z"
-      },
+      "role": "coordinator",
+      "project_id": "16832",
       "parent_id": "general",
       "spawned_by": "operator",
-      "spawned_at": "2026-10-30T14:02:11.000Z"
-    },
-    {
-      "id": "17901",
-      "name": "build-tests",
-      "kind": "claude",
-      "title": "Run the upload suite",
+      "spawned_at": "2026-10-30T14:02:11.000Z",
       "pinned": false,
       "muted": false,
       "state": "working",
@@ -78,16 +58,47 @@
         "format": "plain",
         "author": "agent",
         "at": "2026-11-01T20:25:37.123Z"
-      },
-      "parent_id": "16832",
-      "spawned_by": "16832",
-      "spawned_at": "2026-11-01T22:10:00.000Z"
+      }
     },
     {
-      "id": "17120",
-      "name": "notes",
+      "id": "w_16832_1",
+      "name": "tests",
       "kind": "claude",
-      "title": null,
+      "title": "Run the upload suite",
+      "role": "worker",
+      "project_id": "16832",
+      "parent_id": "16832",
+      "spawned_by": "16832",
+      "spawned_at": "2026-11-01T22:10:00.000Z",
+      "pinned": false,
+      "muted": false,
+      "state": "working",
+      "state_since": "2026-11-01T20:25:37.123Z",
+      "unread": 0,
+      "read_seq": 0,
+      "pending_approvals": 0,
+      "route": {
+        "provider": "anthropic",
+        "model": "claude-opus-5-5",
+        "effort": "xhigh"
+      },
+      "last_message": {
+        "preview": "Running the suite now.",
+        "format": "plain",
+        "author": "agent",
+        "at": "2026-11-01T20:25:37.123Z"
+      }
+    },
+    {
+      "id": "w_16832_2",
+      "name": "migration",
+      "kind": "claude",
+      "title": "Draft the schema migration",
+      "role": "worker",
+      "project_id": "16832",
+      "parent_id": "16832",
+      "spawned_by": "16832",
+      "spawned_at": "2026-11-01T22:12:00.000Z",
       "pinned": false,
       "muted": false,
       "state": "idle",
@@ -105,10 +116,36 @@
         "format": "plain",
         "author": "agent",
         "at": "2026-11-01T20:25:37.123Z"
-      },
+      }
+    },
+    {
+      "id": "17120",
+      "name": "notes",
+      "kind": "claude",
+      "title": null,
+      "role": "coordinator",
+      "project_id": "17120",
       "parent_id": "general",
       "spawned_by": "operator",
-      "spawned_at": "2026-10-31T09:00:00.000Z"
+      "spawned_at": "2026-10-31T09:00:00.000Z",
+      "pinned": false,
+      "muted": false,
+      "state": "idle",
+      "state_since": "2026-11-01T20:25:37.123Z",
+      "unread": 0,
+      "read_seq": 0,
+      "pending_approvals": 0,
+      "route": {
+        "provider": "anthropic",
+        "model": "claude-opus-5-5",
+        "effort": "xhigh"
+      },
+      "last_message": {
+        "preview": "Running the suite now.",
+        "format": "plain",
+        "author": "agent",
+        "at": "2026-11-01T20:25:37.123Z"
+      }
     }
   ]
 }

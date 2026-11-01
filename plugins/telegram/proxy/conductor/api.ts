@@ -8,6 +8,7 @@ import type { StoredEvent, StoredMessage } from './domain/message'
 import { devicePublicKey } from './domain/signing'
 import { checkSignedWrite, replay } from './domain/write-auth'
 import type { SignedWrite } from './domain/write-auth'
+import type { Role } from '../topics/domain/session-tree'
 import type { ConductorControl, ControlResult } from './control'
 import type { Ledger } from './ledger'
 import type { ConductorStore } from './sqlite-store'
@@ -26,7 +27,11 @@ export type TopicSummary = {
   title: string | null
   route: TopicView['route']
   state: AgentState
-  /** The session tree: the topic it hangs under (null for the root), who spawned it and when, null where unknown. */
+  /** Its place in the session tree: root, a project's coordinator, or a worker. */
+  role: Role
+  /** The project it belongs to: none for the root. */
+  projectId: string | null
+  /** The session tree: the session it hangs under (null for the root), who spawned it and when, null where unknown. */
   parentId: string | null
   spawnedBy: string | null
   spawnedAt: string | null

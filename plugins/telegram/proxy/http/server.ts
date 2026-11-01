@@ -1,5 +1,6 @@
 // The loopback HTTP API the topic MCPs and hooks call: inbound long-polls, the
 // permission relay, the topic directory, and the routes each context answers.
+import { mayCreateProject } from '../topics/domain/session-tree'
 import type { ChatPort } from '../chat/domain/chat-port'
 import { PORT, PROXY_URL, SQUARE_TOPIC } from '../config'
 import type { TopicHarness } from '../harness/domain/topic-harness'
@@ -121,7 +122,10 @@ export function createHttpServer(ports: HttpPorts) {
 
   async function handleTopicCreate(req: Request): Promise<Response> {
     const { name, harness, by } = parseTopicCreate(await req.json())
-    // The calling topic is the agent's own word for itself; display only.
+    // The calling topic is the agent's own word for itself until the broker can prove it.
+    if (by !== undefined && !mayCreateProject(by)) {
+      return json({ error: 'only the root session makes projects; a coordinator spawns workers inside its own' }, 403)
+    }
     const topic = await createTopic(name, harness, by ?? 'proxy')
     return json({
       topic,

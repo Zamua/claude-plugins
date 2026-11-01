@@ -44,8 +44,8 @@ beforeEach(() => {
   deliveries = []
   deliverOutcome = { delivered: true }
   listed = [
-    { id: 'general', name: 'General', kind: 'claude', title: null, route: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'xhigh' }, state: 'idle', parentId: null, spawnedBy: null, spawnedAt: null },
-    { id: '42', name: 'build', kind: 'claude', title: null, route: null, state: 'stopped', parentId: 'general', spawnedBy: 'operator', spawnedAt: '2026-10-30T14:02:11.000Z' },
+    { id: 'general', name: 'General', kind: 'claude', title: null, route: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'xhigh' }, state: 'idle', role: 'root', projectId: null, parentId: null, spawnedBy: null, spawnedAt: null },
+    { id: '42', name: 'build', kind: 'claude', title: null, route: null, state: 'stopped', role: 'coordinator', projectId: '42', parentId: 'general', spawnedBy: 'operator', spawnedAt: '2026-10-30T14:02:11.000Z' },
   ]
   screenOf = () => undefined
   topicsChanged = () => {}
@@ -78,7 +78,7 @@ beforeEach(() => {
       interrupt: () => false,
       say: async () => {},
       createTopic: async name => {
-        listed = [...listed, { id: '501', name, kind: 'claude', title: null, route: null, state: 'stopped', parentId: 'general', spawnedBy: 'operator', spawnedAt: null }]
+        listed = [...listed, { id: '501', name, kind: 'claude', title: null, route: null, state: 'stopped', role: 'coordinator', projectId: '501', parentId: 'general', spawnedBy: 'operator', spawnedAt: null }]
         return '501'
       },
       renameTopic: async (topic, name) => void (listed = listed.map(t => (t.id === topic ? { ...t, name } : t))),

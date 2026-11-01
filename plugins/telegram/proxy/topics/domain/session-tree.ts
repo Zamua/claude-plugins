@@ -1,23 +1,43 @@
-// Where each topic hangs in the session tree: general is the root, a topic an
-// agent created hangs under that agent's topic, and any other under general.
-// Who spawned a topic is display only until the broker can prove a caller.
+// The session tree, at most two levels below the root: general's session is
+// the root, every other topic is a project whose session is its coordinator,
+// and a coordinator's workers hang under it. Only the root and the operator
+// make projects; only a coordinator makes workers; a worker makes nothing.
+// Who spawned a session is display only until the broker can prove a caller.
 export type SessionNode = { parent: string | null; spawnedBy: string | null; spawnedAt: string | null }
+export type Role = 'root' | 'coordinator' | 'worker'
 
 export const ROOT = 'general'
 
-/** A topic's node: the one recorded, or, for a topic that predates the tree, the root or a child of it. */
-export function sessionNode(topic: string, recorded?: SessionNode): SessionNode {
-  if (topic === ROOT) return { parent: null, spawnedBy: recorded?.spawnedBy ?? null, spawnedAt: recorded?.spawnedAt ?? null }
-  return recorded ?? { parent: ROOT, spawnedBy: null, spawnedAt: null }
+/** A topic's role: general is the root, every other topic a project's coordinator. */
+export const topicRole = (topic: string): Role => (topic === ROOT ? 'root' : 'coordinator')
+
+/** What a session of this role may spawn: the root projects, a coordinator workers, a worker nothing. */
+export function spawns(role: Role): Role | undefined {
+  return role === 'root' ? 'coordinator' : role === 'coordinator' ? 'worker' : undefined
 }
 
-/**
- * The node of a topic spawned now by `by`: "operator", "proxy" or a topic's id.
- * It hangs under its creator when that is another known topic, else under the
- * root. A new topic is no one's ancestor, so this never makes a cycle.
- */
-export function spawnedNode(topic: string, by: string, isTopic: (id: string) => boolean, at: string): SessionNode {
-  return { parent: by !== topic && isTopic(by) ? by : ROOT, spawnedBy: by, spawnedAt: at }
+/** The project a session belongs to: none for the root, its own topic for a coordinator, its coordinator's for a worker. */
+export function projectOf(role: Role, id: string, parent: string | null): string | null {
+  return role === 'root' ? null : role === 'coordinator' ? id : parent
+}
+
+/** A topic's node: the root has no parent, and every project hangs under it, whoever made it. */
+export function sessionNode(topic: string, recorded?: SessionNode): SessionNode {
+  return {
+    parent: topic === ROOT ? null : ROOT,
+    spawnedBy: recorded?.spawnedBy ?? null,
+    spawnedAt: recorded?.spawnedAt ?? null,
+  }
+}
+
+/** The node of a project made now by `by`: "operator", "proxy", or the root's topic. */
+export function spawnedNode(topic: string, by: string, at: string): SessionNode {
+  return { ...sessionNode(topic), spawnedBy: by, spawnedAt: at }
+}
+
+/** Who may make a project: the operator, the proxy (the ask topic), or the root's session; a coordinator spawns workers instead. */
+export function mayCreateProject(by: string): boolean {
+  return by === 'operator' || by === 'proxy' || by === ROOT
 }
 
 /** A recorded node read back from storage; anything malformed is no record. */
