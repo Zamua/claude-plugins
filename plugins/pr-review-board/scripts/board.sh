@@ -159,7 +159,7 @@ cmd_reply() {  # <board.json> <n> [--sign-off TEXT]
     {body: (if $sign == "" then .body else .body + "\n\n" + $sign end), in_reply_to: .reply_to}' "$file"
 }
 
-cmd_mark() {  # <board.json> <n> <status> [url|note]
+cmd_mark() {  # <board.json> <n> <status> [url|note]; a posted comment is final
   [ $# -ge 3 ] || _b_die "usage: board.sh mark <board.json> <n> <proposed|approved|posted|dropped> [url|note]"
   local file="$1" n="$2" status="$3" extra="${4-}" tmp
   _b_numbers "$n" >/dev/null || exit 1
@@ -169,6 +169,10 @@ cmd_mark() {  # <board.json> <n> <status> [url|note]
     *) _b_die "status is not proposed, approved, posted or dropped: $status" ;;
   esac
   jq -e --argjson n "$n" 'any(.comments[]?; .n == $n)' "$file" >/dev/null || _b_die "comment $n is not on the board"
+  # Posted is final: a comment marked back to proposed could be posted to GitHub twice
+  local posted
+  posted="$(jq -r --argjson n "$n" '.comments[] | select(.n == $n and .status == "posted") | .posted_url // "(no url)"' "$file")"
+  [ -z "$posted" ] || _b_die "comment $n is already posted: $posted"
   tmp="$(mktemp "$(dirname "$file")/.board.XXXXXX")"
   if jq --argjson n "$n" --arg s "$status" --arg x "$extra" --arg now "$(_b_now)" '
       .updated_at = $now |

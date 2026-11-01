@@ -146,7 +146,8 @@ test that proves it, so reading the board is how the operator reaches the code.
 One file rather than a report and a comment list keeps the wording the operator reads
 and the wording that posts the same: `board.sh payload` builds each review from the
 board, and `board.sh mark` records the post on it, so the pane and the ledger cannot
-disagree. The pane finds the board through `state.json`, by the session the poller
+disagree. A posted comment is final: `mark` refuses to change it, so nothing can make
+it postable again. The pane finds the board through `state.json`, by the session the poller
 recorded for the review or the herdr workspace it runs in, or for a review run by
 hand by a path keyed with the session's id.
 
