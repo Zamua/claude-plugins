@@ -14,6 +14,7 @@ const GROUP = '-1007770000001'
 const OPERATOR = 4242
 const RESUMED = '11111111-1111-4111-8111-111111111111'
 const MISSING = '22222222-2222-4222-8222-222222222222'
+const PROXIED = '33333333-3333-4333-8333-333333333333'
 
 const FAKE_TMUX = `#!/usr/bin/env bash
 live="$HOME/fake/live"; touch "$live"
@@ -40,6 +41,9 @@ case "$1" in
     done
     [ -n "$id" ] && [ -z "$resume" ] && echo '{}' > "$HOME/.claude/projects/p/$id.jsonl" ;;
   kill-session) grep -vx "\${3#=}" "$live" > "$live.new"; mv "$live.new" "$live" ;;
+  # Every pane shows Claude's empty prompt, so a proxied topic reads as idle
+  capture-pane) printf '\n❯ \n' ;;
+  load-buffer) cat >> "$HOME/fake/pasted" ;;
 esac
 exit 0
 `
@@ -200,12 +204,17 @@ beforeAll(async () => {
   }
   mkdirSync(join(home, '.claude', 'projects', 'p'), { recursive: true })
   writeFileSync(join(home, '.claude', 'projects', 'p', `${RESUMED}.jsonl`), '{}\n')
+  writeFileSync(join(home, '.claude', 'projects', 'p', `${PROXIED}.jsonl`), '{}\n')
   mkdirSync(state, { recursive: true })
   // A harness topic file that cannot be read must not keep the proxy from booting
   writeFileSync(join(state, 'localgen-topics.json'), '{"version":1,"topics":[')
   writeFileSync(join(state, 'registry.json'), JSON.stringify({
     '43': { tmux_session: 'claude-resumed-43', thread_id: 43, name: 'resumed', spawned_at: 1, claude_session_id: RESUMED },
     '44': { tmux_session: 'claude-gone-44', thread_id: 44, name: 'gone', spawned_at: 1, claude_session_id: MISSING },
+    '46': {
+      tmux_session: 'claude-proxied-46', thread_id: 46, name: 'proxied', spawned_at: 1, claude_session_id: PROXIED,
+      route: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', ultracode: false },
+    },
   }))
 
   api = Bun.serve({
@@ -321,6 +330,19 @@ describe('the proxy, end to end', () => {
     const resumed = await until('topic 43 to resume', () => spawns().find(s => s.session === 'claude-resumed-43'))
     expect(resumed.env.TG_RESUME).toBe('1')
     expect(resumed.env.TG_CLAUDE_SESSION_ID).toBe(RESUMED)
+  }, 20_000)
+
+  test('a topic on a proxied route gets its turns typed into its idle pane, never through /poll', async () => {
+    send(46, 'over the bridge')
+    const spawned = await until('topic 46 to resume', () => spawns().find(s => s.session === 'claude-proxied-46'))
+    expect(spawned.env.TG_CLAUDE_SESSION_ID).toBe(PROXIED)
+    const pasted = await until('the turn to be pasted', () => {
+      const file = join(home, 'fake', 'pasted')
+      return existsSync(file) && readFileSync(file, 'utf8').includes('over the bridge') && readFileSync(file, 'utf8')
+    })
+    expect(pasted).toContain('<channel source="plugin:telegram:telegram"')
+    expect(pasted).toContain('message_thread_id="46"')
+    expect((await fetch(`${proxyUrl}/poll?topic=46`)).status).toBe(204)
   }, 20_000)
 
   test('a square tag posts the root and a breadcrumb, and the peer can poll it and reply', async () => {
@@ -514,6 +536,32 @@ describe('the proxy, end to end', () => {
       calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 44 && /no longer exists/.test(c.body.text)))
     expect(notice.body.chat_id).toBe(GROUP)
     expect(spawns().some(s => s.session.endsWith('-44'))).toBeFalse()
+  }, 20_000)
+
+  test('/relaunch restarts a topic on its same conversation with a nudge, once per window', async () => {
+    const before = spawns().filter(s => s.session === 'claude-42').length
+    send(42, '/relaunch')
+    await until('the relaunch ack', () => said(42, /relaunching this topic's agent: same conversation/))
+    const again = await until('topic 42 to respawn', () => spawns().filter(s => s.session === 'claude-42')[before])
+    expect(again.env.TG_RESUME).toBe('1')
+    expect(again.env.TG_CLAUDE_SESSION_ID).toBe(registry()['42'].claude_session_id)
+    // Earlier tests' turns for topic 42 are still queued ahead of the nudge
+    let polled = await fetch(`${proxyUrl}/poll?topic=42`).then(r => r.json())
+    for (let i = 0; i < 10 && polled.meta.relaunch !== '1'; i++) {
+      polled = await fetch(`${proxyUrl}/poll?topic=42`).then(r => r.json())
+    }
+    expect(polled.meta.relaunch).toBe('1')
+    expect(polled.content).toContain('the operator relaunched this session')
+    send(42, '/relaunch')
+    await until('the debounce answer', () => said(42, /already relaunching/))
+  }, 20_000)
+
+  test('/relaunch in a topic whose conversation is missing starts a new one', async () => {
+    send(44, '/relaunch')
+    await until('the relaunch ack', () => said(44, /\(22222222-[^)]*\) was missing on disk, so a new conversation was started/))
+    const fresh = await until('topic 44 to spawn', () => spawns().find(s => s.session.endsWith('-44')))
+    expect(fresh.env.TG_RESUME).toBe('')
+    expect(fresh.env.TG_CLAUDE_SESSION_ID).not.toBe(MISSING)
   }, 20_000)
 
   test('a malformed request is refused with a 400 naming the field', async () => {
