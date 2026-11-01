@@ -62,6 +62,8 @@ export interface ChatPort {
   createTopic(name: string): Promise<string>
   /** The command menu the chat offers its members. */
   setCommands(commands: readonly ChatCommand[]): Promise<void>
+  /** A link that opens the message for a reader, when the transport has one. */
+  link(topic: string, id: MessageId): string | null
   /** The message id a caller holds (a request field, a stored value), when it names one here. */
   messageId(raw: unknown): MessageId | undefined
 }

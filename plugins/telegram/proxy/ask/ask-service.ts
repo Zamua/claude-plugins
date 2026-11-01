@@ -1,11 +1,9 @@
 // Takes an ask from the phone into its topic: the post the operator sees there,
 // the turn its agent answers, and the agent's first answer back to the phone when
 // it comes in time.
-import { InputFile } from 'grammy'
-import type { Api } from 'grammy'
+import type { ChatPort, MessageId } from '../chat/domain/chat-port'
 import type { TopicRoute } from '../routing/domain/model-routing'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
-import { messageLink, threadOf } from '../telegram/telegram-messages'
 import {
   AskRefused,
   DEDICATED_TOPIC_NAME,
@@ -38,7 +36,8 @@ export type AskAnswer = {
 }
 
 export type AskPorts = {
-  api: Pick<Api, 'sendPhoto' | 'sendDocument' | 'sendMessage'>
+  chat: Pick<ChatPort, 'send' | 'sendFile' | 'link'>
+  /** The chat id an ask turn's meta names. */
   chatId: string
   /** Undefined when the configured target is malformed. */
   target: AskTarget | undefined
@@ -58,7 +57,7 @@ export type AskPorts = {
 }
 
 export function createAsk(ports: AskPorts) {
-  const { api, chatId, store, log } = ports
+  const { chat, chatId, store, log } = ports
   const now = ports.now ?? Date.now
   /** Asks waiting for their first answer, by their post's message id. */
   const waiting = new Map<number, { topic: string; answer: (text: string) => void }>()
@@ -100,22 +99,22 @@ export function createAsk(ports: AskPorts) {
 
   // The photo, else the image as a document, else the question alone: the operator
   // should see their question even when Telegram refuses the image.
-  async function post(topic: string, caption: string, imagePath?: string): Promise<number> {
-    const where = threadOf(topic)
+  async function post(topic: string, caption: string, imagePath?: string): Promise<MessageId> {
     if (imagePath) {
       try {
-        return (await api.sendPhoto(chatId, new InputFile(imagePath), { ...where, caption })).message_id
+        return await chat.sendFile(topic, { file: { path: imagePath }, kind: 'photo', caption })
       } catch (e) {
         log(`ask: Telegram refused the screenshot as a photo (${e}); sending it as a document`)
       }
       try {
-        return (await api.sendDocument(chatId, new InputFile(imagePath), { ...where, caption })).message_id
+        return await chat.sendFile(topic, { file: { path: imagePath }, kind: 'document', caption })
       } catch (e) {
         log(`ask: Telegram refused the screenshot as a document (${e}); posting the question alone`)
       }
     }
     try {
-      return (await api.sendMessage(chatId, caption, where)).message_id
+      const [posted] = await chat.send(topic, { text: caption })
+      return posted
     } catch (e) {
       throw new AskRefused(`could not post the ask in Telegram: ${e}`, 'unposted')
     }
@@ -163,7 +162,7 @@ export function createAsk(ports: AskPorts) {
     log(`ask: ${messageId} in topic ${topic} from ${s.client ?? 'an unnamed client'} (${question.transcribed ? 'voice' : 'text'}${imagePath ? ', screenshot' : ''})`)
     const text = await answer
     log(`ask: ${messageId} ${text != null ? `answered in ${now() - started}ms` : `not answered within ${s.waitMs}ms`}`)
-    return { topic, messageId, link: messageLink(chatId, topic, messageId), question: question.text, answer: text }
+    return { topic, messageId, link: chat.link(topic, messageId), question: question.text, answer: text }
   }
 
   /** A reply went out in `topic`. The first to an ask's post is that ask's answer. */

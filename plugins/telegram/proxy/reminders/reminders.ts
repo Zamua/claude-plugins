@@ -2,10 +2,9 @@
 // session. At fire time the proxy posts the text itself, which reaches the
 // operator even if the agent cannot start, then wakes the agent for any
 // follow-up it asked for.
-import type { Api } from 'grammy'
+import type { ChatPort } from '../chat/domain/chat-port'
 import { GROUP_CHAT_ID, REMINDERS_FILE, SQUARE_TOPIC } from '../config'
 import { JsonReminderRepository } from './json-reminder-repository'
-import { threadOf } from '../telegram/telegram-messages'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import { InvalidReminder, LATE_AFTER_MS, dueReminders, reminderNotice, scheduleReminder } from './domain/reminder'
 import type { ReminderRequest } from './domain/reminder'
@@ -16,7 +15,7 @@ import { log, reason } from '../log'
 import { openOrSetAside } from '../shared/state-file'
 
 export type ReminderPorts = {
-  api: Pick<Api, 'sendMessage'>
+  chat: Pick<ChatPort, 'send'>
   /** The topics a reminder may name: waking one spawns its agent. */
   topicDirectory: () => readonly { topic: string }[]
   harnessLocked: (topic: string) => boolean
@@ -24,7 +23,7 @@ export type ReminderPorts = {
   enqueue: (topic: string, message: InboundMessage) => void
 }
 
-export function createReminders({ api, topicDirectory, harnessLocked, ensureSession, enqueue }: ReminderPorts) {
+export function createReminders({ chat, topicDirectory, harnessLocked, ensureSession, enqueue }: ReminderPorts) {
   // An agent's own scheduler dies with its session, so reminders live here. At
   // fire time the proxy posts the text itself, which reaches the operator even if
   // the agent cannot start, then wakes the agent for any follow-up it asked for.
@@ -79,7 +78,7 @@ export function createReminders({ api, topicDirectory, harnessLocked, ensureSess
       for (const r of dueReminders(reminders.list(), now)) {
         if (!isSet(r.id)) continue
         try {
-          await api.sendMessage(chatId, `⏰ ${r.text}`, threadOf(r.topic))
+          await chat.send(r.topic, { text: `⏰ ${r.text}` })
         } catch (err) {
           log(`reminder ${r.id}: post failed, retrying next tick: ${reason(err)}`)
           continue

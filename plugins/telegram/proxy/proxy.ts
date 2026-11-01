@@ -73,8 +73,8 @@ import { loadAndReconcileRegistry } from './topics/registry'
 import { getTopic } from './topics/state'
 import { loadConvs } from './square/conversations'
 import { createSquare } from './square/square'
-import { threadOf } from './telegram/telegram-messages'
 import { telegramDownloader, writeInboxFile } from './telegram/telegram-files'
+import { createTelegramChat } from './telegram/telegram-chat'
 import { transcribeAudio } from './telegram/voice-transcription'
 import { createAsk } from './ask/ask-service'
 import { askTarget } from './ask/domain/ask'
@@ -111,7 +111,8 @@ process.on('uncaughtException', err => {
 // ---- grammy inbound --------------------------------------------------------
 
 const bot = new Bot(TOKEN, BOT_API_ROOT ? { client: { apiRoot: BOT_API_ROOT } } : undefined)
-const downloadFile = telegramDownloader(bot.api, TOKEN, INBOX_DIR, log)
+const downloadFile = telegramDownloader(bot.api, TOKEN, INBOX_DIR, log, BOT_API_ROOT)
+const chat = createTelegramChat(bot.api, String(GROUP_CHAT_ID), downloadFile)
 const {
   enqueue,
   killSession,
@@ -121,7 +122,7 @@ const {
   resumePendingPanes,
   relaunch,
 } = createTopicLifecycle({
-  api: bot.api,
+  chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
   harnessLocked,
   modelCatalog: () => modelCatalog(),
@@ -129,20 +130,20 @@ const {
   noticeDelivered: topic => noticeDelivered(topic),
 })
 const { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply, handleSquareUserMessage } = createSquare({
-  api: bot.api,
+  chat,
   harnessLocked,
   ensureSession,
   enqueue,
 })
 const { handleRemind, handleListReminders, handleCancelReminder, fireDueReminders } = createReminders({
-  api: bot.api,
+  chat,
   topicDirectory,
   harnessLocked,
   ensureSession,
   enqueue,
 })
 const secrets = createSecretDrop({
-  api: bot.api,
+  chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
   harnessLocked,
   ensureSession,
@@ -222,8 +223,8 @@ const {
   paneInFlight,
 })
 
-const sayIn = (chatId: string, topic: string, t: string) =>
-  bot.api.sendMessage(chatId, t, threadOf(topic)).catch(noticeFailed('notice', topic))
+const sayIn = (_chatId: string, topic: string, t: string) =>
+  chat.send(topic, { text: t }).catch(noticeFailed('notice', topic))
 
 // ---- harness registry --------------------------------------------------------
 //
@@ -233,7 +234,7 @@ const sayIn = (chatId: string, topic: string, t: string) =>
 const HARNESSES: readonly TopicHarnessAdapter[] = [antigravityHarness, opencodeHarness, localgenHarness]
 const harnessFor = (topic: string) => HARNESSES.find(h => h.owns(topic))
 const harnessOfKind = (kind: LockedHarness) => HARNESSES.find(h => h.kind === kind) as TopicHarnessAdapter
-const createTopic = createTopicCreation({ api: bot.api, harnessOfKind })
+const createTopic = createTopicCreation({ chat, harnessOfKind })
 const sentMessages = openOrSetAside('sent messages', SENT_MESSAGES_FILE, () => new JsonSentMessages(SENT_MESSAGES_FILE), log)
 
 // Asks from the phone land in one topic: a configured one, or a dedicated one created on first use.
@@ -241,7 +242,7 @@ const askTopicStore = openOrSetAside('ask', ASK_TOPIC_FILE, () => new JsonAskTop
 const target = askTarget(ASK_TOPIC)
 if (!target) log(`TELEGRAM_ASK_TOPIC="${ASK_TOPIC}" is neither a thread id nor "general"; asks are refused`)
 const ask = createAsk({
-  api: bot.api,
+  chat,
   chatId: String(GROUP_CHAT_ID),
   target,
   store: askTopicStore,
@@ -308,8 +309,7 @@ process.on('SIGHUP', shutdown)
 const http = createHttpServer({
   api: bot.api,
   outbound: createOutbound({
-    api: bot.api,
-    downloadFile,
+    chat,
     sent: reply => {
       sentMessages.record(reply.topic, reply.ids)
       harnessFor(reply.topic)?.sent(reply.topic, reply.ids.length)
@@ -329,7 +329,7 @@ const http = createHttpServer({
 await http.serve()
 void createAskServer({ port: ASK_PORT, tokenFile: ASK_TOKEN_FILE, images: ASK_IMAGES, ask: ask.ask, log }).serve()
 void polling.run()
-void registerCommands(bot.api)
+void registerCommands(chat)
 for (const harness of HARNESSES) {
   if (harness.reconcile) setInterval(() => void harness.reconcile?.(), 2_000).unref()
 }

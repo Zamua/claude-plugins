@@ -2,6 +2,7 @@
 // gated to the configured group, then routed to the verb, harness, square or
 // Claude topic it belongs to.
 import type { Api, Bot, Context } from 'grammy'
+import type { ChatPort } from '../chat/domain/chat-port'
 import type { ReactionTypeEmoji } from 'grammy/types'
 import { ADMIN_USER_ID, GROUP_CHAT_ID, SECRETS_USER_ID, SQUARE_TOPIC, VOICE } from '../config'
 import type { TopicContext, TopicHarnessAdapter } from '../harness/topic-harness-adapter'
@@ -316,7 +317,7 @@ export function registerInbound(bot: Bot, ports: InboundPorts): void {
 // The "/" menu: discoverable, autocompleted, and free of the "--" a phone
 // keyboard mangles. Scoped to the group so no other chat learns the verbs.
 // Idempotent, and a failure only costs the menu, never the commands.
-export async function registerCommands(api: Api): Promise<void> {
+export async function registerCommands(chat: Pick<ChatPort, 'setCommands'>): Promise<void> {
   const commands = [
     { command: 'relaunch', description: "restart this topic's agent (same conversation, reloads MCP config)" },
     ...(ADMIN_USER_ID
@@ -337,7 +338,7 @@ export async function registerCommands(api: Api): Promise<void> {
       : []),
   ]
   try {
-    await api.setMyCommands(commands, { scope: { type: 'chat', chat_id: Number(GROUP_CHAT_ID) } })
+    await chat.setCommands(commands)
     log(`registered ${commands.map(c => '/' + c.command).join(', ')} in the group command menu`)
   } catch (err) {
     log(`could not register the group commands: ${err}`)

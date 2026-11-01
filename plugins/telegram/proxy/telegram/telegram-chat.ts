@@ -6,7 +6,7 @@ import type { Api } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
 import type { ChatCapabilities, ChatPort, MessageId, OutgoingFile, OutgoingText, TextFormat } from '../chat/domain/chat-port'
 import type { Downloader } from './telegram-files'
-import { chunk, MAX_CHUNK_LIMIT, threadOf } from './telegram-messages'
+import { chunk, MAX_CHUNK_LIMIT, messageLink, threadOf } from './telegram-messages'
 
 export const TELEGRAM_CAPABILITIES: ChatCapabilities = {
   buttons: true,
@@ -87,6 +87,7 @@ export function createTelegramChat(api: TelegramApi, chatId: string, download: D
     setCommands: async commands => {
       await api.setMyCommands(commands, { scope: { type: 'chat', chat_id: Number(chatId) } })
     },
+    link: (topic, id) => messageLink(chatId, topic, id),
     messageId: raw => {
       const n = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : raw
       return typeof n === 'number' && Number.isSafeInteger(n) && n > 0 ? telegramId(n) : undefined
