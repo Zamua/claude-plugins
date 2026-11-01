@@ -11,11 +11,11 @@ import type { LocalFile } from './sources/file'
 const DAY_MS = 24 * 3600e3
 // An answered ask stays behind the fold this long, so the person can see what they decided lately
 const ANSWERED_MS = 7 * DAY_MS
-// A line's right side is fixed columns: the session that asked, when it is due, and how long it has waited
-const WHO_WIDTH = 14
+// A line's right side is fixed columns: the session that asked, as wide as the longest label shown, when it is due,
+// and how long it has waited
+const MAX_WHO = 14
 const DUE_WIDTH = 'Mon 11-02'.length
 const AGE_WIDTH = 3
-const COLUMNS_WIDTH = 1 + WHO_WIDTH + 2 + DUE_WIDTH + 2 + AGE_WIDTH
 
 const opened = new Set<string>()
 let isAnsweredShown = false
@@ -33,6 +33,8 @@ function askerOf(node: Node): Session | undefined {
 
   return undefined
 }
+
+const whoOf = (node: Node) => askerOf(node)?.label ?? node.item.origin?.by ?? ''
 
 const dueAt = (node: Node) => Date.parse(node.item.target ?? node.eta ?? '')
 
@@ -95,12 +97,15 @@ export function decisionsView($: EngineInterface): View {
       const answered = answeredOf(tree, now)
       const at = Date.parse((currentWork()?.state.value as LocalFile | undefined)?.updated_at ?? '')
       const columns = paneWidth() - 2
+      const shown = isAnsweredShown ? [...asks, ...answered] : asks
+      const whoWidth = Math.min(MAX_WHO, Math.max(0, ...shown.map(node => [...whoOf(node)].length)))
+      const draw = (node: Node) => lines(els, node, now, columns, whoWidth)
 
       return (
         <Box key="decisions" flexDirection="column" paddingRight={1}>
           {!Number.isNaN(at) && stamp(els, `Updated ${ago(now - at)}`)}
           {asks.length === 0 && <Text dimColor>Nothing waits on you.</Text>}
-          {asks.flatMap(node => lines(els, node, now, columns))}
+          {asks.flatMap(draw)}
           {answered.length > 0 && (
             <Box key="danswered" flexDirection="column" marginTop={asks.length > 0 ? 1 : 0}>
               <Button
@@ -113,7 +118,7 @@ export function decisionsView($: EngineInterface): View {
                   $.ui.invalidate('ui.render')
                 }}
               />
-              {isAnsweredShown && answered.flatMap(node => lines(els, node, now, columns))}
+              {isAnsweredShown && answered.flatMap(draw)}
             </Box>
           )}
           {notice && (
@@ -132,16 +137,16 @@ export function decisionsView($: EngineInterface): View {
    * shows its detail, where the options and the recommendation live, its answer once given, its links, and a way to
    * the session that asked.
    */
-  function lines(els: Els, node: Node, now: number, columns: number): RenderNode[] {
+  function lines(els: Els, node: Node, now: number, columns: number, whoWidth: number): RenderNode[] {
     const { Box, Button, Markdown, Text } = els
     const { item } = node
     const isOpen = opened.has(item.id)
     const isDone = item.status === 'done'
     const asker = askerOf(node)
-    const room = columns - COLUMNS_WIDTH
+    const room = columns - (1 + whoWidth + 2 + DUE_WIDTH + 2 + AGE_WIDTH)
     const line = fitLine([{ text: isOpen ? '▾' : '▸', dimColor: true }], { text: item.title, dimColor: isDone }, room)
     const pad = Math.max(0, room - widthOf(line))
-    const who = cut(asker?.label ?? item.origin?.by ?? '', WHO_WIDTH)
+    const who = cut(whoOf(node), whoWidth)
     const due = isDone ? undefined : dueOf(item.target, undefined, now)
     const started = Date.parse(item.started ?? '')
     const age = isDone || Number.isNaN(started) ? '' : span(now - started)
@@ -160,7 +165,7 @@ export function decisionsView($: EngineInterface): View {
         </Button>
         {pad > 0 && fixed(els, `dpad-${item.id}`, <Text>{' '.repeat(pad)}</Text>)}
         <Box key={`dfact-${item.id}`} flexDirection="row" flexShrink={0}>
-          <Text dimColor>{` ${who.padEnd(WHO_WIDTH)}  `}</Text>
+          <Text dimColor>{` ${who.padEnd(whoWidth)}  `}</Text>
           <Text color={due?.color} dimColor={!due?.color || undefined}>
             {(due?.text ?? '').padEnd(DUE_WIDTH)}
           </Text>
