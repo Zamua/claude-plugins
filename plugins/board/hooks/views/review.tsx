@@ -17,7 +17,7 @@ const FACTS_MS = 60_000
 
 type Review = { key: string; slug: string; prs: Pr[]; boardPath: string }
 type PollerState = {
-  last_poll?: string
+  last_poll?: number | string
   reviews?: Record<string, { status?: string; slug?: string; claude_session?: string; herdr_workspace?: string; prs?: string[] }>
 }
 
@@ -142,7 +142,8 @@ export async function readReviews($: EngineInterface): Promise<{ reviews: Review
     const meta = `${root}/.pr-review-board`
     const path = (await $.env.get('PR_REVIEW_BOARD_STATE')) || `${home}/${STATE_PATH}`
     const state = (await $.fs.exists(path)) ? (JSON.parse(await $.fs.read(path)) as PollerState) : {}
-    polledAt = Date.parse(state.last_poll ?? '')
+    // The poller writes epoch seconds
+    polledAt = typeof state.last_poll === 'number' ? state.last_poll * 1000 : Date.parse(state.last_poll ?? '')
     for (const [key, r] of Object.entries(state.reviews ?? {})) {
       if (!r || r.status !== 'ACTIVE') continue
       const { board: b, facts } = await readPair($, `${meta}/${key}`)

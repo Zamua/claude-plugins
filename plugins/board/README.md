@@ -153,13 +153,20 @@ The root session's switcher adds two views drawn from the tree, each with a tab 
 Responsibilities without sections, and a heading per top-level Item in it. A tab's count is what in it waits on you.
 
 ```
- Goals 2 · Side · Misc
-╭──────────────────────────────────────────────╮
-│ Grow the partner network                     │
-│   ! #7502 ● CI fail me   ABC-809 adds the fee │
-│     #7600 ● review  lee  ABC-809 adds a hook  │
-╰──────────────────────────────────────────────╯
+ Goals 1 · Side · Misc
+╭────────────────────────────────────────────╮
+│ Grow the partner network                   │
+│   ! #7502 ● CI fail  me  ABC-809 adds the… │
+│     #7600 ● review   lee ABC-809 adds a h… │
+╰────────────────────────────────────────────╯
  ▸ ✓ 14 merged or closed
+```
+
+```
+ Goals 1 · Code review
+Grow the partner network
+▸ to pick   Partner stack      2 open  3/11 PRs   3d ●
+▸ approved  Fee lookup                  1/1 PRs   5d ●
 ```
 
 - `all prs` holds every pull request the tree places, whoever wrote it, each with the prs view's live state and its
@@ -167,9 +174,10 @@ Responsibilities without sections, and a heading per top-level Item in it. A tab
   Unplaced tab. While it is shown it asks GitHub for them through the prs view's shared cache.
 - `all reviews` holds every running [pr-review-board](../pr-review-board/) review and every board a session wrote by
   hand, read from that plugin's own files: where it stands (comments to pick, waiting on its author, reviewing,
-  posted, approved or merged), its threads nobody answered, its open pull requests of all, and how long since it
-  changed. A review sits in the tab of its session's Item, or else of its first pull request the tree places. Pressing
-  one opens its open pull requests; its mark brings its session to the front.
+  posted, approved or merged), how many of its comments and your other threads on its open pull requests wait on
+  their author, its open pull requests of all, and how long since it changed. A review sits in the tab of its
+  session's Item, or else of its first pull request the tree places. Pressing one opens its open pull requests; its
+  mark brings its session to the front.
 - The tabs come from the tree, so the tool's `link`, `hide` and `sections` move a pull request to another tab, leave it
   out, or rename and reorder the tabs.
 

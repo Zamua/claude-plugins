@@ -243,7 +243,11 @@ export function rollupPrsView($: EngineInterface): View {
         return [
           {
             key: `rgroup-${part.key}`,
-            ...(part.heading && { heading: <Text bold>{part.heading}</Text> }),
+            ...(part.heading && { heading: (
+              <Text bold wrap="truncate-end">
+                {part.heading}
+              </Text>
+            ) }),
             prs: rows,
             chains: rows.map(p => [p]),
           },
@@ -352,7 +356,11 @@ export function rollupReviewsView($: EngineInterface): View {
           })}
           {shown.parts.map((part, at) => (
             <Box key={`rrpart-${part.key}`} flexDirection="column" marginTop={at > 0 ? 1 : 0}>
-              {part.heading && <Text bold>{part.heading}</Text>}
+              {part.heading && (
+                <Text bold wrap="truncate-end">
+                  {part.heading}
+                </Text>
+              )}
               {[...part.rows]
                 .sort((a, b) => rankOf(a) - rankOf(b) || (b.updatedAt || 0) - (a.updatedAt || 0))
                 .flatMap(r => reviewLines(els, tree, r, now, columns))}

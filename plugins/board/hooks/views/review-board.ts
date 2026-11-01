@@ -141,7 +141,7 @@ export type ReviewDigest = {
   state: ReviewState
   /** Comments waiting for the person to pick. */
   toPick: number
-  /** Threads the operator started that nobody answered and nobody resolved. */
+  /** On its open pull requests, its posted comments not addressed and the operator's other threads nobody answered. */
   unanswered: number
   openPrs: number
 }
@@ -153,7 +153,7 @@ export type ReviewDigest = {
 function reviewStateOf(toPick: number, posted: Comment[], unanswered: number, openPrs: number, isApproved: boolean): ReviewState {
   if (toPick > 0) return 'pick'
   if (openPrs === 0) return 'finished'
-  if (posted.some(c => !c.addressed) || unanswered > 0) return 'waiting'
+  if (unanswered > 0) return 'waiting'
   if (isApproved) return 'approved'
 
   return posted.length > 0 ? 'posted' : 'reviewing'
@@ -164,11 +164,15 @@ export function digestOf(key: string, slug: string, agent: string, listed: Pr[],
   const prs = b && Array.isArray(b.prs) ? b.prs : listed
   const facts = f?.prs ?? {}
   const comments = b ? commentsOf(b) : []
-  const posted = comments.filter(c => c.status === 'posted')
-  const threads = prs.flatMap(p => (Array.isArray(facts[p.pr]?.threads) ? (facts[p.pr]?.threads as Thread[]) : []))
-  const unanswered = threads.filter(t => !t.resolved && !t.replied).length
   // A pull request the poller has not described yet counts as open
   const open = prs.filter(p => (facts[p.pr]?.state ?? 'OPEN') === 'OPEN')
+  const isOnOpen = (c: Comment) => open.some(p => (typeof c.pr === 'string' ? p.pr === c.pr : p.number === c.pr))
+  const posted = comments.filter(c => c.status === 'posted' && isOnOpen(c))
+  const postedUrls = new Set(comments.map(c => c.posted_url).filter(Boolean))
+  const others = open
+    .flatMap(p => (Array.isArray(facts[p.pr]?.threads) ? (facts[p.pr]?.threads as Thread[]) : []))
+    .filter(t => !postedUrls.has(t.url) && !t.resolved && !t.replied)
+  const unanswered = posted.filter(c => !c.addressed).length + others.length
   const isApproved = open.length > 0 && open.every(p => facts[p.pr]?.approved === true)
   const toPick = comments.filter(isPickable).length
 

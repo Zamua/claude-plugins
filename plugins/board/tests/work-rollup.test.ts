@@ -85,7 +85,7 @@ const thread = (n: number, more: Record<string, boolean> = {}) => ({ url: `https
 
 const REVIEWS = {
   [`${HOME}/.config/pr-review-board/state.json`]: json({
-    last_poll: '2026-10-27T13:58:00Z',
+    last_poll: Date.parse('2026-10-27T13:58:00Z') / 1000,
     reviews: {
       'stack-1': { status: 'ACTIVE', slug: 'nova-stack', claude_session: 'h-r1', prs: ['acme/api#7700', 'acme/api#7701'] },
       'one-8': { status: 'ACTIVE', slug: 'one-8', claude_session: 'h-r2', prs: ['acme/api#8288'] },
@@ -102,10 +102,15 @@ const REVIEWS = {
     comments: [
       { n: 1, pr: 'acme/api#7700', status: 'proposed', summary: 'A gap.' },
       { n: 2, pr: 'acme/api#7700', status: 'posted', addressed: false, posted_url: 'https://github.com/acme/api/pull/7700#discussion_r1' },
+      { n: 3, pr: 'acme/api#7700', status: 'posted', addressed: true, posted_url: 'https://github.com/acme/api/pull/7700#discussion_r5' },
+      { n: 4, pr: 'acme/api#7701', status: 'posted', addressed: false, posted_url: 'https://github.com/acme/api/pull/7701#discussion_r6' },
     ],
   }),
   [`${META}/stack-1/github.json`]: json({
-    prs: { 'acme/api#7700': { state: 'OPEN', approved: false, threads: [thread(1), thread(2, { resolved: true })] }, 'acme/api#7701': { state: 'MERGED' } },
+    prs: {
+      'acme/api#7700': { state: 'OPEN', approved: false, threads: [thread(1), thread(2, { resolved: true }), thread(4), thread(5)] },
+      'acme/api#7701': { state: 'MERGED', threads: [thread(6)] },
+    },
   }),
   [`${META}/one-8/board.json`]: json({
     updated_at: '2026-10-25T14:00:00Z',
@@ -131,7 +136,9 @@ test("the root's review rollup says where each review stands, in the tab of its 
   const ui = await open($, 'allreviews')
   expect(await ui.find({ key: 'tab-allreviews', text: 'all reviews 1' })).toBeDefined()
   expect(await ui.find({ key: 'rrtab-goals', text: 'Goals 1' })).toBeDefined()
-  expect(await ui.find({ key: 'rrrow-stack-1', text: /to pick\s+Nova stack\s+1 open\s+1\/2 PRs\s+10m/ })).toBeDefined()
+  expect(await ui.find({ key: 'rollup-reviews', text: /^Polled 2m ago/ })).toBeDefined()
+  // Comment 2 waits on its author and thread 4 is another of the operator's; 3 is addressed and 6 sits on a merged one
+  expect(await ui.find({ key: 'rrrow-stack-1', text: /to pick\s+Nova stack\s+2 open\s+1\/2 PRs\s+10m/ })).toBeDefined()
   expect(await ui.find({ key: 'rrrow-manual-h-r3', text: /reviewing\s+Architecture watch\s+1\/1 PRs/ })).toBeDefined()
   expect(await ui.find({ key: 'rrrow-old-1' })).toBeUndefined()
 
