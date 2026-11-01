@@ -953,7 +953,7 @@ there is no agent to relaunch.
   "no reply needed" come from `proxy/domain/turn-meta.ts`, and
   `proxy/adapters/hook-contract.test.ts` runs the hook against turns rendered
   with them.
-- `proxy/adapters/proxy-routes.ts`: the proxy's HTTP paths, used by the proxy,
+- `proxy/http/routes.ts`: the proxy's HTTP paths, used by the proxy,
   `server.ts`, and checked against the Python hooks' calls.
 - `override-settings.json`: the BASE session settings - enables `telegram@zamua`
   AND wires the Stop hook (`hooks.Stop` -> `python3 "$TG_HOOK"`). The proxy does

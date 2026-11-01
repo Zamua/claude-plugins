@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { renderPaneTurn } from '../domain/inbound-delivery'
 import { RELAUNCH_META, reminderMeta, SECRET_DROP_META, SQUARE_META } from '../domain/turn-meta'
-import { ROUTE } from './proxy-routes'
+import { ROUTE } from '../http/routes'
 
 const hooks = join(import.meta.dir, '..', '..', 'hooks')
 

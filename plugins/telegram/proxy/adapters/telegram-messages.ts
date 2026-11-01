@@ -136,3 +136,8 @@ export function describeMessage(msg: any): Described | null {
   if (msg.location) return { content: describeLocation(msg.location) }
   return null
 }
+
+/** The forum thread a topic key names; the General topic has none. */
+export function threadIdForTopic(topic: string): number | undefined {
+  return topic === 'general' ? undefined : Number(topic)
+}

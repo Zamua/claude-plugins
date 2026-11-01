@@ -10,7 +10,7 @@ import {
   parseSquareReply,
   parseTopicCreate,
   parseTurnFailed,
-} from './http-requests'
+} from './requests'
 
 const rejects = (parse: () => unknown, field: string) => {
   expect(parse).toThrow(BadRequest)
