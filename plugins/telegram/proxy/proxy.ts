@@ -120,10 +120,6 @@ import {
 } from './http/requests'
 import { topicSlug } from './domain/topic-slug'
 import type { LockedHarness, TopicHarness } from './domain/topic-harness'
-import { LocalgenTopicService } from './application/localgen-topic-service'
-import { QwenImageClient } from './adapters/qwen-image-client'
-import { localgenTopic, localgenTopicFromRecord } from './domain/localgen-topic'
-import type { LocalgenTopic } from './domain/localgen-topic'
 import { antigravityResetPools } from './domain/antigravity-capacity'
 import type { AntigravityUsageWindow } from './application/antigravity-ports'
 import {
@@ -143,9 +139,6 @@ import {
   HERDR_LAUNCH_SCRIPT,
   INBOX_DIR,
   LAUNCH_SCRIPT,
-  LOCALGEN_START_CMD,
-  LOCALGEN_TOPICS_FILE,
-  LOCALGEN_URL,
   MARKETPLACE,
   MODEL,
   OPENCODE_BIN,
@@ -171,6 +164,7 @@ import {
 } from './config'
 import { log, noticeFailed, reason } from './log'
 import type { TopicContext, TopicHarnessAdapter } from './harness/topic-harness-adapter'
+import { createLocalgenHarness } from './harness/localgen'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
 import { mux } from './topics/mux'
@@ -210,8 +204,6 @@ const ANTIGRAVITY_RE = /^\/antigravity(?:@\w+)?\s*$/
 const ROUTE_DEBOUNCE_MS = 10_000
 const lastRouteChange = new Map<string, number>()
 const LOCALCODE_RE = /^\/localcode(?:@\w+)?\s*$/
-// /localgen [name]: lock the current fresh topic to the image generator.
-const LOCALGEN_RE = /^\/localgen(?:@\w+)?(?:\s+(.+?))?\s*$/
 
 // Called PER SPAWN (not once at module load) so each (re)spawn reflects the
 // CURRENT committed override-settings.json - a base-settings edit (e.g. a git
@@ -874,43 +866,11 @@ for (const topic of opencodeService.list()) {
 // localgen is a fourth harness-bounded context with no agent at all: every
 // text message is an image prompt POSTed to the qwen-image server and the PNG
 // comes back into the same thread.
-const localgenRepository = new JsonTopicRepository<LocalgenTopic>(LOCALGEN_TOPICS_FILE, 'localgen', localgenTopicFromRecord)
-const localgenService = new LocalgenTopicService(
-  localgenRepository,
-  new QwenImageClient(LOCALGEN_URL, log),
-  {
-    uploading(topic) {
-      void bot.api.sendChatAction(String(GROUP_CHAT_ID), 'upload_photo', threadOf(topic)).catch(() => {})
-    },
-    // Telegram refuses a photo over 10 MB or with a side past its limits; the
-    // document form carries any PNG, so it is the fallback as well as `raw`.
-    async photo(topic, png, filename, caption, asDocument) {
-      const file = new InputFile(png, filename)
-      const opts = { ...threadOf(topic), caption }
-      if (!asDocument) {
-        try {
-          await bot.api.sendPhoto(String(GROUP_CHAT_ID), file, opts)
-          return
-        } catch (error) {
-          log(`localgen sendPhoto failed for topic ${topic}, sending as document: ${error}`)
-        }
-      }
-      await bot.api.sendDocument(String(GROUP_CHAT_ID), new InputFile(png, filename), opts)
-    },
-    async queued(topic, position) {
-      await bot.api.sendMessage(String(GROUP_CHAT_ID), `queued (#${position})`, threadOf(topic))
-    },
-    async error(topic, text) {
-      log(`localgen failed for topic ${topic}: ${text}`)
-      await bot.api.sendMessage(
-        String(GROUP_CHAT_ID),
-        `⚠️ ${text.slice(0, MAX_CHUNK_LIMIT - 3)}`,
-        threadOf(topic),
-      )
-    },
-  },
-  LOCALGEN_START_CMD,
-)
+const localgenHarness = createLocalgenHarness({
+  api: bot.api,
+  sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
+  mayLockTopic,
+})
 
 function topicHarnessOf(topic: string): TopicHarness {
   return harnessFor(topic)?.kind ?? 'claude'
@@ -1252,61 +1212,6 @@ async function handleOpencodeModelCommand(chatId: string, topic: string, argumen
   )
 }
 
-// ---- localgen harness --------------------------------------------------------
-
-const localgenRouteLabel = () => `qwen-image · ${LOCALGEN_URL}`
-
-// Locks the topic the command was posted in, like /localcode: admin only,
-// never the square, never a topic another harness or a Claude UUID owns. The
-// argument renames the topic record; without one the learned name is kept.
-async function activateLocalgenTopic(
-  chatId: string,
-  topic: string,
-  fromId: string,
-  argument: string,
-): Promise<void> {
-  if (!(await mayLockTopic(chatId, topic, fromId, 'localgen'))) return
-  if (localgenService.isLocked(topic)) {
-    await sayIn(chatId, topic, `This topic is already locked to ${localgenRouteLabel()}.`)
-    return
-  }
-  const claude = getTopic(topic)
-  try {
-    const name = argument.trim() || claude.name || topicNames.get(topic) || 'localgen'
-    localgenService.activate(localgenTopic(topic, name))
-    claude.name = name
-    topicNames.set(topic, name)
-    saveRegistry()
-    await sayIn(
-      chatId,
-      topic,
-      `Locked this topic to ${localgenRouteLabel()}. Every text message here is an image prompt; ` +
-      'options: size:WxH steps:N seed:N n:K raw. No agent runs in this topic.',
-    )
-  } catch (error) {
-    await sayIn(chatId, topic, `Could not enable localgen: ${reason(error)}`)
-  }
-}
-
-// Single-model harness: /model only reports status, there is nothing to pick.
-async function handleLocalgenModelCommand(chatId: string, topic: string, argument: string): Promise<void> {
-  let health = 'not listening'
-  try {
-    const response = await fetch(`${LOCALGEN_URL}/healthz`, { signal: AbortSignal.timeout(3_000) })
-    const body = (await response.json().catch(() => ({}))) as any
-    health = `${body.status ?? response.status}` +
-      (body.busy != null ? `, busy ${body.busy}, queued ${body.queued}` : '')
-  } catch {}
-  await sayIn(
-    chatId,
-    topic,
-    `Route: ${localgenRouteLabel()}\nServer: ${health}\n` +
-    'Harness: localgen (locked)\nPermissions: none, nothing runs but the generator\n' +
-    'Options: size:WxH steps:N seed:N n:K raw' +
-    (argument ? '\n\nThis topic runs a single local model, so there is nothing to pick.' : ''),
-  )
-}
-
 // Same kill-then-nudge sequence as a provider-route recovery: killSession
 // drains the dying MCP's long-polls first so the nudge cannot be handed to it
 // and lost. The nudge asks for one line back, so a respawn that fails is a
@@ -1441,37 +1346,6 @@ const opencodeHarness: TopicHarnessAdapter = {
   prepareTopic: async name => async topic => {
     opencodeService.activate(opencodeTopic(topic, name))
     await opencodeService.start(topic)
-  },
-}
-
-const localgenHarness: TopicHarnessAdapter = {
-  kind: 'localgen',
-  lockCommand: LOCALGEN_RE,
-  attachments: 'none',
-  tracesInbound: true,
-  owns: topic => localgenService.isLocked(topic),
-  lock: (c, argument) => activateLocalgenTopic(c.chatId, c.topic, c.fromId, argument),
-  model: (c, argument) => handleLocalgenModelCommand(c.chatId, c.topic, argument),
-  usage: ({ chatId, topic }) =>
-    sayIn(chatId, topic, 'localgen runs on the local qwen-image server; there is no quota to report.').then(() => {}),
-  relaunch: async ({ chatId, topic }) => {
-    await sayIn(chatId, topic, 'localgen runs no agent; there is nothing to relaunch. Restart the qwen-image server from the gpu topic if needed.')
-  },
-  rename: (topic, name) => localgenService.rename(topic, name),
-  // The text is the prompt; nothing is downloaded, queued or spawned.
-  receive: async ({ chatId, topic }, turn) => {
-    if (typeof turn.text !== 'string') {
-      await sayIn(chatId, topic, 'localgen takes text prompts only.')
-      return
-    }
-    log(`received localgen prompt ${turn.messageId ?? '(no id)'} for topic ${topic}`)
-    void localgenService.submit(topic, turn.text)
-      .then(() => log(`settled localgen prompt ${turn.messageId ?? '(no id)'} for topic ${topic}`))
-      .catch(error => log(`localgen prompt ${turn.messageId ?? '(no id)'} for topic ${topic} threw: ${error}`))
-  },
-  sent: () => {},
-  prepareTopic: async name => async topic => {
-    localgenService.activate(localgenTopic(topic, name))
   },
 }
 

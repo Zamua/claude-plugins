@@ -1,3 +1,4 @@
+import type { Api } from 'grammy'
 import type { LockedHarness } from '../domain/topic-harness'
 
 /** Who sent a command or message, and where. */
@@ -33,4 +34,12 @@ export interface TopicHarnessAdapter {
   sent(topic: string, messages: number): void
   /** Readies a new topic before Telegram creates it; the returned step locks it once it exists. */
   prepareTopic(name: string): Promise<(topic: string) => Promise<void>>
+}
+
+/** What every harness's Telegram front end needs from the proxy. */
+export type HarnessPorts = {
+  api: Api
+  sayIn: (chatId: string, topic: string, text: string) => Promise<unknown>
+  /** Says why a topic cannot be locked to `harness` and returns false, else true. */
+  mayLockTopic: (chatId: string, topic: string, fromId: string, harness: LockedHarness) => Promise<boolean>
 }
