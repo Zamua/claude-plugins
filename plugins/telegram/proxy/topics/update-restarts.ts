@@ -14,12 +14,13 @@ import { pendingPerms } from './permissions'
 import { saveRegistry } from './registry'
 import { topics } from './state'
 import type { TopicState } from './state'
+import type { SpawnOutcome } from './lifecycle'
 
 export type UpdateRestartPorts = {
   sayIn: (chatId: string, topic: string, text: string) => Promise<unknown>
   harnessLocked: (topic: string) => boolean
   killSession: (st: TopicState, topic: string) => boolean
-  ensureSession: (topic: string) => void
+  ensureSession: (topic: string) => SpawnOutcome
   paneInFlight: (topic: string) => boolean
   installedVersion?: () => string | undefined
   liveSessions?: () => Map<string, LiveClaudeSession>
@@ -75,8 +76,9 @@ export function createUpdateRestarts({
       deferred.delete(topic)
       attempted.set(topic, installed)
       killSession(st, topic)
-      if (action === 'restart') {
-        ensureSession(topic)
+      // A start that fails has already said so in the topic, and the next message retries it
+      const resumed = action === 'restart' && ensureSession(topic) === 'spawned'
+      if (resumed) {
         void sayIn(
           String(GROUP_CHAT_ID),
           topic,
@@ -85,7 +87,7 @@ export function createUpdateRestarts({
       }
       saveRegistry()
       log(
-        `update: topic ${topic} "${st.name}" ${action === 'restart' ? 'restarted and resumed' : 'stopped; resumes on its next message'} ` +
+        `update: topic ${topic} "${st.name}" ${resumed ? 'restarted and resumed' : 'stopped; resumes on its next message'} ` +
         `(claude ${claude?.version} -> ${installed})`,
       )
     }

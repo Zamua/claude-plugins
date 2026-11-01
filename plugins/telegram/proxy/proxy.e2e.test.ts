@@ -15,6 +15,7 @@ const OPERATOR = 4242
 const RESUMED = '11111111-1111-4111-8111-111111111111'
 const MISSING = '22222222-2222-4222-8222-222222222222'
 const PROXIED = '33333333-3333-4333-8333-333333333333'
+const STUCK = '44444444-4444-4444-8444-444444444444'
 
 const FAKE_TMUX = `#!/usr/bin/env bash
 live="$HOME/fake/live"; touch "$live"
@@ -32,6 +33,9 @@ case "$1" in
         *) shift ;;
       esac
     done
+    echo "$name" >> "$HOME/fake/attempts"
+    # A session named in fail-spawn cannot be created
+    if grep -qx "$name" "$HOME/fake/fail-spawn" 2>/dev/null; then echo "no server running" >&2; exit 1; fi
     echo "$name" >> "$live"
     { echo "session=$name"; printf '%s\\n' "\${envs[@]}"; echo; } >> "$HOME/fake/spawns"
     # A fresh conversation writes its transcript, as Claude does on its first turn
@@ -188,6 +192,11 @@ function press(thread: number, data: string) {
 type Button = { text: string; callback_data: string }
 const buttons = (call: Call | undefined): Button[] => (call?.body.reply_markup?.inline_keyboard ?? []).flat()
 
+const attempts = (session: string) =>
+  existsSync(join(home, 'fake', 'attempts'))
+    ? readFileSync(join(home, 'fake', 'attempts'), 'utf8').split('\n').filter(line => line === session).length
+    : 0
+
 const spawns = () =>
   existsSync(join(home, 'fake', 'spawns'))
     ? readFileSync(join(home, 'fake', 'spawns'), 'utf8').split('\n\n').filter(Boolean).map(block => {
@@ -227,6 +236,8 @@ beforeAll(async () => {
   mkdirSync(join(home, '.claude', 'projects', 'p'), { recursive: true })
   writeFileSync(join(home, '.claude', 'projects', 'p', `${RESUMED}.jsonl`), '{}\n')
   writeFileSync(join(home, '.claude', 'projects', 'p', `${PROXIED}.jsonl`), '{}\n')
+  writeFileSync(join(home, '.claude', 'projects', 'p', `${STUCK}.jsonl`), '{}\n')
+  writeFileSync(join(home, 'fake', 'fail-spawn'), 'claude-stuck-53\n')
   mkdirSync(state, { recursive: true })
   // A harness topic file that cannot be read must not keep the proxy from booting
   writeFileSync(join(state, 'localgen-topics.json'), '{"version":1,"topics":[')
@@ -235,6 +246,10 @@ beforeAll(async () => {
     '44': { tmux_session: 'claude-gone-44', thread_id: 44, name: 'gone', spawned_at: 1, claude_session_id: MISSING },
     '46': {
       tmux_session: 'claude-proxied-46', thread_id: 46, name: 'proxied', spawned_at: 1, claude_session_id: PROXIED,
+      route: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', ultracode: false },
+    },
+    '53': {
+      tmux_session: 'claude-stuck-53', thread_id: 53, name: 'stuck', spawned_at: 1, claude_session_id: STUCK,
       route: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', ultracode: false },
     },
   }))
@@ -382,6 +397,17 @@ describe('the proxy, end to end', () => {
     send(49, 'after the crash')
     const next = await fetch(`${proxyUrl}/poll?topic=49`, { signal: AbortSignal.timeout(5_000) }).then(r => r.json())
     expect(next.content).toContain('after the crash')
+  }, 20_000)
+
+  test('a proxied topic whose agent cannot start tries again on the next message, not on a timer', async () => {
+    send(53, 'hello?')
+    await until('the spawn failure notice', () => said(53, /^Could not start this topic's agent/))
+    await Bun.sleep(2_000)
+    expect(attempts('claude-stuck-53')).toBe(1)
+    send(53, 'still there?')
+    await until('a second attempt', () => attempts('claude-stuck-53') === 2)
+    await Bun.sleep(1_000)
+    expect(attempts('claude-stuck-53')).toBe(2)
   }, 20_000)
 
   test('a square tag posts the root and a breadcrumb, and the peer can poll it and reply', async () => {
@@ -700,6 +726,24 @@ describe('the proxy, end to end', () => {
     await Bun.sleep(1000)
     expect(spawns().filter(s => s.session === 'claude-47')).toHaveLength(2)
     expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).toContain('claude-47')
+  }, 30_000)
+
+  test('an update restart whose agent cannot start again does not claim it resumed', async () => {
+    send(52, 'hi')
+    const first = await until('topic 52 to spawn', () => spawns().find(s => s.session === 'claude-52'))
+    await fetch(`${proxyUrl}/poll?topic=52`)
+    writeFileSync(join(home, 'fake', 'fail-spawn'), 'claude-stuck-53\nclaude-52\n')
+    // Another live process stands in for this session, so topic 47's record stays as it is
+    const record = (status: string) => writeFileSync(join(home, '.claude', 'sessions', `${proxy.pid}.json`), JSON.stringify({
+      pid: proxy.pid, sessionId: first.env.TG_CLAUDE_SESSION_ID, version: '2.1.300', status, statusUpdatedAt: Date.now(), startedAt: 1,
+    }))
+    record('busy')
+    const log = () => readFileSync(join(root, 'proxy.log'), 'utf8')
+    await until('the update to wait for the turn', () => /topic 52 .* runs claude 2\.1\.300 \(busy\)/.test(log()))
+    record('idle')
+    await until('the spawn failure notice', () => said(52, /^Could not start this topic's agent/))
+    await Bun.sleep(1_000)
+    expect(said(52, /updated to Claude Code/)).toBeUndefined()
   }, 30_000)
 
   // Runs last: it stops the proxy.
