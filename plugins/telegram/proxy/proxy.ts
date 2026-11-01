@@ -154,7 +154,6 @@ const secrets = createSecretDrop({
 // Telegram Bot API adapter with Claude topics; its session identity, model
 // catalog, route, and persistence are deliberately separate.
 const antigravity = createAntigravityHarness({
-  api: bot.api,
   chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
   mayLockTopic,
@@ -165,7 +164,6 @@ const antigravityHarness = antigravity.harness
 // model, no route or usage, persisted in its own file. It shares only the
 // Telegram Bot API adapter with the other two.
 const opencodeHarness = createOpencodeHarness({
-  api: bot.api,
   chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
   mayLockTopic,
@@ -175,7 +173,6 @@ const opencodeHarness = createOpencodeHarness({
 // text message is an image prompt POSTed to the qwen-image server and the PNG
 // comes back into the same thread.
 const localgenHarness = createLocalgenHarness({
-  api: bot.api,
   chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
   mayLockTopic,

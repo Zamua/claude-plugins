@@ -102,12 +102,12 @@ buttons' intents, and `answer` / `update` / `clearActions`). A transport without
 buttons could render the same intents as numbered text. The pickers' paging and
 expiry and the legacy switch-back live in `chat/domain/pickers.ts`.
 
-Outbound traffic goes through the port: the MCP's outbound routes, every proxy
-notice (`sayIn`), spawn and turn-failed notices, reminders, the square, the
-`/secret` drop, `/ask`, topic creation, the command menu, the route and
-Antigravity pickers and the permission prompt. Still on grammy directly: the
-harness fronts' typing indicators, messages and photos, and inbound updates
-(including the gate in front of every button press).
+All outbound traffic goes through the port: the MCP's outbound routes, every
+proxy notice (`sayIn`), spawn and turn-failed notices, reminders, the square,
+the `/secret` drop, `/ask`, topic creation, the command menu, the pickers, the
+permission prompt, and the harness fronts' typing indicators, notices and
+photos. Still on grammy directly: inbound updates, including the gate in front
+of every button press.
 
 The MCP's `format: "markdownv2"` is the Telegram dialect the agent writes itself;
 the port carries it as `format: 'markdown'`, and the adapter's capabilities name

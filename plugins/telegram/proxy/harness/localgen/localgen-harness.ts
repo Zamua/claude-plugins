@@ -1,11 +1,9 @@
 // The localgen harness: a locked topic's text messages are image prompts for the
 // local qwen-image server, and the PNG comes back into the same thread.
-import { InputFile } from 'grammy'
 import { JsonTopicRepository } from '../json-topic-repository'
 import { QwenImageClient } from './qwen-image-client'
-import { MAX_CHUNK_LIMIT, threadOf } from '../../telegram/telegram-messages'
 import { LocalgenTopicService } from './localgen-topic-service'
-import { GROUP_CHAT_ID, LOCALGEN_START_CMD, LOCALGEN_TOPICS_FILE, LOCALGEN_URL } from '../../config'
+import { LOCALGEN_START_CMD, LOCALGEN_TOPICS_FILE, LOCALGEN_URL } from '../../config'
 import { localgenTopic, localgenTopicFromRecord } from './domain/localgen-topic'
 import type { LocalgenTopic } from './domain/localgen-topic'
 import { log, reason } from '../../log'
@@ -17,7 +15,7 @@ import type { HarnessPorts, TopicHarnessAdapter } from '../topic-harness-adapter
 // /localgen [name]: lock the current fresh topic to the image generator.
 const LOCALGEN_RE = /^\/localgen(?:@\w+)?(?:\s+(.+?))?\s*$/
 
-export function createLocalgenHarness({ api, sayIn, mayLockTopic }: HarnessPorts): TopicHarnessAdapter {
+export function createLocalgenHarness({ chat, sayIn, mayLockTopic }: HarnessPorts): TopicHarnessAdapter {
   const localgenRepository = openOrSetAside('localgen topics', LOCALGEN_TOPICS_FILE, () =>
     new JsonTopicRepository<LocalgenTopic>(LOCALGEN_TOPICS_FILE, 'localgen', localgenTopicFromRecord), log)
   const localgenService = new LocalgenTopicService(
@@ -25,33 +23,28 @@ export function createLocalgenHarness({ api, sayIn, mayLockTopic }: HarnessPorts
     new QwenImageClient(LOCALGEN_URL, log),
     {
       uploading(topic) {
-        void api.sendChatAction(String(GROUP_CHAT_ID), 'upload_photo', threadOf(topic)).catch(() => {})
+        void chat.typing(topic, 'upload').catch(() => {})
       },
       // Telegram refuses a photo over 10 MB or with a side past its limits; the
       // document form carries any PNG, so it is the fallback as well as `raw`.
       async photo(topic, png, filename, caption, asDocument) {
-        const file = new InputFile(png, filename)
-        const opts = { ...threadOf(topic), caption }
+        const file = { bytes: png, name: filename }
         if (!asDocument) {
           try {
-            await api.sendPhoto(String(GROUP_CHAT_ID), file, opts)
+            await chat.sendFile(topic, { file, kind: 'photo', caption })
             return
           } catch (error) {
             log(`localgen sendPhoto failed for topic ${topic}, sending as document: ${error}`)
           }
         }
-        await api.sendDocument(String(GROUP_CHAT_ID), new InputFile(png, filename), opts)
+        await chat.sendFile(topic, { file, kind: 'document', caption })
       },
       async queued(topic, position) {
-        await api.sendMessage(String(GROUP_CHAT_ID), `queued (#${position})`, threadOf(topic))
+        await chat.send(topic, { text: `queued (#${position})` })
       },
       async error(topic, text) {
         log(`localgen failed for topic ${topic}: ${text}`)
-        await api.sendMessage(
-          String(GROUP_CHAT_ID),
-          `⚠️ ${text.slice(0, MAX_CHUNK_LIMIT - 3)}`,
-          threadOf(topic),
-        )
+        await chat.send(topic, { text: `⚠️ ${text.slice(0, chat.capabilities.maxMessageLength - 3)}` })
       },
     },
     LOCALGEN_START_CMD,

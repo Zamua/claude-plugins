@@ -10,7 +10,6 @@ import { HerdrAntigravityRuntime } from './herdr-antigravity-runtime'
 import { JsonTopicRepository } from '../json-topic-repository'
 import type { Action, ActionPress, Actions } from '../../chat/domain/actions'
 import { formatTime, MODELS_PER_PAGE, PICKER_TTL_MS } from '../../chat/domain/pickers'
-import { MAX_CHUNK_LIMIT, threadOf } from '../../telegram/telegram-messages'
 import type { AntigravityUsageWindow } from './antigravity-ports'
 import { AntigravityTopicService } from './antigravity-topic-service'
 import {
@@ -18,7 +17,6 @@ import {
   ANTIGRAVITY_BIN,
   ANTIGRAVITY_ENABLED,
   ANTIGRAVITY_TOPICS_FILE,
-  GROUP_CHAT_ID,
   HERDR_BIN,
   HERDR_LAUNCH_SCRIPT,
   PLUGIN_ROOT,
@@ -37,7 +35,7 @@ import type { HarnessPorts, TopicHarnessAdapter } from '../topic-harness-adapter
 // /antigravity: lock the current fresh topic to the Antigravity harness.
 const ANTIGRAVITY_RE = /^\/antigravity(?:@\w+)?\s*$/
 
-export function createAntigravityHarness({ api, chat, sayIn, mayLockTopic }: HarnessPorts) {
+export function createAntigravityHarness({ chat, sayIn, mayLockTopic }: HarnessPorts) {
   const antigravityRepository = openOrSetAside('Antigravity topics', ANTIGRAVITY_TOPICS_FILE, () =>
     new JsonTopicRepository<AntigravityTopic>(ANTIGRAVITY_TOPICS_FILE, 'Antigravity', antigravityTopicFromRecord), log)
   const antigravityRuntime = ANTIGRAVITY_ENABLED
@@ -48,15 +46,11 @@ export function createAntigravityHarness({ api, chat, sayIn, mayLockTopic }: Har
     antigravityRuntime,
     {
       typing(topic) {
-        void api.sendChatAction(String(GROUP_CHAT_ID), 'typing', threadOf(topic)).catch(() => {})
+        void chat.typing(topic, 'text').catch(() => {})
       },
       async error(topic, text) {
         log(`Antigravity turn failed for topic ${topic}: ${text}`)
-        await api.sendMessage(
-          String(GROUP_CHAT_ID),
-          `⚠️ ${text.slice(0, MAX_CHUNK_LIMIT - 3)}`,
-          threadOf(topic),
-        )
+        await chat.send(topic, { text: `⚠️ ${text.slice(0, chat.capabilities.maxMessageLength - 3)}` })
         if (/limit|quota|resource exhausted/i.test(text)) void refreshAntigravityUsage(true).catch(() => {})
       },
     },
