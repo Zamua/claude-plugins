@@ -6,7 +6,7 @@ export type ClaudeSpawnSpec = {
   topic: string
   label: string
   sessionName: string
-  muxKind: 'tmux' | 'herdr'
+  muxKind: 'tmux' | 'herdr' | 'hc'
   spawnDir: string
   proxyUrl: string
   squareTopic: string

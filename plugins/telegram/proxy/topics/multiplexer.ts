@@ -5,7 +5,7 @@ import type { AgentRuntime, HerdrPane } from '../shared/herdr-panes'
 export type { AgentRuntime }
 
 export interface MultiplexerPort {
-  readonly kind: 'tmux' | 'herdr'
+  readonly kind: 'tmux' | 'herdr' | 'hc'
   liveSessions(): Set<string>
   runtime(session: string): AgentRuntime
   prompt(session: string, text: string): boolean

@@ -7,7 +7,7 @@ import { launchProfileNeedsRefresh } from './domain/launch-profile'
 import { topicRouteFromRecord } from '../routing/domain/model-routing'
 import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-routing'
 import { log } from '../log'
-import { mux } from './mux'
+import { muxes } from './mux'
 import { nextAgent } from './domain/agent'
 import { nextRoute } from '../routing/domain/route-flow'
 import { getTopic, topicNames, topics } from './state'
@@ -59,7 +59,7 @@ export function saveRegistry(): void {
 // sessions) and forget the rest (dead sessions).
 export function loadAndReconcileRegistry(): void {
   const raw = readRegistryFile(REGISTRY_FILE, log)
-  const live = mux.liveSessions()
+  const live = muxes.liveSessions()
   for (const [topic, entry] of Object.entries(raw)) {
     const st = getTopic(topic)
     st.threadId = entry.thread_id ?? undefined

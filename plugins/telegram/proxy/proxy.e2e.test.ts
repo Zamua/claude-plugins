@@ -16,6 +16,8 @@ const RESUMED = '11111111-1111-4111-8111-111111111111'
 const MISSING = '22222222-2222-4222-8222-222222222222'
 const PROXIED = '33333333-3333-4333-8333-333333333333'
 const STUCK = '44444444-4444-4444-8444-444444444444'
+const ON_HC_PROXIED = '55555555-5555-4555-8555-555555555555'
+const MOVING = '66666666-6666-4666-8666-666666666666'
 
 const FAKE_TMUX = `#!/usr/bin/env bash
 live="$HOME/fake/live"; touch "$live"
@@ -111,6 +113,64 @@ cp "$in" "$prev"
 `
 const FAKE_WHISPER = `#!/usr/bin/env bash
 prev=''; for a in "$@"; do [ "$prev" = -f ] && cat "$a"; prev="$a"; done
+`
+// A herdr-core stand-in: terminals live in a JSON file. `run` records the spawn as
+// the tmux stand-in does, reading the variables the launcher's script exports, and
+// leaves an agent that has reported `done`. `connect` answers the API calls the
+// proxy makes.
+const FAKE_HC = `#!/usr/bin/env python3
+import json, os, re, subprocess, sys
+home = os.environ['HOME']; fake = os.path.join(home, 'fake'); st = os.path.join(fake, 'hc.json')
+state = json.load(open(st)) if os.path.exists(st) else {'terminals': [], 'n': 0}
+def save(): json.dump(state, open(st, 'w'))
+def find(ref): return next((t for t in state['terminals'] if ref in (t['address'], t['name'])), None)
+a = sys.argv[1:]
+open(os.path.join(fake, 'hc.calls'), 'a').write(' '.join(a) + '\\n')
+if a[0] == 'ls':
+    label = a[a.index('--label') + 1].split('=', 1) if '--label' in a else None
+    ts = [t for t in state['terminals'] if not label or t['labels'].get(label[0]) == label[1]]
+    print(json.dumps({'terminals': [{'address': t['address'], 'state': t['state']} for t in ts]}))
+elif a[0] == 'rm':
+    state['terminals'] = [t for t in state['terminals'] if t['address'] != a[1]]; save()
+elif a[0] == 'run':
+    i, labels, name, cmd = 1, {}, None, []
+    while i < len(a):
+        if a[i] in ('--name', '--cwd', '--label'):
+            if a[i] == '--name': name = a[i + 1]
+            if a[i] == '--label': k, v = a[i + 1].split('=', 1); labels[k] = v
+            i += 2
+        elif a[i].startswith('--'): i += 1
+        else: cmd = a[i:]; break
+    script = cmd[-1]
+    env = subprocess.run(['bash', '-c', 'eval "$(grep ^export "$1")"; env', '_', script], env={'HOME': home}, capture_output=True, text=True).stdout
+    os.remove(script)
+    keep = [l for l in env.splitlines() if l.startswith(('TG_', 'TELEGRAM_'))]
+    open(os.path.join(fake, 'spawns'), 'a').write('session=' + labels['session'] + '\\n' + '\\n'.join(keep + ['TG_MUX=hc']) + '\\n\\n')
+    sid = re.search(r'^TG_CLAUDE_SESSION_ID=(.*)$', env, re.M).group(1)
+    if not re.search(r'^TG_RESUME=1$', env, re.M):
+        open(os.path.join(home, '.claude', 'projects', 'p', sid + '.jsonl'), 'w').write('{}\\n')
+    state['n'] += 1
+    state['terminals'].append({'address': 't%d' % state['n'], 'name': name, 'state': 'live', 'labels': labels,
+                               'reported': True, 'status': {'state': 'done'}, 'foreground': {'name': 'claude'}})
+    save()
+    print(json.dumps({'address': 't%d' % state['n'], 'state': 'live'}))
+elif a[0] == 'connect':
+    for line in sys.stdin:
+        req = json.loads(line); m, p = req['method'], req.get('params', {})
+        t = find(p.get('terminal', ''))
+        open(os.path.join(fake, 'hc.calls'), 'a').write('rpc %s %s\\n' % (m, p.get('terminal', '')))
+        result = None
+        if m == 'terminal.list': result = {'terminals': [x for x in state['terminals'] if x['state'] == 'live']}
+        elif m == 'terminal.read' and t: result = {'text': ''}
+        elif m == 'terminal.send' and t:
+            open(os.path.join(fake, 'hc.sent'), 'a').write(p['text'] + '\\n')
+            result = {'started': True}
+        elif m == 'terminal.kill' and t: t['state'] = 'finished'; save(); result = t
+        elif m == 'terminal.rm' and t and t['state'] != 'live':
+            state['terminals'].remove(t); save(); result = {'removed': t['address']}
+        reply = {'jsonrpc': '2.0', 'id': req['id']}
+        reply.update({'result': result} if result is not None else {'error': {'code': -32000, 'message': 'no terminal'}})
+        print(json.dumps(reply), flush=True)
 `
 // A 1x1 PNG, as the qwen-image server would return one.
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
@@ -234,7 +294,7 @@ beforeAll(async () => {
 
   mkdirSync(join(home, '.local', 'bin'), { recursive: true })
   mkdirSync(join(home, 'fake'))
-  for (const [name, body] of [['tmux', FAKE_TMUX], ['herdr', FAKE_HERDR], ['opencode', FAKE_OPENCODE], ['ffmpeg', FAKE_FFMPEG], ['whisper-cli', FAKE_WHISPER]]) {
+  for (const [name, body] of [['tmux', FAKE_TMUX], ['herdr', FAKE_HERDR], ['opencode', FAKE_OPENCODE], ['ffmpeg', FAKE_FFMPEG], ['whisper-cli', FAKE_WHISPER], ['hc', FAKE_HC]]) {
     writeFileSync(join(home, '.local', 'bin', name), body)
     chmodSync(join(home, '.local', 'bin', name), 0o700)
   }
@@ -249,6 +309,10 @@ beforeAll(async () => {
   writeFileSync(join(home, '.claude', 'projects', 'p', `${PROXIED}.jsonl`), '{}\n')
   writeFileSync(join(home, '.claude', 'projects', 'p', `${STUCK}.jsonl`), '{}\n')
   writeFileSync(join(home, 'fake', 'fail-spawn'), 'claude-stuck-53\n')
+  writeFileSync(join(home, '.claude', 'projects', 'p', `${ON_HC_PROXIED}.jsonl`), '{}\n')
+  writeFileSync(join(home, '.claude', 'projects', 'p', `${MOVING}.jsonl`), '{}\n')
+  // A session still running under tmux for a topic now configured onto hc
+  writeFileSync(join(home, 'fake', 'live'), 'claude-moving-63\n')
   writeFileSync(join(home, 'fake', 'whisper.bin'), '')
   mkdirSync(join(root, 'keys'), { mode: 0o700 })
   writeFileSync(join(root, 'keys', 'telegram-ask-token'), `${ASK_TOKEN}\n`, { mode: 0o600 })
@@ -266,6 +330,11 @@ beforeAll(async () => {
       tmux_session: 'claude-stuck-53', thread_id: 53, name: 'stuck', spawned_at: 1, claude_session_id: STUCK,
       route: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', ultracode: false },
     },
+    '62': {
+      tmux_session: '', thread_id: 62, name: '', spawned_at: 0, claude_session_id: ON_HC_PROXIED,
+      route: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', ultracode: false },
+    },
+    '63': { tmux_session: 'claude-moving-63', thread_id: 63, name: 'moving', spawned_at: 1, claude_session_id: MOVING },
   }))
 
   api = Bun.serve({
@@ -348,6 +417,8 @@ beforeAll(async () => {
       TELEGRAM_TOPICS_SECRETS_DIR: join(root, 'keys'),
       // Stand-ins or absent binaries, so nothing here runs a real CLI or reaches a real Herdr
       TELEGRAM_HERDR_BIN: join(home, '.local', 'bin', 'herdr'),
+      TELEGRAM_HC_BIN: join(home, '.local', 'bin', 'hc'),
+      TELEGRAM_TOPICS_HC_TOPICS: '61,62,63',
       TELEGRAM_OPENCODE_BIN: join(home, '.local', 'bin', 'opencode'),
       TELEGRAM_OPENCODE_PROJECT_DIR: join(root, 'oc-project'),
       LOCALGEN_PORT: String(qwenImage.port),
@@ -954,6 +1025,49 @@ describe('the proxy, end to end', () => {
     expect(turn.content.startsWith('[asked by voice, auto-transcribed; may contain errors]\nexplain this paper')).toBeTrue()
     expect(turn.meta.voice_transcribed).toBe('1')
     expect(readdirSync(join(state, 'inbox')).filter(f => f.includes('audio'))).toEqual([])
+  }, 20_000)
+
+  const hcCalls = () => (existsSync(join(home, 'fake', 'hc.calls')) ? readFileSync(join(home, 'fake', 'hc.calls'), 'utf8') : '')
+  const hcTerminals = () => JSON.parse(readFileSync(join(home, 'fake', 'hc.json'), 'utf8')).terminals as Array<{ name: string; state: string; labels: Record<string, string> }>
+
+  test('a topic configured onto hc spawns its Claude there, named by topic and labelled with its session', async () => {
+    send(61, 'hello hc')
+    const spawned = await until('topic 61 to spawn under hc', () => spawns().find(s => s.session === 'claude-61'))
+    expect(spawned.env.TG_MUX).toBe('hc')
+    expect(spawned.env.TELEGRAM_TOPIC_ID).toBe('61')
+    expect(hcTerminals().find(t => t.name === 'tg-61')?.labels).toEqual({ session: 'claude-61', topic: '61' })
+    expect(registry()['61'].tmux_session).toBe('claude-61')
+    const turn = await fetch(`${proxyUrl}/poll?topic=61`).then(r => r.json())
+    expect(turn.content).toContain('hello hc')
+  }, 20_000)
+
+  test('/relaunch on an hc topic ends its terminal through hc and resumes the same conversation there', async () => {
+    const before = spawns().filter(s => s.session === 'claude-61')
+    send(61, '/relaunch')
+    const again = await until('topic 61 to respawn', () => spawns().filter(s => s.session === 'claude-61')[before.length])
+    expect(again.env.TG_RESUME).toBe('1')
+    expect(again.env.TG_CLAUDE_SESSION_ID).toBe(before[0].env.TG_CLAUDE_SESSION_ID)
+    expect(hcCalls()).toMatch(/^rpc terminal\.kill t\d+$/m)
+    expect(hcTerminals().filter(t => t.name === 'tg-61').map(t => t.state)).toEqual(['live'])
+  }, 20_000)
+
+  test('a proxied topic on hc gets its turn typed in once Claude reports done', async () => {
+    send(62, 'over hc')
+    await until('topic 62 to resume under hc', () => spawns().find(s => s.session === 'claude-62' && s.env.TG_MUX === 'hc'))
+    const typed = await until('the turn to be sent through hc', () => {
+      const file = join(home, 'fake', 'hc.sent')
+      return existsSync(file) && readFileSync(file, 'utf8').includes('over hc') && readFileSync(file, 'utf8')
+    })
+    expect(typed).toContain('<channel source="plugin:telegram:telegram"')
+  }, 20_000)
+
+  test('a topic moved onto hc stops where it ran and resumes the same conversation under hc', async () => {
+    send(63, 'moved')
+    const moved = await until('topic 63 to resume under hc', () => spawns().find(s => s.session === 'claude-moving-63' && s.env.TG_MUX === 'hc'))
+    expect(moved.env.TG_RESUME).toBe('1')
+    expect(moved.env.TG_CLAUDE_SESSION_ID).toBe(MOVING)
+    expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).not.toContain('claude-moving-63')
+    expect(proxyLog()).toContain('moving topic 63 from tmux to hc')
   }, 20_000)
 
   // Runs last: it stops the proxy.

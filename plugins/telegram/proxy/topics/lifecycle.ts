@@ -36,7 +36,7 @@ import { nextAgent, sessionOf } from './domain/agent'
 import type { AgentEvent } from './domain/agent'
 import { nextTurn } from './domain/pane-turn'
 import type { PaneTurn } from './domain/pane-turn'
-import { mux } from './mux'
+import { muxes } from './mux'
 import { saveRegistry } from './registry'
 import { currentRoute, getTopic, legacySessionNameFor, sessionNameFor, topicNames, topics } from './state'
 import type { InboundMsg, TopicState } from './state'
@@ -135,6 +135,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
   // bare mux.kill would be handed to the dying process and lost.
   function killSession(st: TopicState, topic: string): boolean {
     const session = sessionOf(st.agent)
+    const mux = muxes.forTopic(topic)
     const killed = !!session && mux.liveSessions().has(session) && mux.kill(session)
     apply(topic, st, { type: 'stopped' })
     const pump = panePumps.get(topic)
@@ -187,7 +188,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     ensureSession(topic, 'timer')
     const state = panePumpState(topic)
     const session = sessionOf(st.agent)
-    const runtime = session ? mux.runtime(session) : 'missing'
+    const runtime = session ? muxes.forTopic(topic).runtime(session) : 'missing'
 
     state.turn = nextTurn(state.turn, { type: 'sampled', runtime, now: Date.now() })
     if (state.turn.state !== 'settled') {
@@ -213,7 +214,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
       return
     }
 
-    if (!mux.prompt(session, renderPaneTurn(pending.message))) {
+    if (!muxes.forTopic(topic).prompt(session, renderPaneTurn(pending.message))) {
       schedulePanePump(topic, 500)
       return
     }
@@ -290,8 +291,17 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     // The square hosts conversations, not a Claude of its own.
     if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return 'skipped'
     const st = getTopic(topic)
-    const live = mux.liveSessions()
+    const mux = muxes.forTopic(topic)
     const session = sessionOf(st.agent)
+    // A topic moved to another multiplexer stops there and resumes here, never runs
+    // twice; its dying MCP's long-polls are dropped, as killSession drops them.
+    const moved = session ? muxes.elsewhere(topic, session) : []
+    for (const old of moved) {
+      log(`moving topic ${topic} from ${old.kind} to ${mux.kind}: stopping ${session} there`)
+      if (session) old.kill(session)
+    }
+    if (moved.length) apply(topic, st, { type: 'stopped' })
+    const live = mux.liveSessions()
     const legacy = legacySessionNameFor(topic)
     const outcome = apply(topic, st, {
       type: 'wanted',
@@ -330,7 +340,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
         topic,
         label,
         sessionName: name,
-        muxKind: mux.kind,
+        muxKind: muxes.forTopic(topic).kind,
         spawnDir: SPAWN_DIR,
         proxyUrl: PROXY_URL,
         squareTopic: SQUARE_TOPIC,
@@ -361,7 +371,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
         `(claude ${st.claudeSessionId}; ${route.provider}/${route.model}; ${route.effort}; ` +
         `aux ${auxiliaryModel}; subagents locked; ultracode ${route.ultracode ? 'on' : 'off'}; ` +
         `compact ${autoCompactWindow(route.provider, routeModel?.contextWindow) ?? 'auto'}) ` +
-        `-> ${mux.kind} ${name}`,
+        `-> ${muxes.forTopic(topic).kind} ${name}`,
       )
       return 'spawned'
     } catch (e) {

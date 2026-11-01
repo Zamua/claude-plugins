@@ -9,7 +9,7 @@ import { SQUARE_META } from '../shared/domain/turn-meta'
 import { parseSquareReply, parseSquareTag } from '../http/requests'
 import { json } from '../http/response'
 import { log } from '../log'
-import { mux } from '../topics/mux'
+import { muxes } from '../topics/mux'
 import { topicNames, topics } from '../topics/state'
 import { convs, saveConvs } from './conversations'
 
@@ -27,7 +27,7 @@ export function createSquare({ chat, harnessLocked, ensureSession, enqueue }: Sq
   // Topic directory: every known topic (live or dormant) addressable by slug.
   // The square itself and never-spawned unnamed topics are excluded.
   function topicDirectory(): Array<{ slug: string; name: string; topic: string; live: boolean }> {
-    const live = mux.liveSessions()
+    const live = muxes.liveSessions()
     const out: Array<{ slug: string; name: string; topic: string; live: boolean }> = []
     for (const [topic, st] of topics) {
       if (topic === SQUARE_TOPIC || harnessLocked(topic)) continue

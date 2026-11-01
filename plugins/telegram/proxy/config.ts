@@ -142,6 +142,19 @@ export const MUX_KIND = resolveMux()
 // Herdr, which hosts herdr-backed Claude topics and every Antigravity and OpenCode topic.
 export const HERDR_BIN = process.env.TELEGRAM_HERDR_BIN ||
   (existsSync('/opt/homebrew/bin/herdr') ? '/opt/homebrew/bin/herdr' : 'herdr')
+// herdr-core (`hc`): topics listed here run under it, the rest under the multiplexer
+// above, so topics move one at a time. HC_SESSION and XDG_STATE_HOME in the
+// proxy's environment pick the hc session, as for the hc CLI itself.
+export const HC_BIN = process.env.TELEGRAM_HC_BIN ||
+  (existsSync(join(homedir(), '.local', 'bin', 'hc')) ? join(homedir(), '.local', 'bin', 'hc') : 'hc')
+export const HC_TOPICS: ReadonlySet<string> = new Set(
+  (process.env.TELEGRAM_TOPICS_HC_TOPICS ?? '').split(',').map(t => t.trim()).filter(t => {
+    if (!t) return false
+    if (t === 'general' || /^\d+$/.test(t)) return true
+    log(`TELEGRAM_TOPICS_HC_TOPICS: "${t}" is neither a thread id nor general; ignored`)
+    return false
+  }),
+)
 
 export const PROXY_URL = `http://localhost:${PORT}`
 

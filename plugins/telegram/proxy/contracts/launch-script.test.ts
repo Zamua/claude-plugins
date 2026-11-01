@@ -40,6 +40,24 @@ case "$1" in
     env -i HOME="$HOME" "\${envs[@]}" bash -c "$cmd" ;;
 esac
 `,
+  hc: `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$HOME/fake/calls"
+env > "$HOME/fake/hc.env"
+case "$1" in
+  ls) cat "$HOME/fake/terminals.json" ;;
+  run)
+    [ -e "$HOME/fake/no-core" ] && exit 1
+    shift; argv=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name|--cwd|--label) shift 2 ;;
+        --*) shift ;;
+        *) argv+=("$1"); shift ;;
+      esac
+    done
+    env -i HOME="$HOME" "\${argv[@]}" ;;
+esac
+`,
   seq: '#!/bin/sh\nexit 0\n',
   claude: `#!/usr/bin/env bash
 printf '%s\\n' "$@" > "$HOME/fake/claude.args"
@@ -71,7 +89,7 @@ const baseSpec = (over: Partial<ClaudeSpawnSpec> = {}): ClaudeSpawnSpec => ({
 // Variables the launcher consumes itself; every other one must reach the pane.
 const LAUNCHER_ONLY = new Set(['TG_SESSION', 'TG_MUX', 'TG_SPAWN_DIR'])
 
-function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false) {
+function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false, terminals: unknown[] = []) {
   const home = mkdtempSync(join(tmpdir(), 'tg-launch-'))
   const bin = join(home, '.local', 'bin')
   const fake = join(home, 'fake')
@@ -82,11 +100,15 @@ function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false) 
     chmodSync(join(bin, name), 0o700)
   }
   writeFileSync(join(fake, 'panes.json'), JSON.stringify({ result: { panes } }))
-  if (tmuxDown) writeFileSync(join(fake, 'no-server'), '')
+  if (tmuxDown) {
+    writeFileSync(join(fake, 'no-server'), '')
+    writeFileSync(join(fake, 'no-core'), '')
+  }
+  writeFileSync(join(fake, 'terminals.json'), JSON.stringify({ terminals }))
   const spawnEnv = claudeSpawnEnv(spec)
   const result = spawnSync('bash', [scriptPath], {
     encoding: 'utf8',
-    env: { HOME: home, USER: 'test', PATH: '/usr/bin:/bin', TMPDIR: home, ...spawnEnv },
+    env: { HOME: home, USER: 'test', PATH: '/usr/bin:/bin', TMPDIR: home, TELEGRAM_BOT_TOKEN: 'bot-token', ...spawnEnv },
   })
   const read = (file: string) => (existsSync(join(fake, file)) ? readFileSync(join(fake, file), 'utf8') : '')
   const paneEnv = Object.fromEntries(read('claude.env').split('\n').filter(Boolean).map(line => {
@@ -99,11 +121,12 @@ function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false) 
     args: read('claude.args').split('\n').slice(0, -1),
     paneEnv,
     calls: read('calls').trim().split('\n').filter(Boolean),
+    hcEnv: read('hc.env'),
   }
 }
 
 describe('launch-topic.sh', () => {
-  for (const mux of ['herdr', 'tmux'] as const) {
+  for (const mux of ['herdr', 'tmux', 'hc'] as const) {
     describe(`under ${mux}`, () => {
       test('every per-topic variable the proxy sets reaches the Claude pane unchanged', () => {
         const run = launch(baseSpec({ muxKind: mux }))
@@ -183,5 +206,37 @@ describe('launch-topic.sh', () => {
     const stale = launch(baseSpec(), [{ label: 'claude-hostthis-34', pane_id: 'p0', agent_status: 'unknown' }])
     expect(stale.calls.slice(0, 2)).toEqual(['pane list', 'pane close p0'])
     expect(stale.args).toContain('--session-id')
+  })
+
+  test('hc names the terminal by topic and labels it with the session, outside any parent terminal', () => {
+    const run = launch(baseSpec({ muxKind: 'hc' }))
+    expect(run.result.status).toBe(0)
+    expect(run.calls[0]).toBe('ls --all --json --label session=claude-hostthis-34')
+    expect(run.calls[1]).toMatch(
+      /^run --bg --json --no-parent --no-notify --name tg-34 --label session=claude-hostthis-34 --label topic=34 --cwd \/tmp\/spawn dir bash \S+tg-topic-\w+$/,
+    )
+  })
+
+  test('hc leaves a live agent alone, and clears the session\'s finished terminals before starting it again', () => {
+    const live = launch(baseSpec({ muxKind: 'hc' }), [], false, [{ address: 't1', state: 'live' }])
+    expect(live.result.status).toBe(0)
+    expect(live.calls).toEqual(['ls --all --json --label session=claude-hostthis-34'])
+
+    const finished = launch(baseSpec({ muxKind: 'hc' }), [], false, [{ address: 't1', state: 'finished' }, { address: 't2', state: 'finished' }])
+    expect(finished.calls.slice(1, 3)).toEqual(['rm t1', 'rm t2'])
+    expect(finished.args).toContain('--session-id')
+  })
+
+  test('hc never gets the proxy\'s own environment, which a core it starts would hand every terminal', () => {
+    const run = launch(baseSpec({ muxKind: 'hc' }))
+    expect(run.paneEnv.TELEGRAM_TOPIC_ID).toBe('34')
+    expect(run.hcEnv).not.toContain('TELEGRAM_BOT_TOKEN')
+    expect(run.hcEnv).not.toContain('TG_KICKOFF')
+  })
+
+  test('an hc terminal that cannot start fails the launch, so the proxy reports it', () => {
+    const run = launch(baseSpec({ muxKind: 'hc' }), [], true)
+    expect(run.result.status).toBe(1)
+    expect(run.result.stderr).toContain('hc could not start terminal tg-34 for claude-hostthis-34')
   })
 })
