@@ -1,0 +1,18 @@
+{
+  "id": "ap_7f3c",
+  "topic": "16832",
+  "kind": "permission",
+  "prompt": "Allow running `bun test`?",
+  "choices": [
+    {
+      "id": "1",
+      "label": "Yes"
+    },
+    {
+      "id": "2",
+      "label": "No"
+    }
+  ],
+  "created_at": "2026-11-01T20:25:37.123Z",
+  "resolved": null
+}

@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "signature_invalid",
+    "message": "the request signature does not verify"
+  }
+}
