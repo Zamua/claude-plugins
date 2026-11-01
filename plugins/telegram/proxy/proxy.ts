@@ -100,10 +100,6 @@ import type {
   AntigravityModel,
   AntigravityTopic,
 } from './domain/antigravity-topic'
-import { OpencodeTopicService } from './application/opencode-topic-service'
-import { HerdrOpencodeRuntime } from './adapters/herdr-opencode-runtime'
-import { opencodeTopic, opencodeTopicFromRecord } from './domain/opencode-topic'
-import type { OpencodeTopic } from './domain/opencode-topic'
 import { lockRefusal } from './domain/topic-harness'
 import { RELAUNCH_META } from './domain/turn-meta'
 import { ROUTE } from './http/routes'
@@ -143,9 +139,6 @@ import {
   MODEL,
   OPENCODE_BIN,
   OPENCODE_GO_KEY_FILE,
-  OPENCODE_MODEL,
-  OPENCODE_PROJECT_DIR,
-  OPENCODE_TOPICS_FILE,
   OVERRIDE_SETTINGS,
   PID_FILE,
   PLUGIN_ROOT,
@@ -165,6 +158,7 @@ import {
 import { log, noticeFailed, reason } from './log'
 import type { TopicContext, TopicHarnessAdapter } from './harness/topic-harness-adapter'
 import { createLocalgenHarness } from './harness/localgen'
+import { createOpencodeHarness } from './harness/opencode'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
 import { mux } from './topics/mux'
@@ -203,7 +197,6 @@ const USAGE_RE = /^\/usage(?:@\w+)?\s*$/
 const ANTIGRAVITY_RE = /^\/antigravity(?:@\w+)?\s*$/
 const ROUTE_DEBOUNCE_MS = 10_000
 const lastRouteChange = new Map<string, number>()
-const LOCALCODE_RE = /^\/localcode(?:@\w+)?\s*$/
 
 // Called PER SPAWN (not once at module load) so each (re)spawn reflects the
 // CURRENT committed override-settings.json - a base-settings edit (e.g. a git
@@ -807,61 +800,11 @@ const antigravityService = new AntigravityTopicService(
 // OpenCode (localcode) is a third harness-bounded context: one local Qwen
 // model, no route or usage, persisted in its own file. It shares only the
 // Telegram Bot API adapter with the other two.
-const opencodeRepository = new JsonTopicRepository<OpencodeTopic>(OPENCODE_TOPICS_FILE, 'OpenCode', opencodeTopicFromRecord)
-const opencodeRuntime = new HerdrOpencodeRuntime(
-  OPENCODE_BIN,
-  OPENCODE_PROJECT_DIR,
-  HERDR_LAUNCH_SCRIPT,
-  PROXY_URL,
-  process.execPath,
-  join(PLUGIN_ROOT, 'server.ts'),
-  HERDR_BIN,
-  undefined,
-  undefined,
-  OPENCODE_MODEL,
-)
-// Last /send per locked OpenCode topic; the service's reply backstop reads it.
-const opencodeLastSentAt = new Map<string, number>()
-const opencodeService = new OpencodeTopicService(
-  opencodeRepository,
-  opencodeRuntime,
-  {
-    typing(topic) {
-      void bot.api.sendChatAction(String(GROUP_CHAT_ID), 'typing', threadOf(topic)).catch(() => {})
-    },
-    async error(topic, text) {
-      log(`OpenCode turn failed for topic ${topic}: ${text}`)
-      await bot.api.sendMessage(
-        String(GROUP_CHAT_ID),
-        `⚠️ ${text.slice(0, MAX_CHUNK_LIMIT - 3)}`,
-        threadOf(topic),
-      )
-    },
-    repliedSince(topic, sinceMs) {
-      return (opencodeLastSentAt.get(topic) ?? 0) >= sinceMs
-    },
-    async notice(topic, text) {
-      log(`OpenCode reply backstop for topic ${topic}: ${text.slice(0, 80)}`)
-      await bot.api.sendMessage(
-        String(GROUP_CHAT_ID),
-        `↩︎ ${text.slice(0, MAX_CHUNK_LIMIT - 2)}`,
-        threadOf(topic),
-      )
-    },
-  },
-)
-
-// Records without a Herdr session name are started at boot so an enabled
-// topic is visible without a throwaway Telegram turn.
-for (const topic of opencodeService.list()) {
-  if (topic.sessionName) continue
-  void opencodeService.start(topic.topic)
-    .then(running => log(
-      `started OpenCode topic ${topic.topic} "${topic.name}" in Herdr ` +
-      `${running.sessionName} (${running.opencodeSessionId})`,
-    ))
-    .catch(error => log(`OpenCode Herdr start failed for topic ${topic.topic}: ${error}`))
-}
+const opencodeHarness = createOpencodeHarness({
+  api: bot.api,
+  sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
+  mayLockTopic,
+})
 
 // localgen is a fourth harness-bounded context with no agent at all: every
 // text message is an image prompt POSTed to the qwen-image server and the PNG
@@ -1151,67 +1094,6 @@ async function handleAntigravityModelCommand(
   }
 }
 
-// ---- OpenCode (localcode) harness ------------------------------------------
-
-const opencodeRouteLabel = () => `OpenCode / local Qwen · ${OPENCODE_MODEL}`
-
-async function activateLocalcodeTopic(
-  chatId: string,
-  topic: string,
-  fromId: string,
-): Promise<void> {
-  if (!(await mayLockTopic(chatId, topic, fromId, 'opencode'))) return
-  const existing = opencodeService.get(topic)
-  if (existing) {
-    try {
-      const running = await opencodeService.start(topic)
-      await sayIn(
-        chatId,
-        topic,
-        `This topic is already locked to ${opencodeRouteLabel()} in Herdr workspace ` +
-        `${running.sessionName}. Session: ${running.opencodeSessionId}.`,
-      )
-    } catch (error) {
-      await sayIn(chatId, topic, `Could not start the existing OpenCode session: ${reason(error)}`)
-    }
-    return
-  }
-  const claude = getTopic(topic)
-  try {
-    const name = claude.name || topicNames.get(topic) || `localcode ${topic}`
-    opencodeService.activate(opencodeTopic(topic, name))
-    claude.name = name
-    topicNames.set(topic, name)
-    saveRegistry()
-    await sayIn(chatId, topic, 'Starting OpenCode on the local Qwen model in a persistent Herdr workspace…')
-    const running = await opencodeService.start(topic)
-    await sayIn(
-      chatId,
-      topic,
-      `Locked this topic to OpenCode / local Qwen (${OPENCODE_MODEL}) in Herdr workspace ${running.sessionName}. ` +
-      `Session: ${running.opencodeSessionId}. Other harness/provider routes are disabled here. ` +
-      'The first reply takes a few minutes while OpenCode loads its instructions.',
-    )
-  } catch (error) {
-    await sayIn(chatId, topic, `Could not enable OpenCode: ${reason(error)}`)
-  }
-}
-
-// Single-model harness: /model only reports status, there is nothing to pick.
-async function handleOpencodeModelCommand(chatId: string, topic: string, argument: string): Promise<void> {
-  const current = opencodeService.get(topic)!
-  await sayIn(
-    chatId,
-    topic,
-    `OpenCode session: ${current.opencodeSessionId ?? 'not started'}\n` +
-    `Route: ${opencodeRouteLabel()}\n` +
-    `Herdr: ${current.sessionName ?? 'not running'} (${await opencodeService.status(topic)})\n` +
-    'Harness: OpenCode (locked)\nPermissions: OpenCode defaults\n' +
-    'Context: AGENTS.md and ~/.claude/CLAUDE.md native' +
-    (argument ? '\n\nThis topic runs a single local model, so there is nothing to pick.' : ''),
-  )
-}
-
 // Same kill-then-nudge sequence as a provider-route recovery: killSession
 // drains the dying MCP's long-polls first so the nudge cannot be handed to it
 // and lost. The nudge asks for one line back, so a respawn that fails is a
@@ -1307,45 +1189,6 @@ const antigravityHarness: TopicHarnessAdapter = {
       antigravityService.activate(antigravityTopic(topic, name, route))
       await antigravityService.start(topic)
     }
-  },
-}
-
-const opencodeHarness: TopicHarnessAdapter = {
-  kind: 'opencode',
-  lockCommand: LOCALCODE_RE,
-  attachments: 'eager',
-  tracesInbound: false,
-  owns: topic => opencodeService.isLocked(topic),
-  lock: c => activateLocalcodeTopic(c.chatId, c.topic, c.fromId),
-  model: (c, argument) => handleOpencodeModelCommand(c.chatId, c.topic, argument),
-  usage: ({ chatId, topic }) =>
-    sayIn(chatId, topic, 'OpenCode runs on the local Qwen server; there is no quota to report.').then(() => {}),
-  relaunch: async ({ chatId, topic }) => {
-    const current = opencodeService.get(topic)!
-    const result = await opencodeService.requestRelaunch(topic)
-    await sayIn(
-      chatId,
-      topic,
-      result.pending
-        ? `OpenCode is busy; relaunch is queued for the next idle boundary. It will keep session ` +
-          `${current.opencodeSessionId ?? 'not started'} and reopen in Herdr.`
-        : `Relaunched OpenCode in Herdr with the same session ` +
-          `${result.topic.opencodeSessionId ?? 'not started'} and freshly loaded MCP/configuration.`,
-    )
-  },
-  rename: (topic, name) => opencodeService.rename(topic, name),
-  receive: async ({ topic }, turn) => {
-    log(`received OpenCode Telegram turn ${turn.messageId ?? '(no id)'} for topic ${topic}`)
-    void opencodeService.submitTurn(topic, { content: turn.content, meta: turn.meta })
-      .then(() => log(`settled OpenCode Telegram turn ${turn.messageId ?? '(no id)'} for topic ${topic}`))
-  },
-  sent: (topic, messages) => {
-    opencodeLastSentAt.set(topic, Date.now())
-    log(`sent OpenCode Telegram reply for topic ${topic} (${messages} message${messages === 1 ? '' : 's'})`)
-  },
-  prepareTopic: async name => async topic => {
-    opencodeService.activate(opencodeTopic(topic, name))
-    await opencodeService.start(topic)
   },
 }
 
@@ -2605,7 +2448,9 @@ await serveWithRetry()
 void pollWithRetry()
 void registerCommands()
 setInterval(() => void antigravityService.reconcilePending(), 2_000).unref()
-setInterval(() => void opencodeService.reconcilePending(), 2_000).unref()
+for (const harness of HARNESSES) {
+  if (harness.reconcile) setInterval(() => void harness.reconcile?.(), 2_000).unref()
+}
 // Overdue reminders (the proxy was down at their time) fire at boot, flagged late.
 void fireDueReminders()
 setInterval(() => void fireDueReminders(), 15_000).unref()
