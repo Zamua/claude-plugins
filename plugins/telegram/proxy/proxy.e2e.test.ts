@@ -32,7 +32,13 @@ case "$1" in
       esac
     done
     echo "$name" >> "$live"
-    { echo "session=$name"; printf '%s\\n' "\${envs[@]}"; echo; } >> "$HOME/fake/spawns" ;;
+    { echo "session=$name"; printf '%s\\n' "\${envs[@]}"; echo; } >> "$HOME/fake/spawns"
+    # A fresh conversation writes its transcript, as Claude does on its first turn
+    id=''; resume=''
+    for e in "\${envs[@]}"; do
+      case "$e" in TG_CLAUDE_SESSION_ID=*) id="\${e#*=}" ;; TG_RESUME=*) resume="\${e#*=}" ;; esac
+    done
+    [ -n "$id" ] && [ -z "$resume" ] && echo '{}' > "$HOME/.claude/projects/p/$id.jsonl" ;;
   kill-session) grep -vx "\${3#=}" "$live" > "$live.new"; mv "$live.new" "$live" ;;
 esac
 exit 0
@@ -137,6 +143,30 @@ function send(thread: number, text: string): number {
   })
   return id
 }
+
+// The operator pressing an inline button under a message in `thread`.
+function press(thread: number, data: string) {
+  pending.push({
+    update_id: updateId++,
+    callback_query: {
+      id: String(updateId),
+      from: { id: OPERATOR, is_bot: false, first_name: 'Operator' },
+      chat_instance: '1',
+      data,
+      message: {
+        message_id: 999,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: Number(GROUP), type: 'supergroup', title: 'topics', is_forum: true },
+        message_thread_id: thread,
+        is_topic_message: true,
+        text: 'picker',
+      },
+    },
+  })
+}
+
+type Button = { text: string; callback_data: string }
+const buttons = (call: Call | undefined): Button[] => (call?.body.reply_markup?.inline_keyboard ?? []).flat()
 
 const spawns = () =>
   existsSync(join(home, 'fake', 'spawns'))
@@ -405,6 +435,78 @@ describe('the proxy, end to end', () => {
     expect(resumed.label).toMatch(/^oc-.*-60$/)
     expect(spawns().some(s => s.session.endsWith('-60'))).toBeFalse()
   }, 90_000)
+
+  test('the model picker walks provider, model, effort and Ultracode, and the topic restarts on that route', async () => {
+    const first = spawns().find(s => s.session === 'claude-42')!
+    const edits = () => calls.filter(c => c.method === 'editMessageText')
+    send(42, '/model')
+    const picker = await until('the provider picker', () =>
+      calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 42 && /Choose a provider/.test(c.body.text)))
+    expect(buttons(picker).map(b => b.callback_data)).toContain('tgroute:p:a:m:42')
+
+    let seen = edits().length
+    press(42, 'tgroute:p:a:m:42')
+    const models = await until('the model list', () => edits().length > seen && edits().at(-1))
+    const sonnet = buttons(models).find(b => b.text.startsWith('Sonnet'))!
+    seen = edits().length
+    press(42, sonnet.callback_data)
+    const efforts = await until('the effort list', () => edits().length > seen && edits().at(-1))
+    const high = buttons(efforts).find(b => b.callback_data.endsWith(':high'))!
+    seen = edits().length
+    press(42, high.callback_data)
+    const ultracode = await until('the Ultracode choice', () => edits().length > seen && edits().at(-1))
+    seen = edits().length
+    press(42, buttons(ultracode).find(b => b.callback_data.endsWith(':0'))!.callback_data)
+    const done = await until('the route answer', () => edits().length > seen && edits().at(-1))
+    expect(done.body.text).toMatch(/sonnet/i)
+
+    // A busy Claude switches at its next poll, the observable end of its turn
+    if (/Queued/.test(done.body.text)) {
+      await fetch(`${proxyUrl}/poll?topic=42`)
+    }
+    const restarted = await until('topic 42 restarted on Sonnet', () =>
+      spawns().filter(s => s.session === 'claude-42').find(s => s.env.TG_MODEL === 'sonnet'))
+    expect(restarted.env.TG_EFFORT).toBe('high')
+    expect(restarted.env.TG_RESUME).toBe('1')
+    expect(restarted.env.TG_CLAUDE_SESSION_ID).toBe(first.env.TG_CLAUDE_SESSION_ID)
+    expect(registry()['42'].route).toMatchObject({ provider: 'anthropic', model: 'sonnet', effort: 'high', ultracode: false })
+
+    send(42, '/usage')
+    await until('the usage answer', () =>
+      calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 42 && /^Provider usage/.test(c.body.text)))
+  }, 40_000)
+
+  test('a usage limit fails over to Fable, both resets are announced, and switch-back restores the route', async () => {
+    const said43 = (pattern: RegExp) =>
+      calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 43 && pattern.test(c.body.text))
+    const limited = await fetch(`${proxyUrl}/rate-limit`, {
+      method: 'POST',
+      body: JSON.stringify({ topic: '43', error: 'rate_limit', reset_at: Math.floor(Date.now() / 1000) + 11 }),
+    }).then(r => r.json())
+    expect(limited.fallback).toMatchObject({ provider: 'anthropic', model: 'fable' })
+    const notice = await until('the failover notice', () => said43(/reached its usage limit/))
+    expect(buttons(notice).map(b => b.callback_data)).toContain('tgroute:return:a:43')
+    await until('topic 43 resumed on Fable', () =>
+      spawns().filter(s => s.session === 'claude-resumed-43').find(s => s.env.TG_MODEL === 'fable'))
+    expect(registry()['43'].exhausted_routes[0].model).toBe('claude-opus-5-5')
+
+    // The provider's own window resets: its timer offers the way back
+    await fetch(`${proxyUrl}/capacity`, {
+      method: 'POST',
+      body: JSON.stringify({ provider: 'anthropic', windows: [{ name: '5h', availability: 'exhausted', used_percent: 100, resets_at: Date.now() + 1_000 }] }),
+    })
+    await until('the provider reset notice', () => said43(/is available again/), 15_000)
+    // The model's reported reset: its own timer offers the way back too
+    await until('the fallback return offer', () => said43(/should be available again/), 20_000)
+
+    press(43, 'tgroute:return:a:43')
+    const answer = await until('the switch-back answer', () =>
+      calls.find(c => c.method === 'editMessageText' && /(Now using|Queued) Anthropic · claude-opus-5-5/.test(c.body.text)))
+    if (/Queued/.test(answer.body.text)) await fetch(`${proxyUrl}/poll?topic=43`)
+    await until('topic 43 back on Opus 5.5', () =>
+      spawns().filter(s => s.session === 'claude-resumed-43').slice(-1).find(s => s.env.TG_MODEL === 'claude-opus-5-5'))
+    expect(registry()['43'].exhausted_routes ?? []).toEqual([])
+  }, 60_000)
 
   test('a topic bound to a missing conversation is told so and starts nothing', async () => {
     send(44, 'hello?')
