@@ -5,7 +5,7 @@ import type { SessionBoard, SessionItem, SessionSection } from '../../types'
 import { fixed } from '../kit'
 import type { Els, View } from '../kit'
 import { showView } from '../pane'
-import { legacyValue, loadBoard, saveBoard, storedBoard } from '../store'
+import { legacyBoard, loadBoard, saveBoard, storedBoard } from '../store'
 
 export const SESSION_TOOL = 'mcp__board__session'
 
@@ -128,15 +128,8 @@ async function syncBoard($: EngineInterface) {
 async function importLegacy($: EngineInterface) {
   const current = await read($, board)
   if (current.legacyImported) return
-  let held: unknown
-  try {
-    held = await legacyValue($, 'session-board', `board:${current.sessionId}`)
-  } catch {
-    return
-  }
-  const old = (held as { shape?: string; value?: SessionBoard } | undefined)?.shape === 'board-1'
-    ? (held as { value: SessionBoard }).value
-    : undefined
+  const old = await legacyBoard<SessionBoard>($, 'session-board', 'board-1', current.sessionId)
+  if (old === null) return
   await update($, board, now => (now.sessionId === current.sessionId ? withLegacy(now, old) : now))
   if (old) await saveBoard($, PREFIX, SHAPE, await read($, board))
 }

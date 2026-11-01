@@ -40,9 +40,20 @@ export async function storedValues($: EngineInterface, plugin: string): Promise<
   return out
 }
 
-/** What another plugin's store holds under `key`. */
-export async function legacyValue($: EngineInterface, plugin: string, key: string): Promise<unknown> {
-  return (await storedValues($, plugin))[key]
+/**
+ * The board the plugin this one replaced kept for a session, under `board:<session id>` in its own store: the board
+ * when it was saved in `shape`, undefined when there is none, and null when that store cannot be read now.
+ */
+export async function legacyBoard<T>($: EngineInterface, plugin: string, shape: string, sessionId: string) {
+  let held: unknown
+  try {
+    held = (await storedValues($, plugin))[`board:${sessionId}`]
+  } catch {
+    return null
+  }
+  const saved = held as { shape?: string; value?: T } | undefined
+
+  return saved?.shape === shape ? (saved.value as T) : undefined
 }
 
 /** A board another session saved under `<prefix>:<session id>`, read from disk. */
