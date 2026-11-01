@@ -6,14 +6,15 @@ import { join } from 'path'
 
 const scriptPath = join(import.meta.dir, '..', '..', 'scripts', 'launch-herdr-topic.sh')
 
-// A fake `herdr` on PATH records every call and runs `pane run` synchronously,
-// so the launcher executes end to end with no Herdr server.
+// A fake `herdr` on PATH records every call and runs `pane run` synchronously
+// without the launcher's environment, as the Herdr server would, so the
+// launcher executes end to end with no Herdr server.
 const FAKE_HERDR = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$FAKE/calls"
 case "$1 $2" in
   "pane list") cat "$FAKE/panes.json" ;;
   "workspace create") [ -f "$FAKE/fail-create" ] && exit 1; echo '{"result":{"pane":{"pane_id":"p-new"}}}' ;;
-  "pane run") bash -c "$4" > "$FAKE/pane.out" 2>&1 ;;
+  "pane run") env -i HOME="$HOME" bash -c "$4" > "$FAKE/pane.out" 2>&1 ;;
 esac
 `
 

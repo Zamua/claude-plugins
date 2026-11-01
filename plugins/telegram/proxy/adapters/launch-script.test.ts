@@ -1,73 +1,179 @@
 import { describe, expect, test } from 'bun:test'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
 import { spawnSync } from 'child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
+import { claudeSpawnEnv } from './claude-launch'
+import type { ClaudeSpawnSpec } from './claude-launch'
 
-describe('Claude provider launch script', () => {
-  const script = readFileSync(join(import.meta.dir, '..', '..', 'scripts', 'launch-topic.sh'), 'utf8')
+const scriptPath = join(import.meta.dir, '..', '..', 'scripts', 'launch-topic.sh')
 
-  test('bypasses approvals only for Codex on fresh launches and resumes', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'telegram-launch-'))
-    try {
-      const capture = join(dir, 'capture-args')
-      writeFileSync(capture, '#!/bin/sh\nprintf "%s\\n" "$@"\n')
-      chmodSync(capture, 0o700)
-      const pane = script.match(/PANE_CMD='([\s\S]*?)'\n/)![1]
-      for (const provider of ['codex', 'anthropic', 'opencode-go', '']) {
-        for (const resume of ['', '1']) {
-          const result = spawnSync('/bin/bash', ['-c', pane], {
-            encoding: 'utf8',
-            env: {
-              PATH: process.env.PATH,
-              TG_PATH: process.env.PATH,
-              TG_PROVIDER: provider,
-              TG_CLAUDE_BIN: capture,
-              TG_CLAUDE_SESSION_ID: 'test-conversation',
-              TG_MODEL: provider === 'codex' ? 'gpt-6.1-sol' : 'test-model',
-              TG_RESUME: resume,
-              TG_KICKOFF: 'test kickoff',
-            },
-          })
-          expect(result.status).toBe(0)
-          const args = result.stdout.trim().split('\n')
-          expect(args.includes('--dangerously-skip-permissions')).toBe(provider === 'codex')
-          expect(args.includes('--permission-mode')).toBe(provider !== 'codex')
-          if (provider !== 'codex') expect(args[args.indexOf('--permission-mode') + 1]).toBe('auto')
-          expect(args).toContain(resume ? '--resume' : '--session-id')
-          expect(args).toContain('test-conversation')
+// Fakes on the launcher's PATH. Both multiplexers start the pane command
+// synchronously and without the launcher's environment, as a server that
+// predates the launcher would: tmux passes only its `-e` variables, herdr none.
+// `seq` prints nothing so the dialog watchers exit at once. `claude` records
+// its argv and environment.
+const FAKES: Record<string, string> = {
+  herdr: `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$HOME/fake/calls"
+case "$1 $2" in
+  "pane list") cat "$HOME/fake/panes.json" ;;
+  "workspace create") echo '{"result":{"workspace":{"workspace_id":"w1"},"pane":{"pane_id":"p1"}}}' ;;
+  "pane run") env -i HOME="$HOME" bash -c "$4" ;;
+esac
+`,
+  tmux: `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$HOME/fake/calls"
+case "$1" in
+  has-session) exit 1 ;;
+  new-session)
+    shift; envs=(); cmd=''
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -d) shift ;;
+        -s|-c) shift 2 ;;
+        -e) envs+=("$2"); shift 2 ;;
+        *) cmd="$1"; shift ;;
+      esac
+    done
+    env -i HOME="$HOME" "\${envs[@]}" bash -c "$cmd" ;;
+esac
+`,
+  seq: '#!/bin/sh\nexit 0\n',
+  claude: `#!/usr/bin/env bash
+printf '%s\\n' "$@" > "$HOME/fake/claude.args"
+env > "$HOME/fake/claude.env"
+`,
+}
+
+const baseSpec = (over: Partial<ClaudeSpawnSpec> = {}): ClaudeSpawnSpec => ({
+  topic: '34',
+  label: 'hostthis',
+  sessionName: 'claude-hostthis-34',
+  muxKind: 'herdr',
+  spawnDir: '/tmp/spawn dir',
+  proxyUrl: 'http://localhost:8790',
+  squareTopic: '123',
+  marketplace: 'plugin:telegram@zamua',
+  route: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'xhigh', ultracode: false },
+  auxiliaryModel: 'haiku',
+  claudeSessionId: 'abc-123',
+  resume: false,
+  settingsPath: '/tmp/settings.json',
+  stopHook: '/hooks/stop-reply-guard.py',
+  failoverHook: '/hooks/rate-limit-failover.py',
+  capacityHook: '/hooks/provider-capacity-status.py',
+  providerProxyUrl: 'http://127.0.0.1:18765',
+  ...over,
+})
+
+// Variables the launcher consumes itself; every other one must reach the pane.
+const LAUNCHER_ONLY = new Set(['TG_SESSION', 'TG_MUX', 'TG_SPAWN_DIR'])
+
+function launch(spec: ClaudeSpawnSpec, panes: unknown[] = []) {
+  const home = mkdtempSync(join(tmpdir(), 'tg-launch-'))
+  const bin = join(home, '.local', 'bin')
+  const fake = join(home, 'fake')
+  mkdirSync(bin, { recursive: true })
+  mkdirSync(fake)
+  for (const [name, body] of Object.entries(FAKES)) {
+    writeFileSync(join(bin, name), body)
+    chmodSync(join(bin, name), 0o700)
+  }
+  writeFileSync(join(fake, 'panes.json'), JSON.stringify({ result: { panes } }))
+  const spawnEnv = claudeSpawnEnv(spec)
+  const result = spawnSync('bash', [scriptPath], {
+    encoding: 'utf8',
+    env: { HOME: home, USER: 'test', PATH: '/usr/bin:/bin', TMPDIR: home, ...spawnEnv },
+  })
+  const read = (file: string) => (existsSync(join(fake, file)) ? readFileSync(join(fake, file), 'utf8') : '')
+  const paneEnv = Object.fromEntries(read('claude.env').split('\n').filter(Boolean).map(line => {
+    const at = line.indexOf('=')
+    return [line.slice(0, at), line.slice(at + 1)]
+  }))
+  return {
+    result,
+    spawnEnv,
+    args: read('claude.args').split('\n').slice(0, -1),
+    paneEnv,
+    calls: read('calls').trim().split('\n').filter(Boolean),
+  }
+}
+
+describe('launch-topic.sh', () => {
+  for (const mux of ['herdr', 'tmux'] as const) {
+    describe(`under ${mux}`, () => {
+      test('every per-topic variable the proxy sets reaches the Claude pane unchanged', () => {
+        const run = launch(baseSpec({ muxKind: mux }))
+        expect(run.result.status).toBe(0)
+        for (const [key, value] of Object.entries(run.spawnEnv)) {
+          if (LAUNCHER_ONLY.has(key)) continue
+          expect([key, run.paneEnv[key]]).toEqual([key, value])
         }
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
+        expect(run.paneEnv.MCP_TIMEOUT).toBe('180000')
+      })
+
+      test('a first launch mints the conversation with the kickoff under checked auto mode', () => {
+        const run = launch(baseSpec({ muxKind: mux }))
+        expect(run.args).toEqual([
+          '--dangerously-load-development-channels=plugin:telegram@zamua',
+          '--settings', '/tmp/settings.json',
+          '--disallowedTools=AskUserQuestion,Workflow',
+          '--permission-mode', 'auto',
+          '--model', 'claude-opus-5-5',
+          '--effort', 'xhigh',
+          '--session-id', 'abc-123', run.spawnEnv.TG_KICKOFF,
+        ])
+        expect(run.paneEnv.CLAUDE_CODE_SUBAGENT_MODEL).toBe('claude-opus-5-5')
+        expect(run.paneEnv.CLAUDE_CODE_EFFORT_LEVEL).toBe('xhigh')
+        expect(run.paneEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('claude-haiku-4-5-20251001')
+        expect(run.paneEnv.ANTHROPIC_BASE_URL).toBeUndefined()
+      })
+
+      test('a Codex resume keeps the conversation, bypasses approvals and routes through the bridge', () => {
+        const run = launch(baseSpec({
+          muxKind: mux,
+          resume: true,
+          route: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', ultracode: true },
+          auxiliaryModel: 'gpt-5.6-luna',
+          modelContextWindow: 1_000_000,
+        }))
+        expect(run.args).toContain('--dangerously-skip-permissions')
+        expect(run.args).not.toContain('--permission-mode')
+        expect(run.args).toContain('--disallowedTools=AskUserQuestion')
+        expect(run.args.slice(-2)).toEqual(['--resume', 'abc-123'])
+        expect(run.paneEnv.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:18765')
+        expect(run.paneEnv.ANTHROPIC_MODEL).toBe('gpt-5.6-sol[1m]')
+        expect(run.paneEnv.CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol[1m]')
+        expect(run.paneEnv.ANTHROPIC_SMALL_FAST_MODEL).toBe('gpt-5.6-luna[1m]')
+        expect(run.paneEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe(run.spawnEnv.TG_AUTO_COMPACT_WINDOW)
+        expect(run.paneEnv.TG_INBOUND_MODE).toBe('pane')
+      })
+
+      test('a provider-default effort passes no effort at all', () => {
+        const run = launch(baseSpec({
+          muxKind: mux,
+          route: { provider: 'opencode-go', model: 'opencode-go/glm-5.2', effort: 'auto', ultracode: false },
+        }))
+        expect(run.args).not.toContain('--effort')
+        expect(run.paneEnv.CLAUDE_CODE_EFFORT_LEVEL).toBeUndefined()
+      })
+    })
+  }
+
+  test('herdr labels the workspace without the claude- marker and the pane with the session name', () => {
+    const run = launch(baseSpec())
+    expect(run.calls).toContain('workspace create --cwd /tmp/spawn dir --label hostthis-34 --no-focus')
+    expect(run.calls).toContain('pane rename p1 claude-hostthis-34')
   })
 
-  test('pins main, subagent, auxiliary, and effort policy when resuming through another provider', () => {
-    expect(script).toContain('ANTHROPIC_MODEL="$TG_MODEL"')
-    expect(script).toContain('ANTHROPIC_DEFAULT_HAIKU_MODEL="$TG_AUX_MODEL"')
-    expect(script).toContain('ANTHROPIC_SMALL_FAST_MODEL="$TG_AUX_MODEL"')
-    expect(script).toContain('CLAUDE_CODE_SUBAGENT_MODEL="$TG_MODEL"')
-    expect(script).toContain('CLAUDE_CODE_EFFORT_LEVEL="$TG_EFFORT"')
-    expect(script).toContain('--disallowedTools="$TG_DISALLOWED_TOOLS"')
-  })
+  test('herdr leaves a live agent alone and replaces a restored dead pane', () => {
+    const live = launch(baseSpec(), [{ label: 'claude-hostthis-34', pane_id: 'p0', agent_status: 'idle' }])
+    expect(live.result.status).toBe(0)
+    expect(live.calls).toEqual(['pane list'])
 
-  test('labels the herdr workspace without the claude- marker but keeps it on the pane', () => {
-    expect(script).toContain('workspace create --cwd "$TG_SPAWN_DIR" --label "${TG_SESSION#claude-}" --no-focus')
-    expect(script).toContain('pane rename "$pane_id" "$TG_SESSION"')
-  })
-
-  test('removes every proxy override on the native Anthropic route', () => {
-    expect(script).toContain('unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL')
-    expect(script).toContain('CLAUDE_CODE_AUTO_COMPACT_WINDOW')
-  })
-
-  test('forwards provider-aware inbound mode to both multiplexer adapters', () => {
-    expect(script).toContain('-e TG_INBOUND_MODE="$TG_INBOUND_MODE"')
-    expect(script).toContain('-e TG_AUX_MODEL="$TG_AUX_MODEL"')
-    expect(script).toContain('-e TG_DISALLOWED_TOOLS="$TG_DISALLOWED_TOOLS"')
-    expect(script).toContain("printf 'export TG_INBOUND_MODE=%q\\n' \"$TG_INBOUND_MODE\"")
-    expect(script).toContain("printf 'export TG_AUX_MODEL=%q\\n' \"$TG_AUX_MODEL\"")
-    expect(script).toContain("printf 'export TG_DISALLOWED_TOOLS=%q\\n' \"$TG_DISALLOWED_TOOLS\"")
+    const stale = launch(baseSpec(), [{ label: 'claude-hostthis-34', pane_id: 'p0', agent_status: 'unknown' }])
+    expect(stale.calls.slice(0, 2)).toEqual(['pane list', 'pane close p0'])
+    expect(stale.args).toContain('--session-id')
   })
 })
