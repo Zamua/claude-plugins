@@ -35,12 +35,10 @@ import {
   renameSync,
   rmSync,
   statSync,
-  realpathSync,
-  existsSync,
 } from 'fs'
 import { homedir } from 'os'
 import { join, extname, sep } from 'path'
-import { spawnSync, execFile, execFileSync } from 'child_process'
+import { spawnSync, execFileSync } from 'child_process'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
 import {
@@ -141,7 +139,6 @@ import { QwenImageClient } from './adapters/qwen-image-client'
 import { localgenTopic, localgenTopicFromRecord } from './domain/localgen-topic'
 import type { LocalgenTopic } from './domain/localgen-topic'
 import { antigravityResetPools } from './domain/antigravity-capacity'
-import { describeLocation, describeVenue } from './domain/location'
 import type { AntigravityUsageWindow } from './application/antigravity-ports'
 import { InvalidReminder, LATE_AFTER_MS, dueReminders, reminderNotice, scheduleReminder } from './domain/reminder'
 import type { ReminderRequest } from './domain/reminder'
@@ -192,8 +189,19 @@ import {
   STOP_HOOK,
   TOKEN,
   TOPIC_LAUNCH_PROFILE_VERSION,
+  VOICE,
 } from './config'
 import { log } from './log'
+import {
+  assertSendable,
+  chunk,
+  describeMessage,
+  MAX_ATTACHMENT_BYTES,
+  MAX_CHUNK_LIMIT,
+  PHOTO_EXTS,
+} from './adapters/telegram-messages'
+import { telegramDownloader } from './adapters/telegram-files'
+import { transcribeVoice, VOICE_TAG } from './adapters/voice-transcription'
 import type { Registry } from './adapters/registry-file'
 
 // "/relaunch" in a topic kills that topic's agent and respawns it with the
@@ -261,141 +269,6 @@ process.on('unhandledRejection', err => {
 process.on('uncaughtException', err => {
   log(`uncaught exception: ${err}`)
 })
-
-// ---- Telegram helpers (ported from the single-session server) --------------
-
-const MAX_CHUNK_LIMIT = 4096
-const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
-const PHOTO_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp'])
-
-function realOrNull(p: string): string | null {
-  try {
-    return realpathSync(p)
-  } catch {
-    return null
-  }
-}
-
-// reply's files param takes any path, and the proxy would InputFile+send it.
-// A prompt-injected topic-Claude could call reply(files:['.../telegram-topics/.env'])
-// to ship the bot token to the group. Refuse the proxy's own state (everything
-// under STATE_DIR except the inbox subdir) and the token-bearing .env files.
-// Claude can already Read+paste arbitrary file contents, so this is not a new
-// exfil channel for other paths - it just closes the one path Claude has no
-// reason to ever send: the server's own credentials/state.
-function assertSendable(f: string): void {
-  const real = realOrNull(f)
-  if (real === null) return // statSync will fail with a proper error later
-  const stateReal = realOrNull(STATE_DIR)
-  if (stateReal) {
-    const inbox = join(stateReal, 'inbox')
-    if (real.startsWith(stateReal + sep) && !real.startsWith(inbox + sep)) {
-      throw new Error(`refusing to send channel state: ${f}`)
-    }
-  }
-  for (const envf of ENV_FILES) {
-    const er = realOrNull(envf)
-    if (er && real === er) {
-      throw new Error(`refusing to send credential file: ${f}`)
-    }
-  }
-}
-
-// Telegram caps messages at 4096 chars. Split long replies on the char count.
-function chunk(text: string, limit: number): string[] {
-  if (text.length <= limit) return [text]
-  const out: string[] = []
-  let rest = text
-  while (rest.length > limit) {
-    out.push(rest.slice(0, limit))
-    rest = rest.slice(limit)
-  }
-  if (rest) out.push(rest)
-  return out
-}
-
-// Uploader-controlled names land inside the <channel> meta; strip delimiters so
-// they cannot break out of the tag or forge a second meta entry.
-function safeName(s: string | undefined): string | undefined {
-  return s?.replace(/[<>\[\]\r\n;]/g, '_')
-}
-
-type AttachmentMeta = {
-  kind: string
-  file_id: string
-  size?: number
-  mime?: string
-  name?: string
-}
-
-type Described = {
-  content: string
-  attachment?: AttachmentMeta
-  photo?: { file_id: string; file_unique_id: string }
-}
-
-// Turn a Telegram message into the channel content string plus any attachment /
-// photo descriptors. Returns null for messages we do not relay (service
-// messages with no user content).
-function describeMessage(msg: any): Described | null {
-  if (typeof msg.text === 'string') return { content: msg.text }
-  if (msg.photo) {
-    const best = msg.photo[msg.photo.length - 1]
-    return {
-      content: msg.caption ?? '(photo)',
-      photo: { file_id: best.file_id, file_unique_id: best.file_unique_id },
-    }
-  }
-  if (msg.document) {
-    const d = msg.document
-    const name = safeName(d.file_name)
-    return {
-      content: msg.caption ?? `(document: ${name ?? 'file'})`,
-      attachment: { kind: 'document', file_id: d.file_id, size: d.file_size, mime: d.mime_type, name },
-    }
-  }
-  if (msg.voice) {
-    const v = msg.voice
-    return {
-      content: msg.caption ?? '(voice message)',
-      attachment: { kind: 'voice', file_id: v.file_id, size: v.file_size, mime: v.mime_type },
-    }
-  }
-  if (msg.audio) {
-    const a = msg.audio
-    const name = safeName(a.file_name)
-    return {
-      content: msg.caption ?? `(audio: ${safeName(a.title) ?? name ?? 'audio'})`,
-      attachment: { kind: 'audio', file_id: a.file_id, size: a.file_size, mime: a.mime_type, name },
-    }
-  }
-  if (msg.video) {
-    const v = msg.video
-    return {
-      content: msg.caption ?? '(video)',
-      attachment: {
-        kind: 'video',
-        file_id: v.file_id,
-        size: v.file_size,
-        mime: v.mime_type,
-        name: safeName(v.file_name),
-      },
-    }
-  }
-  if (msg.video_note) {
-    const v = msg.video_note
-    return { content: '(video note)', attachment: { kind: 'video_note', file_id: v.file_id, size: v.file_size } }
-  }
-  if (msg.sticker) {
-    const s = msg.sticker
-    const emoji = s.emoji ? ` ${s.emoji}` : ''
-    return { content: `(sticker${emoji})`, attachment: { kind: 'sticker', file_id: s.file_id, size: s.file_size } }
-  }
-  // A venue also carries a location, so it is checked first.
-  if (msg.venue) return { content: describeVenue(msg.venue) }
-  if (msg.location) return { content: describeLocation(msg.location) }
-  return null
-}
 
 // ---- per-topic state -------------------------------------------------------
 
@@ -1463,122 +1336,10 @@ function ensureSession(topic: string): void {
   }
 }
 
-// ---- file download (photo inbound + /download) -----------------------------
-
-async function downloadFile(fileId: string, uniqueHint?: string): Promise<string | null> {
-  try {
-    const file = await bot.api.getFile(fileId)
-    if (!file.file_path) return null
-    const url = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`
-    const res = await fetch(url)
-    if (!res.ok) return null
-    const buf = Buffer.from(await res.arrayBuffer())
-    // file_path is from Telegram (trusted) but strip to safe chars anyway.
-    const rawExt = file.file_path.includes('.') ? file.file_path.split('.').pop()! : 'bin'
-    const ext = rawExt.replace(/[^a-zA-Z0-9]/g, '') || 'bin'
-    const uid = (file.file_unique_id ?? uniqueHint ?? '').replace(/[^a-zA-Z0-9_-]/g, '') || 'dl'
-    mkdirSync(INBOX_DIR, { recursive: true })
-    const path = join(INBOX_DIR, `${Date.now()}-${uid}.${ext}`)
-    writeFileSync(path, buf)
-    return path
-  } catch (e) {
-    log(`download failed for ${fileId}: ${e}`)
-    return null
-  }
-}
-
-// ---- voice transcription ---------------------------------------------------
-//
-// Inbound voice notes are transcribed locally (whisper.cpp + large-v3-turbo)
-// and delivered as text behind a short provenance tag, so a topic-Claude gets
-// the words as if typed. Fail-open by design: any missing binary/model or a
-// transcription error falls back to the plain "(voice message)" content with
-// the attachment meta intact, so the manual download path still works.
-// Subprocesses run ASYNC (execFile, not spawnSync): a long clip must not
-// stall the event loop that serves every topic's /poll.
-const VOICE_TRANSCRIBE = environmentFlag(
-  process.env.TELEGRAM_TOPICS_VOICE_TRANSCRIBE,
-  true,
-  (value) => log(`TELEGRAM_TOPICS_VOICE_TRANSCRIBE="${value}" is not a recognized boolean; using default (true)`),
-)
-const FFMPEG_BIN = process.env.TELEGRAM_TOPICS_FFMPEG_BIN ?? '/opt/homebrew/bin/ffmpeg'
-const WHISPER_BIN = process.env.TELEGRAM_TOPICS_WHISPER_BIN ?? '/opt/homebrew/bin/whisper-cli'
-const WHISPER_MODEL = process.env.TELEGRAM_TOPICS_WHISPER_MODEL
-  ?? join(homedir(), '.local/share/whisper-models/ggml-large-v3-turbo-q5_0.bin')
-const VOICE_TAG = '[voice note, auto-transcribed; may contain errors]'
-
-// Vocabulary bias for the decoder. Whisper conditions on this text, so naming
-// the stack's jargon fixes the words a general model reliably mangles:
-// measured on synthesized speech, "kubectl"->"cubectal", "traefik"->"Trifik",
-// "502"->"500 too", "namespace"->"namaspace". The glossary fixed most of them
-// with no model change. Keep it SHORT - whisper's prompt window is ~224
-// tokens, and a bloated list dilutes the bias rather than sharpening it.
-// A bare word list is NOT enough for terms whose spoken form differs from the
-// written one: "CLAUDE.md" is said "claude dot em dee", and listing the token
-// alone still produced "clot md". Embedding the term in a natural SENTENCE
-// fixed it, so the prompt ends with prose, not just commas.
-const VOICE_GLOSSARY = process.env.TELEGRAM_TOPICS_WHISPER_PROMPT ?? (
-  [
-    'e2e', 'CI', 'PR', 'repo', 'staging', 'prod', 'semver', 'ghcr', 'MCP', 'API',
-    'transcription', 'glossary', 'CLI', 'JSON', 'YAML', 'regex', 'ripgrep',
-    'async', 'await', 'TODO', 'kubectl', 'namespace', 'k3s', 'traefik', 'nginx',
-    'MinIO', 'podman', 'colima', 'tmux', 'launchd', 'pm2', 'caddy', 'tailscale',
-    'herdr', 'PostgreSQL', 'SQLite', 'slatedb', 'Hetzner', 'Oracle',
-    'Cloudflare', 'OpenTofu', 'ansible', 'prepcards',
-    'boardtogether', 'pokerchips', 'jamshelf', 'shale', 'whisper',
-    'Claude', 'opus', 'sonnet', 'fable',
-  ].join(', ')
-  // Terms whose SPOKEN form differs from the written one need a sentence, not a
-  // list entry: "hostthis" is said "host this" and came back as "hostess" while
-  // sitting in the list above, and "celld" is said "cell dee".
-  + '. Update the CLAUDE.md file, run the e2e tests, then check the CI logs.'
-  + ' Deploy hostthis to staging, then migrate hostthis onto celld and check the celld cells.'
-)
-
-function run(bin: string, args: string[], timeoutMs: number): Promise<string | null> {
-  return new Promise(resolve => {
-    execFile(bin, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
-      resolve(err ? null : String(stdout))
-    })
-  })
-}
-
-async function transcribeVoice(fileId: string): Promise<string | null> {
-  if (!VOICE_TRANSCRIBE) return null
-  for (const [what, p] of [['ffmpeg', FFMPEG_BIN], ['whisper-cli', WHISPER_BIN], ['model', WHISPER_MODEL]] as const) {
-    if (!existsSync(p)) {
-      log(`voice transcription skipped: ${what} not found at ${p}`)
-      return null
-    }
-  }
-  const oga = await downloadFile(fileId)
-  if (!oga) return null
-  const wav = `${oga}.16k.wav`
-  try {
-    const ff = await run(FFMPEG_BIN, ['-y', '-v', 'error', '-i', oga, '-ar', '16000', '-ac', '1', wav], 30_000)
-    if (ff === null) {
-      log('voice transcription: ffmpeg failed')
-      return null
-    }
-    const whisperArgs = ['-m', WHISPER_MODEL, '-f', wav, '--no-timestamps']
-    if (VOICE_GLOSSARY.trim()) whisperArgs.push('--prompt', VOICE_GLOSSARY)
-    const out = await run(WHISPER_BIN, whisperArgs, 120_000)
-    if (out === null) {
-      log('voice transcription: whisper-cli failed')
-      return null
-    }
-    const text = out.trim()
-    return text || null
-  } finally {
-    for (const f of [wav, oga]) {
-      try { rmSync(f) } catch {}
-    }
-  }
-}
-
 // ---- grammy inbound --------------------------------------------------------
 
 const bot = new Bot(TOKEN, BOT_API_ROOT ? { client: { apiRoot: BOT_API_ROOT } } : undefined)
+const downloadFile = telegramDownloader(bot.api, TOKEN, INBOX_DIR, log)
 
 // Antigravity is a separate harness-bounded context. It shares only the one
 // Telegram Bot API adapter with Claude topics; its session identity, model
@@ -3029,7 +2790,7 @@ bot.on('message', async ctx => {
 
   let voiceTranscribed = false
   if (desc.attachment?.kind === 'voice') {
-    const text = await transcribeVoice(desc.attachment.file_id)
+    const text = await transcribeVoice(VOICE, downloadFile, desc.attachment.file_id, log)
     if (text) {
       desc.content = (msg.caption ? `${msg.caption}\n\n` : '') + `${VOICE_TAG}\n${text}`
       voiceTranscribed = true
@@ -3469,7 +3230,7 @@ async function handleSend(req: Request): Promise<Response> {
   const parseMode = markdown ? ('MarkdownV2' as const) : undefined
 
   for (const f of files) {
-    assertSendable(f)
+    assertSendable(f, STATE_DIR, ENV_FILES)
     const st = statSync(f)
     if (st.size > MAX_ATTACHMENT_BYTES) {
       throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 50MB)`)

@@ -3,6 +3,9 @@
 import { chmodSync, existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join, sep } from 'path'
+import { DEFAULT_VOICE_GLOSSARY } from './adapters/voice-transcription'
+import type { VoiceSettings } from './adapters/voice-transcription'
+import { environmentFlag } from './domain/env-flag'
 import { DEFAULT_MODEL, DEFAULT_ROUTE, topicRoute } from './domain/model-routing'
 import { log } from './log'
 
@@ -154,3 +157,17 @@ export const EFFECTIVE_SETTINGS_DIR = join(STATE_DIR, 'effective-settings')
 // behavior changes in a way an already-running pane cannot absorb. A stale
 // pane is reconciled at its next safe turn boundary, preserving its UUID.
 export const TOPIC_LAUNCH_PROFILE_VERSION = 4
+
+// Inbound voice notes are transcribed when ffmpeg, whisper-cli and the model are all present.
+export const VOICE: VoiceSettings = {
+  enabled: environmentFlag(
+    process.env.TELEGRAM_TOPICS_VOICE_TRANSCRIBE,
+    true,
+    (value) => log(`TELEGRAM_TOPICS_VOICE_TRANSCRIBE="${value}" is not a recognized boolean; using default (true)`),
+  ),
+  ffmpeg: process.env.TELEGRAM_TOPICS_FFMPEG_BIN ?? '/opt/homebrew/bin/ffmpeg',
+  whisper: process.env.TELEGRAM_TOPICS_WHISPER_BIN ?? '/opt/homebrew/bin/whisper-cli',
+  model: process.env.TELEGRAM_TOPICS_WHISPER_MODEL
+    ?? join(homedir(), '.local/share/whisper-models/ggml-large-v3-turbo-q5_0.bin'),
+  glossary: process.env.TELEGRAM_TOPICS_WHISPER_PROMPT ?? DEFAULT_VOICE_GLOSSARY,
+}
