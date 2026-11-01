@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'crypto'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { Approval, Resolution } from './domain/approval'
-import type { BlobRef, NewMessage, StoredEvent, StoredMessage } from './domain/message'
+import type { BlobRef, ImportedMessage, NewMessage, StoredEvent, StoredMessage } from './domain/message'
 import type { Device } from './wire'
 
 const SCHEMA = `
@@ -60,7 +60,7 @@ const approvalFrom = (row: ApprovalRow): Approval => ({
 type MessageRow = {
   id: string; topic: string; seq: number; author: string; origin: string; kind: string | null; text: string
   format: string; reply_to: string | null; chat_ids: string; at: string; edited_at: string | null; reactions: string
-  client_id: string | null; delivery: string | null; failure: string | null
+  client_id: string | null; delivery: string | null; failure: string | null; imported: number
 }
 
 type DeviceRow = {
@@ -73,20 +73,30 @@ export class ConductorStore {
   private readonly blobDir: string
   private readonly listeners: Array<(event: StoredEvent) => void> = []
 
-  constructor(dir: string) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
+  /** `readOnly` opens an existing store to look at only: no schema, no migration, no writes. */
+  constructor(dir: string, options: { readOnly?: boolean } = {}) {
     this.blobDir = join(dir, 'blobs')
+    if (options.readOnly) {
+      this.db = new Database(join(dir, 'conductor.db'), { readonly: true })
+      return
+    }
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
     mkdirSync(this.blobDir, { recursive: true, mode: 0o700 })
     this.db = new Database(join(dir, 'conductor.db'), { create: true })
     this.db.exec('PRAGMA journal_mode = WAL')
+    // The history importer writes from its own process while the proxy runs.
+    this.db.exec('PRAGMA busy_timeout = 5000')
     this.db.exec(SCHEMA)
+    const columns = this.db.query('PRAGMA table_info(messages)').all() as Array<{ name: string }>
+    if (!columns.some(c => c.name === 'imported')) this.db.exec('ALTER TABLE messages ADD COLUMN imported INTEGER NOT NULL DEFAULT 0')
   }
 
   /** Stores the message and its event in one transaction, taking the topic's next seq. */
   append(message: NewMessage): StoredMessage {
     const stored = this.db.transaction(() => {
       const { next } = this.db
-        .query('SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM messages WHERE topic = ?')
+        // Imported history sits at or below zero, so a live message never takes a seq a read marker treats as read.
+        .query('SELECT MAX(COALESCE(MAX(seq), 0), 0) + 1 AS next FROM messages WHERE topic = ?')
         .get(message.topic) as { next: number }
       const id = `msg_${randomUUID().replaceAll('-', '').slice(0, 20)}`
       const at = message.at ?? new Date().toISOString()
@@ -101,6 +111,41 @@ export class ConductorStore {
     })()
     for (const listener of this.listeners) listener(stored)
     return stored.message
+  }
+
+  /** Message ids by the chat message ids they carry, across every topic. */
+  chatIdIndex(): Map<number, string> {
+    const index = new Map<number, string>()
+    for (const row of this.db.query("SELECT id, chat_ids FROM messages WHERE chat_ids != '[]'").all() as Array<{ id: string; chat_ids: string }>) {
+      for (const chatId of JSON.parse(row.chat_ids) as number[]) index.set(chatId, row.id)
+    }
+    return index
+  }
+
+  /** The topic's lowest seq, or undefined when it holds nothing. */
+  lowestSeq(topic: string): number | undefined {
+    return (this.db.query('SELECT MIN(seq) AS seq FROM messages WHERE topic = ?').get(topic) as { seq: number | null }).seq ?? undefined
+  }
+
+  /**
+   * Stores history from before this store began, as given: no event, so no
+   * stream frame, push or unread. A message whose id is already stored is left.
+   */
+  importMessages(messages: readonly ImportedMessage[]): number {
+    return this.db.transaction(() => {
+      let added = 0
+      for (const m of messages) {
+        const { changes } = this.db
+          .query(`INSERT OR IGNORE INTO messages (id, topic, seq, author, origin, kind, text, format, reply_to, chat_ids, at, edited_at, imported)
+            VALUES (?, ?, ?, ?, 'telegram', ?, ?, ?, ?, ?, ?, ?, 1)`)
+          .run(m.id, m.topic, m.seq, m.author, m.kind, m.text, m.format, m.replyTo, JSON.stringify(m.chatIds), m.at, m.editedAt)
+        if (!changes) continue
+        added++
+        m.blobs.forEach((blob, ord) =>
+          this.db.query('INSERT INTO message_blobs (message_id, blob_id, ord) VALUES (?, ?, ?)').run(m.id, blob.id, ord))
+      }
+      return added
+    })()
   }
 
   /** Opens an approval for a blocked session and announces it. */
@@ -330,6 +375,7 @@ export class ConductorStore {
       blobs, replyTo: row.reply_to, chatIds: JSON.parse(row.chat_ids), at: row.at,
       editedAt: row.edited_at, reactions: JSON.parse(row.reactions),
       clientId: row.client_id, delivery: row.delivery as StoredMessage['delivery'], failure: row.failure,
+      imported: row.imported === 1,
     }
   }
 }

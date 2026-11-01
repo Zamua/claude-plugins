@@ -231,7 +231,9 @@ root and the operator make projects, so `/topic/create` refuses another topic.
 dialog (choices parsed from its screen by `domain/approval.ts`) and expires it
 when the session moves on; nothing answers one yet. Every admitted request and
 the stream's open, hello and close are logged
-(`conductor: ...`). With
+(`conductor: ...`). Earlier history comes in through `telegram-import.ts`
+(see "Importing Telegram history" in `docs/conductor.md`): seqs at or below
+zero, `imported: true`, no events. With
 `CONDUCTOR_LISTEN` set, `mirroredChat` wraps the
 chat port each service gets, so every message sent to a topic is also kept in
 SQLite (author `agent` for the MCP's `/send`, `proxy` for everything else, with

@@ -43,7 +43,12 @@ export type StoredMessage = Required<Omit<NewMessage, 'replyTo' | 'chatIds' | 'c
   clientId: string | null
   delivery: Delivery | null
   failure: string | null
+  /** History brought in from before the store began; its seq is at or below zero. */
+  imported: boolean
 }
+
+/** A message of earlier history as the importer stores it, whole. */
+export type ImportedMessage = Pick<StoredMessage, 'id' | 'topic' | 'seq' | 'author' | 'kind' | 'text' | 'format' | 'replyTo' | 'chatIds' | 'at' | 'editedAt' | 'blobs'>
 
 /** A stored message, or news about a topic (its state, title, name or route), which a client reads as the topic now. */
 export type StoredEvent =

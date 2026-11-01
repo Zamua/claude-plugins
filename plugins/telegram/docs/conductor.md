@@ -185,6 +185,12 @@ proxy message of kind `ask`, which the app shows as the operator's own question
 and which never counts as an operator act. Posts from service callers through
 the internal API read as `agent` until they get named tokens.
 
+**Imported history:** messages from before the store began, brought in from a
+Telegram export, carry `imported: true` (the key is absent on every other
+message), `origin` `telegram`, and seqs at or below zero, counting up by time
+to the topic's first live message. `before_seq` may be zero or negative to page
+through them. They are never stream events, pushes, unread or operator acts.
+
 **Approval:** `id`, `topic`, `kind` (`permission`, `question`, `auth`),
 `prompt`, `choices` (`id`, `label`, `role`: `approve`, `deny` or `null`),
 `created_at`, `resolved` (`choice`, `by`, `at`) once answered or expired. A
@@ -359,6 +365,32 @@ the state begin, `null` for a state that held when it started.
 The topic list is compared with what was last seen whenever hc reports a
 change and every 2 s (for the lifecycle's own changes); a changed state, title,
 name or route, or a new topic, is a `topic` event.
+
+## Importing Telegram history
+
+`proxy/conductor/telegram-import.ts` reads a Telegram Desktop JSON export of
+the forum group (`result.json` plus its media folders) and stores its messages
+as imported history. A dry run unless given `--write`:
+
+```
+bun conductor/telegram-import.ts <export dir> --store <conductor dir> \
+  --registry <registry.json> --operator-id <user id> [--exclude <topic>]... [--write]
+```
+
+- A message's topic is the root its reply chain reaches, a `topic_created`
+  service message whose id is the thread id; no reply means general. Roots
+  that are not known topics are reported, not imported, with how many of their
+  messages are the operator's. `--exclude` leaves a topic out.
+- The operator's messages are `operator`; the bot's are `proxy` when they open
+  as the proxy's own posts do (notices, `⏰` reminders, `You asked:` asks),
+  otherwise `agent`. `You (app):` echoes are skipped, since the app's message
+  is stored already. Text with markup is kept as MarkdownV2.
+- A message whose Telegram id the store already holds is skipped, so a run can
+  be repeated with a newer export; ids are derived from the Telegram id, and a
+  later run numbers what it adds below what is there.
+- Media is stored as blobs; a file the export left out is counted and skipped.
+- It writes from its own process in batches while the proxy runs. Nothing it
+  stores is an event, a push, a ledger entry or a turn.
 
 ## Coexistence and rollout
 

@@ -11,7 +11,7 @@ const photo = { id: 'blob_9a1', mime: 'image/png', bytes: 1, width: null, height
 const message = (over: Partial<StoredMessage> = {}): StoredMessage => ({
   id: 'msg_1', topic: '16832', seq: 42, author: 'agent', origin: 'proxy', kind: null, text: 'Running the suite now.',
   format: 'plain', blobs: [], replyTo: null, chatIds: [], at: '2026-11-01T20:25:37.123Z', editedAt: null,
-  reactions: [], clientId: null, delivery: null, failure: null, ...over,
+  reactions: [], clientId: null, delivery: null, failure: null, imported: false, ...over,
 })
 
 describe('the payloads match the contract fixtures', () => {

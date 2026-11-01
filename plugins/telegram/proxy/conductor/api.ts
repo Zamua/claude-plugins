@@ -433,7 +433,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
     const limit = Number(url.searchParams.get('limit') ?? 50)
     const before = url.searchParams.get('before_seq')
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) return fail(400, 'bad_limit', 'limit must be 1 to 100')
-    if (before !== null && !/^\d+$/.test(before)) return fail(400, 'bad_before_seq', 'before_seq must be a number')
+    if (before !== null && !/^-?\d+$/.test(before)) return fail(400, 'bad_before_seq', 'before_seq must be a number')
     const messages = store.history(topic, limit, before === null ? undefined : Number(before))
     return Response.json({ cursor: store.latestCursor(), messages: messages.map(m => wireMessage(m)) })
   }
