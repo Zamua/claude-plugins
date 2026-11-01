@@ -6,6 +6,7 @@ import { admit } from './domain/identity'
 import type { IdentityPolicy, Peer } from './domain/identity'
 import type { StoredEvent, StoredMessage } from './domain/message'
 import { devicePublicKey } from './domain/signing'
+import { plainText } from './domain/plain-text'
 import { checkSignedWrite, replay } from './domain/write-auth'
 import type { SignedWrite } from './domain/write-auth'
 import type { Role } from '../topics/domain/session-tree'
@@ -142,7 +143,8 @@ export function createConductorApi(ports: ConductorApiPorts) {
       unread,
       readSeq,
       pendingApprovals: store.openApprovals(t.id).length,
-      lastMessage: last ? { preview: last.text.slice(0, 200), format: last.format, author: last.author, at: last.at } : null,
+      // Plain text, as the push for the same message shows it.
+      lastMessage: last ? { preview: [...plainText(last.text, last.format)].slice(0, 200).join(''), format: 'plain', author: last.author, at: last.at } : null,
     }
   }
 

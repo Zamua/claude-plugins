@@ -49,3 +49,9 @@ test('only agents\' and the proxy\'s new messages are pushed, never the operator
   expect(pushable(message({ author: 'proxy', kind: 'ask' }))).toBeFalse()
   expect(pushable(message({ editedAt: '2026-11-01T20:26:00.000Z' }))).toBeFalse()
 })
+
+test('a MarkdownV2 message is pushed as plain text', () => {
+  const { payload } = messagePush(message({ text: 'Merged \\#98: *roles* \\(and projects\\)\\.', format: 'markdownv2' }), 'build', 0)
+  expect((payload.aps as { alert: { body: string } }).alert.body).toBe('Merged #98: roles (and projects).')
+})
+

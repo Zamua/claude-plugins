@@ -2,6 +2,7 @@
 // as much of the text as fits Apple's 4 KB limit; the app's notification
 // extension fetches the rest over the tailnet.
 import type { StoredMessage } from './message'
+import { plainText } from './plain-text'
 
 export const PAYLOAD_LIMIT = 4096
 
@@ -30,7 +31,8 @@ function fitBody(build: (body: string) => Record<string, unknown>, text: string)
 
 export function messagePush(message: StoredMessage, topicName: string, badge: number): Push {
   const reminder = message.kind === 'reminder'
-  const text = message.text || (message.blobs.length ? `[${message.blobs.length === 1 ? 'image' : `${message.blobs.length} images`}]` : '')
+  // A notification cannot render markup, so it shows the message as plain text.
+  const text = plainText(message.text, message.format) || (message.blobs.length ? `[${message.blobs.length === 1 ? 'image' : `${message.blobs.length} images`}]` : '')
   const payload = fitBody(
     body => ({
       aps: {

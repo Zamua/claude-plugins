@@ -158,8 +158,8 @@ Each has a golden fixture in `conductor-v1/`.
 `title` (the session's own title, when it has one), `pinned` (`general` first),
 `muted`, `state` (`starting`, `idle`, `working`, `blocked`, `stopped`,
 `missing`), `state_since`, `unread`, `read_seq`, `pending_approvals`, `route`
-(`provider`, `model`, `effort`), `last_message` (`preview`, `format` as the
-message was written, `author`, `at`). `role`, `project_id`, `parent_id`, `spawned_by` and `spawned_at` place it in
+(`provider`, `model`, `effort`), `last_message` (`preview` as plain text, the
+same text a push for that message shows, so `format` is `plain`; `author`, `at`). `role`, `project_id`, `parent_id`, `spawned_by` and `spawned_at` place it in
 the session tree, at most two levels below the root: `general` is the `root`
 (`project_id` and `parent_id` null); every other topic is a project whose
 session is its `coordinator` (`project_id` its own id, `parent_id` `general`);
@@ -311,8 +311,9 @@ Straight to Apple (APNs, HTTP/2, token authentication with a `.p8` key, its key
 id and team id). The APNs topic is the app's bundle id. There are no silent
 pushes: iOS throttles them.
 
-- **Agent message:** `alert` (`title`: topic name, `body`: the message's text,
-  as much as fits the 4 KB payload), `thread-id`: topic id, `badge`: total
+- **Agent message:** `alert` (`title`: topic name, `body`: the message's text
+  as plain text, its MarkdownV2 or Markdown undone (`domain/plain-text.ts`), as
+  much as fits the 4 KB payload), `thread-id`: topic id, `badge`: total
   unread, `mutable-content: 1`, and custom `topic` and `seq`, so the service
   extension can fetch the rest and the thumbnails. Full text goes through Apple
   by the operator's choice; a secret never does.
