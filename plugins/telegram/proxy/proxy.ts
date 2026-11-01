@@ -70,6 +70,7 @@ import { listenMode, startConductor } from './conductor/conductor'
 import { Ledger } from './conductor/ledger'
 import { tailscaleCli } from './conductor/tailscale'
 import { conductorControl } from './conductor/control'
+import type { Features } from './conductor/api'
 import { conductorBlocked, conductorScreen, conductorScreenText, conductorTopics } from './conductor/topic-source'
 import { trackApprovals } from './conductor/approvals'
 import type { HcTopics } from './conductor/topic-source'
@@ -415,6 +416,8 @@ const conductor = conductorStore && conductorMode?.listener
           screen: (topic: string) => conductorScreen(topic, hcTopics),
           watchTopics: (changed: () => void) => hcTopics.watch.onChange(changed),
         }),
+        // Answering waits for sessions to be isolated from each other (C6b).
+        features: (): Features => ({ answer_approvals: false, push: conductorPush !== undefined, screens: hcTopics !== undefined, secrets: secrets.secretsOn() }),
         log,
         version: '1',
       },

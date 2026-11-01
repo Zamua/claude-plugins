@@ -8,5 +8,11 @@
     "last_seen": "2026-11-01T20:25:37.123Z"
   },
   "server_version": "1.0.0",
-  "contract": "v1"
+  "contract": "v1",
+  "features": {
+    "answer_approvals": false,
+    "push": true,
+    "screens": true,
+    "secrets": true
+  }
 }

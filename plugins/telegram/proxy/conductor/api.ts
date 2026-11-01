@@ -15,6 +15,10 @@ import { topicTracker } from './topic-tracker'
 import { wireApproval, wireDevice, wireMessage, wireScreen, wireTopic } from './wire'
 import type { AgentState, Device, ScreenView, TopicView } from './wire'
 
+export type Features = { answer_approvals: boolean; push: boolean; screens: boolean; secrets: boolean }
+
+const NO_FEATURES: Features = { answer_approvals: false, push: false, screens: false, secrets: false }
+
 export type TopicSummary = {
   id: string
   name: string
@@ -53,6 +57,8 @@ export type ConductorApiPorts = {
   screen?: (topic: string) => Promise<ScreenView | undefined>
   /** The operator's commands: routes, usage, relaunch, interrupt. Absent, those paths answer 503. */
   control?: ConductorControl
+  /** What this server can do now, so the app shows only what works. */
+  features?: () => Features
   /** Calls back whenever something the topic list reports may have changed. */
   watchTopics?: (changed: () => void) => void
   log: (message: string) => void
@@ -492,7 +498,9 @@ export function createConductorApi(ports: ConductorApiPorts) {
       return signedWrite(req, url, device, body => setPush(device, decodeURIComponent(pushPath[1]), body))
     }
     if (req.method !== 'GET') return fail(405, 'method_not_allowed', 'not yet served')
-    if (url.pathname === '/v1/me') return Response.json({ device: wireDevice(device), server_version: ports.version, contract: 'v1' })
+    if (url.pathname === '/v1/me') {
+      return Response.json({ device: wireDevice(device), server_version: ports.version, contract: 'v1', features: ports.features?.() ?? NO_FEATURES })
+    }
     if (url.pathname === '/v1/topics') return topics()
     if (url.pathname === '/v1/approvals') {
       if ((url.searchParams.get('state') ?? 'open') !== 'open') return fail(400, 'bad_state', 'state must be open')
