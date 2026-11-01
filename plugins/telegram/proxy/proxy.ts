@@ -123,6 +123,20 @@ import type { OpencodeTopic } from './domain/opencode-topic'
 import { lockRefusal } from './domain/topic-harness'
 import { RELAUNCH_META, reminderMeta, SECRET_DROP_META, SQUARE_META } from './domain/turn-meta'
 import { ROUTE } from './adapters/proxy-routes'
+import {
+  BadRequest,
+  parseCancelReminder,
+  parseDownload,
+  parseEdit,
+  parsePermissionRequest,
+  parseRateLimit,
+  parseReact,
+  parseSend,
+  parseSquareReply,
+  parseSquareTag,
+  parseTopicCreate,
+  parseTurnFailed,
+} from './adapters/http-requests'
 import { topicSlug } from './domain/topic-slug'
 import type { LockedHarness, TopicHarness } from './domain/topic-harness'
 import { LocalgenTopicService } from './application/localgen-topic-service'
@@ -1043,10 +1057,10 @@ function deliverSquare(
 // delivers to (and wakes) the peer.
 async function handleSquareTag(req: Request): Promise<Response> {
   if (!SQUARE_TOPIC) return new Response('square not configured', { status: 404 })
-  const b = (await req.json()) as any
-  const caller = String(b.topic ?? '')
-  const peer = resolvePeer(String(b.peer ?? ''))
-  const text = String(b.text ?? '').trim()
+  const b = parseSquareTag(await req.json())
+  const caller = b.caller
+  const peer = resolvePeer(b.peer)
+  const text = b.text
   if (!peer) {
     const dir = topicDirectory().map(e => e.slug).join(', ')
     return new Response(`unknown peer; known topics: ${dir}`, { status: 400 })
@@ -1104,10 +1118,8 @@ async function handleSquareTag(req: Request): Promise<Response> {
 // safe fallback - a stray unthreaded message is not expressible.
 async function handleSquareReply(req: Request): Promise<Response> {
   if (!SQUARE_TOPIC) return new Response('square not configured', { status: 404 })
-  const b = (await req.json()) as any
-  const caller = String(b.topic ?? '')
-  const conv = String(b.conv ?? '')
-  const text = String(b.text ?? '').trim()
+  const b = parseSquareReply(await req.json())
+  const { caller, conv, text } = b
   const c = convs.get(conv)
   if (!c) {
     return new Response('conversation not found (expired or never existed); use square_tag to start a new one', {
@@ -1119,8 +1131,7 @@ async function handleSquareReply(req: Request): Promise<Response> {
   }
   if (!text) return new Response('text required', { status: 400 })
 
-  const replyToRaw = Number(b.reply_token)
-  const replyTo = Number.isFinite(replyToRaw) && replyToRaw > 0 ? replyToRaw : Number(conv)
+  const replyTo = b.replyToken ?? Number(conv)
   const callerSlug = caller === 'operator' ? 'operator' : slugForTopic(caller)
   const sent = await bot.api.sendMessage(String(GROUP_CHAT_ID), `🤖 ${callerSlug} · #${conv}\n${text}`, {
     message_thread_id: Number(SQUARE_TOPIC),
@@ -1149,9 +1160,8 @@ async function handleSquareReply(req: Request): Promise<Response> {
 // Telegram offers another provider. Either way the resumed session receives a
 // one-time nudge to finish that turn.
 async function handleRateLimit(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  const topic = String(b.topic ?? '')
-  if (!topic) return new Response('topic required', { status: 400 })
+  const b = parseRateLimit(await req.json())
+  const topic = b.topic
   const st = getTopic(topic)
   const label = st.name || topic
   const limitedRoute = st.route ?? DEFAULT_TOPIC_ROUTE
@@ -1163,9 +1173,8 @@ async function handleRateLimit(req: Request): Promise<Response> {
   if (justRerouted || (!st.session && alreadyReported && sameRoute(alreadyReported, returnRoute))) {
     return json({ ok: true, provider: limitedRoute.provider, awaiting_selection: true, duplicate: true })
   }
-  const resetAt = Number(b.reset_at)
-  const resetMs = Number.isFinite(resetAt) && resetAt * 1000 > Date.now()
-    ? resetAt * 1000
+  const resetMs = b.resetAt !== undefined && b.resetAt * 1000 > Date.now()
+    ? b.resetAt * 1000
     : undefined
   const resetText = resetMs ? `\nExpected reset: ${formatTime(resetMs)}.` : ''
 
@@ -1260,11 +1269,7 @@ async function handleCapacity(req: Request): Promise<Response> {
 // which survives an Anthropic outage. No debounce by operator choice - keep
 // it simple; revisit if an incident ever makes this spammy.
 async function handleTurnFailed(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  const topic = String(b.topic ?? '')
-  if (!topic) return new Response('topic required', { status: 400 })
-  const err = String(b.error ?? 'unknown').slice(0, 40)
-  const details = String(b.details ?? '')
+  const { topic, error: err, details } = parseTurnFailed(await req.json())
   // CONTEXT OVERFLOW, not a fault: the harness classifies an invalid_request
   // carrying this language as "request too large" and responds by
   // auto-compacting, then carries on. Same regex the CLI uses, so we stay in
@@ -1307,13 +1312,7 @@ function handleTopics(): Response {
 // thread id, and we register + persist immediately - no user action needed.
 // (Requires the bot to be a group admin with can_manage_topics.)
 async function handleTopicCreate(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  const name = String(b.name ?? '').trim()
-  if (!name) return new Response('name required', { status: 400 })
-  const harness = b.harness == null ? 'claude' : String(b.harness)
-  if (harness !== 'claude' && harness !== 'antigravity' && harness !== 'opencode' && harness !== 'localgen') {
-    return new Response('harness must be claude, antigravity, opencode, or localgen', { status: 400 })
-  }
+  const { name, harness } = parseTopicCreate(await req.json())
   // Resolve a viable route before creating the Telegram topic. A catalog/auth
   // failure must not strand an empty forum topic.
   const initialAntigravityRoute = harness === 'antigravity'
@@ -2138,10 +2137,9 @@ function handleListReminders(url: URL): Response {
 }
 
 async function handleCancelReminder(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  const id = String(b.id ?? '')
+  const { topic, id } = parseCancelReminder(await req.json())
   const r = reminders.list().find(x => x.id === id)
-  if (!r || r.topic !== String(b.topic ?? '')) return new Response(`no reminder ${id} in this topic`, { status: 404 })
+  if (!r || r.topic !== topic) return new Response(`no reminder ${id} in this topic`, { status: 404 })
   reminders.remove(id)
   log(`reminder ${id} cancelled`)
   return json({ cancelled: id })
@@ -3570,15 +3568,10 @@ function handlePoll(url: URL): Promise<Response> {
 }
 
 async function handleSend(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  assertGroup(b.chat_id)
-  const chatId = String(b.chat_id)
-  const topic = String(b.topic ?? 'general')
+  const { chatId, topic, text, replyTo, files, markdown } = parseSend(await req.json())
+  assertGroup(chatId)
   const threadId = threadIdForTopic(topic)
-  const text = String(b.text ?? '')
-  const replyTo = b.reply_to != null ? Number(b.reply_to) : undefined
-  const files: string[] = Array.isArray(b.files) ? b.files : []
-  const parseMode = b.format === 'markdownv2' ? ('MarkdownV2' as const) : undefined
+  const parseMode = markdown ? ('MarkdownV2' as const) : undefined
 
   for (const f of files) {
     assertSendable(f)
@@ -3623,31 +3616,30 @@ async function handleSend(req: Request): Promise<Response> {
 }
 
 async function handleReact(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  assertGroup(b.chat_id)
-  await bot.api.setMessageReaction(String(b.chat_id), Number(b.message_id), [
+  const b = parseReact(await req.json())
+  assertGroup(b.chatId)
+  await bot.api.setMessageReaction(b.chatId, b.messageId, [
     { type: 'emoji', emoji: b.emoji as ReactionTypeEmoji['emoji'] },
   ])
   return json({ ok: true })
 }
 
 async function handleEdit(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  assertGroup(b.chat_id)
-  const parseMode = b.format === 'markdownv2' ? ('MarkdownV2' as const) : undefined
+  const b = parseEdit(await req.json())
+  assertGroup(b.chatId)
+  const parseMode = b.markdown ? ('MarkdownV2' as const) : undefined
   const edited = await bot.api.editMessageText(
-    String(b.chat_id),
-    Number(b.message_id),
-    String(b.text),
+    b.chatId,
+    b.messageId,
+    b.text,
     ...(parseMode ? [{ parse_mode: parseMode }] : []),
   )
-  const id = typeof edited === 'object' ? edited.message_id : Number(b.message_id)
+  const id = typeof edited === 'object' ? edited.message_id : b.messageId
   return json({ message_id: id })
 }
 
 async function handleDownload(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  const path = await downloadFile(String(b.file_id))
+  const path = await downloadFile(parseDownload(await req.json()).fileId)
   if (!path) throw new Error('download failed (file may have expired)')
   return json({ path })
 }
@@ -3655,12 +3647,7 @@ async function handleDownload(req: Request): Promise<Response> {
 // A topic-MCP forwards a harness permission prompt here. Remember it against
 // the origin topic and post an approve/deny prompt into that topic's thread.
 async function handlePermissionRequest(req: Request): Promise<Response> {
-  const b = (await req.json()) as any
-  const topic = String(b.topic ?? 'general')
-  const requestId = String(b.request_id ?? '')
-  const tool = String(b.tool ?? 'tool')
-  const input = b.input != null ? String(b.input) : ''
-  if (!requestId) throw new Error('permission-request requires request_id')
+  const { topic, requestId, tool, input } = parsePermissionRequest(await req.json())
 
   prunePendingPerms()
   pendingPerms.set(requestId, { topic, createdAt: Date.now() })
@@ -3810,7 +3797,7 @@ async function serveWithRetry(): Promise<void> {
             return new Response('not found', { status: 404 })
           } catch (e) {
             const m = e instanceof Error ? e.message : String(e)
-            return json({ error: m }, 500)
+            return json({ error: m }, e instanceof BadRequest || e instanceof SyntaxError ? 400 : 500)
           }
         },
       })
