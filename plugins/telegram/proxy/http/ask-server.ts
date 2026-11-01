@@ -70,6 +70,7 @@ export function createAskServer({ port, tokenFile, images, ask, log }: AskServer
       id: String(answered.messageId),
       topic: answered.topic,
       message_id: answered.messageId,
+      telegram_url: answered.link,
       question: answered.question,
       answer: answered.answer,
       image,

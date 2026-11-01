@@ -397,15 +397,19 @@ curl -sS https://<tailnet host>/ask \
 `200`:
 
 ```json
-{"id": "16901", "topic": "3105", "message_id": 16901, "question": "what is this paper about?",
- "answer": "It proposes ... Checking on that…", "image": "none"}
+{"id": "16901", "topic": "3105", "message_id": 16901,
+ "telegram_url": "https://t.me/c/<chat id without -100>/3105/16901",
+ "question": "what is this paper about?", "answer": "It proposes ... Checking on that…", "image": "none"}
 ```
 
 `answer` is the agent's first reply to the ask's post within `wait`, as plain
 text, or `null` when none came (the ask still goes ahead and the reply still
 lands in Telegram). For a deep question it is "Checking on that…", and the real
 answer follows in Telegram. `image` is `none` (no image sent), `accepted` or
-`ignored` (screenshots are off). Transcription happens before the wait starts,
+`ignored` (screenshots are off). `telegram_url` is a deep link to the ask's post,
+where later answers arrive (null when the chat is not a supergroup; absent on
+proxies before it was added, so clients decode it leniently). Transcription
+happens before the wait starts,
 so a client's timeout must cover both.
 
 Errors are `{"error": "<message>"}`: `400` a field is missing or malformed,

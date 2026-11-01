@@ -5,7 +5,7 @@ import { InputFile } from 'grammy'
 import type { Api } from 'grammy'
 import type { TopicRoute } from '../routing/domain/model-routing'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
-import { threadOf } from '../telegram/telegram-messages'
+import { messageLink, threadOf } from '../telegram/telegram-messages'
 import {
   AskRefused,
   DEDICATED_TOPIC_NAME,
@@ -30,6 +30,8 @@ export type AskAnswer = {
   topic: string
   /** The ask's post in the topic. */
   messageId: number
+  /** A deep link to the post, where later answers arrive, when the chat has one. */
+  link: string | null
   question: string
   /** The agent's first reply to the post, or null when none came within the wait. */
   answer: string | null
@@ -161,7 +163,7 @@ export function createAsk(ports: AskPorts) {
     log(`ask: ${messageId} in topic ${topic} from ${s.client ?? 'an unnamed client'} (${question.transcribed ? 'voice' : 'text'}${imagePath ? ', screenshot' : ''})`)
     const text = await answer
     log(`ask: ${messageId} ${text != null ? `answered in ${now() - started}ms` : `not answered within ${s.waitMs}ms`}`)
-    return { topic, messageId, question: question.text, answer: text }
+    return { topic, messageId, link: messageLink(chatId, topic, messageId), question: question.text, answer: text }
   }
 
   /** A reply went out in `topic`. The first to an ask's post is that ask's answer. */

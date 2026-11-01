@@ -24,7 +24,7 @@ function harness(options: { target?: AskTarget | undefined; refuse?: string[]; t
   }
   const ports: AskPorts = {
     api: { sendPhoto: send('sendPhoto'), sendDocument: send('sendDocument'), sendMessage: send('sendMessage') } as unknown as AskPorts['api'],
-    chatId: '-100',
+    chatId: '-1007770000001',
     target: 'target' in options ? options.target : { kind: 'dedicated' },
     store: { topic: () => stored, save: t => { stored = t } },
     createTopic: async name => {
@@ -93,11 +93,12 @@ describe('the post', () => {
     const answered = await h.service.ask(asking({ image, url: 'https://example.com/p' }))
     expect(h.sent).toEqual([{
       method: 'sendPhoto',
-      chatId: '-100',
+      chatId: '-1007770000001',
       other: { message_thread_id: 77, caption: 'You asked: what is this?\nhttps://example.com/p' },
     }])
     const [, turn] = h.queued[0]
     expect(turn.meta).toMatchObject({ ask: '1', message_id: String(answered.messageId), image_path: '/inbox/1-ask.png' })
+    expect(answered.link).toBe(`https://t.me/c/7770000001/77/${answered.messageId}`)
   })
 
   test('a screenshot Telegram refuses goes as a document, then the question alone', async () => {
