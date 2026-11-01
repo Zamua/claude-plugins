@@ -32,10 +32,15 @@ The core keeps the environment it was started in, and every terminal inherits
 it. Whatever starts the core therefore decides what every topic's Claude sees.
 `hc run` has no option to start a terminal with a clean environment.
 
-- **Started by the proxy.** A call that finds no core starts one. The proxy's
-  environment holds the bot token, so every hc call (proxy and launcher) runs
-  with only `HOME`, `PATH`, `USER`, `LANG`, `TMPDIR`, `HC_SESSION`,
-  `HC_SOCKET`, `XDG_STATE_HOME` and `XDG_CONFIG_HOME`.
+- **Started by a client.** Any hc call that finds no core starts one, even
+  `hc server status`, and with an explicit `HC_SOCKET` too. A core the proxy
+  started would hold the proxy's environment (the bot token) and its privacy
+  permissions. So the proxy and the launcher never start one: before every hc
+  call they connect to the session's socket, and make no call when nothing
+  listens there. The launch then fails and is retried on the next message, and
+  the proxy logs once that the core is down. Calls also run with only `HOME`,
+  `PATH`, `USER`, `LANG`, `TMPDIR`, `HC_SESSION`, `HC_SOCKET`,
+  `XDG_STATE_HOME` and `XDG_CONFIG_HOME`.
 - **Started or restarted inside another Claude.** `hc server restart` re-execs
   the core in the environment of whoever runs it. Run from an agent's shell,
   every later terminal inherits that agent's identity (`CLAUDECODE`,
@@ -61,20 +66,23 @@ with a protected-folder listing inside an hc terminal:
 | --- | --- |
 | From a shell under a process that has Full Disk Access | allowed |
 | As its own launchd job (`herdr-core serve`), no grant | denied |
+| As its own launchd job, Full Disk Access granted to `herdr-core` | allowed |
+| Restarted by its holder after that job's core crashed | allowed |
 | Auto-started by the first hc call of a launchd bash job | denied |
 
-So the outcome depends on which process happens to make the first call.
-Run the core as a dedicated launchd agent whose program is the `herdr-core`
+So the outcome depends on which process starts the core.
+Run it as a dedicated launchd agent whose program is the `herdr-core`
 binary itself (`ProgramArguments: [<path>/herdr-core, serve]`, `RunAtLoad`,
 `KeepAlive`, a clean `EnvironmentVariables` with `HOME`, `USER`, `PATH`,
-`LANG` and a dedicated `HC_SESSION`), and grant Full Disk Access to that
-binary. The release binary is ad-hoc signed, so the grant is pinned to its
-code hash and must be given again after every `hc update`.
+`LANG` and `HC_SESSION`), and grant Full Disk Access to that binary. The
+release binary is ad-hoc signed, so the grant is pinned to its code hash: an
+update replaces the binary and the grant stops matching once the core
+restarts on the new one.
 
-A dedicated session (for example `HC_SESSION=topics`) keeps topic terminals
-apart from interactive hc use and lets the agent own that core alone. Its
-`config.toml` should set `notes = false`, so hc never types notes into a
-terminal; the launcher also starts every topic with `--no-parent --no-notify`.
+Topic terminals live in their own session, `topics` by default
+(`TELEGRAM_HC_SESSION`), apart from interactive hc use, so the agent owns that
+core alone. The launcher starts every topic with `--no-parent --no-notify`, so
+hc never types notes about it into another terminal.
 
 ## Restart and failure semantics
 
@@ -98,6 +106,12 @@ terminal would return as a bare shell, which reads as missing; the launcher
 never uses `--keep`.
 
 ## Known gaps
+
+- After an hc update the Full Disk Access grant no longer matches the binary.
+  Topics then run without it until the grant is given again, and nothing
+  detects that yet.
+- An updater or a person that restarts the core with `hc server restart` hands
+  it their own environment and permissions.
 
 - The launcher's dialog watcher answers only the development-channel dialog.
   The spawn directory must already be a trusted folder, as on every backend.

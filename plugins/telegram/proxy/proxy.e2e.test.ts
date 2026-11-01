@@ -186,6 +186,8 @@ let askUrl: string
 const ASK_TOKEN = 'e2e-ask-token'
 let api: ReturnType<typeof Bun.serve>
 let qwenImage: ReturnType<typeof Bun.serve>
+// Accepts connections as the hc session's running core does.
+let hcCore: ReturnType<typeof Bun.listen>
 const generations: Record<string, any>[] = []
 const calls: Call[] = []
 const pending: unknown[] = []
@@ -372,6 +374,7 @@ beforeAll(async () => {
     },
   })
 
+  hcCore = Bun.listen({ unix: join(root, 'hc.sock'), socket: { data() {} } })
   qwenImage = Bun.serve({
     port: 0,
     async fetch(req) {
@@ -418,6 +421,7 @@ beforeAll(async () => {
       // Stand-ins or absent binaries, so nothing here runs a real CLI or reaches a real Herdr
       TELEGRAM_HERDR_BIN: join(home, '.local', 'bin', 'herdr'),
       TELEGRAM_HC_BIN: join(home, '.local', 'bin', 'hc'),
+      HC_SOCKET: join(root, 'hc.sock'),
       TELEGRAM_TOPICS_HC_TOPICS: '61,62,63',
       TELEGRAM_OPENCODE_BIN: join(home, '.local', 'bin', 'opencode'),
       TELEGRAM_OPENCODE_PROJECT_DIR: join(root, 'oc-project'),
@@ -443,6 +447,7 @@ afterAll(() => {
   proxy?.kill()
   api?.stop(true)
   qwenImage?.stop(true)
+  hcCore?.stop(true)
 })
 
 describe('the proxy, end to end', () => {

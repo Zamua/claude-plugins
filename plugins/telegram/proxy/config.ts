@@ -143,8 +143,10 @@ export const MUX_KIND = resolveMux()
 export const HERDR_BIN = process.env.TELEGRAM_HERDR_BIN ||
   (existsSync('/opt/homebrew/bin/herdr') ? '/opt/homebrew/bin/herdr' : 'herdr')
 // herdr-core (`hc`): topics listed here run under it, the rest under the multiplexer
-// above, so topics move one at a time. HC_SESSION and XDG_STATE_HOME in the
-// proxy's environment pick the hc session, as for the hc CLI itself.
+// above, so topics move one at a time. Their terminals live in their own hc
+// session, whose core its own launchd agent starts; XDG_STATE_HOME or HC_SOCKET
+// in the proxy's environment place its socket, as for the hc CLI itself.
+export const HC_SESSION = (process.env.TELEGRAM_HC_SESSION || 'topics').trim()
 export const HC_BIN = process.env.TELEGRAM_HC_BIN ||
   (existsSync(join(homedir(), '.local', 'bin', 'hc')) ? join(homedir(), '.local', 'bin', 'hc') : 'hc')
 export const HC_TOPICS: ReadonlySet<string> = new Set(

@@ -3,6 +3,7 @@
 // `hc connect`, so a list returns every terminal's labels, reported status and
 // foreground program at once.
 import { spawnSync } from 'child_process'
+import { join } from 'path'
 import { hcRuntime, parseHcTerminals } from '../shared/hc-terminals'
 import type { HcTerminal } from '../shared/hc-terminals'
 import type { AgentRuntime } from '../shared/herdr-panes'
@@ -12,19 +13,54 @@ import type { MultiplexerPort } from './multiplexer'
 /** One hc API request; null when hc refused it or could not be reached. */
 export type HcCall = (method: string, params: Record<string, unknown>) => unknown | null
 
-// A call that finds no core starts one, the core keeps the environment it was
-// started in, and every terminal inherits it, so hc runs with only what picks its
-// session: never the proxy's own variables, the bot token among them.
-const HC_ENV = ['HOME', 'PATH', 'USER', 'LANG', 'TMPDIR', 'HC_SESSION', 'HC_SOCKET', 'XDG_STATE_HOME', 'XDG_CONFIG_HOME']
+// The core keeps the environment it was started in and every terminal inherits
+// it, so hc runs with only what places its session: never the proxy's own
+// variables, the bot token among them.
+const HC_ENV = ['HOME', 'PATH', 'USER', 'LANG', 'TMPDIR', 'HC_SOCKET', 'XDG_STATE_HOME', 'XDG_CONFIG_HOME']
 
-export function hcEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(HC_ENV.flatMap(k => (env[k] !== undefined ? [[k, env[k] as string]] : [])))
+export function hcEnvironment(env: NodeJS.ProcessEnv, session: string): Record<string, string> {
+  const kept = HC_ENV.flatMap(k => (env[k] !== undefined ? [[k, env[k] as string]] : []))
+  return { ...Object.fromEntries(kept), HC_SESSION: session }
 }
 
-/** Requests through `hc connect`, which bridges stdin and stdout to the core's socket. */
-export function hcConnect(bin: string, log: (m: string) => void): HcCall {
-  const env = hcEnvironment(process.env)
+/** Where the session's core listens, as the hc CLI finds it. */
+export function hcSocketPath(env: Record<string, string | undefined>): string {
+  const session = env.HC_SESSION || 'default'
+  const state = env.XDG_STATE_HOME || join(env.HOME ?? '', '.local', 'state')
+  return env.HC_SOCKET || join(state, 'herdr-core', session, `${session}.sock`)
+}
+
+// Connects and leaves at once: the core never has to answer or close first.
+const CONNECT = 'use IO::Socket::UNIX; exit(IO::Socket::UNIX->new(Peer => $ARGV[0]) ? 0 : 1)'
+
+/** Whether a core accepts connections on `socket`; a stale socket file does not. */
+export function hcCoreListening(socket: string): boolean {
+  return spawnSync('/usr/bin/perl', ['-e', CONNECT, socket], { timeout: 2_000 }).status === 0
+}
+
+/**
+ * Requests through `hc connect`, which bridges stdin and stdout to the core's
+ * socket. Any hc call that finds no core starts one, and that core would hold
+ * the proxy's macOS privacy permissions instead of its own grant, so no call is
+ * made while the session's core is down: its launchd agent starts it.
+ */
+export function hcConnect(
+  bin: string,
+  session: string,
+  log: (m: string) => void,
+  coreUp?: () => boolean,
+): HcCall {
+  const env = hcEnvironment(process.env, session)
+  const up = coreUp ?? (() => hcCoreListening(hcSocketPath(env)))
+  let down = false
   return (method, params) => {
+    if (!up()) {
+      if (!down) log(`hc core for session ${session} is not running; its launchd agent starts it, so no hc call is made`)
+      down = true
+      return null
+    }
+    if (down) log(`hc core for session ${session} is running again`)
+    down = false
     const request = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
     const r = spawnSync(bin, ['connect'], { input: `${request}\n`, encoding: 'utf8', timeout: 10_000, env })
     if (r.status !== 0 && !r.stdout) {
