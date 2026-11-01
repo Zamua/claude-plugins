@@ -139,6 +139,7 @@ import {
   ENV_FILES,
   FAILOVER_HOOK,
   GROUP_CHAT_ID,
+  HERDR_BIN,
   HERDR_LAUNCH_SCRIPT,
   INBOX_DIR,
   LAUNCH_SCRIPT,
@@ -169,6 +170,7 @@ import {
   VOICE,
 } from './config'
 import { log, noticeFailed, reason } from './log'
+import type { TopicContext, TopicHarnessAdapter } from './harness/topic-harness-adapter'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
 import { mux } from './topics/mux'
@@ -590,26 +592,14 @@ function handleTopics(): Response {
 // (Requires the bot to be a group admin with can_manage_topics.)
 async function handleTopicCreate(req: Request): Promise<Response> {
   const { name, harness } = parseTopicCreate(await req.json())
-  // Resolve a viable route before creating the Telegram topic. A catalog/auth
-  // failure must not strand an empty forum topic.
-  const initialAntigravityRoute = harness === 'antigravity'
-    ? await defaultAntigravityRoute()
-    : undefined
+  const lockNewTopic = harness === 'claude' ? undefined : await harnessOfKind(harness).prepareTopic(name)
   const created = await bot.api.createForumTopic(String(GROUP_CHAT_ID), name)
   const topic = String(created.message_thread_id)
   const st = getTopic(topic)
   st.name = name
   topicNames.set(topic, name)
   saveRegistry()
-  if (initialAntigravityRoute) {
-    antigravityService.activate(antigravityTopic(topic, name, initialAntigravityRoute))
-    await antigravityService.start(topic)
-  } else if (harness === 'opencode') {
-    opencodeService.activate(opencodeTopic(topic, name))
-    await opencodeService.start(topic)
-  } else if (harness === 'localgen') {
-    localgenService.activate(localgenTopic(topic, name))
-  }
+  if (lockNewTopic) await lockNewTopic(topic)
   log(`created + registered topic ${topic} "${name}"`)
   return json({
     topic,
@@ -801,7 +791,7 @@ const antigravityRepository = new JsonTopicRepository<AntigravityTopic>(
   ANTIGRAVITY_TOPICS_FILE, 'Antigravity', antigravityTopicFromRecord,
 )
 const antigravityRuntime = ANTIGRAVITY_ENABLED
-  ? new HerdrAntigravityRuntime(ANTIGRAVITY_BIN, SPAWN_DIR, HERDR_LAUNCH_SCRIPT, PROXY_URL)
+  ? new HerdrAntigravityRuntime(ANTIGRAVITY_BIN, SPAWN_DIR, HERDR_LAUNCH_SCRIPT, PROXY_URL, HERDR_BIN)
   : new DisabledAntigravityRuntime()
 const antigravityService = new AntigravityTopicService(
   antigravityRepository,
@@ -833,7 +823,7 @@ const opencodeRuntime = new HerdrOpencodeRuntime(
   PROXY_URL,
   process.execPath,
   join(PLUGIN_ROOT, 'server.ts'),
-  undefined,
+  HERDR_BIN,
   undefined,
   undefined,
   OPENCODE_MODEL,
@@ -923,10 +913,7 @@ const localgenService = new LocalgenTopicService(
 )
 
 function topicHarnessOf(topic: string): TopicHarness {
-  if (antigravityService.isLocked(topic)) return 'antigravity'
-  if (opencodeService.isLocked(topic)) return 'opencode'
-  if (localgenService.isLocked(topic)) return 'localgen'
-  return 'claude'
+  return harnessFor(topic)?.kind ?? 'claude'
 }
 
 // True for every harness that owns the topic instead of a Claude pane.
@@ -1325,36 +1312,9 @@ async function handleLocalgenModelCommand(chatId: string, topic: string, argumen
 // and lost. The nudge asks for one line back, so a respawn that fails is a
 // visible silence rather than a quiet one.
 async function handleRelaunch(chatId: string, topic: string, fromId: string): Promise<void> {
-  if (antigravityService.isLocked(topic)) {
-    const current = antigravityService.get(topic)!
-    const result = await antigravityService.requestRelaunch(topic)
-    await sayIn(
-      chatId,
-      topic,
-      result.pending
-        ? `Antigravity is busy; relaunch is queued for the next idle boundary. It will keep conversation ` +
-          `${current.conversationId ?? 'not started'} and reopen in Herdr.`
-        : `Relaunched Antigravity in Herdr with the same conversation ` +
-          `${result.topic.conversationId ?? 'not started'} and freshly loaded MCP/configuration.`,
-    )
-    return
-  }
-  if (opencodeService.isLocked(topic)) {
-    const current = opencodeService.get(topic)!
-    const result = await opencodeService.requestRelaunch(topic)
-    await sayIn(
-      chatId,
-      topic,
-      result.pending
-        ? `OpenCode is busy; relaunch is queued for the next idle boundary. It will keep session ` +
-          `${current.opencodeSessionId ?? 'not started'} and reopen in Herdr.`
-        : `Relaunched OpenCode in Herdr with the same session ` +
-          `${result.topic.opencodeSessionId ?? 'not started'} and freshly loaded MCP/configuration.`,
-    )
-    return
-  }
-  if (localgenService.isLocked(topic)) {
-    await sayIn(chatId, topic, 'localgen runs no agent; there is nothing to relaunch. Restart the qwen-image server from the gpu topic if needed.')
+  const harness = harnessFor(topic)
+  if (harness) {
+    await harness.relaunch({ chatId, topic, fromId })
     return
   }
   if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
@@ -1392,6 +1352,132 @@ async function handleRelaunch(chatId: string, topic: string, fromId: string): Pr
   })
   ensureSession(topic)
 }
+
+
+// ---- harness registry --------------------------------------------------------
+//
+// Each harness that owns a topic instead of a Claude pane answers that topic's
+// commands and messages through one adapter; a topic none owns is a Claude topic.
+
+const antigravityHarness: TopicHarnessAdapter = {
+  kind: 'antigravity',
+  lockCommand: ANTIGRAVITY_RE,
+  attachments: 'eager',
+  tracesInbound: false,
+  owns: topic => antigravityService.isLocked(topic),
+  lock: c => activateAntigravityTopic(c.chatId, c.topic, c.fromId),
+  model: (c, argument) => handleAntigravityModelCommand(c.chatId, c.topic, c.fromId, argument),
+  usage: async ({ chatId, topic }) => {
+    try {
+      await sayIn(chatId, topic, antigravityUsageText(await refreshAntigravityUsage(true)))
+    } catch (error) {
+      await sayIn(chatId, topic, `Could not read Antigravity usage: ${reason(error)}`)
+    }
+  },
+  relaunch: async ({ chatId, topic }) => {
+    const current = antigravityService.get(topic)!
+    const result = await antigravityService.requestRelaunch(topic)
+    await sayIn(
+      chatId,
+      topic,
+      result.pending
+        ? `Antigravity is busy; relaunch is queued for the next idle boundary. It will keep conversation ` +
+          `${current.conversationId ?? 'not started'} and reopen in Herdr.`
+        : `Relaunched Antigravity in Herdr with the same conversation ` +
+          `${result.topic.conversationId ?? 'not started'} and freshly loaded MCP/configuration.`,
+    )
+  },
+  rename: (topic, name) => antigravityService.rename(topic, name),
+  receive: async ({ topic }, turn) => {
+    log(`received Antigravity Telegram turn ${turn.messageId ?? '(no id)'} for topic ${topic}`)
+    void antigravityService.submitTurn(topic, { content: turn.content, meta: turn.meta })
+      .then(() => log(`settled Antigravity Telegram turn ${turn.messageId ?? '(no id)'} for topic ${topic}`))
+  },
+  sent: (topic, messages) =>
+    log(`sent Antigravity Telegram reply for topic ${topic} (${messages} message${messages === 1 ? '' : 's'})`),
+  prepareTopic: async name => {
+    // Resolved before Telegram creates the topic: a catalog or auth failure must not strand an empty one.
+    const route = await defaultAntigravityRoute()
+    return async topic => {
+      antigravityService.activate(antigravityTopic(topic, name, route))
+      await antigravityService.start(topic)
+    }
+  },
+}
+
+const opencodeHarness: TopicHarnessAdapter = {
+  kind: 'opencode',
+  lockCommand: LOCALCODE_RE,
+  attachments: 'eager',
+  tracesInbound: false,
+  owns: topic => opencodeService.isLocked(topic),
+  lock: c => activateLocalcodeTopic(c.chatId, c.topic, c.fromId),
+  model: (c, argument) => handleOpencodeModelCommand(c.chatId, c.topic, argument),
+  usage: ({ chatId, topic }) =>
+    sayIn(chatId, topic, 'OpenCode runs on the local Qwen server; there is no quota to report.').then(() => {}),
+  relaunch: async ({ chatId, topic }) => {
+    const current = opencodeService.get(topic)!
+    const result = await opencodeService.requestRelaunch(topic)
+    await sayIn(
+      chatId,
+      topic,
+      result.pending
+        ? `OpenCode is busy; relaunch is queued for the next idle boundary. It will keep session ` +
+          `${current.opencodeSessionId ?? 'not started'} and reopen in Herdr.`
+        : `Relaunched OpenCode in Herdr with the same session ` +
+          `${result.topic.opencodeSessionId ?? 'not started'} and freshly loaded MCP/configuration.`,
+    )
+  },
+  rename: (topic, name) => opencodeService.rename(topic, name),
+  receive: async ({ topic }, turn) => {
+    log(`received OpenCode Telegram turn ${turn.messageId ?? '(no id)'} for topic ${topic}`)
+    void opencodeService.submitTurn(topic, { content: turn.content, meta: turn.meta })
+      .then(() => log(`settled OpenCode Telegram turn ${turn.messageId ?? '(no id)'} for topic ${topic}`))
+  },
+  sent: (topic, messages) => {
+    opencodeLastSentAt.set(topic, Date.now())
+    log(`sent OpenCode Telegram reply for topic ${topic} (${messages} message${messages === 1 ? '' : 's'})`)
+  },
+  prepareTopic: async name => async topic => {
+    opencodeService.activate(opencodeTopic(topic, name))
+    await opencodeService.start(topic)
+  },
+}
+
+const localgenHarness: TopicHarnessAdapter = {
+  kind: 'localgen',
+  lockCommand: LOCALGEN_RE,
+  attachments: 'none',
+  tracesInbound: true,
+  owns: topic => localgenService.isLocked(topic),
+  lock: (c, argument) => activateLocalgenTopic(c.chatId, c.topic, c.fromId, argument),
+  model: (c, argument) => handleLocalgenModelCommand(c.chatId, c.topic, argument),
+  usage: ({ chatId, topic }) =>
+    sayIn(chatId, topic, 'localgen runs on the local qwen-image server; there is no quota to report.').then(() => {}),
+  relaunch: async ({ chatId, topic }) => {
+    await sayIn(chatId, topic, 'localgen runs no agent; there is nothing to relaunch. Restart the qwen-image server from the gpu topic if needed.')
+  },
+  rename: (topic, name) => localgenService.rename(topic, name),
+  // The text is the prompt; nothing is downloaded, queued or spawned.
+  receive: async ({ chatId, topic }, turn) => {
+    if (typeof turn.text !== 'string') {
+      await sayIn(chatId, topic, 'localgen takes text prompts only.')
+      return
+    }
+    log(`received localgen prompt ${turn.messageId ?? '(no id)'} for topic ${topic}`)
+    void localgenService.submit(topic, turn.text)
+      .then(() => log(`settled localgen prompt ${turn.messageId ?? '(no id)'} for topic ${topic}`))
+      .catch(error => log(`localgen prompt ${turn.messageId ?? '(no id)'} for topic ${topic} threw: ${error}`))
+  },
+  sent: () => {},
+  prepareTopic: async name => async topic => {
+    localgenService.activate(localgenTopic(topic, name))
+  },
+}
+
+const HARNESSES: readonly TopicHarnessAdapter[] = [antigravityHarness, opencodeHarness, localgenHarness]
+const harnessFor = (topic: string) => HARNESSES.find(h => h.owns(topic))
+const harnessOfKind = (kind: LockedHarness) => HARNESSES.find(h => h.kind === kind) as TopicHarnessAdapter
 
 // ---- provider routing application service + Telegram adapter ---------------
 
@@ -1788,7 +1874,8 @@ bot.on('message', async ctx => {
 
   const topic = msg.message_thread_id != null ? String(msg.message_thread_id) : 'general'
   // One line per inbound message so a topic that never answers can be traced to arrival or to routing.
-  if (localgenService.isLocked(topic)) log(`inbound topic ${topic} message ${msg.message_id ?? '(no id)'} text=${typeof msg.text === 'string'} kind=${Object.keys(msg).filter(k => ['text','photo','document','voice','sticker','location','venue','forum_topic_created','forum_topic_edited'].includes(k)).join(',') || 'other'}`)
+  const harness = harnessFor(topic)
+  if (harness?.tracesInbound) log(`inbound topic ${topic} message ${msg.message_id ?? '(no id)'} text=${typeof msg.text === 'string'} kind=${Object.keys(msg).filter(k => ['text','photo','document','voice','sticker','location','venue','forum_topic_created','forum_topic_edited'].includes(k)).join(',') || 'other'}`)
 
   // Secret drop runs before every relay path, the square included, so the
   // value can reach neither a topic-Claude nor a peer. See handleSecretDrop.
@@ -1796,18 +1883,13 @@ bot.on('message', async ctx => {
     await handleSecretDrop(String(ctx.chat.id), topic, msg.message_id, String(ctx.from?.id ?? ''), msg.text)
     return
   }
-  if (typeof msg.text === 'string' && ANTIGRAVITY_RE.test(msg.text)) {
-    await activateAntigravityTopic(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
-    return
-  }
-  if (typeof msg.text === 'string' && LOCALCODE_RE.test(msg.text)) {
-    await activateLocalcodeTopic(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
-    return
-  }
-  const localgenMatch = typeof msg.text === 'string' ? LOCALGEN_RE.exec(msg.text) : null
-  if (localgenMatch) {
-    await activateLocalgenTopic(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), localgenMatch[1] ?? '')
-    return
+  const here: TopicContext = { chatId: String(ctx.chat.id), topic, fromId: String(ctx.from?.id ?? '') }
+  for (const h of HARNESSES) {
+    const lockMatch = typeof msg.text === 'string' ? h.lockCommand.exec(msg.text) : null
+    if (lockMatch) {
+      await h.lock(here, lockMatch[1] ?? '')
+      return
+    }
   }
   if (typeof msg.text === 'string' && RELAUNCH_RE.test(msg.text)) {
     await handleRelaunch(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''))
@@ -1815,14 +1897,8 @@ bot.on('message', async ctx => {
   }
   const modelMatch = MODEL_RE.exec(msg.text ?? '')
   if (modelMatch) {
-    if (antigravityService.isLocked(topic)) {
-      await handleAntigravityModelCommand(
-        String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), modelMatch[1] ?? '',
-      )
-    } else if (opencodeService.isLocked(topic)) {
-      await handleOpencodeModelCommand(String(ctx.chat.id), topic, modelMatch[1] ?? '')
-    } else if (localgenService.isLocked(topic)) {
-      await handleLocalgenModelCommand(String(ctx.chat.id), topic, modelMatch[1] ?? '')
+    if (harness) {
+      await harness.model(here, modelMatch[1] ?? '')
     } else {
       await handleModelCommand(String(ctx.chat.id), topic, String(ctx.from?.id ?? ''), modelMatch[1] ?? '')
     }
@@ -1831,16 +1907,8 @@ bot.on('message', async ctx => {
   if (USAGE_RE.test(msg.text ?? '')) {
     if (!ADMIN_USER_ID || String(ctx.from?.id ?? '') !== ADMIN_USER_ID) {
       await sayIn(String(ctx.chat.id), topic, 'Only the operator can inspect provider usage.')
-    } else if (antigravityService.isLocked(topic)) {
-      try {
-        await sayIn(String(ctx.chat.id), topic, antigravityUsageText(await refreshAntigravityUsage(true)))
-      } catch (error) {
-        await sayIn(String(ctx.chat.id), topic, `Could not read Antigravity usage: ${reason(error)}`)
-      }
-    } else if (opencodeService.isLocked(topic)) {
-      await sayIn(String(ctx.chat.id), topic, 'OpenCode runs on the local Qwen server; there is no quota to report.')
-    } else if (localgenService.isLocked(topic)) {
-      await sayIn(String(ctx.chat.id), topic, 'localgen runs on the local qwen-image server; there is no quota to report.')
+    } else if (harness) {
+      await harness.usage(here)
     } else {
       await refreshProviderCapacity()
       await sayIn(String(ctx.chat.id), topic, capacityText())
@@ -1873,9 +1941,7 @@ bot.on('message', async ctx => {
     topicNames.set(topic, nm)
     const st = topics.get(topic)
     if (st && !st.name) st.name = nm
-    if (antigravityService.isLocked(topic)) antigravityService.rename(topic, nm)
-    if (opencodeService.isLocked(topic)) opencodeService.rename(topic, nm)
-    if (localgenService.isLocked(topic)) localgenService.rename(topic, nm)
+    harness?.rename(topic, nm)
     log(`learned topic ${topic} name "${nm}"`)
     return
   }
@@ -1893,9 +1959,7 @@ bot.on('message', async ctx => {
         st.name = nm
         saveRegistry()
       }
-      if (antigravityService.isLocked(topic)) antigravityService.rename(topic, nm)
-      if (opencodeService.isLocked(topic)) opencodeService.rename(topic, nm)
-      if (localgenService.isLocked(topic)) localgenService.rename(topic, nm)
+      harness?.rename(topic, nm)
       log(`topic ${topic} renamed to "${nm}"`)
     }
     return
@@ -1930,21 +1994,9 @@ bot.on('message', async ctx => {
   const desc = describeMessage(msg)
   if (!desc) return // service message with nothing to relay
 
-  // localgen: the text IS the prompt; nothing is downloaded, queued, or spawned.
-  if (localgenService.isLocked(topic)) {
-    if (typeof msg.text !== 'string') {
-      await sayIn(String(ctx.chat.id), topic, 'localgen takes text prompts only.')
-      return
-    }
-    log(`received localgen prompt ${msg.message_id ?? '(no id)'} for topic ${topic}`)
-    void localgenService.submit(topic, msg.text)
-      .then(() => log(`settled localgen prompt ${msg.message_id ?? '(no id)'} for topic ${topic}`))
-      .catch(error => log(`localgen prompt ${msg.message_id ?? '(no id)'} for topic ${topic} threw: ${error}`))
-    return
-  }
-
+  const takesFiles = harness?.attachments !== 'none'
   let imagePath: string | undefined
-  if (desc.photo) {
+  if (takesFiles && desc.photo) {
     imagePath = (await downloadFile(desc.photo.file_id, desc.photo.file_unique_id)) ?? undefined
   }
 
@@ -1953,13 +2005,12 @@ bot.on('message', async ctx => {
   // proxy eagerly materializes non-photo attachments and supplies the safe
   // local path in the channel metadata instead.
   let attachmentPath: string | undefined
-  const eagerAttachments = antigravityService.isLocked(topic) || opencodeService.isLocked(topic)
-  if (eagerAttachments && desc.attachment && !imagePath) {
+  if (harness?.attachments === 'eager' && desc.attachment && !imagePath) {
     attachmentPath = (await downloadFile(desc.attachment.file_id, desc.attachment.name)) ?? undefined
   }
 
   let voiceTranscribed = false
-  if (desc.attachment?.kind === 'voice') {
+  if (takesFiles && desc.attachment?.kind === 'voice') {
     const text = await transcribeVoice(VOICE, downloadFile, desc.attachment.file_id, log)
     if (text) {
       desc.content = (msg.caption ? `${msg.caption}\n\n` : '') + `${VOICE_TAG}\n${text}`
@@ -1989,16 +2040,13 @@ bot.on('message', async ctx => {
       : {}),
   }
 
-  if (antigravityService.isLocked(topic)) {
-    log(`received Antigravity Telegram turn ${msg.message_id ?? '(no id)'} for topic ${topic}`)
-    void antigravityService.submitTurn(topic, { content: desc.content, meta })
-      .then(() => log(`settled Antigravity Telegram turn ${msg.message_id ?? '(no id)'} for topic ${topic}`))
-    return
-  }
-  if (opencodeService.isLocked(topic)) {
-    log(`received OpenCode Telegram turn ${msg.message_id ?? '(no id)'} for topic ${topic}`)
-    void opencodeService.submitTurn(topic, { content: desc.content, meta })
-      .then(() => log(`settled OpenCode Telegram turn ${msg.message_id ?? '(no id)'} for topic ${topic}`))
+  if (harness) {
+    await harness.receive(here, {
+      ...(msg.message_id != null ? { messageId: msg.message_id } : {}),
+      ...(typeof msg.text === 'string' ? { text: msg.text } : {}),
+      content: desc.content,
+      meta,
+    })
     return
   }
 
@@ -2420,12 +2468,7 @@ async function handleSend(req: Request): Promise<Response> {
     ids.push(sent.message_id)
   }
 
-  if (antigravityService.isLocked(topic)) {
-    log(`sent Antigravity Telegram reply for topic ${topic} (${ids.length} message${ids.length === 1 ? '' : 's'})`)
-  } else if (opencodeService.isLocked(topic)) {
-    opencodeLastSentAt.set(topic, Date.now())
-    log(`sent OpenCode Telegram reply for topic ${topic} (${ids.length} message${ids.length === 1 ? '' : 's'})`)
-  }
+  harnessFor(topic)?.sent(topic, ids.length)
 
   return json({ message_ids: ids })
 }

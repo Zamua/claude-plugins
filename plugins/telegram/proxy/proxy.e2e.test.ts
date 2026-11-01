@@ -3,6 +3,7 @@ import type { Subprocess } from 'bun'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
+import { ANTIGRAVITY_DISABLED_MESSAGE } from './adapters/disabled-antigravity-runtime'
 
 // The proxy as a whole, booted from a copy of the plugin (so no .env of the
 // checkout reaches it) against a stand-in Bot API and a stand-in tmux and
@@ -41,6 +42,57 @@ const FAKE_CLAUDE = `#!/usr/bin/env bash
 exit 0
 `
 
+// Herdr and OpenCode stand-ins for a localcode topic: panes live in a JSON
+// file, `pane run` runs the pane script at once, and the opencode "TUI"
+// records its argv on its pane and, unless resuming, creates one session.
+const FAKE_HERDR = `#!/usr/bin/env python3
+import json, os, subprocess, sys
+def dumps(v): return json.dumps(v, separators=(',', ':'))
+home = os.environ['HOME']; fake = os.path.join(home, 'fake'); st = os.path.join(fake, 'herdr.json')
+state = json.load(open(st)) if os.path.exists(st) else {'panes': [], 'n': 0}
+a = sys.argv[1:]
+open(os.path.join(fake, 'herdr.calls'), 'a').write(' '.join(a) + '\\n')
+def save(): json.dump(state, open(st, 'w'))
+cmd = ' '.join(a[:2])
+if cmd == 'pane list':
+    print(dumps({'result': {'panes': [{'label': p['label'], 'pane_id': p['id'], 'agent_status': 'idle'} for p in state['panes']]}}))
+elif cmd == 'workspace create':
+    state['n'] += 1; pid = 'p%d' % state['n']
+    state['panes'].append({'id': pid, 'label': a[a.index('--label') + 1], 'argv': []}); save()
+    print(dumps({'result': {'workspace': {'workspace_id': 'w%d' % state['n']}, 'pane': {'pane_id': pid}}}))
+elif cmd == 'pane rename':
+    for p in state['panes']:
+        if p['id'] == a[2]: p['label'] = a[3]
+    save()
+elif cmd == 'pane run':
+    subprocess.run(['bash', '-c', a[3]], env={'HOME': home, 'FAKE_PANE': a[2], 'PATH': '/usr/bin:/bin'})
+elif cmd == 'pane process-info':
+    pid = a[a.index('--pane') + 1]
+    argv = next((p['argv'] for p in json.load(open(st))['panes'] if p['id'] == pid), [])
+    print(dumps({'result': {'process_info': {'foreground_processes': [{'name': 'opencode', 'argv': argv}]}}}))
+elif cmd == 'pane close':
+    state['panes'] = [p for p in state['panes'] if p['id'] != a[2]]; save()
+`
+const FAKE_OPENCODE = `#!/usr/bin/env python3
+import json, os, sys, time
+fake = os.path.join(os.environ['HOME'], 'fake'); sessions = os.path.join(fake, 'oc-sessions.json')
+a = sys.argv[1:]
+if a[:2] == ['session', 'list']:
+    print(open(sessions).read() if os.path.exists(sessions) else '[]'); sys.exit(0)
+if a[:2] == ['session', 'export']:
+    print(json.dumps({'messages': []})); sys.exit(0)
+if not os.environ.get('FAKE_PANE'): sys.exit(1)
+st = os.path.join(fake, 'herdr.json'); state = json.load(open(st))
+for p in state['panes']:
+    if p['id'] == os.environ.get('FAKE_PANE'): p['argv'] = ['opencode'] + a
+json.dump(state, open(st, 'w'))
+if '-s' not in a:
+    now = int(time.time() * 1000)
+    json.dump([{'id': 'ses_fake1', 'created': now, 'updated': now}], open(sessions, 'w'))
+`
+// A 1x1 PNG, as the qwen-image server would return one.
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
 type Call = { method: string; body: Record<string, any> }
 
 let root: string
@@ -49,6 +101,8 @@ let state: string
 let proxy: Subprocess
 let proxyUrl: string
 let api: ReturnType<typeof Bun.serve>
+let qwenImage: ReturnType<typeof Bun.serve>
+const generations: Record<string, any>[] = []
 const calls: Call[] = []
 const pending: unknown[] = []
 let updateId = 1
@@ -59,7 +113,10 @@ const until = async <T>(what: string, probe: () => T | undefined | false, ms = 1
   for (;;) {
     const value = probe()
     if (value) return value
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}:\n${proxyLog()}`)
+    if (Date.now() > deadline) {
+      const sent = calls.filter(c => c.method === 'sendMessage').slice(-6).map(c => `${c.body.message_thread_id}: ${c.body.text}`)
+      throw new Error(`timed out waiting for ${what}\nlast messages:\n${sent.join('\n')}\n${proxyLog()}`)
+    }
     await Bun.sleep(100)
   }
 }
@@ -107,7 +164,7 @@ beforeAll(async () => {
 
   mkdirSync(join(home, '.local', 'bin'), { recursive: true })
   mkdirSync(join(home, 'fake'))
-  for (const [name, body] of [['tmux', FAKE_TMUX], ['claude', FAKE_CLAUDE]]) {
+  for (const [name, body] of [['tmux', FAKE_TMUX], ['claude', FAKE_CLAUDE], ['herdr', FAKE_HERDR], ['opencode', FAKE_OPENCODE]]) {
     writeFileSync(join(home, '.local', 'bin', name), body)
     chmodSync(join(home, '.local', 'bin', name), 0o700)
   }
@@ -133,12 +190,25 @@ beforeAll(async () => {
         if (pending.length === 0) await Bun.sleep(200)
         return ok(pending.splice(0))
       }
+      if (method === 'sendPhoto' || method === 'sendDocument') {
+        return ok({ message_id: messageId++, date: 0, chat: { id: Number(GROUP), type: 'supergroup' } })
+      }
       if (method === 'sendMessage') {
         return ok({ message_id: messageId++, date: 0, chat: { id: Number(GROUP), type: 'supergroup' }, text: body.text })
       }
       return ok(true)
     },
   })
+
+  qwenImage = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      if (new URL(req.url).pathname !== '/v1/images/generations') return new Response('no', { status: 404 })
+      generations.push(await req.json())
+      return Response.json({ data: [{ b64_json: PNG }] })
+    },
+  })
+  mkdirSync(join(root, 'oc-project'))
 
   const free = Bun.serve({ port: 0, fetch: () => new Response() })
   const port = free.port
@@ -162,8 +232,11 @@ beforeAll(async () => {
       TELEGRAM_TOPICS_SQUARE_TOPIC_ID: '900',
       TELEGRAM_TOPICS_SECRETS_USER_ID: String(OPERATOR),
       TELEGRAM_TOPICS_SECRETS_DIR: join(root, 'keys'),
-      // Absent binaries, so no capacity probe or catalog runs a real CLI
-      TELEGRAM_OPENCODE_BIN: join(root, 'absent', 'opencode'),
+      // Stand-ins or absent binaries, so nothing here runs a real CLI or reaches a real Herdr
+      TELEGRAM_HERDR_BIN: join(home, '.local', 'bin', 'herdr'),
+      TELEGRAM_OPENCODE_BIN: join(home, '.local', 'bin', 'opencode'),
+      TELEGRAM_OPENCODE_PROJECT_DIR: join(root, 'oc-project'),
+      LOCALGEN_PORT: String(qwenImage.port),
       TELEGRAM_PROVIDER_PROXY_BIN: join(root, 'absent', 'claude-code-proxy'),
       TELEGRAM_ANTIGRAVITY_BIN: join(root, 'absent', 'agy'),
     },
@@ -184,6 +257,7 @@ beforeAll(async () => {
 afterAll(() => {
   proxy?.kill()
   api?.stop(true)
+  qwenImage?.stop(true)
 })
 
 describe('the proxy, end to end', () => {
@@ -282,6 +356,47 @@ describe('the proxy, end to end', () => {
     const left = await fetch(`${proxyUrl}/reminders?topic=42`).then(r => r.json())
     expect(left.reminders).toEqual([])
   }, 30_000)
+
+  const said = (thread: number, pattern: RegExp) =>
+    calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === thread && pattern.test(c.body.text))
+
+  test('/localgen locks a fresh topic: a prompt becomes a photo, and its commands answer for the harness', async () => {
+    send(50, '/localgen pics')
+    await until('the localgen lock', () => said(50, /Locked this topic to qwen-image/))
+    send(50, 'a red cube steps:2 seed:7')
+    const asked = await until('the image request', () => generations[0])
+    expect([asked.prompt, asked.steps, asked.seed]).toEqual(['a red cube', 2, 7])
+    await until('the photo', () => calls.find(c => c.method === 'sendPhoto'))
+    send(50, '/model')
+    await until('the model status', () => said(50, /Harness: localgen \(locked\)/))
+    send(50, '/usage')
+    await until('the usage answer', () => said(50, /localgen runs on the local qwen-image server; there is no quota/))
+    send(50, '/relaunch')
+    await until('the relaunch answer', () => said(50, /localgen runs no agent; there is nothing to relaunch/))
+    expect(spawns().some(s => s.session.endsWith('-50'))).toBeFalse()
+  }, 30_000)
+
+  test('/antigravity with the harness switched off says so and locks nothing', async () => {
+    send(51, '/antigravity')
+    await until('the disabled answer', () =>
+      calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 51 && c.body.text === ANTIGRAVITY_DISABLED_MESSAGE))
+  }, 20_000)
+
+  test('/localcode locks a fresh topic to OpenCode in Herdr, types turns into it, and relaunches the same session', async () => {
+    send(60, '/localcode')
+    await until('the OpenCode lock', () => said(60, /Locked this topic to OpenCode .* Session: ses_fake1\./), 30_000)
+    const herdrCalls = () => readFileSync(join(home, 'fake', 'herdr.calls'), 'utf8')
+    send(60, 'hello qwen')
+    await until('the turn typed into the pane', () => /pane send-text p1 [\s\S]*hello qwen/.test(herdrCalls()))
+    send(60, '/relaunch')
+    await until('the relaunch answer', () => said(60, /(Relaunched OpenCode in Herdr with the same session|relaunch is queued[\s\S]*keep session) ses_fake1/), 30_000)
+    const resumed = await until('the pane resumed with -s', () => {
+      const panes: { label: string; argv: string[] }[] = JSON.parse(readFileSync(join(home, 'fake', 'herdr.json'), 'utf8')).panes
+      return panes.find(p => p.argv.includes('-s') && p.argv.includes('ses_fake1'))
+    }, 40_000)
+    expect(resumed.label).toMatch(/^oc-.*-60$/)
+    expect(spawns().some(s => s.session.endsWith('-60'))).toBeFalse()
+  }, 90_000)
 
   test('a topic bound to a missing conversation is told so and starts nothing', async () => {
     send(44, 'hello?')

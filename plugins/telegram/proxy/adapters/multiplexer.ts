@@ -1,4 +1,3 @@
-import { existsSync } from 'fs'
 import { spawnSync } from 'child_process'
 import { herdrAgentStatus, parseHerdrPanes } from './herdr-panes'
 import type { AgentRuntime, HerdrPane } from './herdr-panes'
@@ -66,7 +65,7 @@ export class TmuxMux implements MultiplexerPort {
 
 export class HerdrMux implements MultiplexerPort {
   readonly kind = 'herdr' as const
-  private readonly bin = existsSync('/opt/homebrew/bin/herdr') ? '/opt/homebrew/bin/herdr' : 'herdr'
+  constructor(private readonly bin: string) {}
 
   private panes(): Map<string, HerdrPane> {
     const result = spawnSync(this.bin, ['pane', 'list'], { encoding: 'utf8' })
@@ -127,6 +126,6 @@ export class HerdrMux implements MultiplexerPort {
   }
 }
 
-export function createMultiplexer(kind: 'tmux' | 'herdr'): MultiplexerPort {
-  return kind === 'herdr' ? new HerdrMux() : new TmuxMux()
+export function createMultiplexer(kind: 'tmux' | 'herdr', herdrBin: string): MultiplexerPort {
+  return kind === 'herdr' ? new HerdrMux(herdrBin) : new TmuxMux()
 }

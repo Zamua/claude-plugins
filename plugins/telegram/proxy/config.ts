@@ -138,6 +138,9 @@ function resolveMux(): 'tmux' | 'herdr' {
   return 'tmux'
 }
 export const MUX_KIND = resolveMux()
+// Herdr, which hosts herdr-backed Claude topics and every Antigravity and OpenCode topic.
+export const HERDR_BIN = process.env.TELEGRAM_HERDR_BIN ||
+  (existsSync('/opt/homebrew/bin/herdr') ? '/opt/homebrew/bin/herdr' : 'herdr')
 
 export const PROXY_URL = `http://localhost:${PORT}`
 
