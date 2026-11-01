@@ -91,11 +91,23 @@ MarkdownV2, the 4096-character split, forum threads, ForceReply, the group-scope
 command menu, `t.me/c` links and file downloads stay there, and
 `telegram-chat.test.ts` pins each Bot API call it makes.
 
-Plain outbound traffic goes through the port: the MCP's outbound routes, every
-proxy notice (`sayIn`), spawn notices, reminders, the square, the `/secret` drop,
-`/ask`, topic creation and the command menu. Still on grammy directly: the
-inline-keyboard pickers and their callbacks (routing, Antigravity, the permission
-relay), the harness fronts' typing indicators and photos, and inbound updates.
+Buttons are `Actions` (`proxy/chat/domain/actions.ts`): rows of a label and an
+`ActionIntent`, the typed meaning of the button (a route pick, a switch-back, a
+permission answer, an Antigravity pick...). Callers never build a keyboard or a
+callback string: the Telegram adapter renders intents as an inline keyboard
+through the callback codec (`telegram-callback.ts`, 64-byte callback data,
+tokens, and the old strings it must keep decoding), and hands a pressed button
+on as an `ActionPress` (the intent, its topic, the presser's id, the other
+buttons' intents, and `answer` / `update` / `clearActions`). A transport without
+buttons could render the same intents as numbered text. The pickers' paging and
+expiry and the legacy switch-back live in `chat/domain/pickers.ts`.
+
+Outbound traffic goes through the port: the MCP's outbound routes, every proxy
+notice (`sayIn`), spawn and turn-failed notices, reminders, the square, the
+`/secret` drop, `/ask`, topic creation, the command menu, the route and
+Antigravity pickers and the permission prompt. Still on grammy directly: the
+harness fronts' typing indicators, messages and photos, and inbound updates
+(including the gate in front of every button press).
 
 The MCP's `format: "markdownv2"` is the Telegram dialect the agent writes itself;
 the port carries it as `format: 'markdown'`, and the adapter's capabilities name
@@ -1118,7 +1130,8 @@ there is no agent to relaunch.
   - `proxy/square/`: the agent-to-agent square and its conversation registry.
   - `proxy/reminders/`: reminders; `domain/reminder.ts` validates.
   - `proxy/chat/`: the chat port (`domain/chat-port.ts`): what the proxy
-    asks of a chat transport, with no vendor in it.
+    asks of a chat transport, with no vendor in it; buttons and their
+    intents (`domain/actions.ts`) and picker rules (`domain/pickers.ts`).
   - `proxy/sent/`: the messages each topic's agent sent, kept so it can
     delete its own (`delete_message`) and nothing else.
   - `proxy/ask/`: asks from the phone (`POST /ask`); `domain/ask.ts` holds

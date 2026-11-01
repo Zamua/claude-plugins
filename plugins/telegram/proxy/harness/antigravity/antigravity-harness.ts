@@ -2,16 +2,14 @@
 // own Herdr workspace, with its own model catalog, usage pools and route.
 import { homedir } from 'os'
 import { join } from 'path'
-import { InlineKeyboard } from 'grammy'
-import type { Context } from 'grammy'
 import { routeLabel as antigravityRouteLabel } from './antigravity-cli'
 import { syncAntigravityTelegramMcp } from './antigravity-mcp-config'
 import { claudePluginSkillRoots, syncAntigravitySkills } from './antigravity-skill-interop'
 import { ANTIGRAVITY_DISABLED_MESSAGE, DisabledAntigravityRuntime } from './disabled-antigravity-runtime'
 import { HerdrAntigravityRuntime } from './herdr-antigravity-runtime'
 import { JsonTopicRepository } from '../json-topic-repository'
-import { encodeCallback, formatTime, MODELS_PER_PAGE, PICKER_TTL_MS } from '../../telegram/telegram-callback'
-import type { Callback } from '../../telegram/telegram-callback'
+import type { Action, ActionPress, Actions } from '../../chat/domain/actions'
+import { formatTime, MODELS_PER_PAGE, PICKER_TTL_MS } from '../../chat/domain/pickers'
 import { MAX_CHUNK_LIMIT, threadOf } from '../../telegram/telegram-messages'
 import type { AntigravityUsageWindow } from './antigravity-ports'
 import { AntigravityTopicService } from './antigravity-topic-service'
@@ -39,7 +37,7 @@ import type { HarnessPorts, TopicHarnessAdapter } from '../topic-harness-adapter
 // /antigravity: lock the current fresh topic to the Antigravity harness.
 const ANTIGRAVITY_RE = /^\/antigravity(?:@\w+)?\s*$/
 
-export function createAntigravityHarness({ api, sayIn, mayLockTopic }: HarnessPorts) {
+export function createAntigravityHarness({ api, chat, sayIn, mayLockTopic }: HarnessPorts) {
   const antigravityRepository = openOrSetAside('Antigravity topics', ANTIGRAVITY_TOPICS_FILE, () =>
     new JsonTopicRepository<AntigravityTopic>(ANTIGRAVITY_TOPICS_FILE, 'Antigravity', antigravityTopicFromRecord), log)
   const antigravityRuntime = ANTIGRAVITY_ENABLED
@@ -158,24 +156,23 @@ export function createAntigravityHarness({ api, sayIn, mayLockTopic }: HarnessPo
   async function antigravityModelPicker(
     topic: string,
     page = 0,
-  ): Promise<{ text: string; keyboard: InlineKeyboard }> {
+  ): Promise<{ text: string; actions: Actions }> {
     pruneAntigravitySelections()
     const models = await antigravityModels()
     const pages = Math.max(1, Math.ceil(models.length / MODELS_PER_PAGE))
     const safePage = Math.max(0, Math.min(page, pages - 1))
-    const keyboard = new InlineKeyboard()
-    for (const model of models.slice(safePage * MODELS_PER_PAGE, (safePage + 1) * MODELS_PER_PAGE)) {
-      keyboard.text(model.label, encodeCallback({ kind: 'antigravity-model', token: antigravitySelection(model, topic) })).row()
-    }
+    const actions: Actions = models.slice(safePage * MODELS_PER_PAGE, (safePage + 1) * MODELS_PER_PAGE).map(model =>
+      [{ label: model.label, intent: { kind: 'antigravity-model', token: antigravitySelection(model, topic) } }])
     if (pages > 1) {
-      if (safePage > 0) keyboard.text('Previous', encodeCallback({ kind: 'antigravity-models', topic, page: safePage - 1 }))
-      if (safePage + 1 < pages) keyboard.text('Next', encodeCallback({ kind: 'antigravity-models', topic, page: safePage + 1 }))
-      keyboard.row()
+      const nav: Action[] = []
+      if (safePage > 0) nav.push({ label: 'Previous', intent: { kind: 'antigravity-models', topic, page: safePage - 1 } })
+      if (safePage + 1 < pages) nav.push({ label: 'Next', intent: { kind: 'antigravity-models', topic, page: safePage + 1 } })
+      actions.push(nav)
     }
-    keyboard.text('Usage', encodeCallback({ kind: 'antigravity-usage', topic }))
+    actions.push([{ label: 'Usage', intent: { kind: 'antigravity-usage', topic } }])
     return {
       text: `Google / Antigravity subscription models${pages > 1 ? ` (${safePage + 1}/${pages})` : ''}:`,
-      keyboard,
+      actions,
     }
   }
 
@@ -203,16 +200,11 @@ export function createAntigravityHarness({ api, sayIn, mayLockTopic }: HarnessPo
       antigravityUsageSnapshot = current
       for (const pool of resets) {
         for (const topic of antigravityService.list()) {
-          await api.sendMessage(
-            String(GROUP_CHAT_ID),
-            `${pool} is available again on your Google / Antigravity subscription. ` +
-            'This topic was not switched automatically.',
-            {
-              ...threadOf(topic.topic),
-              reply_markup: new InlineKeyboard()
-                .text('Choose Antigravity model', encodeCallback({ kind: 'antigravity-models', topic: topic.topic, page: 0 })),
-            },
-          ).catch(error => log(`Antigravity reset notice failed for topic ${topic.topic}: ${error}`))
+          await chat.send(topic.topic, {
+            text: `${pool} is available again on your Google / Antigravity subscription. ` +
+              'This topic was not switched automatically.',
+            actions: [[{ label: 'Choose Antigravity model', intent: { kind: 'antigravity-models', topic: topic.topic, page: 0 } }]],
+          }).catch(error => log(`Antigravity reset notice failed for topic ${topic.topic}: ${error}`))
         }
       }
       return current
@@ -304,7 +296,7 @@ export function createAntigravityHarness({ api, sayIn, mayLockTopic }: HarnessPo
     }
     try {
       const picker = await antigravityModelPicker(topic)
-      await api.sendMessage(chatId, picker.text, { ...threadOf(topic), reply_markup: picker.keyboard })
+      await chat.send(topic, { text: picker.text, actions: picker.actions })
     } catch (error) {
       await sayIn(chatId, topic, `Could not load Antigravity models: ${reason(error)}`)
     }
@@ -312,20 +304,22 @@ export function createAntigravityHarness({ api, sayIn, mayLockTopic }: HarnessPo
 
 
 
-  // The Antigravity model picker's buttons; true when the callback was one of them.
-  async function handleCallback(ctx: Context, cb: Callback, currentTopic: string): Promise<boolean> {
+  // The Antigravity model picker's buttons; true when the press was one of them.
+  async function handleAction(press: ActionPress): Promise<boolean> {
+    const cb = press.intent
+    const currentTopic = press.topic
     if (cb.kind === 'antigravity-models') {
       const topic = cb.topic
       if (topic !== currentTopic || !antigravityService.isLocked(topic)) {
-        await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
+        await press.answer({ text: 'This picker belongs to another topic.', alert: true }).catch(() => {})
         return true
       }
       try {
         const picker = await antigravityModelPicker(topic, cb.page)
-        await ctx.editMessageText(picker.text, { reply_markup: picker.keyboard })
-        await ctx.answerCallbackQuery()
+        await press.update(picker.text, picker.actions)
+        await press.answer()
       } catch (error) {
-        await ctx.answerCallbackQuery({ text: `Could not load models: ${reason(error)}`, show_alert: true }).catch(() => {})
+        await press.answer({ text: `Could not load models: ${reason(error)}`, alert: true }).catch(() => {})
       }
       return true
     }
@@ -334,23 +328,20 @@ export function createAntigravityHarness({ api, sayIn, mayLockTopic }: HarnessPo
       pruneAntigravitySelections()
       const selection = antigravityModelSelections.get(cb.token)
       if (!selection) {
-        await ctx.answerCallbackQuery({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
+        await press.answer({ text: 'This model picker expired. Run /model again.' }).catch(() => {})
         return true
       }
       if (selection.topic !== currentTopic || !antigravityService.isLocked(selection.topic)) {
-        await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
+        await press.answer({ text: 'This picker belongs to another topic.', alert: true }).catch(() => {})
         return true
       }
-      const keyboard = new InlineKeyboard()
-      for (const effort of selection.model.efforts) {
+      const efforts: Actions = selection.model.efforts.map(effort => {
         const suffix = effort === selection.model.defaultEffort ? ' · default' : ''
-        keyboard.text(`${effort}${suffix}`, encodeCallback({ kind: 'antigravity-effort', token: cb.token, effort })).row()
-      }
-      keyboard.text('Back', encodeCallback({ kind: 'antigravity-models', topic: selection.topic, page: 0 }))
-      await ctx.editMessageText(`${selection.model.label}: choose reasoning effort`, {
-        reply_markup: keyboard,
-      }).catch(() => {})
-      await ctx.answerCallbackQuery().catch(() => {})
+        return [{ label: `${effort}${suffix}`, intent: { kind: 'antigravity-effort', token: cb.token, effort } }]
+      })
+      efforts.push([{ label: 'Back', intent: { kind: 'antigravity-models', topic: selection.topic, page: 0 } }])
+      await press.update(`${selection.model.label}: choose reasoning effort`, efforts).catch(() => {})
+      await press.answer().catch(() => {})
       return true
     }
 
@@ -359,11 +350,11 @@ export function createAntigravityHarness({ api, sayIn, mayLockTopic }: HarnessPo
       const selection = antigravityModelSelections.get(cb.token)
       const effort = cb.effort
       if (!selection || !selection.model.efforts.includes(effort)) {
-        await ctx.answerCallbackQuery({ text: 'This effort picker expired. Run /model again.' }).catch(() => {})
+        await press.answer({ text: 'This effort picker expired. Run /model again.' }).catch(() => {})
         return true
       }
       if (selection.topic !== currentTopic || !antigravityService.isLocked(selection.topic)) {
-        await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
+        await press.answer({ text: 'This picker belongs to another topic.', alert: true }).catch(() => {})
         return true
       }
       const result = await antigravityService.requestRoute(
@@ -372,29 +363,27 @@ export function createAntigravityHarness({ api, sayIn, mayLockTopic }: HarnessPo
       )
       const changed = result.topic
       antigravityModelSelections.delete(cb.token)
-      await ctx.editMessageText(
+      await press.update(
         `${result.pending ? 'Switch queued for the next idle boundary:' : 'Now using'} ${antigravityRouteLabel(result.pending ? antigravityRoute(selection.model, effort) : changed.route)} ` +
         `in the same Antigravity conversation (${changed.conversationId ?? 'starts on your first message'}).\n\n` +
         'This topic remains harness-locked; Anthropic, Codex, and OpenCode routes are unavailable here.',
       ).catch(() => {})
-      await ctx.answerCallbackQuery({ text: result.pending ? 'Model queued.' : 'Model updated in Herdr.' }).catch(() => {})
+      await press.answer({ text: result.pending ? 'Model queued.' : 'Model updated in Herdr.' }).catch(() => {})
       return true
     }
 
     if (cb.kind === 'antigravity-usage') {
       const topic = cb.topic
       if (topic !== currentTopic || !antigravityService.isLocked(topic)) {
-        await ctx.answerCallbackQuery({ text: 'This picker belongs to another topic.', show_alert: true }).catch(() => {})
+        await press.answer({ text: 'This picker belongs to another topic.', alert: true }).catch(() => {})
         return true
       }
       try {
         const usage = antigravityUsageText(await refreshAntigravityUsage(true))
-        await ctx.editMessageText(usage, {
-          reply_markup: new InlineKeyboard().text('Back', encodeCallback({ kind: 'antigravity-models', topic, page: 0 })),
-        })
-        await ctx.answerCallbackQuery()
+        await press.update(usage, [[{ label: 'Back', intent: { kind: 'antigravity-models', topic, page: 0 } }]])
+        await press.answer()
       } catch (error) {
-        await ctx.answerCallbackQuery({ text: `Could not read usage: ${reason(error)}`, show_alert: true }).catch(() => {})
+        await press.answer({ text: `Could not read usage: ${reason(error)}`, alert: true }).catch(() => {})
       }
       return true
     }
@@ -448,5 +437,5 @@ export function createAntigravityHarness({ api, sayIn, mayLockTopic }: HarnessPo
     reconcile: () => antigravityService.reconcilePending(),
   }
 
-  return { harness, refreshUsage: refreshAntigravityUsage, handleCallback }
+  return { harness, refreshUsage: refreshAntigravityUsage, handleAction }
 }

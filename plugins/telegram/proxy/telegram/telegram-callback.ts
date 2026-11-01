@@ -1,7 +1,6 @@
 import type { ActionIntent } from '../chat/domain/actions'
 import type { AntigravityEffort } from '../harness/antigravity/domain/antigravity-topic'
 import type { Effort, PickerReason, ProviderId } from '../routing/domain/model-routing'
-import type { TopicHarness } from '../harness/domain/topic-harness'
 
 /** Every button's meaning, as Telegram callback data carries it. */
 export type Callback = ActionIntent
@@ -85,41 +84,4 @@ export function decodeCallback(data: string): Callback | undefined {
   }
   if ((m = /^agroute:usage:(.+)$/.exec(data))) return { kind: 'antigravity-usage', topic: m[1] }
   return undefined
-}
-
-/** The topic a callback names outright, so a button replayed in another topic can be refused. */
-export function callbackTopic(c: Callback): string | undefined {
-  return 'topic' in c ? c.topic : undefined
-}
-
-/**
- * The harness whose picker emitted the callback; undefined for controls any
- * harness may use. Telegram data a topic did not emit (an old or forged
- * button) is refused against this.
- */
-export function callbackHarness(c: Callback): TopicHarness | undefined {
-  if (c.kind === 'permission') return undefined
-  return c.kind.startsWith('antigravity-') ? 'antigravity' : 'claude'
-}
-
-/** The provider and topic of a reset keyboard posted before switch-back buttons existed. */
-export function legacySwitchBack(message: unknown): { provider: ProviderId; topic: string } | undefined {
-  const rows = (message as any)?.reply_markup?.inline_keyboard
-  if (!Array.isArray(rows)) return undefined
-  for (const button of rows.flat()) {
-    const c = decodeCallback(String(button?.callback_data ?? ''))
-    if (c?.kind === 'provider' && c.reason === 'reset') return { provider: c.provider, topic: c.topic }
-  }
-  return undefined
-}
-
-// A picker's buttons outlive their selection by this long; then it asks for /model again.
-export const PICKER_TTL_MS = 10 * 60_000
-export const MODELS_PER_PAGE = 8
-
-/** A time as the operator reads it in a notice: weekday, hour and zone. */
-export function formatTime(epochMs: number): string {
-  return new Date(epochMs).toLocaleString(undefined, {
-    weekday: 'short', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-  })
 }

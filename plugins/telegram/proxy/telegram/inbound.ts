@@ -16,8 +16,10 @@ import type { createTopicLifecycle } from '../topics/lifecycle'
 import { PERMISSION_REPLY_RE, pendingPerms, resolvePermission } from '../topics/permissions'
 import { saveRegistry } from '../topics/registry'
 import { topicNames, topics } from '../topics/state'
-import { callbackHarness, callbackTopic, decodeCallback } from './telegram-callback'
-import type { Callback } from './telegram-callback'
+import { intentHarness, intentTopic } from '../chat/domain/actions'
+import type { ActionPress } from '../chat/domain/actions'
+import { decodeCallback } from './telegram-callback'
+import { telegramActionPress } from './telegram-chat'
 import type { Downloader } from './telegram-files'
 import { describeMessage } from './telegram-messages'
 import { transcribeVoice, VOICE_TAG } from './voice-transcription'
@@ -38,12 +40,12 @@ export type InboundPorts = {
   lifecycle: Pick<ReturnType<typeof createTopicLifecycle>, 'enqueue' | 'ensureSession' | 'relaunch'>
   routing: Pick<
     ReturnType<typeof createRouting>,
-    'handleModelCommand' | 'refreshProviderCapacity' | 'capacityText' | 'handleRouteCallback'
+    'handleModelCommand' | 'refreshProviderCapacity' | 'capacityText' | 'handleRouteAction'
   >
   secrets: ReturnType<typeof createSecretDrop>
   square: Pick<ReturnType<typeof createSquare>, 'handleSquareUserMessage'>
   /** Antigravity's own model picker; true when it answered the callback. */
-  harnessCallback: (ctx: Context, cb: Callback, topic: string) => Promise<boolean>
+  harnessAction: (press: ActionPress) => Promise<boolean>
 }
 
 export function registerInbound(bot: Bot, ports: InboundPorts): void {
@@ -262,7 +264,7 @@ export function registerInbound(bot: Bot, ports: InboundPorts): void {
         ? String((ctx.callbackQuery.message as any).message_thread_id)
         : 'general'
       const currentHarness = topicHarnessOf(currentTopic)
-      const namedTopic = callbackTopic(cb)
+      const namedTopic = intentTopic(cb)
       if (namedTopic && namedTopic !== currentTopic) {
         await ctx.answerCallbackQuery({
           text: 'This control belongs to a different Telegram topic.',
@@ -270,7 +272,7 @@ export function registerInbound(bot: Bot, ports: InboundPorts): void {
         }).catch(() => {})
         return
       }
-      const emitter = callbackHarness(cb)
+      const emitter = intentHarness(cb)
       if (emitter && emitter !== currentHarness) {
         await ctx.answerCallbackQuery({
           text: currentHarness === 'antigravity'
@@ -285,9 +287,10 @@ export function registerInbound(bot: Bot, ports: InboundPorts): void {
         return
       }
 
-      if (await ports.harnessCallback(ctx, cb, currentTopic)) return
+      const press = telegramActionPress(ctx, cb, currentTopic)
+      if (await ports.harnessAction(press)) return
 
-      if (await routing.handleRouteCallback(ctx, cb)) return
+      if (await routing.handleRouteAction(press)) return
 
       await ctx.answerCallbackQuery().catch(() => {})
       return
