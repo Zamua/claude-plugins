@@ -2,7 +2,7 @@
 .env
 
 # Bun / node deps.
-node_modules/
+node_modules
 __pycache__/
 
 # Runtime state, if a STATE_DIR is ever pointed inside the repo (default is
