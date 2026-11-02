@@ -62,12 +62,12 @@ describe('HcMux', () => {
     expect(mux.kill('claude-a-1')).toBeFalse()
   })
 
-  test('interrupt presses the stop key of the session\'s live terminal only', () => {
+  test('interrupt presses the stop key of the session\'s live terminal only, without waiting to watch its effect', () => {
     const { mux, calls } = fakeCore([claude('t1', 'claude-a-1', 'working'), { ...claude('t2', 'claude-b-2'), state: 'finished' }])
     expect(mux.interrupt('claude-a-1')).toBeTrue()
     expect(mux.interrupt('claude-b-2')).toBeFalse()
     expect(mux.interrupt('claude-none')).toBeFalse()
-    expect(calls.filter(([m]) => m === 'terminal.interrupt')).toEqual([['terminal.interrupt', { terminal: 't1' }]])
+    expect(calls.filter(([m]) => m === 'terminal.interrupt')).toEqual([['terminal.interrupt', { terminal: 't1', timeout: 0 }]])
   })
 
   test('an hc that does not answer reads as no sessions, not a crash', () => {

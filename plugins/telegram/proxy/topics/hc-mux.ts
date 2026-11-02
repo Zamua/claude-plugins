@@ -127,10 +127,13 @@ export class HcMux implements MultiplexerPort {
     return this.call('terminal.send', { terminal: terminal.address, text }) !== null
   }
 
+  // hc presses the stop key at once, then by default watches 10 s for an effect before
+  // answering; this call blocks the proxy, so it asks for no watch and counts any
+  // answer as the key sent.
   interrupt(session: string): boolean {
     const terminal = this.terminals().get(session)
     if (!terminal || terminal.state !== 'live') return false
-    return this.call('terminal.interrupt', { terminal: terminal.address }) !== null
+    return this.call('terminal.interrupt', { terminal: terminal.address, timeout: 0 }) !== null
   }
 
   kill(session: string): boolean {
