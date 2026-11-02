@@ -53,6 +53,8 @@ export function createUpdateRestarts({
       if (SQUARE_TOPIC && topic === SQUARE_TOPIC) continue
       if (harnessLocked(topic) || st.agent.state !== 'running' || !st.claudeSessionId) continue
       const claude = sessions.get(st.claudeSessionId)
+      // A conversation moved to a background job: stopping the terminal would not move it, and the restart would be refused.
+      if (claude?.kind === 'bg') continue
       const action = updateRestartAction({
         running: claude?.version,
         installed,

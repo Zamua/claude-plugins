@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Subprocess } from 'bun'
 import { Database } from 'bun:sqlite'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
 import { ANTIGRAVITY_DISABLED_MESSAGE } from './harness/antigravity/disabled-antigravity-runtime'
@@ -603,6 +603,45 @@ describe('the proxy, end to end', () => {
     expect(await cli('migrate', 'proxy', '73')).toEqual(['73 migrated\n', 0])
     expect(registry()['73'].lifecycle_owner).toBe('proxy')
   }, 20_000)
+
+  test('a conversation moved to a background job takes its topic with it, and is never resumed while the job runs', async () => {
+    const live = () => readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')
+    send(74, 'hello')
+    const first = await until('topic 74 to spawn', () => spawns().find(s => s.session === 'claude-74'))
+    const before = first.env.TG_CLAUDE_SESSION_ID
+    const after = '77777777-7777-4777-8777-777777777777'
+    const projects = join(home, '.claude', 'projects', 'p')
+    writeFileSync(join(projects, `${before}.jsonl`), [
+      { type: 'user', sessionId: before },
+      { type: 'assistant', sessionId: before },
+      { type: 'continued-in', sessionId: before, continuedInSessionId: after },
+      { type: 'queue-operation', sessionId: before },
+    ].map(e => JSON.stringify(e)).join('\n') + '\n')
+    writeFileSync(join(projects, `${after}.jsonl`), '{}\n')
+    const job = Bun.spawn(['sleep', '120'])
+    const record = join(home, '.claude', 'sessions', `${job.pid}.json`)
+    mkdirSync(join(home, '.claude', 'sessions'), { recursive: true })
+    writeFileSync(record, JSON.stringify({ pid: job.pid, sessionId: after, kind: 'bg', jobId: '77777777', status: 'idle' }))
+    try {
+      send(74, '/relaunch')
+      await until('the parked notice', () => said(74, /background job 77777777.*`claude stop 77777777`/s))
+      expect(registry()['74'].claude_session_id).toBe(after)
+      expect(live()).toContain('claude-74')
+
+      // The terminal goes away; the job still holds the conversation, so nothing resumes it
+      expect(await cli('archive', '74')).toEqual(['74 archived\n', 0])
+      expect([live().includes('claude-74'), proxyLog().includes('runs on as background job 77777777')]).toEqual([false, true])
+      send(74, 'still there?')
+      await until('the start refused while the job runs', () => proxyLog().includes('conversation 77777777-7777-4777-8777-777777777777 is held by background job 77777777'))
+      expect(spawns().filter(s => s.session === 'claude-74')).toHaveLength(1)
+    } finally {
+      job.kill()
+      rmSync(record, { force: true })
+    }
+    send(74, 'and now?')
+    const resumed = await until('topic 74 to resume where its conversation moved', () => spawns().filter(s => s.session === 'claude-74')[1])
+    expect([resumed.env.TG_RESUME, resumed.env.TG_CLAUDE_SESSION_ID]).toEqual(['1', after])
+  }, 30_000)
 
   test('a proxied topic whose agent cannot start tries again on the next message, not on a timer', async () => {
     send(53, 'hello?')
