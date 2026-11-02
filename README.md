@@ -44,6 +44,28 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   set of questions while designing a change, as a checklist when self-reviewing a
   diff, or to audit a whole repo with path:line evidence and every fix it calls for.
 
+## Herdr mods
+
+Panels for the [Herdr app](https://herdr.dev), in [herdr-mods/](herdr-mods/). Link
+each folder into `~/.config/herdr-app/mods/` and the layout into
+`~/.config/herdr-app/layouts/`.
+
+- **[session-tree](herdr-mods/session-tree/)**: a sidebar of a tree of Claude
+  sessions, root first, then each project's coordinator as a folder with its
+  workers under it, from the terminals' `tree.role`, `tree.project` and
+  `tree.parent` labels and each session's state file. A bell counts open asks
+  and blocked sessions, a hand filters to what needs you, and a pen starts a
+  new session.
+- **[session-prs](herdr-mods/session-prs/)**: every session's pull requests,
+  grouped by project, with draft, CI, review and unresolved-thread state from
+  one GitHub query a minute while it shows.
+- **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the
+  session tree as its sidebar and the PRs pane beside the terminals.
+- **[quiet-toast](herdr-mods/quiet-toast/)**: drops Herdr's "an agent finished"
+  toasts and keeps the rest, by patching Herdr's own toast mod, since no setting
+  picks which toasts show. Herdr restores its mod when it starts, so run
+  `apply.sh` again after a restart; `apply.sh --undo` puts it back.
+
 ## License
 
 MIT: see [LICENSE](LICENSE).
