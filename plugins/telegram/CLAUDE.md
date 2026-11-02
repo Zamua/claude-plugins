@@ -315,6 +315,9 @@ core:
     general when it is lost or back (`topics/hc-full-disk-access.ts`).
     Claude reports `done` after each turn, which hc's own `if: idle` send
     condition refuses, so `HcMux.prompt` checks the boundary itself.
+    `terminal.interrupt` presses the stop key at once but by default watches 10 s
+    for an effect before answering, which outlasts the blocking call's timeout, so
+    `HcMux.interrupt` passes `timeout: 0` and counts any answer as the key sent.
   - The claude invocation (`PANE_CMD`) is byte-identical for all backends. It
     unsets a parent Claude's identity variables and sets `USER` when missing: a
     server started inside another Claude would make the topic's Claude its
