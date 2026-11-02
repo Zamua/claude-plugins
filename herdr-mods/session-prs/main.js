@@ -24,6 +24,9 @@ const QUEUE = "session-prs.queue";
 const SENT = "session-prs.sent";
 // The PR tabs' filters by tab, then by dropdown: { prs: { author: [...], status: [...], stream: [...] } }
 const FILTERS = "session-prs.filters";
+// Which filter dropdown is open, and when it last closed: a press on its own button closes it, and
+// the press that closes it from outside arrives a moment after the popup has already gone
+const DROPDOWN = "session-prs.dropdown";
 const STATUSES = [["draft", "draft"], ["ready", "ready"], ["approved", "approved by me"], ["action", "needs action (!)"], ["ci", "CI failing"], ["merged", "merged"]];
 const URL = /https?:\/\/[^\s)>"]+/g;
 
@@ -449,8 +452,9 @@ export default class SessionPrs extends View {
     const options = {
       author: [...new Set(all.flatMap((proj) => proj.prs.map((p) => who(this.live.get(p.id)?.author))).filter(Boolean))].sort().map((a) => ({ key: a, label: a })),
       status: STATUSES.map(([key, label]) => ({ key, label })),
-      stream: streams.map((x) => ({ key: x.key, label: !x.name ? x.project : named(x.name) > 1 ? `${x.project} / ${x.name}` : x.name })),
+      stream: streams.map((x) => ({ key: x.key, label: reviewing ? this.labels?.get(x.key) ?? x.name : !x.name ? x.project : named(x.name) > 1 ? `${x.project} / ${x.name}` : x.name })),
     };
+    this.options = options;
     const shown = filtering
       ? all.map((proj) => ({ ...proj, prs: proj.prs.filter((p) => matches(proj, p)) })).filter((proj) => proj.prs.length)
       : all;
@@ -459,10 +463,11 @@ export default class SessionPrs extends View {
         const n = pick(dim).length;
         return h_flex().id(`flt-${tab}-${dim}`).h(22).px(8).gap(5).items_center().rounded(5).border_1()
           .border_color(n ? t.accent : t.input).text_color(n ? t.foreground : t.muted).cursor_pointer().hover((el) => el.bg(t.hover))
-          .on_click(() => openOverlay({
-            mod: "session-prs", kind: "popup", width: 280, height: Math.min(44 + options[dim].length * 26, 420),
-            props: { mode: "filter", tab, dim, title: label, options: options[dim] },
-          }))
+          // A press reports the button's bounds, which a click does not, so the list opens under it
+          .on_mouse_down("left", (e, cx) => {
+            cx.stop_propagation();
+            this.openFilter(tab, dim, label, options[dim], e.bounds);
+          })
           .child(n ? `${label} (${n})` : label)
           .child(div().text_color(t.dim).child("▾"));
       }))
@@ -489,7 +494,7 @@ export default class SessionPrs extends View {
       const emit = (g, gap, done, title = g.title) => {
         if (gap && title) items.push({ kind: "gap", project, done, top });
         const group = title ? items.length : null;
-        if (title) items.push({ kind: "group", title, project, group, done, top, open: reviewing && g.title ? `${proj.name}/${g.title}` : null });
+        if (title) items.push({ kind: "group", title, label: reviewing ? this.labels?.get(`${proj.name}/${g.title}`) : null, project, group, done, top, open: reviewing && g.title ? `${proj.name}/${g.title}` : null });
         for (const n of this.runs(g.prs, heads)) items.push({ kind: "pr", n, project, group, done, top });
       };
       // A workstream whose PRs are all merged waits, folded, in Done at the project's foot; the
@@ -530,7 +535,7 @@ export default class SessionPrs extends View {
         ? h_flex().h(ROW).px(12).gap(6).items_center().whitespace_nowrap().bg(t.surface).cursor_pointer().text_color(t.dim)
           .child(div().w(10).child(item.open ? "▾" : "▸")).child(div().child(item.title))
         : go(item)(h_flex().h(ROW).px(12).items_center().whitespace_nowrap().bg(t.surface)
-          .child(div().font_semibold().text_color(t.foreground).child(item.title)));
+          .child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(item.label || item.title)));
     const openSession = (path) => this.focusSession(...path.split("/"));
     const toggleDone = (name, cx) => {
       this.doneOpen.has(name) ? this.doneOpen.delete(name) : this.doneOpen.add(name);
@@ -574,24 +579,63 @@ export default class SessionPrs extends View {
       .child(Scrollbar.vertical(id).absolute().inset_0()));
   }
 
+  openFilter(tab, dim, title, options, bounds) {
+    const key = `${tab}/${dim}`;
+    const was = shared(DROPDOWN);
+    if (was?.key === key && (!was.closed || Date.now() - was.closed < 400)) {
+      if (!was.closed) closeOverlay(was.id);
+      return setShared(DROPDOWN, null);
+    }
+    if (was && !was.closed) closeOverlay(was.id);
+    const id = openOverlay({
+      mod: "session-prs", kind: "popup", width: 260, height: Math.min(52 + Math.max(options.length, 1) * 28, 400),
+      ...(bounds && { at: { x: bounds.x, y: bounds.y + bounds.height + 4 } }),
+      props: { mode: "filter", tab, dim, title, options },
+    });
+    setShared(DROPDOWN, { key, id });
+  }
+
+  async close() {
+    const was = shared(DROPDOWN);
+    if (props()?.mode === "filter" && was?.id === props()?.overlay) setShared(DROPDOWN, { ...was, closed: Date.now() });
+  }
+
   filterPopup(t) {
     const { tab, dim, title, options } = props();
     const all = shared(FILTERS) ?? {};
     const chosen = all[tab]?.[dim] ?? [];
     const set = (next) => setShared(FILTERS, { ...all, [tab]: { ...(all[tab] ?? {}), [dim]: next } });
-    return v_flex().size_full().min_h(0).p(6).bg(t.popover).text_size(12.5).text_color(t.foreground)
+    return v_flex().w_full().p(6).bg(t.popover).text_size(12.5).text_color(t.foreground)
       .child(h_flex().px(8).pt(4).pb(6).items_center()
         .child(div().flex_1().text_size(11).text_color(t.dim).child(title))
         .when(chosen.length > 0, (el) => el.child(div().id("flt-none").text_size(11).text_color(t.dim).cursor_pointer()
           .hover((el) => el.text_color(t.foreground)).on_click(() => set([])).child("clear"))))
-      .child(v_flex().id("flt-list").flex_1().min_h(0).overflow_y_scrollbar().children(options.map((o, k) => {
+      .when(!options?.length, (el) => el.child(div().px(8).py(4).text_color(t.dim).child("Nothing to filter by yet.")))
+      .child(v_flex().id("flt-list").max_h(340).overflow_y_scrollbar().children((options ?? []).map((o, k) => {
         const on = chosen.includes(o.key);
-        return h_flex().id(`flt-o-${k}`).h(26).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().hover((el) => el.bg(t.hover))
+        return h_flex().id(`flt-o-${k}`).h(28).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().hover((el) => el.bg(t.hover))
           .on_click(() => set(on ? chosen.filter((x) => x !== o.key) : [...chosen, o.key]))
           .child(div().size(14).flex_none().rounded(3).border_1().border_color(on ? t.accent : t.input).bg(on ? t.accent : t.popover)
             .flex().items_center().justify_center().text_size(10).text_color(t.accent_foreground).child(on ? "✓" : ""))
           .child(div().flex_1().min_w(0).truncate().child(o.label));
       })));
+  }
+
+  // A review section is named for what it reviews: its session's `title` or `group`, else its one
+  // PR's title, else the ticket key its PRs share, else the session's name.
+  reviewLabels(reviews) {
+    const labels = new Map();
+    for (const proj of reviews) {
+      const bySession = new Map();
+      for (const p of proj.prs) bySession.set(p.group, [...(bySession.get(p.group) ?? []), p]);
+      for (const [session, prs] of bySession) {
+        const f = this.files.get(`${proj.name}/${session}`) ?? {};
+        const titles = prs.map((p) => this.live.get(p.id)?.title).filter(Boolean);
+        const keys = [...new Set(titles.map((x) => /\b[A-Z][A-Z0-9]+-\d+\b/.exec(x)?.[0]).filter(Boolean))];
+        labels.set(`${proj.name}/${session}`, f.title || f.group || (prs.length === 1 && titles[0]) || (keys.length === 1 && keys[0]) || session);
+      }
+    }
+    return labels;
   }
 
   focusSession(project, session) {
@@ -648,6 +692,7 @@ export default class SessionPrs extends View {
       ...p,
       prs: p.prs.map((pr) => ({ ...pr, group: pr.sessions.find((s) => s !== p.name) ?? pr.group ?? p.title })),
     }));
+    this.labels = this.reviewLabels(reviews);
     const body = this.tab === "asks" ? this.askList(t, asks)
       : this.tab === "reviews" ? this.prList(t, once(reviews), true)
         : this.prList(t, once(all.filter((p) => p.name !== this.reviewsProject)), false);
