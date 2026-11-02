@@ -794,6 +794,10 @@ describe('the proxy, end to end', () => {
       spawns().filter(s => s.session === 'claude-72').find(s => s.env.TG_MODEL === 'sonnet'))
     expect([switched.env.TG_EFFORT, switched.env.TG_CLAUDE_SESSION_ID]).toEqual(['medium', first.env.TG_CLAUDE_SESSION_ID])
 
+    const catalog = await fetch(`${proxyUrl}/routes`).then(r => r.json())
+    expect(catalog.providers.map((p: { id: string; operator_only: boolean }) => [p.id, p.operator_only])).toEqual([['anthropic', false], ['codex', true], ['opencode-go', false]])
+    expect(catalog.providers[0].models.some((m: { id: string }) => m.id === 'sonnet')).toBeTrue()
+
     const outside = await post('/topic/route', { topic: '69', provider: 'anthropic', model: 'sonnet' })
     expect([outside.status, (await outside.json()).error.code]).toEqual([409, 'external_lifecycle'])
     const malformed = await post('/topic/route', { topic: 'nope', provider: 'anthropic', model: 'sonnet' })

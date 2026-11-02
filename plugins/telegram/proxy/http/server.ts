@@ -46,6 +46,7 @@ export type HttpPorts = {
   topicControl?: {
     relaunch: (topics: string[]) => Promise<TargetResult[]>
     route: (topic: string, choice: unknown) => Promise<ControlResult>
+    routes: () => Record<string, unknown>
   }
 }
 
@@ -159,6 +160,10 @@ export function createHttpServer(ports: HttpPorts) {
       case ROUTE.topicRelaunch: if (post) {
         if (!ports.topicControl) return json({ error: 'relaunch needs the conductor ledger' }, 503)
         return json({ results: await ports.topicControl.relaunch(parseTopicList(await req.json())) })
+      } break
+      case ROUTE.routeCatalog: if (get) {
+        if (!ports.topicControl) return json({ error: 'the route catalog needs the conductor' }, 503)
+        return json(ports.topicControl.routes())
       } break
       case ROUTE.topicRoute: if (post) {
         if (!ports.topicControl) return json({ error: 'route changes need the conductor' }, 503)

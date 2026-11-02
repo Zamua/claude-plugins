@@ -198,7 +198,8 @@ export function conductorControl(ports: ControlPorts) {
 
   return {
     commands: () => ({ commands: COMMANDS }),
-    routes: () => wireRoutes(ports.catalog()),
+    /** Loopback callers learn which providers they may not pick (see `route`). */
+    routes: (origin: RouteOrigin = 'app') => wireRoutes(ports.catalog(), origin === 'loopback' ? bypassesPermissions : undefined),
     async usage() {
       await ports.refreshCapacity()
       return wireUsage(ports.capacities())

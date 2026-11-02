@@ -556,7 +556,7 @@ Unset, nothing changes.
 ## Relaunch and route changes over loopback (until Crook's cutover)
 
 So the Crook backend can restart a topic and switch its model before it runs
-sessions itself, the loopback API has two more routes, unauthenticated like the
+sessions itself, the loopback API has three more routes, unauthenticated like the
 rest of it:
 
 - `POST /topic/relaunch {topics: [...]}` goes through the broker's own
@@ -572,7 +572,11 @@ rest of it:
   it never picks a route that skips permission checks (Codex): that is 403
   `needs_operator`, left to Telegram or the signed app.
 
-Both need the conductor's store and ledger (503 without them).
+`GET /routes` is the catalog the app's `/v1/routes` serves, with
+`operator_only` on each provider (true for Codex), so the backend can show the
+routes it may not pick as disabled.
+
+These need the conductor's store, and relaunch its ledger (503 without them).
 
 ## Relaunch from the root (`broker/`)
 

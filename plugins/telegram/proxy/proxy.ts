@@ -536,6 +536,7 @@ const http = createHttpServer({
   topicControl: appControl && relaunchBroker && {
     relaunch: topics => relaunchBroker.requestLoopback(topics),
     route: (topic, choice) => appControl.route(topic, choice, 'loopback'),
+    routes: () => appControl.routes('loopback'),
   },
 })
 await http.serve()

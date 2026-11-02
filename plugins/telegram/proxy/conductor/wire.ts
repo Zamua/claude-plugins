@@ -1,6 +1,7 @@
 // The conductor's objects as the API sends them: docs/conductor.md, with the
 // golden fixtures in docs/conductor-v1/ as the exact shapes.
 import { PROVIDERS, providerLabel } from '../routing/domain/model-routing'
+import type { ProviderId } from '../routing/domain/model-routing'
 import type { ProviderCapacity } from '../routing/domain/provider-capacity'
 import type { ProviderCatalog } from '../routing/provider-catalog'
 import type { Reminder } from '../reminders/domain/reminder'
@@ -111,11 +112,13 @@ export function wireDevice(d: Device): Record<string, unknown> {
 }
 
 /** The model catalog as the app picks from it: every provider, the models the bridge can run. */
-export function wireRoutes(catalog: ProviderCatalog): Record<string, unknown> {
+/** The route catalog; with `operatorOnly`, each provider says whether only the operator may pick it. */
+export function wireRoutes(catalog: ProviderCatalog, operatorOnly?: (provider: ProviderId) => boolean): Record<string, unknown> {
   return {
     providers: PROVIDERS.map(id => ({
       id,
       label: providerLabel(id),
+      ...(operatorOnly ? { operator_only: operatorOnly(id) } : {}),
       models: offered(catalog, id).map(m => ({ id: m.id, label: m.label, efforts: m.efforts, default_effort: m.defaultEffort })),
     })),
   }
