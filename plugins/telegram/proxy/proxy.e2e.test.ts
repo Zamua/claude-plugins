@@ -974,6 +974,17 @@ describe('the proxy, end to end', () => {
     expect((await out('/edit', { chat_id: GROUP, message_id: 5, text: '*b*', format: 'markdownv2' })).status).toBe(200)
     expect(calls.findLast(c => c.method === 'editMessageText')?.body.parse_mode).toBe('MarkdownV2')
 
+    const gfmAt = calls.length
+    const gfm = '## Plan\n\n- build `x.ts`\n- test (all)\n\n| a | b |\n|---|---|\n| 1 | 2 |'
+    expect((await out('/send', { chat_id: GROUP, topic: '42', text: gfm, format: 'markdown' })).status).toBe(200)
+    expect(calls.slice(gfmAt).find(c => c.method === 'sendMessage')?.body).toMatchObject({
+      parse_mode: 'MarkdownV2',
+      text: '*Plan*\n\n• build `x.ts`\n• test \\(all\\)\n\n```\na │ b\n──┼──\n1 │ 2\n```',
+    })
+    const db = new Database(join(state, 'conductor', 'conductor.db'), { readonly: true })
+    expect(db.query("SELECT text, format FROM messages WHERE topic = '42' ORDER BY seq DESC LIMIT 1").get()).toEqual({ text: gfm, format: 'markdown' })
+    db.close()
+
     const notes = join(root, 'notes.txt')
     writeFileSync(notes, 'n')
     const docAt = calls.length

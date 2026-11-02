@@ -15,6 +15,7 @@ export type MessageLog = {
 
 /** The format a message was written in, named as the app renders it. */
 export function formatOf(format: TextFormat | undefined, dialect: MarkdownDialect): MessageFormat {
+  if (format === 'gfm') return 'markdown'
   if (format !== 'markdown') return 'plain'
   if (dialect === 'telegram-markdownv2') return 'markdownv2'
   return dialect === 'commonmark' ? 'markdown' : 'plain'

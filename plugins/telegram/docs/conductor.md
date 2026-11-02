@@ -146,7 +146,10 @@ API with named tokens and no operator role.
 - A message has an opaque string `id` and an integer `seq`, gapless per topic.
 - Every stream event has an integer `cursor`, increasing across all topics.
 - `format` on agent messages is passed through as written (`markdownv2`,
-  `markdown` or `plain`); the app renders it.
+  `markdown` or `plain`); the app renders it. `markdown` is GitHub-flavored
+  Markdown (headings, lists, task lists, tables, fenced code, links,
+  strikethrough), stored exactly as the agent wrote it; Telegram gets its own
+  conversion of the same text.
 - Errors: `{"error": {"code": "...", "message": "..."}}` with the HTTP status
   that fits (400, 401, 403, 404, 409, 413, 422, 429, 503).
 

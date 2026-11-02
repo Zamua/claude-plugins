@@ -8,6 +8,7 @@
     "start": "bun install --no-summary && bun proxy.ts"
   },
   "dependencies": {
-    "grammy": "^1.21.0"
+    "grammy": "^1.21.0",
+    "marked": "18.1.1"
   }
 }

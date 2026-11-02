@@ -174,11 +174,11 @@ than inherit it:
 - **Topic naming.** Topic names, and the session names made from them, come from
   Telegram's forum service messages (created, renamed) and from the
   bot-created-topic path, since Telegram does not echo a bot's own topic creation.
-- **The markdown dialect.** Agents write MarkdownV2 because the MCP's tools say
-  so. The port carries it as `format: 'markdown'` and the adapter's capabilities
-  name the dialect, but `server.ts` is a separate process whose tool descriptions
-  say MarkdownV2 rather than read the dialect from the proxy; another transport
-  needs translation or tools that name its own.
+- **The markdown dialect.** Agents write GitHub Markdown (the tools' `format:
+  'markdown'`, the port's `gfm`), which each adapter renders as best it can, or
+  Telegram's MarkdownV2 (`format: 'markdownv2'`, the port's `markdown`, in the
+  dialect the adapter's capabilities name). Another transport must still render
+  `gfm` and either accept MarkdownV2 or refuse it.
 - **Button data.** Intents fit Telegram's 64-byte callback data through short
   codes and in-memory tokens that expire with the picker; a transport with no
   buttons renders intents some other way.
@@ -418,6 +418,21 @@ never broadcast; behavioral discipline, no caps).
   topics for exactly this reason). A proxy-created topic is in the directory
   and taggable immediately; its claude spawns on first message or tag. Only
   topics created OUTSIDE the proxy still need a first human message.
+
+## Formatted replies (GitHub Markdown)
+
+The `reply` and `edit_message` tools take `format: 'markdown'`: ordinary
+GitHub-flavored Markdown, written with no escaping. The conductor stores it as
+written with `format: markdown`, so the app renders lists, headings, tables
+and code natively. Telegram gets a conversion (`telegram/markdown-v2.ts`):
+`marked`'s lexer parses it, and each block becomes MarkdownV2. A heading is a
+bold line, a list item a `• ` or `1. ` line (nested ones indented, tasks as
+☑/☐), a table an aligned monospace block, a rule a line of box characters, and
+everything outside markup is escaped. Blocks are packed into parts of at most
+4096 characters, so a split never cuts an entity. A part Telegram still
+refuses to parse (or a block longer than a message) goes as its Markdown
+source, plain, so a formatted reply never fails on parsing. `format:
+'markdownv2'` stays for callers that escape Telegram's dialect themselves.
 
 ## Location messages
 
@@ -1391,7 +1406,7 @@ there is no agent to relaunch.
 - `.claude-plugin/plugin.json`: manifest (name `telegram`).
 - `.mcp.json`: starts the MCP via `bun run --cwd ${CLAUDE_PLUGIN_ROOT} ... start`.
 - `server.ts` + `package.json`: the thin MCP client (dep: `@modelcontextprotocol/sdk`).
-- `proxy/proxy.ts` + `proxy/package.json`: the daemon (dep: `grammy`), and
+- `proxy/proxy.ts` + `proxy/package.json`: the daemon (deps: `grammy`, `marked` for the GitHub Markdown lexer), and
   the composition root: it builds each context below with its ports and wires
   the Telegram handlers and HTTP routes to them. `proxy/config.ts` holds every
   path and environment setting (importing it loads the `.env` files);

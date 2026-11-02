@@ -81,6 +81,7 @@ test('formats are named as the app renders them', () => {
   expect(formatOf('markdown', 'telegram-markdownv2')).toBe('markdownv2')
   expect(formatOf('markdown', 'commonmark')).toBe('markdown')
   expect(formatOf(undefined, 'telegram-markdownv2')).toBe('plain')
+  expect(formatOf('gfm', 'telegram-markdownv2')).toBe('markdown')
 })
 
 describe('recordingOperatorTurns', () => {

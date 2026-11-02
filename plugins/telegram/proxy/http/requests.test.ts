@@ -21,11 +21,16 @@ const rejects = (parse: () => unknown, field: string) => {
 describe('proxy HTTP request bodies', () => {
   test('a reply from the MCP parses with its defaults', () => {
     expect(parseSend({ chat_id: '-1001', topic: '42', text: 'hi' })).toEqual({
-      chatId: '-1001', topic: '42', text: 'hi', files: [], markdown: false,
+      chatId: '-1001', topic: '42', text: 'hi', files: [], format: 'plain',
     })
     expect(parseSend({ chat_id: -1001, reply_to: '7', files: ['/tmp/a.png'], format: 'markdownv2' })).toEqual({
-      chatId: '-1001', topic: 'general', text: '', replyTo: 7, files: ['/tmp/a.png'], markdown: true,
+      chatId: '-1001', topic: 'general', text: '', replyTo: 7, files: ['/tmp/a.png'], format: 'markdown',
     })
+  })
+
+  test('format "markdown" is GitHub Markdown, "markdownv2" Telegram\'s own, anything else plain', () => {
+    expect(['markdown', 'markdownv2', 'text', 'html', undefined].map(format => parseSend({ chat_id: '-1', format }).format)).toEqual(['gfm', 'markdown', 'plain', 'plain', 'plain'])
+    expect(parseEdit({ chat_id: '-1', message_id: 3, text: '**x**', format: 'markdown' }).format).toBe('gfm')
   })
 
   test('message ids must be integers rather than becoming NaN', () => {

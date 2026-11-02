@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { InlineKeyboard, InputFile } from 'grammy'
+import { GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { Context } from 'grammy'
 import type { ActionIntent } from '../chat/domain/actions'
 import type { MessageId } from '../chat/domain/chat-port'
@@ -59,6 +59,35 @@ describe('send', () => {
       { message_thread_id: 42, disable_notification: true },
       { message_thread_id: 42, disable_notification: true },
     ])
+  })
+
+  test('GitHub Markdown goes as MarkdownV2, packed into parts at block boundaries', async () => {
+    const { chat, calls } = chatOver()
+    await chat.send('42', { text: '## Done\n\n- one\n- two', format: 'gfm', replyTo: id(9), silent: true })
+    expect(calls).toEqual([{ method: 'sendMessage', args: [CHAT, '*Done*\n\n• one\n• two', { message_thread_id: 42, reply_parameters: { message_id: 9 }, disable_notification: true, parse_mode: 'MarkdownV2' }] }])
+    calls.length = 0
+    const para = 'word '.repeat(700).trim()
+    await chat.send('42', { text: `${para}\n\n${para}`, format: 'gfm' })
+    expect(calls.map(c => (c.args[1] as string).length)).toEqual([para.length, para.length])
+  })
+
+  test('a part Telegram cannot parse goes again as its Markdown, plain', async () => {
+    const calls: Call[] = []
+    const api = new Proxy({}, {
+      get: (_, method: string) => async (...args: unknown[]) => {
+        calls.push({ method, args })
+        if (args.some(a => typeof a === 'object' && a !== null && 'parse_mode' in a)) throw new GrammyError('refused', { ok: false, error_code: 400, description: "Bad Request: can't parse entities: unclosed" }, method, {})
+        return { message_id: 600 }
+      },
+    })
+    const chat = createTelegramChat(api as Parameters<typeof createTelegramChat>[0], CHAT, async () => null)
+    expect(await chat.send('42', { text: '**odd** case', format: 'gfm' })).toEqual([id(600)])
+    expect(calls.map(c => [c.args[1], c.args[2]])).toEqual([
+      ['*odd* case', { message_thread_id: 42, parse_mode: 'MarkdownV2' }],
+      ['**odd** case', { message_thread_id: 42 }],
+    ])
+    expect(await chat.edit(id(600), '**odd**', 'gfm')).toEqual(id(600))
+    expect(calls.slice(-2).map(c => c.args.slice(2))).toEqual([['*odd*', { parse_mode: 'MarkdownV2' }], ['**odd**']])
   })
 
   test('a forced reply opens the reply box with its placeholder', async () => {

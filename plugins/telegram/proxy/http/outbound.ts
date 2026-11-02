@@ -33,7 +33,7 @@ export function createOutbound({ chat, sent, sentMessages }: OutboundPorts) {
   }
 
   async function handleSend(req: Request): Promise<Response> {
-    const { chatId, topic, text, replyTo, files, markdown } = parseSend(await req.json())
+    const { chatId, topic, text, replyTo, files, format } = parseSend(await req.json())
     assertGroup(chatId)
 
     for (const f of files) {
@@ -46,7 +46,7 @@ export function createOutbound({ chat, sent, sentMessages }: OutboundPorts) {
 
     const answering = replyTo != null ? { replyTo: messageId(replyTo) } : {}
     const ids = text.length
-      ? await chat.send(topic, { text, ...(markdown ? { format: 'markdown' as const } : {}), ...answering })
+      ? await chat.send(topic, { text, ...(format !== 'plain' ? { format } : {}), ...answering })
       : []
     for (const f of files) {
       const kind = PHOTO_EXTS.has(extname(f).toLowerCase()) ? 'photo' : 'document'
@@ -67,7 +67,7 @@ export function createOutbound({ chat, sent, sentMessages }: OutboundPorts) {
   async function handleEdit(req: Request): Promise<Response> {
     const b = parseEdit(await req.json())
     assertGroup(b.chatId)
-    const id = await chat.edit(messageId(b.messageId), b.text, b.markdown ? 'markdown' : 'plain')
+    const id = await chat.edit(messageId(b.messageId), b.text, b.format)
     return json({ message_id: id })
   }
 
