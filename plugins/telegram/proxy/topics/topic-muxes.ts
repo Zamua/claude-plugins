@@ -17,8 +17,10 @@ export function topicMuxes(
   fallback: MultiplexerPort,
   hc: MultiplexerPort | undefined,
   hcTopics: Pick<TopicSelection, 'has'>,
+  /** Backends topics ran on before: searched and stopped, never started on. */
+  previous: readonly MultiplexerPort[] = [],
 ): TopicMuxes {
-  const all = hc ? [fallback, hc] : [fallback]
+  const all = [fallback, ...(hc ? [hc] : []), ...previous]
   const forTopic = (topic: string) => (hc && hcTopics.has(topic) ? hc : fallback)
   return {
     forTopic,

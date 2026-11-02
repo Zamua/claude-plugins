@@ -20,6 +20,7 @@ const STUCK = '44444444-4444-4444-8444-444444444444'
 const ON_HC_PROXIED = '55555555-5555-4555-8555-555555555555'
 const MOVING = '66666666-6666-4666-8666-666666666666'
 const RELAUNCHED = '67676767-6767-4767-8767-676767676767'
+const ELDER = '68686868-6868-4868-8868-686868686868'
 
 const FAKE_TMUX = `#!/usr/bin/env bash
 live="$HOME/fake/live"; touch "$live"
@@ -122,7 +123,8 @@ prev=''; for a in "$@"; do [ "$prev" = -f ] && cat "$a"; prev="$a"; done
 // proxy makes.
 const FAKE_HC = `#!/usr/bin/env python3
 import json, os, re, subprocess, sys
-home = os.environ['HOME']; fake = os.path.join(home, 'fake'); st = os.path.join(fake, 'hc.json')
+home = os.environ['HOME']; fake = os.path.join(home, 'fake'); session = os.environ.get('HC_SESSION') or 'topics'
+st = os.path.join(fake, 'hc.json' if session == 'topics' else 'hc-%s.json' % session)
 state = json.load(open(st)) if os.path.exists(st) else {'terminals': [], 'n': 0}
 def save(): json.dump(state, open(st, 'w'))
 def find(ref): return next((t for t in state['terminals'] if ref in (t['address'], t['name'])), None)
@@ -320,6 +322,9 @@ beforeAll(async () => {
   writeFileSync(join(home, '.claude', 'projects', 'p', `${ON_HC_PROXIED}.jsonl`), '{}\n')
   writeFileSync(join(home, '.claude', 'projects', 'p', `${MOVING}.jsonl`), '{}\n')
   writeFileSync(join(home, '.claude', 'projects', 'p', `${RELAUNCHED}.jsonl`), '{}\n')
+  writeFileSync(join(home, '.claude', 'projects', 'p', `${ELDER}.jsonl`), '{}\n')
+  // A topic still running in the hc session topics used before this one
+  writeFileSync(join(home, 'fake', 'hc-old.json'), JSON.stringify({ n: 1, terminals: [{ address: 't1', name: 'tg-68', state: 'live', labels: { session: 'claude-elder-68', topic: '68' }, reported: true, status: { state: 'done' }, foreground: { name: 'claude' } }] }))
   // A session still running under tmux for a topic now configured onto hc
   writeFileSync(join(home, 'fake', 'live'), 'claude-moving-63\nclaude-relaunched-67\n')
   writeFileSync(join(home, 'fake', 'whisper.bin'), '')
@@ -345,6 +350,7 @@ beforeAll(async () => {
     },
     '63': { tmux_session: 'claude-moving-63', thread_id: 63, name: 'moving', spawned_at: 1, claude_session_id: MOVING },
     '67': { tmux_session: 'claude-relaunched-67', thread_id: 67, name: 'relaunched', spawned_at: 1, claude_session_id: RELAUNCHED },
+    '68': { tmux_session: 'claude-elder-68', thread_id: 68, name: 'elder', spawned_at: 1, claude_session_id: ELDER },
   }))
 
   api = Bun.serve({
@@ -431,7 +437,8 @@ beforeAll(async () => {
       TELEGRAM_HERDR_BIN: join(home, '.local', 'bin', 'herdr'),
       TELEGRAM_HC_BIN: join(home, '.local', 'bin', 'hc'),
       HC_SOCKET: join(root, 'hc.sock'),
-      TELEGRAM_TOPICS_HC_TOPICS: '61,62,63,64,66,67',
+      TELEGRAM_TOPICS_HC_TOPICS: '61,62,63,64,66,67,68',
+      TELEGRAM_HC_PREVIOUS_SESSIONS: 'old',
       TELEGRAM_OPENCODE_BIN: join(home, '.local', 'bin', 'opencode'),
       TELEGRAM_OPENCODE_PROJECT_DIR: join(root, 'oc-project'),
       LOCALGEN_PORT: String(qwenImage.port),
@@ -1166,6 +1173,15 @@ describe('the proxy, end to end', () => {
     expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).not.toContain('claude-relaunched-67')
     const copies = hcTerminals().filter(t => t.state === 'live' && t.labels.session === 'claude-relaunched-67')
     expect(copies).toHaveLength(1)
+  }, 20_000)
+
+  test('a topic still running in a previous hc session is stopped there when it moves, so exactly one runs', async () => {
+    send(68, '/relaunch')
+    const resumed = await until('topic 68 to resume in the current hc session', () => spawns().find(s => s.session === 'claude-elder-68' && s.env.TG_MUX === 'hc'))
+    expect([resumed.env.TG_RESUME, resumed.env.TG_CLAUDE_SESSION_ID]).toEqual(['1', ELDER])
+    const old = JSON.parse(readFileSync(join(home, 'fake', 'hc-old.json'), 'utf8')).terminals as Array<{ state: string }>
+    expect(old.filter(t => t.state === 'live')).toEqual([])
+    expect(hcTerminals().filter(t => t.state === 'live' && t.labels.session === 'claude-elder-68')).toHaveLength(1)
   }, 20_000)
 
   test('the operator hears in general when the hc core loses Full Disk Access, and when it is back', async () => {
