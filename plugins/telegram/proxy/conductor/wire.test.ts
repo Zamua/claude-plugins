@@ -72,6 +72,11 @@ test('routes.json: each provider with the models it can run, as the picker offer
   expect(wire.providers.map(p => (p as { id: string }).id)).toEqual(['anthropic', 'codex', 'opencode-go'])
 })
 
+test('a catalog for a caller that may not pick every provider marks each one operator_only or not', () => {
+  const wire = wireRoutes({ anthropic: [], codex: [], 'opencode-go': [] }, provider => provider === 'codex') as { providers: Array<{ id: string; operator_only: boolean }> }
+  expect(wire.providers.map(p => [p.id, p.operator_only])).toEqual([['anthropic', false], ['codex', true], ['opencode-go', false]])
+})
+
 test('usage.json: the observed windows, with a reset as a time and an unknown share as null', () => {
   const f = fixture('usage.json')
   const w = f.providers[0].windows[0]
