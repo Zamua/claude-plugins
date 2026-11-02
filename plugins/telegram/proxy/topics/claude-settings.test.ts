@@ -19,6 +19,12 @@ describe('Claude settings adapter', () => {
     expect(off).not.toBe(on)
   })
 
+  test('every topic session runs without prompt suggestions', () => {
+    const base = JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'override-settings.json'), 'utf8'))
+    const route = { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'xhigh', ultracode: false } as const
+    expect(effectiveClaudeSettings(base, route).promptSuggestionEnabled).toBeFalse()
+  })
+
   test('keeps built-in soft rules while making exfiltration human-overridable', () => {
     const base = JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'override-settings.json'), 'utf8'))
     expect(base.autoMode.soft_deny[0]).toBe('$defaults')

@@ -50,5 +50,7 @@
     "command": "python3 \"$TG_CAPACITY_HOOK\""
   },
   "_comment_style": "outputStyle Concise (built-in, landed in claude 2.1.237): lead with the result, skip preamble and narration, same thoroughness. Set here so topic-Claudes get it via the generated effective-settings.json; also set in the global settings.json for every other session.",
-  "outputStyle": "Concise"
+  "outputStyle": "Concise",
+  "_comment_suggestions": "Claude Code's prompt suggestions (the dim predicted next prompt in the input line) are noise in a session driven from Telegram or Crook, and a harness watching the pane reads them as typed input. The settings schema: 'When false, prompt suggestions are disabled.' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, when set, wins over it.",
+  "promptSuggestionEnabled": false
 }

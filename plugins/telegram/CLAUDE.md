@@ -1504,8 +1504,9 @@ there is no agent to relaunch.
   with them.
 - `proxy/http/routes.ts`: the proxy's HTTP paths, used by the proxy,
   `server.ts`, and checked against the Python hooks' calls.
-- `override-settings.json`: the BASE session settings - enables `telegram@zamua`
-  AND wires the Stop hook (`hooks.Stop` -> `python3 "$TG_HOOK"`). The proxy does
+- `override-settings.json`: the BASE session settings - enables `telegram@zamua`,
+  wires the Stop hook (`hooks.Stop` -> `python3 "$TG_HOOK"`), and turns Claude
+  Code's prompt suggestions off (`promptSuggestionEnabled: false`). The proxy does
   NOT hand this to the launcher directly; it generates
   one file per topic under
   `~/.claude/channels/telegram-topics/effective-settings/` from it (adding that
