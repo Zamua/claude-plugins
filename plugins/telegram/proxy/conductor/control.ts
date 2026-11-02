@@ -42,6 +42,8 @@ export type ControlPorts = {
   interrupt: (topic: string) => boolean
   /** Posts into the topic's chat. */
   say: (topic: string, text: string) => Promise<void>
+  /** Posts the operator's own act into the topic's chat, without notifying them of it. */
+  echo: (topic: string, text: string) => Promise<void>
   /** Creates a Claude topic in the chat and the proxy; gives its id. */
   createTopic: (name: string) => Promise<string>
   /** Renames the chat's topic and the proxy's record of it. */
@@ -163,7 +165,7 @@ export function conductorControl(ports: ControlPorts) {
     if (origin === 'loopback' && bypassesPermissions(choice.provider)) {
       return refuse(403, 'needs_operator', 'a route that skips permission checks is chosen from Telegram or the app')
     }
-    await ports.say(topic, `${ECHO[origin]}: /model ${choice.provider} ${choice.model.id} ${choice.effort}`)
+    await ports.echo(topic, `${ECHO[origin]}: /model ${choice.provider} ${choice.model.id} ${choice.effort}`)
     const request = ports.requestRoute(topic, choice)
     if ('refused' in request) {
       const { status, code } = REFUSALS[request.refused]
@@ -185,14 +187,14 @@ export function conductorControl(ports: ControlPorts) {
     const noAgent = ports.noAgent(topic)
     if (noAgent) return refuse(409, 'no_agent', noAgent)
     if (name === 'relaunch') {
-      await ports.say(topic, 'You (app): /relaunch')
+      await ports.echo(topic, 'You (app): /relaunch')
       await ports.relaunch(topic)
       return { ok: { name, text: 'Relaunching; the agent answers when it is back.' } }
     }
     const locked = ports.locked(topic)
     if (locked) return refuse(409, 'no_interrupt', locked)
     if (!ports.interrupt(topic)) return refuse(409, 'not_running', "this topic's agent is not running")
-    await ports.say(topic, 'You (app): interrupt')
+    await ports.echo(topic, 'You (app): interrupt')
     return { ok: { name, text: 'Pressed stop; the current turn ends.' } }
   }
 

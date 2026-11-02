@@ -392,7 +392,8 @@ const appControl = conductorStore
       },
       interrupt,
       // Unmirrored, like the app's own messages: the app already shows what it did.
-      say: async (topic, text) => void (await telegramChat.send(topic, { text }).catch(noticeFailed('app command echo', topic))),
+      say: async (topic, text) => void (await telegramChat.send(topic, { text }).catch(noticeFailed('app command notice', topic))),
+      echo: async (topic, text) => void (await telegramChat.send(topic, { text, silent: true }).catch(noticeFailed('app command echo', topic))),
       createTopic: name => createTopic(name, 'claude', 'operator'),
       renameTopic: renameEverywhere,
       setPrefs: (topic, prefs) => conductorStore.setPrefs(topic, prefs),
@@ -449,7 +450,7 @@ const conductor = conductorStore && appControl && conductorMode?.listener
           ensureSession,
           enqueue,
           // Unmirrored: the store already holds the operator's message.
-          echo: async (topic, text) => (await telegramChat.send(topic, { text }))[0],
+          echo: async (topic, text) => (await telegramChat.send(topic, { text, silent: true }))[0],
         }),
         control: appControl,
         ...(hcTopics && {

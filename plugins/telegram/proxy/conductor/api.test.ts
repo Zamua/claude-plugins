@@ -79,6 +79,7 @@ beforeEach(() => {
       relaunch: async topic => void controlled.push(`relaunch ${topic}`),
       interrupt: () => false,
       say: async () => {},
+      echo: async () => {},
       createTopic: async name => {
         listed = [...listed, { id: '501', name, kind: 'claude', title: null, route: null, state: 'stopped', role: 'coordinator', projectId: '501', parentId: 'general', spawnedBy: 'operator', spawnedAt: null, archivedAt: null }]
         return '501'

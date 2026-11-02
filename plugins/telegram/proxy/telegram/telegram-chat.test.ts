@@ -52,6 +52,15 @@ describe('send', () => {
     ])
   })
 
+  test('a silent text is delivered without a notification, on every part', async () => {
+    const { chat, calls } = chatOver()
+    await chat.send('42', { text: 'a'.repeat(5000), silent: true })
+    expect(calls.map(c => c.args[2])).toEqual([
+      { message_thread_id: 42, disable_notification: true },
+      { message_thread_id: 42, disable_notification: true },
+    ])
+  })
+
   test('a forced reply opens the reply box with its placeholder', async () => {
     const { chat, calls } = chatOver()
     await chat.send('42', { text: 'name?', forceReply: { placeholder: 'secret name' } })

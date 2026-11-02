@@ -82,6 +82,7 @@ export function createTelegramChat(api: TelegramApi, chatId: string, download: D
         ...threadOf(topic),
         ...(i === 0 ? replyTo(message.replyTo) : {}),
         ...parseMode(message.format),
+        ...(message.silent ? { disable_notification: true } : {}),
         ...(message.forceReply
           ? { reply_markup: { force_reply: true, input_field_placeholder: message.forceReply.placeholder } }
           : message.actions && i === parts.length - 1
