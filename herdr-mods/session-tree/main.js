@@ -39,20 +39,16 @@ export default class SessionTree extends View {
     if (mode === "new") this.initNew(cx);
     if (!mode && props()?.part !== "header") {
       this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? "[]"));
-      this.search = "";
-      this.input = InputState.new({ placeholder: "Search" });
-      this.input.on("change", (_e, cx) => {
-        this.search = this.input.value();
-        cx.notify();
-      });
       this.lastRoot = JSON.parse(localStorage.getItem("root") ?? "null");
       cx.spawn(async (cx) => {
         for (;;) {
           const command = await nextCommand();
           if (command === "close" || command === "close-pane") this.guardClose(command === "close-pane");
+          if (command === "new") this.openNew();
           cx.notify();
         }
       });
+      cx.timer.every(5000, () => this.syncOrder());
     }
     cx.spawn(async (cx) => {
       this.files = await readFiles(this.folder);
@@ -98,6 +94,23 @@ export default class SessionTree extends View {
     });
   }
 
+  // Herdr's space order follows the tree's, so stepping through spaces walks the sidebar top to
+  // bottom: the root's space, then each project's by its `order`, then the rest as they were.
+  syncOrder() {
+    const m = model(this.files);
+    const now = spaces().filter((sp) => !sp.machine).map((sp) => sp.id);
+    const tree = [m.root?.space, ...m.projects.map((p) => p.lead?.space ?? p.workers[0]?.space)].filter((id) => id && now.includes(id));
+    const want = [...new Set(tree), ...now.filter((id) => !tree.includes(id))];
+    const at = want.findIndex((id, i) => now[i] !== id);
+    if (at >= 0) run("space.move", { id: want[at], index: at + 1 });
+  }
+
+  openNew() {
+    const m = model(this.files);
+    const project = m.sessions.find((s) => s.address === focused()?.terminal)?.project;
+    openOverlay({ mod: "session-tree", kind: "dialog", width: 520, props: { mode: "new", folder: props()?.folder, project: project === m.root?.project ? "" : project } });
+  }
+
   reopenRoot(cx) {
     const r = this.lastRoot;
     if (!r?.sid || this.reopening) return;
@@ -138,14 +151,6 @@ export default class SessionTree extends View {
       .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(10));
   }
 
-  round(t, id, icon, tip, action) {
-    return div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded_full()
-      .bg(t.raised).text_color(t.muted)
-      .hover((s) => s.bg(t.hover).text_color(t.foreground)).cursor_pointer().tooltip(tip)
-      .on_click(action)
-      .child(svg(ICON(icon)).size(14));
-  }
-
   header(t) {
     const w = window();
     return h_flex().size_full().bg(t.chrome).pl(w?.platform === "macos" && !w?.fullscreen ? 80 : 14).pr(10).gap(8).items_center()
@@ -154,8 +159,6 @@ export default class SessionTree extends View {
   }
 
   list(t, m) {
-    const q = this.search.trim().toLowerCase();
-    const hit = (s) => Boolean(s) && (!q || s.name.toLowerCase().includes(q));
     const shown = focused()?.terminal;
     const order = [];
     const rows = [];
@@ -173,13 +176,13 @@ export default class SessionTree extends View {
       this.lastRoot = { sid: m.root.sid, cwd: m.root.cwd, name: m.root.name, project: m.root.project };
       localStorage.setItem("root", JSON.stringify(this.lastRoot));
     }
-    if (!m.root && this.lastRoot && !q) {
+    if (!m.root && this.lastRoot) {
       rows.push(row("st-root-gone", null).cursor_pointer().on_click((_e, cx) => this.reopenRoot(cx))
         .child(svg(ICON("layers")).size(12).flex_none().mr(6).text_color(t.blocked))
         .child(name(this.reopenError ?? `${this.lastRoot.name} closed`, t.muted, false))
         .child(div().flex_none().text_size(11.5).font_semibold().text_color(t.blocked).child(this.reopening ? "…" : "Reopen")));
     }
-    if (hit(m.root)) {
+    if (m.root) {
       rows.push(row("st-root", m.root)
         .child(svg(ICON("layers")).size(12).flex_none().mr(6).text_color(t.foreground))
         .child(name(m.root.name, t.foreground, true))
@@ -187,23 +190,17 @@ export default class SessionTree extends View {
         .child(this.glyph(t, "root", m.root)));
     }
 
-    const projects = m.projects
-      .map((p) => {
-        const titled = q && p.title.toLowerCase().includes(q);
-        const workers = titled ? p.workers : p.workers.filter(hit);
-        return { p, workers, show: titled || hit(p.lead) || workers.length > 0 };
-      })
-      .filter((x) => x.show);
+    const projects = m.projects.map((p) => ({ p, workers: p.workers }));
     projects.forEach(({ p, workers }, i) => {
       const last = i === projects.length - 1;
-      const open = Boolean(q) || !this.folded.has(p.name);
+      const open = !this.folded.has(p.name);
       const hidden = open ? [] : p.workers;
       const blocked = p.lead?.status === "blocked" || hidden.some((w) => w.status === "blocked");
       const needs = Boolean(p.lead?.needs) || hidden.some((w) => w.needs);
       rows.push(row(`st-p-${p.name}`, p.lead)
         .child(guide(t, last ? "└" : "├"))
         .child(name(p.title, t.foreground, true))
-        .child(p.workers.length > 0 && !q ? this.fold(t, p, open) : div().w(14).flex_none())
+        .child(p.workers.length > 0 ? this.fold(t, p, open) : div().w(14).flex_none())
         .child(this.glyph(t, `p-${p.name}`, { status: blocked ? "blocked" : p.status, needs, asks: p.lead?.asks })));
       if (!open) return;
       workers.forEach((w, j) => rows.push(row(`st-w-${w.address}`, w)
@@ -216,7 +213,7 @@ export default class SessionTree extends View {
 
     // Spaces outside the tree stay reachable from here, since this sidebar replaces the spaces list
     const tree = new Set(m.sessions.map((s) => s.space));
-    const others = spaces().filter((sp) => !tree.has(sp.id) && (!q || sp.name.toLowerCase().includes(q)));
+    const others = spaces().filter((sp) => !tree.has(sp.id));
     if (others.length) {
       rows.push(div().pl(12).pt(10).pb(2).text_size(11).text_color(t.dim).child("Other spaces"));
       for (const sp of others) {
@@ -229,21 +226,11 @@ export default class SessionTree extends View {
     }
     setAgentOrder(order);
 
-    const empty = q ? "No session matches." : "No sessions in the tree yet.";
+    const empty = "No sessions in the tree yet.";
     return v_flex().id("root").size_full().min_h(0).bg(t.chrome).text_color(t.foreground)
       .child(div().mx(10).mb(4).h(1).flex_none().bg(t.border))
       .child(v_flex().id("st-list").flex_1().min_h(0).pb(6).overflow_y_scrollbar()
-        .children(rows.length ? rows : [div().px(12).py(6).text_size(12).text_color(t.dim).child(empty)]))
-      .child(h_flex().flex_none().h(44).px(8).gap(6).items_center().border_t(1).border_color(t.border)
-        .child(this.round(t, "st-settings", "settings", "Settings", () => run("app.settings")))
-        .child(h_flex().id("st-search").flex_1().min_w(0).h(26).px(8).gap(6).items_center().rounded_full().bg(t.raised)
-          .border_1().border_color(t.border).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-          .child(svg(ICON("search")).size(12).flex_none().text_color(t.dim))
-          .child(Input.new(this.input).flex_1().h_full().text_size(12).text_color(t.foreground)))
-        .child(this.round(t, "st-new", "square-pen", "New session", () => {
-          const project = m.sessions.find((s) => s.address === focused()?.terminal)?.project;
-          openOverlay({ mod: "session-tree", kind: "dialog", width: 520, props: { mode: "new", folder: props()?.folder, project: project === m.root?.project ? "" : project } });
-        })));
+        .children(rows.length ? rows : [div().px(12).py(6).text_size(12).text_color(t.dim).child(empty)]));
   }
 
   initNew(cx) {

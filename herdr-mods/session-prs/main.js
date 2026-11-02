@@ -5,12 +5,13 @@
 // is left alone while hidden.
 
 import { View, div } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, v_virtual_list, Scrollbar } from "gpui-base";
 import { exec, theme, props, run, layout, watchFolder, closeOverlay, settings } from "herdr";
 import { folderOf, readFiles } from "./files.js";
 
 const REFRESH_MS = 60000;
 const FIELDS = "title url state isDraft reviewDecision mergeable baseRefName headRefName author{login ... on User{name}} " +
+  "latestOpinionatedReviews(first:30){nodes{state author{login}}} " +
   "commits(last:1){nodes{commit{statusCheckRollup{state}}}} reviewThreads(first:100){nodes{isResolved}}";
 
 function find(node, id) {
@@ -136,6 +137,7 @@ export default class SessionPrs extends View {
           base: pr.baseRefName, head: pr.headRefName, author: pr.author ? { login: pr.author.login, name: pr.author.name } : null,
           ci: pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null,
           threads: (pr.reviewThreads?.nodes ?? []).filter((n) => !n.isResolved).length,
+          reviews: (pr.latestOpinionatedReviews?.nodes ?? []).map((n) => ({ login: n.author?.login, state: n.state })),
         });
       });
       this.error = r.code === 0 || Object.keys(data).length ? null : (r.stderr.trim().split("\n")[0] || `gh exited ${r.code}`);
@@ -182,17 +184,18 @@ export default class SessionPrs extends View {
     const pr = this.live.get(p.id);
     const merged = isMerged(pr);
     const final = isFinal(pr);
-    const url = pr?.url ?? `https://github.com/${p.owner}/${p.repo}/pull/${p.number}`;
-    const approved = pr?.review === "APPROVED";
+    // Many repos compute no review decision, so a ✓ is the person's own approval on someone
+    // else's PR, and anyone's approval on theirs
+    const mine = pr?.author?.login === this.viewer;
+    const approved = Boolean(pr) && (pr.review === "APPROVED" ||
+      (pr.reviews ?? []).some((r) => r.state === "APPROVED" && (mine ? r.login !== this.viewer : r.login === this.viewer)));
     const action = !final && pr && (pr.threads > 0 || pr.review === "CHANGES_REQUESTED" || pr.ci === "FAILURE" || pr.ci === "ERROR" || pr.mergeable === "CONFLICTING");
     const ci = final ? t.dim : { SUCCESS: t.ansi2, FAILURE: t.ansi1, ERROR: t.ansi1, PENDING: t.ansi3, EXPECTED: t.ansi3 }[pr?.ci] ?? t.dim;
     const [word, color] = !pr ? ["", t.dim] : merged ? ["merged", t.ansi5] : pr.state === "CLOSED" ? ["closed", t.ansi1] : pr.draft ? ["draft", t.muted] : ["ready", t.ansi4];
     const on = this.onOf(p, heads);
-    const tip = [pr?.threads ? `${pr.threads} unresolved` : "", pr?.mergeable === "CONFLICTING" ? "conflicting" : "", pr?.review === "CHANGES_REQUESTED" ? "changes requested" : ""].filter(Boolean).join(", ");
     const cell = (w, text, c) => div().w(w).flex_none().text_color(c).child(text);
-    return h_flex().id(`pr-${p.id}`).h(ROW).flex_none().px(12).items_center().rounded(5).whitespace_nowrap()
-      .hover((el) => el.bg(t.hover)).cursor_pointer().on_click(() => exec("open", [url]))
-      .when(Boolean(tip), (el) => el.tooltip(tip))
+    // Drawn inside a virtual list, where a row may register no handler; the list's on_item_click opens it
+    return h_flex().id(`pr-${p.id}`).h(ROW).flex_none().px(12).items_center().whitespace_nowrap().cursor_pointer()
       .child(rail(t, kind))
       .child(cell(16, merged ? "◆" : approved ? "✓" : "", merged ? t.ansi5 : t.ansi2))
       .child(cell(14, action ? "!" : "", t.ansi3))
@@ -214,7 +217,12 @@ export default class SessionPrs extends View {
       if (pr?.head) heads.set(`${p.owner}/${p.repo}:${pr.head}`, p.number);
     }
     const who = (author) => firstName(author).toLowerCase();
-    const blocks = list.map((proj, i) => {
+    // One flat list of same-height rows, so the visible range says which headers to pin
+    const items = [];
+    list.forEach((proj, i) => {
+      if (i) items.push({ kind: "gap" });
+      const project = items.length;
+      items.push({ kind: "project", title: proj.title, project });
       const groups = [];
       for (const p of proj.prs) {
         const title = p.group ?? "";
@@ -222,16 +230,25 @@ export default class SessionPrs extends View {
         if (!g) (title ? groups.push((g = { title, prs: [] })) : groups.unshift((g = { title, prs: [] })));
         g.prs.push(p);
       }
-      return v_flex().id(`pr-p-${i}`).flex_none().pt(i ? 16 : 2)
-        .child(h_flex().h(24).px(12).items_center().border_b(1).border_color(t.border)
-          .child(div().font_bold().text_color(t.foreground).child(proj.title)))
-        .children(groups.map((g, j) => {
-          return v_flex().id(`pr-g-${i}-${j}`).flex_none().pt(g.title ? 8 : 4)
-            .when(Boolean(g.title), (el) => el.child(h_flex().h(22).px(12).items_center().whitespace_nowrap()
-              .child(div().font_semibold().text_color(t.foreground).child(g.title))))
-            .children(this.runs(g.prs, heads).map((n) => this.row(t, n, heads, who)));
-        }));
+      groups.forEach((g, j) => {
+        if (j && g.title) items.push({ kind: "gap", project });
+        const group = g.title ? items.length : null;
+        if (g.title) items.push({ kind: "group", title: g.title, project, group });
+        for (const n of this.runs(g.prs, heads)) items.push({ kind: "pr", n, project, group });
+      });
     });
+    const header = (item) => item.kind === "project"
+      ? h_flex().h(ROW).px(12).items_center().border_b(1).border_color(t.border).bg(t.surface)
+        .child(div().font_bold().text_color(t.foreground).child(item.title))
+      : h_flex().h(ROW).px(12).items_center().whitespace_nowrap().bg(t.surface)
+        .child(div().font_semibold().text_color(t.foreground).child(item.title));
+    const draw = (item) => (item.kind === "pr" ? this.row(t, item.n, heads, who) : item.kind === "gap" ? div().h(ROW) : header(item));
+    const keyOf = (k) => (items[k]?.kind === "pr" ? items[k].n.p.id : `row-${k}`);
+    const at = this.top ?? 0;
+    const top = items[at];
+    const pinned = top?.project !== undefined && at > top.project
+      ? [items[top.project], ...(top.group != null && at >= top.group ? [items[top.group]] : [])]
+      : [];
     const close = () => {
       const block = props()?.block;
       if (block && find(layout(), block)) run("layout.hide", { id: block });
@@ -248,7 +265,19 @@ export default class SessionPrs extends View {
           })).child("refresh"))
         .child(div().id("pr-close").px(6).h(22).flex().items_center().rounded(5).text_color(t.muted).cursor_pointer()
           .hover((el) => el.bg(t.hover).text_color(t.foreground)).on_click(close).child("×")))
-      .child(v_flex().id("pr-list").flex_1().min_h(0).py(8).overflow_y_scrollbar()
-        .children(blocks.length ? blocks : [div().px(12).py(8).text_color(t.dim).child("No session lists a pull request yet.")]));
+      .child(items.length
+        ? div().id("pr-body").flex_1().min_h(0).w_full().relative()
+          // The list reports its first visible row as it draws; a wheel turn redraws the pinned headers from it
+          .on_scroll_wheel((_e, cx) => cx.notify())
+          .child(v_virtual_list("pr-list", items.length, ROW, keyOf, (range) => {
+            this.top = range.start;
+            return items.slice(range.start, range.end).map(draw);
+          }).size_full().on_item_click((key) => {
+            const p = items.find((item) => item.kind === "pr" && item.n.p.id === key)?.n.p;
+            if (p) exec("open", [this.live.get(p.id)?.url ?? `https://github.com/${p.owner}/${p.repo}/pull/${p.number}`]);
+          }))
+          .when(pinned.length > 0, (el) => el.child(v_flex().absolute().top(0).left(0).right(0).children(pinned.map(header))))
+          .child(Scrollbar.vertical("pr-list").absolute().inset_0())
+        : div().px(12).py(8).text_color(t.dim).child("No session lists a pull request yet."));
   }
 }
