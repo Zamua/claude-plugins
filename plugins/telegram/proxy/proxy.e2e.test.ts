@@ -1116,12 +1116,12 @@ describe('the proxy, end to end', () => {
   const hcCalls = () => (existsSync(join(home, 'fake', 'hc.calls')) ? readFileSync(join(home, 'fake', 'hc.calls'), 'utf8') : '')
   const hcTerminals = () => JSON.parse(readFileSync(join(home, 'fake', 'hc.json'), 'utf8')).terminals as Array<{ name: string; state: string; labels: Record<string, string> }>
 
-  test('a topic configured onto hc spawns its Claude there, named by topic and labelled with its session', async () => {
+  test('a topic configured onto hc spawns its Claude there, named by topic, labelled with its session and placed in the app\'s topics space', async () => {
     send(61, 'hello hc')
     const spawned = await until('topic 61 to spawn under hc', () => spawns().find(s => s.session === 'claude-61'))
     expect(spawned.env.TG_MUX).toBe('hc')
     expect(spawned.env.TELEGRAM_TOPIC_ID).toBe('61')
-    expect(hcTerminals().find(t => t.name === 'tg-61')?.labels).toEqual({ session: 'claude-61', topic: '61' })
+    expect(hcTerminals().find(t => t.name === 'tg-61')?.labels).toEqual({ session: 'claude-61', topic: '61', 'herdr.space': 'topics', 'herdr.tab': 'tg-61' })
     expect(registry()['61'].tmux_session).toBe('claude-61')
     const turn = await fetch(`${proxyUrl}/poll?topic=61`).then(r => r.json())
     expect(turn.content).toContain('hello hc')

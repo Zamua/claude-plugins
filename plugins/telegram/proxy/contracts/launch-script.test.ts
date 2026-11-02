@@ -11,7 +11,10 @@ const scriptPath = join(import.meta.dir, '..', '..', 'scripts', 'launch-topic.sh
 // A socket that accepts connections, standing in for the hc session's running core.
 const coreSocket = join(mkdtempSync(join(tmpdir(), 'tg-core-')), 'core.sock')
 const core = Bun.listen({ unix: coreSocket, socket: { data() {} } })
-afterAll(() => core.stop(true))
+// A running Herdr app window, as its socket shows one.
+const appHome = mkdtempSync(join(tmpdir(), 'tg-app-'))
+const app = Bun.listen({ unix: join(appHome, 'herdr-app.sock'), socket: { data() {} } })
+afterAll(() => (core.stop(true), app.stop(true)))
 
 // Fakes on the launcher's PATH. Both multiplexers start the pane command
 // synchronously and without the launcher's environment, as a server that
@@ -19,6 +22,7 @@ afterAll(() => core.stop(true))
 // `seq` prints nothing so the dialog watchers exit at once. `claude` records
 // its argv and environment.
 const FAKES: Record<string, string> = {
+  'herdr-app': '#!/bin/sh\necho "$@" >> "$HOME/fake/app.calls"\n',
   herdr: `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$HOME/fake/calls"
 case "$1 $2" in
@@ -92,9 +96,9 @@ const baseSpec = (over: Partial<ClaudeSpawnSpec> = {}): ClaudeSpawnSpec => ({
 })
 
 // Variables the launcher consumes itself; every other one must reach the pane.
-const LAUNCHER_ONLY = new Set(['TG_SESSION', 'TG_MUX', 'TG_SPAWN_DIR'])
+const LAUNCHER_ONLY = new Set(['TG_SESSION', 'TG_MUX', 'TG_SPAWN_DIR', 'TG_TOPIC_NAME'])
 
-function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false, terminals: unknown[] = [], hcSocket = coreSocket) {
+function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false, terminals: unknown[] = [], hcSocket = coreSocket, extraEnv: Record<string, string> = {}) {
   const home = mkdtempSync(join(tmpdir(), 'tg-launch-'))
   const bin = join(home, '.local', 'bin')
   const fake = join(home, 'fake')
@@ -113,7 +117,7 @@ function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false, 
   const spawnEnv = claudeSpawnEnv(spec)
   const result = spawnSync('bash', [scriptPath], {
     encoding: 'utf8',
-    env: { HOME: home, USER: 'test', PATH: '/usr/bin:/bin', TMPDIR: home, TELEGRAM_BOT_TOKEN: 'bot-token', HC_SOCKET: hcSocket, ...spawnEnv },
+    env: { HOME: home, USER: 'test', PATH: '/usr/bin:/bin', TMPDIR: home, TELEGRAM_BOT_TOKEN: 'bot-token', HC_SOCKET: hcSocket, ...spawnEnv, ...extraEnv },
   })
   const read = (file: string) => (existsSync(join(fake, file)) ? readFileSync(join(fake, file), 'utf8') : '')
   const paneEnv = Object.fromEntries(read('claude.env').split('\n').filter(Boolean).map(line => {
@@ -127,6 +131,7 @@ function launch(spec: ClaudeSpawnSpec, panes: unknown[] = [], tmuxDown = false, 
     paneEnv,
     calls: read('calls').trim().split('\n').filter(Boolean),
     hcEnv: read('hc.env'),
+    home,
   }
 }
 
@@ -227,8 +232,22 @@ describe('launch-topic.sh', () => {
     expect(run.result.status).toBe(0)
     expect(run.calls[0]).toBe('ls --all --json --label session=claude-hostthis-34')
     expect(run.calls[1]).toMatch(
-      /^run --bg --json --no-parent --no-notify --name tg-34 --label session=claude-hostthis-34 --label topic=34 --cwd \/tmp\/spawn dir bash \S+tg-topic-\w+$/,
+      /^run --bg --json --no-parent --no-notify --name tg-34 --label session=claude-hostthis-34 --label topic=34 --label herdr.space=topics --label herdr.tab=tg-34 --cwd \/tmp\/spawn dir bash \S+tg-topic-\w+$/,
     )
+  })
+
+  test('hc puts the topic in the app\'s topics space and names its tab, only when an app window is running', async () => {
+    const shown = launch(baseSpec({ muxKind: 'hc' }), [], false, [], coreSocket, { HERDR_APP_HOME: appHome })
+    const calls = join(shown.home, 'fake', 'app.calls')
+    for (let i = 0; i < 40 && !existsSync(calls); i++) await Bun.sleep(50)
+    await Bun.sleep(100)
+    expect(readFileSync(calls, 'utf8').split('\n').filter(Boolean)).toEqual([
+      'do tab.rename --id tg-34 --name hostthis',
+      'do space.rename --id topics --name topics',
+    ])
+    const hidden = launch(baseSpec({ muxKind: 'hc' }))
+    await Bun.sleep(300)
+    expect(existsSync(join(hidden.home, 'fake', 'app.calls'))).toBeFalse()
   })
 
   test('hc leaves a live agent alone, and clears the session\'s finished terminals before starting it again', () => {

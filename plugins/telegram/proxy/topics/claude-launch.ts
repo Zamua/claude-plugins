@@ -88,6 +88,7 @@ export function claudeSpawnEnv(spec: ClaudeSpawnSpec): Record<string, string> {
   const profile = providerLaunchProfile(spec.route, spec.auxiliaryModel, spec.modelContextWindow)
   return {
     TG_SESSION: spec.sessionName,
+    TG_TOPIC_NAME: spec.label,
     TG_MUX: spec.muxKind,
     TG_SPAWN_DIR: spec.spawnDir,
     TELEGRAM_TOPIC_ID: spec.topic,
