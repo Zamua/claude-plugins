@@ -304,7 +304,10 @@ core:
     space. When an app window is running, the launcher names the tab after the
     topic in the background (`herdr-app do tab.rename`, never opening the app).
     Started with `hc run --bg --no-parent --no-notify` running the
-    same exported-variable script as herdr (an hc terminal also starts in the
+    same exported-variable script as herdr, behind a login `zsh -lic` so the
+    topic gets the interactive environment a herdr pane's shell has (Homebrew,
+    nvm, the dev-scratch cache paths, EDITOR) before the script's own exports
+    (an hc terminal also starts in the
     core's environment). `HcMux` sends one JSON-RPC request per `hc connect`;
     every hc call runs with a minimal environment, because a call that finds
     no core starts one and the core hands its environment to every terminal.
