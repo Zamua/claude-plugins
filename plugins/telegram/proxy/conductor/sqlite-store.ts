@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'crypto'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { Approval, Resolution } from './domain/approval'
+import type { PushRecord } from './domain/push'
 import type { BlobRef, ImportedMessage, NewMessage, StoredEvent, StoredMessage } from './domain/message'
 import type { Device } from './wire'
 
@@ -42,6 +43,12 @@ CREATE TABLE IF NOT EXISTS approvals (
   id TEXT PRIMARY KEY, topic TEXT NOT NULL, kind TEXT NOT NULL, prompt TEXT NOT NULL,
   choices TEXT NOT NULL, created_at TEXT NOT NULL, resolved TEXT
 );
+CREATE TABLE IF NOT EXISTS pushes (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, device TEXT NOT NULL, topic TEXT NOT NULL,
+  kind TEXT NOT NULL, author TEXT, message_id TEXT, message_seq INTEGER, approval_id TEXT,
+  title TEXT NOT NULL, body TEXT NOT NULL, collapse_id TEXT, silent INTEGER NOT NULL, sent_at TEXT NOT NULL,
+  apns_status INTEGER, apns_reason TEXT, apns_id TEXT, error TEXT
+);
 CREATE TABLE IF NOT EXISTS writes (
   device TEXT NOT NULL, client_id TEXT NOT NULL, body_sha256 TEXT NOT NULL,
   status INTEGER NOT NULL, response TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (device, client_id)
@@ -62,6 +69,19 @@ type MessageRow = {
   format: string; reply_to: string | null; chat_ids: string; at: string; edited_at: string | null; reactions: string
   client_id: string | null; delivery: string | null; failure: string | null; imported: number
 }
+
+type PushRow = {
+  seq: number; id: string; device: string; topic: string; kind: PushRecord['kind']; author: PushRecord['author']
+  message_id: string | null; message_seq: number | null; approval_id: string | null; title: string; body: string
+  collapse_id: string | null; silent: number; sent_at: string; apns_status: number | null; apns_reason: string | null
+  apns_id: string | null; error: string | null
+}
+
+const pushFrom = (r: PushRow): PushRecord => ({
+  seq: r.seq, id: r.id, device: r.device, topic: r.topic, kind: r.kind, author: r.author, messageId: r.message_id,
+  messageSeq: r.message_seq, approvalId: r.approval_id, title: r.title, body: r.body, collapseId: r.collapse_id,
+  silent: r.silent === 1, sentAt: r.sent_at, apnsStatus: r.apns_status, apnsReason: r.apns_reason, apnsId: r.apns_id, error: r.error,
+})
 
 type DeviceRow = {
   id: string; name: string; public_key: string; node_id: string; apns_token: string | null
@@ -290,6 +310,22 @@ export class ConductorStore {
   }
 
   /** Forgets a token Apple refused, unless the device has sent a newer one since. */
+  /** Keeps a push as sent, for the app's notification feed. */
+  recordPush(push: Omit<PushRecord, 'seq' | 'id'>): PushRecord {
+    const id = `push_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+    const row = this.db
+      .query(`INSERT INTO pushes (id, device, topic, kind, author, message_id, message_seq, approval_id, title, body, collapse_id, silent, sent_at, apns_status, apns_reason, apns_id, error)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+      .get(id, push.device, push.topic, push.kind, push.author, push.messageId, push.messageSeq, push.approvalId, push.title, push.body,
+        push.collapseId, push.silent ? 1 : 0, push.sentAt, push.apnsStatus, push.apnsReason, push.apnsId, push.error) as PushRow
+    return pushFrom(row)
+  }
+
+  /** Pushes recorded after `seq`, oldest first. */
+  pushesAfter(seq: number, limit = 100): PushRecord[] {
+    return (this.db.query('SELECT * FROM pushes WHERE seq > ? ORDER BY seq LIMIT ?').all(seq, limit) as PushRow[]).map(pushFrom)
+  }
+
   dropPushToken(id: string, apnsToken: string): void {
     this.db.query('UPDATE devices SET apns_token = NULL WHERE id = ? AND apns_token = ?').run(id, apnsToken)
   }

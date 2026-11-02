@@ -350,6 +350,16 @@ pushes: iOS throttles them.
 - Delivery times are logged (`push: <topic>#<seq> -> <device> <status> <ms>`,
   and how long after the message was stored), to compare with Telegram's before
   Telegram retires.
+- Every push to every device is also kept, after Apple answers or the request
+  fails, as a row of `conductor.db`'s `pushes` table, for a notification feed:
+  `seq` (autoincrement, to tail from), `id` (`push_<hex>`), `device`, `topic`,
+  `kind` (`message`, `reminder`, `approval`), `author` (`agent` or `proxy`; null
+  for an approval), `message_id` and `message_seq` or `approval_id`, `title` and
+  `body` as sent (after fitting), `collapse_id`, `silent` (1 when it replaces an
+  earlier notification without a sound, as a photo does its caption's),
+  `sent_at`, `apns_status`, `apns_reason` and `apns_id` (Apple's answer, null
+  when none came) and `error` (why the request failed without one). A row is
+  written once and never updated.
 
 ## States and the screen
 

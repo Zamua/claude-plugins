@@ -80,7 +80,7 @@ describe('the HTTP/2 transport', () => {
   let server: Http2Server | undefined
   afterEach(() => server?.close())
 
-  async function serve(status: number, reply: string): Promise<{ origin: string; seen: Array<{ path: string; topic: string; body: string }> }> {
+  async function serve(status: number, reply: string, apnsId?: string): Promise<{ origin: string; seen: Array<{ path: string; topic: string; body: string }> }> {
     const seen: Array<{ path: string; topic: string; body: string }> = []
     server = http2.createServer()
     server.on('stream', (stream: ServerHttp2Stream, headers) => {
@@ -88,7 +88,7 @@ describe('the HTTP/2 transport', () => {
       stream.on('data', chunk => (body += chunk))
       stream.on('end', () => {
         seen.push({ path: String(headers[':path']), topic: String(headers['apns-topic']), body })
-        stream.respond({ ':status': status })
+        stream.respond({ ':status': status, ...(apnsId ? { 'apns-id': apnsId } : {}) })
         stream.end(reply)
       })
     })
@@ -114,6 +114,13 @@ describe('the HTTP/2 transport', () => {
     const { origin } = await serve(200, '')
     const transport = http2Transport()
     expect(await transport.post(origin, '/3/device/ab', {}, '{}')).toEqual({ status: 200 })
+    transport.close()
+  })
+
+  test('Apple\'s id for the notification comes back with the status', async () => {
+    const { origin } = await serve(200, '', '6E4D2C1B-0000-4000-8000-000000000001')
+    const transport = http2Transport()
+    expect(await transport.post(origin, '/3/device/ab', {}, '{}')).toEqual({ status: 200, apnsId: '6E4D2C1B-0000-4000-8000-000000000001' })
     transport.close()
   })
 

@@ -1,10 +1,11 @@
 // Pushes each new agent or proxy message, once, to every device that gave an
-// APNs token, and forgets a token Apple says will never work again.
+// APNs token, keeps each push as sent with Apple's answer, and forgets a token
+// Apple says will never work again.
 import { readFileSync } from 'fs'
 import { apnsSender } from './apns'
 import type { ApnsReply, ApnsSender } from './apns'
 import type { StoredMessage } from './domain/message'
-import { captionOf, messagePush, pushable } from './domain/push'
+import { captionOf, messagePush, pushable, shown } from './domain/push'
 import type { ConductorStore } from './sqlite-store'
 import type { Device } from './wire'
 
@@ -54,16 +55,33 @@ export function startPush(ports: PushPorts & { sender: ApnsSender }): { stop(): 
     if (!device.apnsToken || !device.apnsEnv) return
     const started = now()
     const route = `push: ${message.topic}#${message.seq} -> ${device.id}`
+    const push = messagePush(message, topicName, badge, caption)
+    const record = (answer: { reply?: ApnsReply; error?: string }) => {
+      try {
+        store.recordPush({
+          device: device.id, topic: message.topic, kind: message.kind === 'reminder' ? 'reminder' : 'message',
+          author: message.author === 'proxy' ? 'proxy' : 'agent', messageId: message.id, messageSeq: message.seq, approvalId: null,
+          ...shown(push), collapseId: push.collapseId ?? null, sentAt: new Date(started).toISOString(),
+          apnsStatus: answer.reply?.status ?? null, apnsReason: answer.reply?.reason ?? null, apnsId: answer.reply?.apnsId ?? null,
+          error: answer.error ?? null,
+        })
+      } catch (error) {
+        log(`${route} not recorded: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
     try {
-      const reply = await sender.send(device.apnsEnv, device.apnsToken, messagePush(message, topicName, badge, caption))
+      const reply = await sender.send(device.apnsEnv, device.apnsToken, push)
       const finished = now()
       log(`${route} ${reply.status}${reply.reason ? ` ${reply.reason}` : ''} ${finished - started}ms, ${finished - Date.parse(message.at)}ms after stored`)
+      record({ reply })
       if (deadToken(reply)) {
         store.dropPushToken(device.id, device.apnsToken)
         log(`push: dropped ${device.id}'s token, which Apple refused`)
       }
     } catch (error) {
-      log(`${route} failed after ${now() - started}ms: ${error instanceof Error ? error.message : String(error)}`)
+      const why = error instanceof Error ? error.message : String(error)
+      log(`${route} failed after ${now() - started}ms: ${why}`)
+      record({ error: why })
     }
   }
 
