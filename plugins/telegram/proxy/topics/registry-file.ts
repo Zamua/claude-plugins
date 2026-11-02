@@ -17,6 +17,7 @@ export type RegistryEntry = {
   /** Where the topic hangs in the session tree; absent for a topic that predates it. */
   session?: { parent: string | null; spawned_by: string | null; spawned_at: string | null } | null
   archived_at?: string | null
+  lifecycle_owner?: string
 }
 
 export type Registry = Record<string, RegistryEntry>

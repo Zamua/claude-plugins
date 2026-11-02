@@ -8,9 +8,8 @@ import {
   OPENCODE_GO_KEY_FILE,
   PROVIDER_PROXY_BIN,
   SQUARE_TOPIC,
-  EXTERNAL_TOPICS,
 } from '../config'
-import { EXTERNAL_NOTICE } from '../topics/domain/external'
+import { CROOK_OWNED_NOTICE } from '../topics/domain/lifecycle-owner'
 import { parseRateLimit, parseTurnFailed } from '../http/requests'
 import { json } from '../http/response'
 import { log, noticeFailed } from '../log'
@@ -20,7 +19,7 @@ import type { ChatPort } from '../chat/domain/chat-port'
 import { formatTime, legacySwitchBack, MODELS_PER_PAGE, PICKER_TTL_MS } from '../chat/domain/pickers'
 import { muxes } from '../topics/mux'
 import { saveRegistry } from '../topics/registry'
-import { currentRoute, getTopic, topics } from '../topics/state'
+import { crookOwned, currentRoute, getTopic, topics } from '../topics/state'
 import type { TopicState } from '../topics/state'
 import { readCodexSnapshot } from './codex-app-server'
 import {
@@ -368,7 +367,7 @@ export function createRouting({ chat, sayIn, killSession, ensureSession, schedul
    * provider at its limit, and right after another change.
    */
   function requestRoute(topic: string, choice: RouteChoice, reason: PickerReason): RouteRequest {
-    if (EXTERNAL_TOPICS.has(topic)) return { refused: 'external' }
+    if (crookOwned(topic)) return { refused: 'external' }
     if (choice.ultracode && !choice.model.supportsUltracode) return { refused: 'ultracode-unsupported' }
     if (capacities.get(choice.provider)?.availability === 'exhausted') return { refused: 'provider-exhausted' }
     const route = topicRoute({ provider: choice.provider, model: choice.model.id, effort: choice.effort, ultracode: choice.ultracode })
@@ -379,7 +378,7 @@ export function createRouting({ chat, sayIn, killSession, ensureSession, schedul
   function refusalText(refusal: RouteRefusal, provider: ProviderId): string {
     if (refusal === 'ultracode-unsupported') return 'Ultracode is not supported by this model.'
     if (refusal === 'provider-exhausted') return `${providerLabel(provider)} is still at its usage limit.`
-    if (refusal === 'external') return EXTERNAL_NOTICE
+    if (refusal === 'external') return CROOK_OWNED_NOTICE
     return 'A route change just ran. Wait a moment.'
   }
 

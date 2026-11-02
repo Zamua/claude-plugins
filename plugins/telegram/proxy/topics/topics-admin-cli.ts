@@ -1,9 +1,10 @@
-// Archive, restore, rename or reparent topics through the proxy's loopback API:
+// Archive, restore, rename, reparent or hand over topics through the proxy's loopback API:
 //
 //   bun topics/topics-admin-cli.ts archive <topic>...
 //   bun topics/topics-admin-cli.ts restore <topic>...
 //   bun topics/topics-admin-cli.ts rename <topic> <name>
 //   bun topics/topics-admin-cli.ts reparent <topic> <parent>   (a project's id, or general)
+//   bun topics/topics-admin-cli.ts migrate crook|proxy <topic>...  (who runs the session)
 //
 // Prints `<topic> <outcome>` per topic and exits 1 when any was unknown or refused.
 const proxy = process.env.TELEGRAM_PROXY_URL ?? `http://127.0.0.1:${process.env.TELEGRAM_PROXY_PORT ?? 8790}`
@@ -18,9 +19,11 @@ const request =
       ? { path: '/topic/rename', body: { topic: rest[0], name: rest.slice(1).join(' ') } }
       : verb === 'reparent' && rest.length === 2
         ? { path: '/topic/reparent', body: { topic: rest[0], parent: rest[1] } }
-        : undefined
+        : verb === 'migrate' && rest.length >= 2
+          ? { path: '/topic/migrate', body: { to: rest[0], topics: rest.slice(1) } }
+          : undefined
 if (!request) {
-  console.error('usage: topics-admin-cli.ts archive|restore <topic>...  |  rename <topic> <name>  |  reparent <topic> <parent>')
+  console.error('usage: topics-admin-cli.ts archive|restore <topic>...  |  rename <topic> <name>  |  reparent <topic> <parent>  |  migrate crook|proxy <topic>...')
   process.exit(2)
 }
 async function main(path: string, body: unknown): Promise<number> {

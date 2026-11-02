@@ -7,7 +7,6 @@ import type { ChatPort } from '../chat/domain/chat-port'
 import {
   ADMIN_USER_ID,
   CAPACITY_HOOK,
-  EXTERNAL_TOPICS,
   
   EFFECTIVE_SETTINGS_DIR,
   FAILOVER_HOOK,
@@ -25,7 +24,7 @@ import {
 } from '../config'
 import { log, reason } from '../log'
 import { RESTORED_NOTICE } from './domain/archive'
-import { EXTERNAL_NOTICE } from './domain/external'
+import { CROOK_OWNED_NOTICE } from './domain/lifecycle-owner'
 import { atTurnBoundary } from './domain/claude-update'
 import { liveClaudeSessions } from './claude-sessions'
 import { autoCompactWindow, auxiliaryModelForRoute } from '../routing/domain/model-routing'
@@ -47,7 +46,7 @@ import { nextTurn } from './domain/pane-turn'
 import type { PaneTurn } from './domain/pane-turn'
 import { muxes } from './mux'
 import { saveRegistry } from './registry'
-import { currentRoute, getTopic, legacySessionNameFor, sessionNameFor, topicNames, topics } from './state'
+import { crookOwned, currentRoute, getTopic, legacySessionNameFor, sessionNameFor, topicNames, topics } from './state'
 import type { InboundMsg, TopicState } from './state'
 
 export type TopicLifecyclePorts = {
@@ -154,7 +153,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
   // enqueue prefers a waiter to the queue, so a nudge enqueued right after a
   // bare mux.kill would be handed to the dying process and lost.
   function killSession(st: TopicState, topic: string): boolean {
-    if (EXTERNAL_TOPICS.has(topic)) {
+    if (crookOwned(topic)) {
       log(`topic ${topic}: its session is run outside the proxy; not stopping it`)
       return false
     }
@@ -206,7 +205,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
    */
   function pumpPane(topic: string): void {
     const st = getTopic(topic)
-    if (EXTERNAL_TOPICS.has(topic) || inboundModeForRoute(currentRoute(st)) !== 'pane') return
+    if (crookOwned(topic) || inboundModeForRoute(currentRoute(st)) !== 'pane') return
     requeueInflight(st)
 
     ensureSession(topic, 'timer')
@@ -315,7 +314,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     if (harnessLocked(topic)) return 'skipped'
     // The square hosts conversations, not a Claude of its own.
     if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return 'skipped'
-    if (EXTERNAL_TOPICS.has(topic)) return 'skipped'
+    if (crookOwned(topic)) return 'skipped'
     const st = getTopic(topic)
     // An archived topic stays down on a timer; anything that wakes it brings it back with its conversation.
     if (st.archivedAt) {
@@ -434,8 +433,8 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
       await tell('♻️ the square has no agent of its own; run /relaunch in a topic.')
       return
     }
-    if (EXTERNAL_TOPICS.has(topic)) {
-      await tell(EXTERNAL_NOTICE)
+    if (crookOwned(topic)) {
+      await tell(CROOK_OWNED_NOTICE)
       return
     }
     const since = Date.now() - (lastRelaunch.get(topic) ?? 0)
@@ -479,7 +478,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     if (!topics.has(topic)) return { topic, outcome: 'unknown' }
     if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return { topic, outcome: 'refused', reason: 'the square has no agent of its own' }
     if (harnessLocked(topic)) return { topic, outcome: 'refused', reason: 'locked to another harness' }
-    if (EXTERNAL_TOPICS.has(topic)) return { topic, outcome: 'refused', reason: 'run by the Crook backend' }
+    if (crookOwned(topic)) return { topic, outcome: 'refused', reason: 'run by the Crook backend' }
     ensureSession(topic, 'quiet')
     enqueue(topic, {
       content: quietNotice('the general session started this turn', instructions),

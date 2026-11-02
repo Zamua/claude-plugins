@@ -1,4 +1,5 @@
 // Every topic's in-memory state: its inbound queues, its session, its route.
+import type { LifecycleOwner } from './domain/lifecycle-owner'
 import type { SessionNode } from './domain/session-tree'
 import { DEFAULT_TOPIC_ROUTE, GROUP_CHAT_ID } from '../config'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
@@ -37,9 +38,14 @@ export type TopicState = {
   session?: SessionNode
   /** When it was archived: hidden and stopped, its conversation kept, until something wakes it. */
   archivedAt?: string
+  /** Who runs its session; absent means the proxy. */
+  lifecycleOwner?: LifecycleOwner
 }
 
 export const topics = new Map<string, TopicState>()
+
+/** The Crook backend runs this topic's session: the proxy relays its messages and never starts, stops or types into it. */
+export const crookOwned = (topic: string): boolean => topics.get(topic)?.lifecycleOwner === 'crook'
 // forum_topic_created names learned before a topic's session is spawned.
 export const topicNames = new Map<string, string>()
 

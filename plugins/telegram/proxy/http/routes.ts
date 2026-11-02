@@ -13,6 +13,7 @@ export const ROUTE = {
   topicRestore: '/topic/restore',
   topicRename: '/topic/rename',
   topicReparent: '/topic/reparent',
+  topicMigrate: '/topic/migrate',
   topicKickoff: '/topic/kickoff',
   topicRelaunch: '/topic/relaunch',
   topicRoute: '/topic/route',

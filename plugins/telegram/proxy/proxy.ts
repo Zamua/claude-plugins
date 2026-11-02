@@ -59,7 +59,6 @@ import {
   SQUARE_TOPIC,
   BROKER_SOCKET,
   CROOK_USAGE_FILE,
-  EXTERNAL_TOPICS,
   OPENCODE_BIN,
   STATE_DIR,
   TAILSCALE_BIN,
@@ -111,7 +110,7 @@ import { claimPidFile, releasePidFile } from './shared/pid-file'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
 import { learnTopicName, loadAndReconcileRegistry, saveRegistry } from './topics/registry'
-import { currentRoute, getTopic, topics } from './topics/state'
+import { crookOwned, currentRoute, getTopic, topics } from './topics/state'
 import { loadConvs } from './square/conversations'
 import { createSquare } from './square/square'
 import { telegramDownloader, writeInboxFile } from './telegram/telegram-files'
@@ -382,7 +381,7 @@ async function renameEverywhere(topic: string, name: string): Promise<void> {
   learnTopicName(topic, name)
   harnessFor(topic)?.rename(topic, name)
 }
-const topicArchive = createTopicArchive({ killSession, save: saveRegistry, rename: renameEverywhere, square: SQUARE_TOPIC || undefined, log })
+const topicArchive = createTopicArchive({ killSession, save: saveRegistry, rename: renameEverywhere, harnessLocked, square: SQUARE_TOPIC || undefined, log })
 // One instance writes the ledger, so its hash chain stays whole.
 const conductorLedger = conductorStore ? new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')) : undefined
 // What each working hc topic is doing, for the app's working strip.
@@ -439,7 +438,7 @@ const relaunchBroker = conductorLedger
         root: ROOT,
         rootAgentPid: () => known.agentPid(ROOT),
         facts: known.facts,
-        external: topic => EXTERNAL_TOPICS.has(topic),
+        external: topic => crookOwned(topic),
         callerTopic: known.callerTopic,
         relaunch: async (topic, by) => {
           const harness = harnessFor(topic)

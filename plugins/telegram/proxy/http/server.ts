@@ -18,7 +18,7 @@ import type { createOutbound } from './outbound'
 import type { TopicArchive } from '../topics/archive'
 import type { TargetResult } from '../broker/domain/relaunch'
 import type { ControlResult } from '../conductor/control'
-import { BadRequest, parsePermissionRequest, parseTopicCreate, parseTopicKickoff, parseTopicList, parseTopicRename, parseTopicReparent, parseTopicRoute } from './requests'
+import { BadRequest, parsePermissionRequest, parseTopicCreate, parseTopicKickoff, parseTopicList, parseTopicRename, parseTopicMigrate, parseTopicReparent, parseTopicRoute } from './requests'
 import { acknowledgedPoll, longPoll } from './long-poll'
 import { json } from './response'
 import { ROUTE } from './routes'
@@ -166,6 +166,10 @@ export function createHttpServer(ports: HttpPorts) {
       case ROUTE.topicReparent: if (post) {
         const { topic, parent } = parseTopicReparent(await req.json())
         return json({ results: [ports.archive.reparent(topic, parent)] })
+      } break
+      case ROUTE.topicMigrate: if (post) {
+        const { topics, to } = parseTopicMigrate(await req.json())
+        return json({ results: ports.archive.migrate(topics, to) })
       } break
       case ROUTE.topicRelaunch: if (post) {
         if (!ports.topicControl) return json({ error: 'relaunch needs the conductor ledger' }, 503)
