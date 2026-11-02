@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'f
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { renderPaneTurn } from '../shared/domain/inbound-delivery'
-import { RELAUNCH_META, reminderMeta, SECRET_DROP_META, SQUARE_META } from '../shared/domain/turn-meta'
+import { RELAUNCH_META, reminderMeta, SECRET_DROP_META, SQUARE_META, QUIET_META } from '../shared/domain/turn-meta'
 import { ROUTE } from '../http/routes'
 import { parseRateLimit } from '../http/requests'
 import { claudeSpawnEnv } from '../topics/claude-launch'
@@ -36,6 +36,8 @@ describe('stop-reply-guard.py and the proxy meta flags', () => {
   })
 
   test('turns the proxy marks as needing no reply may end in silence', () => {
+    expect(blocksSilentStop(QUIET_META)).toBeFalse()
+    expect(blocksSilentStop({ ...RELAUNCH_META, ...QUIET_META })).toBeFalse()
     expect(blocksSilentStop(SQUARE_META)).toBeFalse()
     expect(blocksSilentStop(SECRET_DROP_META)).toBeFalse()
     expect(blocksSilentStop(reminderMeta(false))).toBeFalse()

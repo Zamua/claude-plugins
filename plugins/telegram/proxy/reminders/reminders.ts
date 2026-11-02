@@ -8,7 +8,7 @@ import { JsonReminderRepository } from './json-reminder-repository'
 import type { InboundMessage } from '../shared/domain/inbound-delivery'
 import { InvalidReminder, LATE_AFTER_MS, dueReminders, reminderNotice, scheduleReminder } from './domain/reminder'
 import type { Reminder, ReminderRequest } from './domain/reminder'
-import { reminderMeta } from '../shared/domain/turn-meta'
+import { QUIET_META, reminderMeta } from '../shared/domain/turn-meta'
 import { parseCancelReminder } from '../http/requests'
 import { json } from '../http/response'
 import { log, reason } from '../log'
@@ -19,7 +19,8 @@ export type ReminderPorts = {
   /** The topics a reminder may name: waking one spawns its agent. */
   topicDirectory: () => readonly { topic: string }[]
   harnessLocked: (topic: string) => boolean
-  ensureSession: (topic: string) => void
+  /** `quiet` wakes the agent without posting anything to the operator. */
+  ensureSession: (topic: string, by?: 'event' | 'quiet') => void
   enqueue: (topic: string, message: InboundMessage) => void
 }
 
@@ -86,18 +87,20 @@ export function createReminders({ chat, topicDirectory, harnessLocked, ensureSes
       const isSet = (id: string) => reminders.list().some(x => x.id === id)
       for (const r of dueReminders(reminders.list(), now)) {
         if (!isSet(r.id)) continue
-        try {
-          await chat.send(r.topic, { text: `⏰ ${r.text}` })
-        } catch (err) {
-          log(`reminder ${r.id}: post failed, retrying next tick: ${reason(err)}`)
-          continue
-        }
-        if (!isSet(r.id)) {
-          log(`reminder ${r.id} cancelled while posting; its agent is not woken`)
-          continue
+        if (!r.quiet) {
+          try {
+            await chat.send(r.topic, { text: `⏰ ${r.text}` })
+          } catch (err) {
+            log(`reminder ${r.id}: post failed, retrying next tick: ${reason(err)}`)
+            continue
+          }
+          if (!isSet(r.id)) {
+            log(`reminder ${r.id} cancelled while posting; its agent is not woken`)
+            continue
+          }
         }
         if (!(SQUARE_TOPIC && r.topic === SQUARE_TOPIC) && !harnessLocked(r.topic)) {
-          ensureSession(r.topic)
+          ensureSession(r.topic, r.quiet ? 'quiet' : 'event')
           enqueue(r.topic, {
             content: reminderNotice(r, now),
             meta: {
@@ -106,7 +109,7 @@ export function createReminders({ chat, topicDirectory, harnessLocked, ensureSes
               user_id: '',
               ts: new Date(now).toISOString(),
               ...(r.topic !== 'general' ? { message_thread_id: r.topic } : {}),
-              ...reminderMeta(!!r.prompt),
+              ...(r.quiet ? QUIET_META : reminderMeta(!!r.prompt)),
             },
           })
         }

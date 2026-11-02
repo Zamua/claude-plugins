@@ -794,6 +794,20 @@ describe('the proxy, end to end', () => {
     writeFileSync(join(home, '.claude', 'sessions', `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: first.env.TG_CLAUDE_SESSION_ID, status: 'idle' }))
     const relaunched = await until('topic 72 relaunched at its turn boundary', () => spawns().filter(s => s.session === 'claude-72')[1], 15_000)
     expect([relaunched.env.TG_RESUME, relaunched.env.TG_CLAUDE_SESSION_ID]).toEqual(['1', first.env.TG_CLAUDE_SESSION_ID])
+    const postedIn72 = () => calls.filter(c => c.method === 'sendMessage' && c.body.message_thread_id === 72)
+    expect(postedIn72().filter(c => /♻️/.test(c.body.text))).toEqual([])
+    const back = await fetch(`${proxyUrl}/poll?topic=72`).then(r => r.json())
+    expect(back.content).toMatch(/not by the operator.*to the general session with SendMessage/)
+    expect(back.meta).toMatchObject({ relaunch: '1', quiet: '1', user_id: '' })
+
+    const posted = postedIn72().length
+    const kicked = await post('/topic/kickoff', { topic: '72', prompt: 'summarise the plan' }).then(r => r.json())
+    expect(kicked.results).toEqual([{ topic: '72', outcome: 'kicked_off' }])
+    const turn = await fetch(`${proxyUrl}/poll?topic=72`).then(r => r.json())
+    expect(turn.content).toMatch(/the general session started this turn\. Instructions: summarise the plan .*do not post in this topic/)
+    expect(turn.meta).toMatchObject({ quiet: '1', user_id: '' })
+    expect(postedIn72().length).toBe(posted)
+    expect((await post('/topic/kickoff', { topic: '9999' }).then(r => r.json())).results).toEqual([{ topic: '9999', outcome: 'unknown' }])
 
     const routed = await post('/topic/route', { topic: '72', provider: 'anthropic', model: 'sonnet', effort: 'medium' })
     const answer = await routed.json()

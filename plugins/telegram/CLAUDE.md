@@ -522,8 +522,14 @@ demand: `killSession` (which also drains the dying MCP's long-polls, so the
 nudge cannot be handed to it and lost), a proxy ack in the thread, a `SYSTEM
 NOTICE` enqueued with meta `relaunch=1`, then `ensureSession` respawns with
 `--resume`. The notice asks for ONE line back naming the MCP servers the
-session now sees, so a respawn that fails shows up as a visible silence and
-the operator can read the reloaded config off the reply. The square gets a
+session now sees, so a respawn that fails shows up as a visible silence. Where
+that line goes follows who asked: the operator's own `/relaunch` (or the app's
+command) is acked in the thread and answered there; any other relaunch (the
+root's broker, the loopback API, another member) posts nothing in the topic,
+and its notice (meta `quiet="1"`, which the reply guard accepts as silence)
+asks the session to report `back, MCP: ...` to general with SendMessage. The
+operator talks to general and general to the sessions, so a session posts in
+its topic only in answer to the operator. The square gets a
 refusal (no claude of its own). Registered in the group's "/" menu alongside
 the secret verbs (`registerCommands`); any group member may run it, since it
 is not destructive: the conversation resumes.
@@ -581,7 +587,7 @@ Unset, nothing changes.
 ## Relaunch and route changes over loopback (until Crook's cutover)
 
 So the Crook backend can restart a topic and switch its model before it runs
-sessions itself, the loopback API has three more routes, unauthenticated like the
+sessions itself, the loopback API has more routes, unauthenticated like the
 rest of it:
 
 - `POST /topic/relaunch {topics: [...]}` goes through the broker's own
@@ -596,6 +602,14 @@ rest of it:
   `external_lifecycle` for an external topic. Any local process can call it, so
   it never picks a route that skips permission checks (Codex): that is 403
   `needs_operator`, left to Telegram or the signed app.
+
+`POST /topic/kickoff {topic, prompt?}` starts or wakes a topic's session for
+general, posting nothing to the operator: an archived topic comes back without
+its restore notice, and the session gets general's instructions as a turn
+marked `quiet="1"` that it answers to general with SendMessage. It answers
+`{results: [{topic, outcome}]}`, `kicked_off`, `unknown`, or `refused` for the
+square, a locked harness or an external topic. A reminder posted to `/remind`
+with `quiet: true` does the same at its time: no `⏰` post, the same quiet turn.
 
 `GET /routes` is the catalog the app's `/v1/routes` serves, with
 `operator_only` on each provider (true for Codex), so the backend can show the

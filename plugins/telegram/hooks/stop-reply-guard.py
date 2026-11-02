@@ -93,6 +93,12 @@ def main() -> None:
     if 'secret_drop="1"' in last_blob:
         return
 
+    # A turn the operator did not send (meta quiet="1"): the session reports to
+    # general by SendMessage, so it ends without a reply in its topic.
+    if 'quiet="1"' in last_blob:
+        log("allowing stop: quiet turn, reported to general")
+        return
+
     # A reminder with no follow-up work: the proxy already posted it.
     if 'reminder="notice"' in last_blob:
         return

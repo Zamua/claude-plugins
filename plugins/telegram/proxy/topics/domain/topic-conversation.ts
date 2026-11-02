@@ -39,11 +39,21 @@ export type RelaunchPlan = {
   notice: string
 }
 
+/**
+ * The operator's own /relaunch is answered in the topic; any other relaunch
+ * (the root's broker, the loopback API) posts nothing there, and the session
+ * reports back to general instead.
+ */
 export function planRelaunch(
   bound: string | undefined,
   onDisk: (sessionId: string) => boolean,
   wasLive: boolean,
+  byOperator = true,
 ): RelaunchPlan {
+  const who = byOperator ? 'the operator relaunched this session' : 'this session was relaunched, not by the operator'
+  const report = byOperator
+    ? (state: string) => `Reply with ONE short line confirming you are ${state} and naming the MCP servers you now see.`
+    : () => `Do not post in this topic: report ONE line, "back, MCP: <the MCP servers you now see>", to the general session with SendMessage.`
   if (bound && !onDisk(bound)) {
     return {
       missingSessionId: bound,
@@ -51,10 +61,9 @@ export function planRelaunch(
         `♻️ this topic's conversation (${bound}) was missing on disk, so a new conversation was started ` +
         'with freshly loaded MCP servers and settings.',
       notice:
-        'SYSTEM NOTICE (not a user message): the operator relaunched this session. Its previous conversation ' +
+        `SYSTEM NOTICE (not a user message): ${who}. Its previous conversation ` +
         `(${bound}) was missing on disk, so this is a NEW conversation with no earlier history, running with ` +
-        'freshly loaded MCP servers and settings. Reply with ONE short line confirming you are up and naming ' +
-        'the MCP servers you now see.',
+        `freshly loaded MCP servers and settings. ${report('up')}`,
     }
   }
   return {
@@ -63,8 +72,8 @@ export function planRelaunch(
       `♻️ relaunching this topic's agent${wasLive ? '' : ' (it was not running)'}: same conversation, ` +
       'freshly loaded MCP servers and settings.',
     notice:
-      'SYSTEM NOTICE (not a user message): the operator relaunched this session, so it has just restarted ' +
-      'with your full conversation intact and freshly loaded MCP servers and settings. Reply with ONE short ' +
-      'line confirming you are back and naming the MCP servers you now see, then continue any pending work.',
+      `SYSTEM NOTICE (not a user message): ${who}, so it has just restarted ` +
+      `with your full conversation intact and freshly loaded MCP servers and settings. ${report('back')} ` +
+      'Then continue any pending work.',
   }
 }

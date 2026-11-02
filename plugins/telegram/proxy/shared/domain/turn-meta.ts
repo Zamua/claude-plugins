@@ -4,5 +4,7 @@
 export const SQUARE_META = { square: '1' } as const
 export const SECRET_DROP_META = { secret_drop: '1' } as const
 export const RELAUNCH_META = { relaunch: '1' } as const
+/** A turn the operator did not send: the session reports to general, so it may end without a reply in its topic. */
+export const QUIET_META = { quiet: '1' } as const
 export const ASK_META = { ask: '1' } as const
 export const reminderMeta =(hasFollowUp: boolean) => ({ reminder: hasFollowUp ? 'act' : 'notice' }) as const
