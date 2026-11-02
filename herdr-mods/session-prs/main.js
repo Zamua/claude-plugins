@@ -22,6 +22,9 @@ const TABS = [["prs", "PRs"], ["reviews", "PR Reviews"], ["asks", "Asks"]];
 // shared state so the pane and its dialog see the same
 const QUEUE = "session-prs.queue";
 const SENT = "session-prs.sent";
+// The PR tabs' filters by tab, then by dropdown: { prs: { author: [...], status: [...], stream: [...] } }
+const FILTERS = "session-prs.filters";
+const STATUSES = [["draft", "draft"], ["ready", "ready"], ["approved", "approved by me"], ["action", "needs action (!)"], ["ci", "CI failing"], ["merged", "merged"]];
 const URL = /https?:\/\/[^\s)>"]+/g;
 
 function find(node, id) {
@@ -176,6 +179,7 @@ export default class SessionPrs extends View {
   init(_props, cx) {
     this.folder = folderOf(props());
     if (props()?.mode === "ask") return this.initAsk(cx);
+    if (props()?.mode === "filter") return;
     this.reviewsProject = props()?.reviews ?? "reviews";
     this.files = new Map();
     this.live = new Map(JSON.parse(localStorage.getItem("live") ?? "[]"));
@@ -417,9 +421,55 @@ export default class SessionPrs extends View {
     const who = (author) => firstName(author).toLowerCase();
     const items = [];
     // A PR closed without merging is off the board until it is reopened
-    const shown = list
+    const all = list
       .map((proj) => ({ ...proj, prs: proj.prs.filter((p) => this.live.get(p.id)?.state !== "CLOSED") }))
       .filter((proj) => proj.prs.length);
+
+    // Filters: the values in one dropdown are ORed, the dropdowns ANDed, and an empty one is all
+    const tab = reviewing ? "reviews" : "prs";
+    const chosen = (shared(FILTERS) ?? {})[tab] ?? {};
+    const pick = (dim) => chosen[dim] ?? [];
+    const filtering = ["author", "status", "stream"].some((dim) => pick(dim).length);
+    const statusOf = (p) => {
+      const pr = this.live.get(p.id);
+      const { approved, action } = this.marks(pr, reviewing);
+      const open = pr && !isFinal(pr);
+      return [open && pr.draft && "draft", open && !pr.draft && "ready", approved && "approved", action && "action",
+        open && (pr.ci === "FAILURE" || pr.ci === "ERROR") && "ci", isMerged(pr) && "merged"].filter(Boolean);
+    };
+    const matches = (proj, p) => {
+      const [authors, statuses, streams] = [pick("author"), pick("status"), pick("stream")];
+      return (!authors.length || authors.includes(who(this.live.get(p.id)?.author))) &&
+        (!statuses.length || statusOf(p).some((x) => statuses.includes(x))) &&
+        (!streams.length || streams.includes(`${proj.name}/${p.group ?? ""}`));
+    };
+    const streams = all.flatMap((proj) => [...new Set(proj.prs.map((p) => p.group ?? ""))]
+      .map((g) => ({ key: `${proj.name}/${g}`, name: g, project: proj.title })));
+    const named = (name) => streams.filter((x) => x.name === name).length;
+    const options = {
+      author: [...new Set(all.flatMap((proj) => proj.prs.map((p) => who(this.live.get(p.id)?.author))).filter(Boolean))].sort().map((a) => ({ key: a, label: a })),
+      status: STATUSES.map(([key, label]) => ({ key, label })),
+      stream: streams.map((x) => ({ key: x.key, label: !x.name ? x.project : named(x.name) > 1 ? `${x.project} / ${x.name}` : x.name })),
+    };
+    const shown = filtering
+      ? all.map((proj) => ({ ...proj, prs: proj.prs.filter((p) => matches(proj, p)) })).filter((proj) => proj.prs.length)
+      : all;
+    const bar = h_flex().h(30).flex_none().px(10).gap(6).items_center().border_b(1).border_color(t.border).text_size(11.5)
+      .children([["author", "Author"], ["status", "Status"], ["stream", "Workstream"]].map(([dim, label]) => {
+        const n = pick(dim).length;
+        return h_flex().id(`flt-${tab}-${dim}`).h(22).px(8).gap(5).items_center().rounded(5).border_1()
+          .border_color(n ? t.accent : t.input).text_color(n ? t.foreground : t.muted).cursor_pointer().hover((el) => el.bg(t.hover))
+          .on_click(() => openOverlay({
+            mod: "session-prs", kind: "popup", width: 280, height: Math.min(44 + options[dim].length * 26, 420),
+            props: { mode: "filter", tab, dim, title: label, options: options[dim] },
+          }))
+          .child(n ? `${label} (${n})` : label)
+          .child(div().text_color(t.dim).child("▾"));
+      }))
+      .when(filtering, (el) => el.child(div().id(`flt-${tab}-clear`).px(6).h(22).flex().items_center().text_color(t.dim).cursor_pointer()
+        .hover((el) => el.text_color(t.foreground))
+        .on_click(() => setShared(FILTERS, { ...(shared(FILTERS) ?? {}), [tab]: {} }))
+        .child("clear all")));
     const finished = (g) => g.prs.every((p) => isMerged(this.live.get(p.id)));
     const groupsOf = (proj) => {
       const groups = [];
@@ -450,7 +500,8 @@ export default class SessionPrs extends View {
       if (items.length - 1 > project) items.push({ kind: "gap", project, top });
       const at = items.length;
       const key = `${reviewing ? "r" : "p"}:${proj.name}`;
-      const open = this.doneOpen.has(key);
+      // A filter's matches stay in view even when they are all merged
+      const open = filtering || this.doneOpen.has(key);
       items.push({ kind: "done", title: `Done · ${done.length} workstream${done.length === 1 ? "" : "s"}`, name: key, open, project, done: at, top });
       if (open) done.forEach((g, j) => emit(g, j > 0, at, g.title || proj.title));
     };
@@ -463,7 +514,8 @@ export default class SessionPrs extends View {
       if (items.length) items.push({ kind: "gap" });
       const top = items.length;
       const key = `${reviewing ? "r" : "p"}:*`;
-      const open = this.doneOpen.has(key);
+      // A filter's matches stay in view even when they are all merged
+      const open = filtering || this.doneOpen.has(key);
       items.push({ kind: "done", title: `Done · ${resting.length} project${resting.length === 1 ? "" : "s"}`, name: key, open, top, done: top, project: top });
       if (open) resting.forEach((proj) => emitProject(proj, false, top));
     }
@@ -501,9 +553,10 @@ export default class SessionPrs extends View {
       ...(top.project != null && at > top.project ? pin(top.done) : []),
       ...(top.project != null && at > top.project ? pin(top.group) : []),
     ])];
-    if (!items.length) return div().px(12).py(8).text_color(t.dim).child(reviewing ? "No review session lists a pull request." : "No session lists a pull request yet.");
+    const empty = filtering ? "No pull request matches these filters." : reviewing ? "No review session lists a pull request." : "No session lists a pull request yet.";
+    if (!items.length) return v_flex().flex_1().min_h(0).child(bar).child(div().px(12).py(8).text_color(t.dim).child(empty));
     const id = reviewing ? "rv-list" : "pr-list";
-    return div().id(`${id}-body`).flex_1().min_h(0).w_full().relative()
+    return v_flex().flex_1().min_h(0).w_full().child(bar).child(div().id(`${id}-body`).flex_1().min_h(0).w_full().relative()
       // The list reports its first visible row as it draws; a wheel turn redraws the pinned headers from it
       .on_scroll_wheel((_e, cx) => cx.notify())
       .child(v_virtual_list(id, items.length, ROW, keyOf, (range) => {
@@ -518,7 +571,27 @@ export default class SessionPrs extends View {
       .when(pinned.length > 0, (el) => el.child(v_flex().absolute().top(0).left(0).right(0).children(pinned.map((item, k) =>
         item.kind === "done" ? div().id(`pin-${k}`).on_click((_e, cx) => toggleDone(item.name, cx)).child(header(item))
           : item.open ? div().id(`pin-${k}`).on_click(() => openSession(item.open)).child(header(item)) : header(item)))))
-      .child(Scrollbar.vertical(id).absolute().inset_0());
+      .child(Scrollbar.vertical(id).absolute().inset_0()));
+  }
+
+  filterPopup(t) {
+    const { tab, dim, title, options } = props();
+    const all = shared(FILTERS) ?? {};
+    const chosen = all[tab]?.[dim] ?? [];
+    const set = (next) => setShared(FILTERS, { ...all, [tab]: { ...(all[tab] ?? {}), [dim]: next } });
+    return v_flex().size_full().min_h(0).p(6).bg(t.popover).text_size(12.5).text_color(t.foreground)
+      .child(h_flex().px(8).pt(4).pb(6).items_center()
+        .child(div().flex_1().text_size(11).text_color(t.dim).child(title))
+        .when(chosen.length > 0, (el) => el.child(div().id("flt-none").text_size(11).text_color(t.dim).cursor_pointer()
+          .hover((el) => el.text_color(t.foreground)).on_click(() => set([])).child("clear"))))
+      .child(v_flex().id("flt-list").flex_1().min_h(0).overflow_y_scrollbar().children(options.map((o, k) => {
+        const on = chosen.includes(o.key);
+        return h_flex().id(`flt-o-${k}`).h(26).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().hover((el) => el.bg(t.hover))
+          .on_click(() => set(on ? chosen.filter((x) => x !== o.key) : [...chosen, o.key]))
+          .child(div().size(14).flex_none().rounded(3).border_1().border_color(on ? t.accent : t.input).bg(on ? t.accent : t.popover)
+            .flex().items_center().justify_center().text_size(10).text_color(t.accent_foreground).child(on ? "✓" : ""))
+          .child(div().flex_1().min_w(0).truncate().child(o.label));
+      })));
   }
 
   focusSession(project, session) {
@@ -556,6 +629,7 @@ export default class SessionPrs extends View {
   render() {
     const t = theme();
     if (props()?.mode === "ask") return this.askDialog(t);
+    if (props()?.mode === "filter") return this.filterPopup(t);
     const all = projects(this.files);
     const asks = openAsks(this.files);
     const count = asks.reduce((n, g) => n + g.asks.length, 0);
