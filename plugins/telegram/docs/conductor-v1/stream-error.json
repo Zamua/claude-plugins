@@ -1,6 +1,6 @@
 {
   "type": "error",
-  "screen": "16832",
+  "screen": "100",
   "error": {
     "code": "no_screen",
     "message": "this topic has no screen to show"

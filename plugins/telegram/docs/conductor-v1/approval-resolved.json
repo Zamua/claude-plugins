@@ -1,6 +1,6 @@
 {
   "id": "ap_7f3c",
-  "topic": "16832",
+  "topic": "100",
   "kind": "permission",
   "prompt": "Allow running `bun test`?",
   "choices": [
