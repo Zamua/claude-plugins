@@ -213,6 +213,12 @@ environment with an ES256 token renewed every 50 minutes, keeps each push as
 sent with Apple's answer in the store's `pushes` table (one row per device,
 never updated, tailed by `seq`), and drops tokens Apple calls dead; it needs the
 four `CONDUCTOR_APNS_*` settings and the listener.
+`CONDUCTOR_WRITES=off` refuses every signed write with 410 `writes_retired`
+before its body is read, so nothing reaches the store, the ledger or a topic;
+reads, the stream and enrollment still work. It is for the cutover to the Crook
+backend: both servers trust the same device key over the same signed bytes (no
+audience in them), so a request signed for one would also verify at the other.
+Unset is on; a value that is neither on nor off reads as off.
 With the listener on and hc topics configured, `hc-watch.ts` holds one
 `events.subscribe` connection straight to the topics core's socket (never the
 hc CLI, so it cannot start a core) and keeps its snapshot current through

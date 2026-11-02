@@ -46,6 +46,7 @@ import {
   CONDUCTOR_LISTEN,
   CONDUCTOR_APNS,
   CONDUCTOR_NODES,
+  CONDUCTOR_WRITES,
   CONDUCTOR_OPERATOR_LOGIN,
   GROUP_CHAT_ID,
   HC_BIN,
@@ -494,6 +495,7 @@ const conductor = conductorStore && appControl && conductorMode?.listener
         thumbnail: sipsThumbnailer(log),
         log,
         version: '1',
+        writes: CONDUCTOR_WRITES,
       },
     })
   : undefined

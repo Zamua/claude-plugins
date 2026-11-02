@@ -81,6 +81,8 @@ export type ConductorApiPorts = {
   log: (message: string) => void
   version: string
   now?: () => number
+  /** False refuses every signed write with 410, before its body is read; absent, writes are taken. */
+  writes?: boolean
 }
 
 type SocketData = { deviceId: string; ready: boolean; screens: Set<string> }
@@ -139,6 +141,7 @@ function pushFields(body: Record<string, unknown> | null): Pick<Device, 'apnsTok
 
 export function createConductorApi(ports: ConductorApiPorts) {
   const { store } = ports
+  if (ports.writes === false) ports.log('conductor: signed writes are off (CONDUCTOR_WRITES); each answers 410')
   const now = ports.now ?? Date.now
   const sockets = new Set<ServerWebSocket<SocketData>>()
   const inFlight = new Map<string, Promise<Response>>()
@@ -291,6 +294,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
     device: Device,
     handle: (body: Uint8Array, write: SignedWrite) => Promise<Response>,
   ): Promise<Response> {
+    if (ports.writes === false) return fail(410, 'writes_retired', 'this server no longer takes signed writes; send through the Crook backend')
     const body = new Uint8Array(await req.arrayBuffer())
     const write = checkSignedWrite({ headers: req.headers, method: req.method, pathWithQuery: url.pathname + url.search, body, publicKey: device.publicKey, now: now() })
     if ('code' in write) return fail(write.status, write.code, write.message)

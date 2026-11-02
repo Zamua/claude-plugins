@@ -8,7 +8,7 @@ import { conductorControl } from './control'
 import { scheduleReminder } from '../reminders/domain/reminder'
 import type { Reminder } from '../reminders/domain/reminder'
 import { SecretExists, SecretMissing } from '../secrets/secret'
-import type { DeliverAppMessage, TopicSummary } from './api'
+import type { ConductorApiPorts, DeliverAppMessage, TopicSummary } from './api'
 import type { ScreenView } from './wire'
 import type { Peer } from './domain/identity'
 import { Ledger, brokenLine } from './ledger'
@@ -28,6 +28,7 @@ let notices: string[]
 let deliveries: Array<Parameters<DeliverAppMessage>[0]>
 let deliverOutcome: Awaited<ReturnType<DeliverAppMessage>>
 let api: ReturnType<typeof createConductorApi>
+let ports: ConductorApiPorts
 let listed: TopicSummary[]
 let screenOf: (topic: string) => ScreenView | undefined
 let topicsChanged: () => void
@@ -55,7 +56,7 @@ beforeEach(() => {
   kept = new Map()
   reminderList = []
   archivedIds = new Set()
-  api = createConductorApi({
+  ports = {
     store,
     ledger: new Ledger(join(dir, 'ledger.jsonl')),
     policy: { selfNodeId: 'nSELF', operatorLogin: 'operator@example.com', allowedNodes: new Set(['nPHONE', 'nIPAD']) },
@@ -135,7 +136,8 @@ beforeEach(() => {
     },
     log: line => void logged.push(line),
     version: '1.0.0-test',
-  })
+  }
+  api = createConductorApi(ports)
   server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: api.fetch, websocket: api.websocket })
   base = `http://127.0.0.1:${server.port}`
 })
@@ -648,3 +650,35 @@ function readJson(name: string, over: Record<string, unknown> = {}): Record<stri
   return { ...f, ...over }
 }
 
+
+describe('with signed writes off', () => {
+  beforeEach(() => {
+    api.stop()
+    server.stop(true)
+    api = createConductorApi({ ...ports, writes: false })
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: api.fetch, websocket: api.websocket })
+    base = `http://127.0.0.1:${server.port}`
+  })
+
+  test('every signed write answers 410 before anything is stored, ledgered or delivered; reads and enrollment still work', async () => {
+    const key = signer()
+    const device = ((await (await enroll({ public_key: key.point, name: 'iPhone' })).json()) as { id: string }).id
+    const write = (method: string, path: string, body: string) => {
+      const bytes = new TextEncoder().encode(body)
+      return fetch(`${base}${path}`, { method, body: bytes, headers: { 'X-Device': device, 'content-type': 'application/json', ...key.headers(method, path, 'client-0001', bytes) } })
+    }
+    for (const [method, path] of [
+      ['POST', '/v1/topics/42/messages'], ['POST', '/v1/topics/42/read'], ['POST', '/v1/topics'], ['PATCH', '/v1/topics/42'],
+      ['PUT', '/v1/topics/42/route'], ['POST', '/v1/topics/42/commands'], ['POST', '/v1/topics/42/archive'],
+      ['POST', '/v1/secrets'], ['DELETE', '/v1/secrets/x'], ['POST', '/v1/topics/42/reminders'], ['DELETE', '/v1/reminders/rm_1'],
+      ['PUT', `/v1/devices/${device}/push`],
+    ] as const) {
+      const res = await write(method, path, '{"client_id":"client-0001"}')
+      expect([method, path, res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([method, path, 410, 'writes_retired'])
+    }
+    const ledger = readFileSync(join(dir, 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l).kind)
+    expect([ledger, deliveries, controlled, archivedIds.size]).toEqual([['enroll'], [], [], 0])
+    expect((await get('/v1/topics', device)).status).toBe(200)
+    expect(logged).toContain('conductor: signed writes are off (CONDUCTOR_WRITES); each answers 410')
+  })
+})
