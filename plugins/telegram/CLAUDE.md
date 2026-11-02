@@ -1407,7 +1407,11 @@ there is no agent to relaunch.
   provider sessions inherit outbound tools but do not start another inbound
   poller.
 - `hooks/provider-capacity-status.py`: status line plus Anthropic capacity
-  adapter (`POST /capacity`).
+  adapter (`POST /capacity`). It also keeps the latest windows in
+  `~/.local/state/crook/usage.json` (`CROOK_USAGE_FILE` overrides) as
+  `{"providers": {"anthropic": {"windows", "observed_at"}}}`, replacing only its
+  own provider, written as a 0600 temp file renamed into place, for the Crook
+  backend to read.
 - `hooks/stop-reply-guard.py`: the Stop hook (reply guard). Blocks a
   Telegram-triggered turn that ended without a `reply` call and reminds Claude to
   resend via the reply tool (once per turn). Wired via `override-settings.json`
