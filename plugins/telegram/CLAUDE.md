@@ -537,6 +537,22 @@ the square. It exits 1 on any unknown or refused. Each verb is idempotent. A
 rename goes through the same path as the app's: the Telegram thread, the
 registry and any harness. Archiving leaves the Telegram topic as it is.
 
+## Topics run outside the proxy (`TELEGRAM_TOPICS_EXTERNAL`)
+
+For the hand-over to the Crook backend, `TELEGRAM_TOPICS_EXTERNAL` (thread ids
+and `general`, or `*`) names topics whose sessions something else runs.
+
+- **Unchanged:** the proxy still queues their Telegram messages, for the
+  session's own MCP to take with `/poll`, and relays their replies.
+- **Never done:** spawning (`ensureSession` skips them), stopping
+  (`killSession` leaves them), re-adopting at boot (reconcile never marks them
+  live, so update restarts, the broker and archive never touch them), or typing
+  into their pane (the pane pump skips them, so they need an MCP that polls).
+- **Refused, with a pointer to the backend:** `/relaunch` and route changes
+  (`/model`, the app's `route_change` as 409 `external_lifecycle`).
+
+Unset, nothing changes.
+
 ## Relaunch from the root (`broker/`)
 
 General's agent, the root of the session tree, can relaunch the topics under it
@@ -1462,7 +1478,8 @@ backends" above; applies to Claude topics); `TELEGRAM_TOPICS_HC_TOPICS`,
 binary, and the hc session, default `topics`, whose core its own launchd agent
 starts); `TELEGRAM_HC_PREVIOUS_SESSIONS` (hc sessions topics ran in before the
 session changed: copies still running there are found and stopped when a topic
-moves, never started); `TELEGRAM_ANTIGRAVITY_BIN` (optional
+moves, never started); `TELEGRAM_TOPICS_EXTERNAL` (topics whose sessions
+something else runs; see "Topics run outside the proxy"); `TELEGRAM_ANTIGRAVITY_BIN` (optional
 path to official `agy`, defaults to the Nix per-user profile and then PATH);
 `TELEGRAM_OPENCODE_BIN` (the `opencode` 2.x CLI, default
 `/opt/homebrew/bin/opencode` then PATH; the OpenCode Go catalog reads

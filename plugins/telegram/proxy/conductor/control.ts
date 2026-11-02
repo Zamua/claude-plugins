@@ -66,6 +66,7 @@ const REFUSALS: Record<RouteRefusal, { status: 409 | 429; code: string }> = {
   'too-soon': { status: 429, code: 'too_soon' },
   'provider-exhausted': { status: 409, code: 'provider_exhausted' },
   'ultracode-unsupported': { status: 409, code: 'ultracode_unsupported' },
+  external: { status: 409, code: 'external_lifecycle' },
 }
 
 export function conductorControl(ports: ControlPorts) {

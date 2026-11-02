@@ -2,7 +2,7 @@
 // change and reconciled against the live multiplexer at boot.
 import { readRegistryFile, writeRegistryFile } from './registry-file'
 import type { Registry } from './registry-file'
-import { DEFAULT_TOPIC_ROUTE, REGISTRY_FILE, TOPIC_LAUNCH_PROFILE_VERSION } from '../config'
+import { DEFAULT_TOPIC_ROUTE, EXTERNAL_TOPICS, REGISTRY_FILE, TOPIC_LAUNCH_PROFILE_VERSION } from '../config'
 import { launchProfileNeedsRefresh } from './domain/launch-profile'
 import { topicRouteFromRecord } from '../routing/domain/model-routing'
 import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-routing'
@@ -83,7 +83,8 @@ export function loadAndReconcileRegistry(): void {
       ...(entry.pending_resume_notice && { resumeNotice: entry.pending_resume_notice }),
     }
     if (entry.name) topicNames.set(topic, entry.name)
-    const isLive = !!entry.tmux_session && live.has(entry.tmux_session)
+    // A session run outside the proxy is never adopted, so nothing here can stop or restart it.
+    const isLive = !EXTERNAL_TOPICS.has(topic) && !!entry.tmux_session && live.has(entry.tmux_session)
     st.agent = nextAgent(st.agent, {
       type: 'restored',
       session: entry.tmux_session ?? '',
