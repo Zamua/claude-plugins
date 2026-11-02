@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { renderPaneTurn } from '../shared/domain/inbound-delivery'
@@ -48,6 +48,31 @@ describe('stop-reply-guard.py and the proxy meta flags', () => {
 })
 
 describe('Python hooks and the proxy routes', () => {
+  test('the capacity hook keeps the latest quota windows in a 0600 file, replacing only its own provider', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'usage-'))
+    const file = join(dir, 'crook', 'usage.json')
+    const run = (stdin: string) => spawnSync('/usr/bin/python3', [join(hooks, 'provider-capacity-status.py')], {
+      input: stdin, encoding: 'utf8', env: { HOME: dir, PATH: '/usr/bin:/bin', CROOK_USAGE_FILE: file, TG_MODEL: 'claude-opus-5-5' },
+    })
+    const status = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 42, resets_at: 1793600000 }, seven_day: { used_percentage: 100 } } })
+    mkdirSync(join(dir, 'crook'))
+    writeFileSync(file, JSON.stringify({ providers: { openai: { windows: [], observed_at: 1 } } }))
+    expect(run(status).stdout).toBe('Claude · anthropic · claude-opus-5-5\n')
+    const kept = JSON.parse(readFileSync(file, 'utf8'))
+    expect(kept.providers.openai).toEqual({ windows: [], observed_at: 1 })
+    expect(kept.providers.anthropic).toEqual({
+      windows: [
+        { name: '5 hour', used_percent: 42, availability: 'available', resets_at: 1793600000000 },
+        { name: '7 day', used_percent: 100, availability: 'exhausted' },
+      ],
+      observed_at: expect.any(Number),
+    })
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    writeFileSync(file, 'not json')
+    run(status)
+    expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).providers)).toEqual(['anthropic'])
+  })
+
   test('every route a hook posts to is one the proxy serves', () => {
     const served = new Set<string>(Object.values(ROUTE))
     for (const hook of ['rate-limit-failover.py', 'provider-capacity-status.py']) {
