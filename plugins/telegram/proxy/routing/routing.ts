@@ -63,9 +63,11 @@ export type RoutingPorts = {
   schedulePanePump: (topic: string, delayMs?: number) => void
   /** True while a proxied topic's pane holds a turn the proxy typed into it. */
   paneInFlight: (topic: string) => boolean
+  /** Keeps what a capacity probe read where the Crook backend reads usage. */
+  keepUsage: (capacity: ProviderCapacity) => void
 }
 
-export function createRouting({ chat, sayIn, killSession, ensureSession, schedulePanePump, paneInFlight }: RoutingPorts) {
+export function createRouting({ chat, sayIn, killSession, ensureSession, schedulePanePump, paneInFlight, keepUsage }: RoutingPorts) {
   const capacities = new Map<ProviderId, ProviderCapacity>()
   type ModelSelection = {
     topic: string
@@ -449,12 +451,21 @@ export function createRouting({ chat, sayIn, killSession, ensureSession, schedul
     if (codex.status === 'fulfilled') {
       codexAccountModels = codex.value.models
       catalogCache = undefined
-      observeCapacity(codex.value.capacity)
+      observeProbe(codex.value.capacity)
     } else {
       log(`Codex capacity probe failed: ${codex.reason}`)
     }
-    if (opencode.status === 'fulfilled') observeCapacity(opencode.value)
+    if (opencode.status === 'fulfilled') observeProbe(opencode.value)
     else log(`OpenCode Go capacity probe failed: ${opencode.reason}`)
+  }
+
+  function observeProbe(capacity: ProviderCapacity): void {
+    observeCapacity(capacity)
+    try {
+      keepUsage(capacity)
+    } catch (e) {
+      log(`keeping ${capacity.provider} usage failed: ${e}`)
+    }
   }
 
   // POST /rate-limit {topic, error, details, reset_at}. The failed user turn is

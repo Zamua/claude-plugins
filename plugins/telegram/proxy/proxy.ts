@@ -57,6 +57,7 @@ import {
   SENT_MESSAGES_FILE,
   SQUARE_TOPIC,
   BROKER_SOCKET,
+  CROOK_USAGE_FILE,
   STATE_DIR,
   TAILSCALE_BIN,
   TOKEN,
@@ -86,6 +87,7 @@ import { createLocalgenHarness } from './harness/localgen/localgen-harness'
 import { createOpencodeHarness } from './harness/opencode/opencode-harness'
 import { createAntigravityHarness } from './harness/antigravity/antigravity-harness'
 import { createRouting } from './routing/routing'
+import { keepProviderUsage } from './routing/crook-usage-file'
 import { createFullDiskAccessWatch, hcFullDiskAccessProbe } from './topics/hc-full-disk-access'
 import { createTopicLifecycle } from './topics/lifecycle'
 import { createUpdateRestarts } from './topics/update-restarts'
@@ -265,6 +267,7 @@ const {
   ensureSession,
   schedulePanePump,
   paneInFlight,
+  keepUsage: capacity => keepProviderUsage(CROOK_USAGE_FILE, capacity),
 })
 
 const sayIn = (_chatId: string, topic: string, t: string) =>
