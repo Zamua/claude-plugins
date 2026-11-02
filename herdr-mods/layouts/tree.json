@@ -118,7 +118,8 @@
                 "mod": "session-prs",
                 "props": {
                   "folder": "~/workspace/projects",
-                  "block": "prs"
+                  "block": "prs",
+                  "reviews": "reviews"
                 }
               }
             },

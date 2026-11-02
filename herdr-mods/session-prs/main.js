@@ -16,7 +16,7 @@ const REFRESH_MS = 60000;
 const FIELDS = "title url state isDraft reviewDecision mergeable baseRefName headRefName author{login ... on User{name}} " +
   "latestOpinionatedReviews(first:30){nodes{state author{login}}} latestReviews(first:30){nodes{state author{login}}} " +
   "commits(last:1){nodes{commit{statusCheckRollup{state}}}} reviewThreads(first:100){nodes{isResolved}}";
-const TABS = [["prs", "PRs"], ["reviews", "Reviews"], ["asks", "Asks"]];
+const TABS = [["prs", "PRs"], ["reviews", "PR Reviews"], ["asks", "Asks"]];
 
 function find(node, id) {
   if (node?.id === id) return node;
