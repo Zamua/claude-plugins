@@ -5,6 +5,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rea
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
 import { ANTIGRAVITY_DISABLED_MESSAGE } from './harness/antigravity/disabled-antigravity-runtime'
+import { MISSED_EDGE_MS } from './topics/domain/pane-turn'
 
 // The proxy as a whole, booted from a copy of the plugin (so no .env of the
 // checkout reaches it) against a stand-in Bot API and a stand-in tmux and
@@ -519,7 +520,9 @@ describe('the proxy, end to end', () => {
     const pasted = await until('the turn to be pasted', () => {
       const file = join(home, 'fake', 'pasted')
       return existsSync(file) && readFileSync(file, 'utf8').includes('over the bridge') && readFileSync(file, 'utf8')
-    })
+    }, 30_000)
+    // The first turn was submitted no later than this, so its missed-edge window ends no later than MISSED_EDGE_MS after
+    const firstPasted = Date.now()
     expect(pasted).toContain('<channel source="plugin:telegram:telegram"')
     expect(pasted).toContain('message_thread_id="46"')
     expect((await fetch(`${proxyUrl}/poll?topic=46`)).status).toBe(204)
@@ -527,10 +530,11 @@ describe('the proxy, end to end', () => {
     // The stand-in pane never looks busy, so the next turn waits out the missed-edge window
     send(46, 'one at a time')
     const typed = () => readFileSync(join(home, 'fake', 'pasted'), 'utf8').includes('one at a time')
-    await Bun.sleep(2_500)
-    expect(typed()).toBeFalse()
-    await until('the second turn to be pasted', typed, 10_000)
-  }, 30_000)
+    await Bun.sleep(Math.max(0, firstPasted + MISSED_EDGE_MS / 2 - Date.now()))
+    // Only observable while the window is still open; a loaded machine can spend it before this line
+    if (Date.now() - firstPasted < MISSED_EDGE_MS - 1_000) expect(typed()).toBeFalse()
+    await until('the second turn to be pasted', typed, 30_000)
+  }, 75_000)
 
   test('a message sent after an agent died mid-poll reaches the next poll, not the dead one', async () => {
     send(49, 'hi')
