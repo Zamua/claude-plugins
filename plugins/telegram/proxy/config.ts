@@ -7,7 +7,7 @@ import { homedir } from 'os'
 import { join, sep } from 'path'
 import { DEFAULT_VOICE_GLOSSARY } from './telegram/voice-transcription'
 import type { VoiceSettings } from './telegram/voice-transcription'
-import { environmentFlag } from './shared/env-flag'
+import { environmentFlag, killSwitch } from './shared/env-flag'
 import { DEFAULT_MODEL, DEFAULT_ROUTE, topicRoute } from './routing/domain/model-routing'
 import { log } from './log'
 
@@ -184,6 +184,13 @@ export const CONDUCTOR_APNS = {
   teamId: (process.env.CONDUCTOR_APNS_TEAM_ID ?? '').trim(),
   topic: (process.env.CONDUCTOR_APNS_TOPIC ?? '').trim(),
 }
+// Off refuses every signed write from the app with 410: at the cutover to the Crook
+// backend, which trusts the same device key over the same signed bytes, so a request
+// signed for one server would otherwise also verify at the other. Reads still work.
+export const CONDUCTOR_WRITES = killSwitch(
+  process.env.CONDUCTOR_WRITES,
+  (value) => log(`CONDUCTOR_WRITES="${value}" is not on/off; signed writes are refused`),
+)
 export const TAILSCALE_BIN = process.env.TAILSCALE_BIN ||
   (existsSync('/usr/local/bin/tailscale') ? '/usr/local/bin/tailscale' : 'tailscale')
 
