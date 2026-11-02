@@ -59,6 +59,7 @@ import {
   BROKER_SOCKET,
   CROOK_USAGE_FILE,
   EXTERNAL_TOPICS,
+  OPENCODE_BIN,
   STATE_DIR,
   TAILSCALE_BIN,
   TOKEN,
@@ -91,6 +92,8 @@ import { createOpencodeHarness } from './harness/opencode/opencode-harness'
 import { createAntigravityHarness } from './harness/antigravity/antigravity-harness'
 import { createRouting } from './routing/routing'
 import { keepProviderUsage } from './routing/crook-usage-file'
+import { openCodeModelMetadata } from './routing/opencode-model-metadata'
+import { nodeProcessRunner } from './shared/process-runner'
 import { createFullDiskAccessWatch, hcFullDiskAccessProbe } from './topics/hc-full-disk-access'
 import { createTopicLifecycle } from './topics/lifecycle'
 import { createUpdateRestarts } from './topics/update-restarts'
@@ -248,6 +251,11 @@ async function mayLockTopic(chatId: string, topic: string, fromId: string, harne
   return !refusal
 }
 
+// OpenCode's model metadata, read in the background with the installed binary.
+const openCodeMetadata = openCodeModelMetadata({ run: nodeProcessRunner, bin: OPENCODE_BIN, cwd: process.cwd(), log })
+void openCodeMetadata.refresh()
+setInterval(() => void openCodeMetadata.refresh(), 10 * 60_000).unref()
+
 const {
   modelCatalog,
   turnEnded,
@@ -271,6 +279,7 @@ const {
   schedulePanePump,
   paneInFlight,
   keepUsage: capacity => keepProviderUsage(CROOK_USAGE_FILE, capacity),
+  openCodeModels: openCodeMetadata.current,
 })
 
 const sayIn = (_chatId: string, topic: string, t: string) =>
