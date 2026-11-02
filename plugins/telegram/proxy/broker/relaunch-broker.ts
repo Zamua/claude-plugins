@@ -17,13 +17,34 @@ export type RelaunchBrokerPorts = {
   callerTopic: (ancestry: readonly number[]) => string | undefined
   record: (entry: LedgerRecord) => void
   log: (line: string) => void
+  /** The least time between two relaunches, so the restarted sessions' first replies do not all hit the chat at once. */
+  staggerMs?: number
+  sleep?: (ms: number) => Promise<void>
+  now?: () => number
 }
+
+export const RELAUNCH_STAGGER_MS = 3_000
 
 export type RelaunchAnswer = { caller: string | null; results: TargetResult[] }
 
 export function createRelaunchBroker(ports: RelaunchBrokerPorts) {
   const { root, record, log } = ports
+  const { staggerMs = RELAUNCH_STAGGER_MS, sleep = Bun.sleep, now = Date.now } = ports
   const queued = new Set<string>()
+
+  // One relaunch at a time, at least staggerMs after the last, whichever request or sweep asked.
+  let lastStart = -Infinity
+  let tail: Promise<void> = Promise.resolve()
+  function paced(topic: string): Promise<void> {
+    const run = tail.then(async () => {
+      const wait = lastStart + staggerMs - now()
+      if (wait > 0) await sleep(wait)
+      lastStart = now()
+      await ports.relaunch(topic)
+    })
+    tail = run.catch(() => {})
+    return run
+  }
 
   async function request(callerPid: number | undefined, ancestry: readonly number[], topics: readonly string[]): Promise<RelaunchAnswer> {
     const targets = [...new Set(topics)]
@@ -39,7 +60,7 @@ export function createRelaunchBroker(ports: RelaunchBrokerPorts) {
       const result = relaunchTarget(topic, root, ports.facts)
       record({ kind: 'relaunch', caller: root, caller_pid: callerPid, target: topic, outcome: result.outcome, ...(result.reason ? { reason: result.reason } : {}) })
       log(`broker: ${root} relaunch of ${topic}: ${result.outcome}${result.reason ? ` (${result.reason})` : ''}`)
-      if (result.outcome === 'applied') await ports.relaunch(topic)
+      if (result.outcome === 'applied') await paced(topic)
       if (result.outcome === 'queued') queued.add(topic)
       else queued.delete(topic)
       results.push(result)
@@ -60,7 +81,7 @@ export function createRelaunchBroker(ports: RelaunchBrokerPorts) {
       queued.delete(topic)
       record({ kind: 'relaunch', caller: root, target: topic, outcome: 'applied', queued: true })
       log(`broker: queued relaunch of ${topic} applied at its turn's end`)
-      await ports.relaunch(topic)
+      await paced(topic)
     }
   }
 
