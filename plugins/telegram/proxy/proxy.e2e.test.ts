@@ -527,6 +527,27 @@ describe('the proxy, end to end', () => {
     expect(next.content).toContain('after the crash')
   }, 20_000)
 
+  test('an archived topic stops and leaves the directory; the next message restores the same conversation', async () => {
+    send(71, 'hello')
+    const first = await until('topic 71 to spawn', () => spawns().find(s => s.session === 'claude-71'))
+    const cli = async (...args: string[]) => {
+      const run = Bun.spawn(['bun', join(import.meta.dir, 'topics', 'topics-admin-cli.ts'), ...args], { env: { ...process.env, TELEGRAM_PROXY_URL: proxyUrl }, stdout: 'pipe' })
+      return [await new Response(run.stdout).text(), await run.exited]
+    }
+    expect(await cli('archive', '71', 'general', '9999')).toEqual(['71 archived\ngeneral refused (general is the root, not a project)\n9999 unknown\n', 1])
+    expect(await cli('archive', '71')).toEqual(['71 already_archived\n', 0])
+    expect(registry()['71']).toMatchObject({ archived_at: expect.any(String), claude_session_id: first.env.TG_CLAUDE_SESSION_ID, tmux_session: '' })
+    const directory = await fetch(`${proxyUrl}/topics`).then(r => r.json())
+    expect(directory.topics.some((t: { topic: string }) => t.topic === '71')).toBeFalse()
+
+    send(71, 'are you there?')
+    await until('the restore notice', () => calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 71 && /^📂 restored from the archive/.test(c.body.text)))
+    const resumed = await until('topic 71 to resume', () => spawns().filter(s => s.session === 'claude-71')[1])
+    expect([resumed.env.TG_RESUME, resumed.env.TG_CLAUDE_SESSION_ID]).toEqual(['1', first.env.TG_CLAUDE_SESSION_ID])
+    expect(registry()['71'].archived_at).toBeUndefined()
+    expect(await cli('restore', '71')).toEqual(['71 not_archived\n', 0])
+  }, 30_000)
+
   test('a proxied topic whose agent cannot start tries again on the next message, not on a timer', async () => {
     send(53, 'hello?')
     await until('the spawn failure notice', () => said(53, /^Could not start this topic's agent/))

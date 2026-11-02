@@ -44,8 +44,8 @@ beforeEach(() => {
   deliveries = []
   deliverOutcome = { delivered: true }
   listed = [
-    { id: 'general', name: 'General', kind: 'claude', title: null, route: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'xhigh' }, state: 'idle', role: 'root', projectId: null, parentId: null, spawnedBy: null, spawnedAt: null },
-    { id: '42', name: 'build', kind: 'claude', title: null, route: null, state: 'stopped', role: 'coordinator', projectId: '42', parentId: 'general', spawnedBy: 'operator', spawnedAt: '2026-10-30T14:02:11.000Z' },
+    { id: 'general', name: 'General', kind: 'claude', title: null, route: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'xhigh' }, state: 'idle', role: 'root', projectId: null, parentId: null, spawnedBy: null, spawnedAt: null, archivedAt: null },
+    { id: '42', name: 'build', kind: 'claude', title: null, route: null, state: 'stopped', role: 'coordinator', projectId: '42', parentId: 'general', spawnedBy: 'operator', spawnedAt: '2026-10-30T14:02:11.000Z', archivedAt: null },
   ]
   screenOf = () => undefined
   topicsChanged = () => {}
@@ -78,7 +78,7 @@ beforeEach(() => {
       interrupt: () => false,
       say: async () => {},
       createTopic: async name => {
-        listed = [...listed, { id: '501', name, kind: 'claude', title: null, route: null, state: 'stopped', role: 'coordinator', projectId: '501', parentId: 'general', spawnedBy: 'operator', spawnedAt: null }]
+        listed = [...listed, { id: '501', name, kind: 'claude', title: null, route: null, state: 'stopped', role: 'coordinator', projectId: '501', parentId: 'general', spawnedBy: 'operator', spawnedAt: null, archivedAt: null }]
         return '501'
       },
       renameTopic: async (topic, name) => void (listed = listed.map(t => (t.id === topic ? { ...t, name } : t))),
@@ -202,6 +202,18 @@ describe('reads', () => {
     expect(body.topics.map((t: { id: string }) => t.id)).toEqual(['general', '42'])
     expect(Object.keys(body.topics[1]).sort()).toEqual(Object.keys(topicFixture).sort())
     expect(body.topics[1]).toMatchObject({ unread: 1, last_message: { preview: 'built', author: 'agent' }, pinned: false })
+  })
+
+  test('an archived topic leaves the list unless asked for, and stays reachable by id', async () => {
+    const device = await enrolled()
+    listed = [...listed, { ...listed[1], id: '43', name: 'old', projectId: '43', archivedAt: '2026-11-02T01:00:00.000Z' }]
+    const ids = async (query: string) => ((await (await get(`/v1/topics${query}`, device)).json()).topics as Array<{ id: string }>).map(t => t.id)
+    expect(await ids('')).toEqual(['general', '42'])
+    expect((await ids('?archived=1')).sort()).toEqual(['42', '43', 'general'])
+    const all = (await (await get('/v1/topics?archived=1', device)).json()).topics as Array<Record<string, unknown>>
+    expect(all.find(t => t.id === '43')?.archived_at).toBe('2026-11-02T01:00:00.000Z')
+    expect(all.find(t => t.id === '42')).not.toHaveProperty('archived_at')
+    expect((await get('/v1/topics/43/messages', device)).status).toBe(200)
   })
 
   test('history pages newest first with the cursor, and blobs are served with their type', async () => {

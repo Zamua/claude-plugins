@@ -503,6 +503,27 @@ notice tells the agent it has no earlier history. Nothing is lost that was not
 already gone. The decision and both messages are pure in
 `proxy/topics/domain/topic-conversation.ts` (`planRelaunch`, `spawnConversation`).
 
+## Archiving a project (`topics/archive.ts`)
+
+A project can be archived without losing anything: its session stops (through
+`killSession`), it leaves the square directory and the app's default topic list,
+and its registry entry gains `archived_at`. Its `claude_session_id` and its
+transcript are never touched.
+
+Anything that wakes it restores it: an operator message in Telegram or from the
+app, a reminder, `/relaunch`, a square delivery. That is, any `ensureSession`
+except the pane pump's timer. The flag is cleared, the topic gets one line
+(`📂 restored from the archive...`), and the same conversation resumes.
+
+`bun proxy/topics/topics-admin-cli.ts archive|restore <topic>...` or `rename
+<topic> <name>` drives it through the loopback API (`/topic/archive`,
+`/topic/restore`, `/topic/rename`; no auth, like every loopback route). It
+prints one outcome per topic: `archived`, `already_archived`, `restored`,
+`not_archived`, `renamed`, `unchanged`, `unknown`, or `refused` for the root and
+the square. It exits 1 on any unknown or refused. Each verb is idempotent. A
+rename goes through the same path as the app's: the Telegram thread, the
+registry and any harness. Archiving leaves the Telegram topic as it is.
+
 ## Relaunch from the root (`broker/`)
 
 General's agent, the root of the session tree, can relaunch the topics under it

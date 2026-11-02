@@ -36,7 +36,7 @@ describe('the wire matches the contract fixtures', () => {
     expect(wireTopic({
       id: f.id, name: f.name, kind: f.kind, title: f.title, pinned: f.pinned, muted: f.muted, state: f.state,
       stateSince: f.state_since, unread: f.unread, readSeq: f.read_seq, pendingApprovals: f.pending_approvals,
-      route: f.route, lastMessage: f.last_message, role: f.role, projectId: f.project_id, parentId: f.parent_id, spawnedBy: f.spawned_by, spawnedAt: f.spawned_at,
+      route: f.route, lastMessage: f.last_message, role: f.role, projectId: f.project_id, parentId: f.parent_id, spawnedBy: f.spawned_by, spawnedAt: f.spawned_at, archivedAt: null,
     })).toEqual(f)
   })
 

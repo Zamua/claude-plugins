@@ -213,7 +213,7 @@ All under `/v1`. "Signed" marks a write that needs the device headers.
 | `GET /me` | | the device, the server version, and `features`: whether this server answers approvals, pushes, shows screens and keeps secrets now |
 | `POST /devices` | enrollment | `public_key`, `name`, `apns_token`, `apns_env`; returns the device |
 | `PUT /devices/{id}/push` | signed | the device's own `apns_token` (hex, or null for no push) and `apns_env`; returns the device |
-| `GET /topics` | | `{cursor, history_since, topics}`: every topic, the cursor they are current to, and when the kept history begins (older messages are only in Telegram) |
+| `GET /topics?archived=` | | `{cursor, history_since, topics}`: every topic, the cursor they are current to, and when the kept history begins (older messages are only in Telegram). Archived topics are left out unless `archived=1`; they carry `archived_at` |
 | `POST /topics` | signed | create: `name`; returns the topic (201) |
 | `PATCH /topics/{id}` | signed | any of `name` (renames the Telegram topic), `pinned`, `muted`; returns the topic |
 | `GET /topics/{id}/messages?before_seq=&limit=` | | `{cursor, messages}`: history, newest first, at most 100 |

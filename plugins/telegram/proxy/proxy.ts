@@ -89,6 +89,7 @@ import { createRouting } from './routing/routing'
 import { createFullDiskAccessWatch, hcFullDiskAccessProbe } from './topics/hc-full-disk-access'
 import { createTopicLifecycle } from './topics/lifecycle'
 import { createUpdateRestarts } from './topics/update-restarts'
+import { createTopicArchive } from './topics/archive'
 import { serveBroker } from './broker/broker-server'
 import { createRelaunchBroker } from './broker/relaunch-broker'
 import { topicFacts } from './broker/topic-facts'
@@ -100,7 +101,7 @@ import { createTelegramInbound } from './telegram/telegram-inbound'
 import { claimPidFile, releasePidFile } from './shared/pid-file'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
-import { learnTopicName, loadAndReconcileRegistry } from './topics/registry'
+import { learnTopicName, loadAndReconcileRegistry, saveRegistry } from './topics/registry'
 import { currentRoute, getTopic } from './topics/state'
 import { loadConvs } from './square/conversations'
 import { createSquare } from './square/square'
@@ -358,6 +359,13 @@ if (CONDUCTOR_LISTEN && !conductorMode) log(`CONDUCTOR_LISTEN="${CONDUCTOR_LISTE
 const hcTopics: HcTopics | undefined = conductorStore && conductorMode?.listener && HC_TOPICS.size
   ? { topics: HC_TOPICS, watch: watchHc({ socket: hcSocketPath(hcEnvironment(process.env, HC_SESSION)), log }) }
   : undefined
+// A rename reaches the chat, the registry and any harness that keeps its own name, from the app or the admin path alike.
+async function renameEverywhere(topic: string, name: string): Promise<void> {
+  await chat.renameTopic(topic, name)
+  learnTopicName(topic, name)
+  harnessFor(topic)?.rename(topic, name)
+}
+const topicArchive = createTopicArchive({ killSession, save: saveRegistry, rename: renameEverywhere, square: SQUARE_TOPIC || undefined, log })
 // One instance writes the ledger, so its hash chain stays whole.
 const conductorLedger = conductorStore ? new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')) : undefined
 const conductorTopicList = () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf, hcTopics)
@@ -405,11 +413,7 @@ const conductor = conductorStore && conductorMode?.listener
           // Unmirrored, like the app's own messages: the app already shows what it did.
           say: async (topic, text) => void (await telegramChat.send(topic, { text }).catch(noticeFailed('app command echo', topic))),
           createTopic: name => createTopic(name, 'claude', 'operator'),
-          renameTopic: async (topic, name) => {
-            await chat.renameTopic(topic, name)
-            learnTopicName(topic, name)
-            harnessFor(topic)?.rename(topic, name)
-          },
+          renameTopic: renameEverywhere,
           setPrefs: (topic, prefs) => conductorStore.setPrefs(topic, prefs),
           listed: topic => conductorTopicList().some(t => t.id === topic),
           secretsOn: () => secrets.secretsOn(),
@@ -499,6 +503,7 @@ const http = createHttpServer({
   square: { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply },
   reminders: { handleRemind, handleListReminders, handleCancelReminder },
   pollingSince: inbound.since,
+  archive: topicArchive,
 })
 await http.serve()
 void createAskServer({ port: ASK_PORT, tokenFile: ASK_TOKEN_FILE, images: ASK_IMAGES, ask: ask.ask, log }).serve()

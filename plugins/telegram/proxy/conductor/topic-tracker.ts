@@ -18,7 +18,7 @@ export function topicTracker(ports: {
   /** Compares every topic with what was seen last; the first look only records. */
   function refresh(): void {
     for (const t of ports.topics()) {
-      const key = JSON.stringify([t.name, t.kind, t.title, t.route, t.state, t.role, t.parentId, ports.extra?.(t.id)])
+      const key = JSON.stringify([t.name, t.kind, t.title, t.route, t.state, t.role, t.parentId, t.archivedAt, ports.extra?.(t.id)])
       const before = seen.get(t.id)
       if (before?.key === key) continue
       const since = before?.state === t.state ? before.since : started ? new Date(now()).toISOString() : null

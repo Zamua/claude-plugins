@@ -30,6 +30,7 @@ export type TopicView = {
   parentId: string | null
   spawnedBy: string | null
   spawnedAt: string | null
+  archivedAt: string | null
 }
 
 /** hc reports no cursor position, so screens carry none. */
@@ -92,6 +93,7 @@ export function wireTopic(t: TopicView): Record<string, unknown> {
     parent_id: t.parentId,
     spawned_by: t.spawnedBy,
     spawned_at: t.spawnedAt,
+    ...(t.archivedAt ? { archived_at: t.archivedAt } : {}),
   }
 }
 

@@ -37,6 +37,8 @@ export type TopicSummary = {
   parentId: string | null
   spawnedBy: string | null
   spawnedAt: string | null
+  /** When it was archived; archived topics leave the default list. */
+  archivedAt: string | null
 }
 
 export type AppImage = { bytes: Uint8Array; mime: 'image/jpeg' | 'image/png' }
@@ -423,8 +425,10 @@ export function createConductorApi(ports: ConductorApiPorts) {
     return Response.json({ topic, read_seq: store.markRead(topic, seq as number) })
   }
 
-  function topics(): Response {
-    const listed = ports.topics().map(topicView)
+  /** Archived topics stay reachable by id but leave the list unless `archived=1` asks for them. */
+  function topics(url: URL): Response {
+    const withArchived = url.searchParams.get('archived') === '1'
+    const listed = ports.topics().filter(t => withArchived || !t.archivedAt).map(topicView)
     listed.sort((a, b) => Number(b.pinned) - Number(a.pinned) || (b.lastMessage?.at ?? '').localeCompare(a.lastMessage?.at ?? ''))
     return Response.json({ cursor: store.latestCursor(), history_since: store.historySince(), topics: listed.map(wireTopic) })
   }
@@ -518,7 +522,7 @@ export function createConductorApi(ports: ConductorApiPorts) {
     if (url.pathname === '/v1/me') {
       return Response.json({ device: wireDevice(device), server_version: ports.version, contract: 'v1', features: ports.features?.() ?? NO_FEATURES })
     }
-    if (url.pathname === '/v1/topics') return topics()
+    if (url.pathname === '/v1/topics') return topics(url)
     if (url.pathname === '/v1/approvals') {
       if ((url.searchParams.get('state') ?? 'open') !== 'open') return fail(400, 'bad_state', 'state must be open')
       return Response.json({ cursor: store.latestCursor(), approvals: store.openApprovals().map(wireApproval) })
