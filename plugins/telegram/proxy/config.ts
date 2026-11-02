@@ -246,3 +246,9 @@ export const UPDATE_RESTART = environmentFlag(
   (value) => log(`TELEGRAM_TOPICS_UPDATE_RESTART="${value}" is not on/off; using on`),
 )
 export const UPDATE_SWEEP_MS = Number(process.env.TELEGRAM_TOPICS_UPDATE_SWEEP_MS || '60000')
+// Every bot message posts without a notification, so Telegram stays a quiet mirror while the app's push pings.
+export const SILENT = environmentFlag(
+  process.env.TELEGRAM_TOPICS_SILENT,
+  false,
+  (value) => log(`TELEGRAM_TOPICS_SILENT="${value}" is not on/off; using off`),
+)

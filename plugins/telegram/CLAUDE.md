@@ -1553,7 +1553,9 @@ binary, and the hc session, default `topics`, whose core its own launchd agent
 starts); `TELEGRAM_HC_PREVIOUS_SESSIONS` (hc sessions topics ran in before the
 session changed: copies still running there are found and stopped when a topic
 moves, never started); `TELEGRAM_TOPICS_EXTERNAL` (topics whose sessions
-something else runs; see "Topics run outside the proxy"); `TELEGRAM_ANTIGRAVITY_BIN` (optional
+something else runs; see "Topics run outside the proxy"); `TELEGRAM_TOPICS_SILENT`
+(`on`: the Telegram adapter posts every message with `disable_notification`, so
+Telegram is a quiet mirror while Crook's push is the only ping); `TELEGRAM_ANTIGRAVITY_BIN` (optional
 path to official `agy`, defaults to the Nix per-user profile and then PATH);
 `TELEGRAM_OPENCODE_BIN` (the `opencode` 2.x CLI, default
 `/opt/homebrew/bin/opencode` then PATH; the OpenCode Go catalog reads
