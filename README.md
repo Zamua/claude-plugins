@@ -59,10 +59,13 @@ symlinked folder. Run it again after a pull.
   space order in the tree's order. Cmd+W and Cmd+Shift+W ask before closing a tab
   or pane that holds a live Claude session, a closed root gets a Reopen row that
   resumes it, and `session-tree.new` opens a dialog that starts a session.
-- **[session-prs](herdr-mods/session-prs/)**: every session's pull requests, one
-  dense row each, in sections by each entry's `group` inside its project, with
-  draft, CI, your approval, author and stacks from one GitHub query a minute while
-  it shows. The project and workstream headers stay pinned while it scrolls.
+- **[session-prs](herdr-mods/session-prs/)**: three tabs over the sessions' state
+  files. PRs: every session's pull requests, one dense row each, in sections by each
+  entry's `group` inside its project, with draft, CI, your approval, author and
+  stacks from one GitHub query a minute while it shows; finished workstreams fold
+  into Done, closed PRs drop off, and headers stay pinned while it scrolls. Reviews:
+  the reviews project's PRs the same way, a section per review session. Asks: every
+  open ask by project, due soonest first, each opening to its detail.
 - **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the
   session tree as its sidebar and the PRs pane beside the terminals, toggled with
   Cmd+Shift+R once `keys.json` binds it.
