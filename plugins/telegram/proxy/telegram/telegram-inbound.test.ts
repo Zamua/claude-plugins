@@ -57,12 +57,13 @@ describe('createTelegramInbound', () => {
     })
     const events: ChatEvent[] = []
     let release = () => {}
-    const inbound = createTelegramInbound(bot, String(GROUP), '4242')
+    const logged: string[] = []
+    const inbound = createTelegramInbound(bot, String(GROUP), '4242', line => void logged.push(line))
     inbound.listen(async event => {
       events.push(event)
       await new Promise<void>(r => (release = r))
     })
-    return { bot, sent, events, release: () => release() }
+    return { bot, sent, events, logged, release: () => release() }
   }
   const message = (from: object, extra: object = {}) => ({ update_id: 1, message: { message_id: 5, date: 0, chat, from, text: 'hi', ...extra } })
 
@@ -78,12 +79,16 @@ describe('createTelegramInbound', () => {
     expect(done).toBeTrue()
   })
 
-  test('another chat is dropped, and its button presses refused', async () => {
+  test('another chat is dropped, and its button presses refused, each with a log line naming the chat', async () => {
     const h = harness()
     await h.bot.handleUpdate(message(operator, { chat: { ...chat, id: -1001 } }) as any)
     await h.bot.handleUpdate({ update_id: 2, callback_query: { id: 'q', from: operator, chat_instance: '1', data: 'tgroute:dismiss', message: { message_id: 9, date: 0, chat: { ...chat, id: -1001 }, text: 'x' } } } as any)
     expect(h.events).toEqual([])
     expect(h.sent).toEqual([{ method: 'answerCallbackQuery', payload: { callback_query_id: 'q', text: 'Not authorized.' } }])
+    expect(h.logged).toEqual([
+      'dropped a message from chat -1001 (supergroup): only the group is relayed',
+      'refused a button press from chat -1001: only the group is relayed',
+    ])
   })
 
   test('a button press carries its intent, topic, presser and message text', async () => {

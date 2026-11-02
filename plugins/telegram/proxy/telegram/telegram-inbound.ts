@@ -45,8 +45,8 @@ export function telegramMessage(msg: any, operatorId: string): ChatMessage {
   }
 }
 
-/** Updates from the group `chatId` only; anything from another chat is dropped here. */
-export function createTelegramInbound(bot: Bot, chatId: string, operatorId: string): ChatInbound {
+/** Updates from the group `chatId` only; anything from another chat is dropped here, with a log line. */
+export function createTelegramInbound(bot: Bot, chatId: string, operatorId: string, log: (line: string) => void): ChatInbound {
   const polling = createPolling(bot)
   return {
     listen(handler: (event: ChatEvent) => Promise<void>) {
@@ -54,7 +54,10 @@ export function createTelegramInbound(bot: Bot, chatId: string, operatorId: stri
         process.stderr.write(`telegram-topics-proxy: handler error (polling continues): ${err.error}\n`)
       })
       bot.on('message', async ctx => {
-        if (String(ctx.chat.id) !== chatId) return
+        if (String(ctx.chat.id) !== chatId) {
+          log(`dropped a message from chat ${ctx.chat.id} (${ctx.chat.type}): only the group is relayed`)
+          return
+        }
         await handler({ type: 'message', message: telegramMessage(ctx.message, operatorId) })
       })
       // A button Telegram did not get from us is acknowledged and dropped. Answers
@@ -66,6 +69,7 @@ export function createTelegramInbound(bot: Bot, chatId: string, operatorId: stri
           return
         }
         if (String(ctx.callbackQuery.message?.chat.id) !== chatId) {
+          log(`refused a button press from chat ${ctx.callbackQuery.message?.chat.id ?? 'unknown'}: only the group is relayed`)
           await ctx.answerCallbackQuery({ text: 'Not authorized.' }).catch(() => {})
           return
         }
