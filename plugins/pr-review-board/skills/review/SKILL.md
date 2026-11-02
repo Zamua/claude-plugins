@@ -17,7 +17,9 @@ mechanics.
 Nothing reaches GitHub until the user says so. Local writes only until then: the
 checkout, the board, and scratch tests.
 Once they pick numbers you post those comments. Once they tell you to approve a pull
-request you approve it. Change requests, pushes, branch and label edits, marking a
+request you approve it. Once a posted comment's concern is gone you resolve its
+thread, with no instruction needed. An approval relayed by this session's coordinator
+or the root session counts as theirs. Change requests, pushes, branch and label edits, marking a
 draft ready, and merging are always theirs. See the GitHub boundary in the review
 rules.
 
