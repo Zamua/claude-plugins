@@ -10,6 +10,8 @@ export type LiveClaudeSession = {
   activity?: string
   activitySince?: number
   startedAt: number
+  /** `bg` for a background job, which is what a conversation moved out of a terminal runs as. */
+  kind?: string
 }
 
 const alive = (pid: number): boolean => {
@@ -51,6 +53,7 @@ export function liveClaudeSessions(
       activity: typeof record.status === 'string' ? record.status : undefined,
       activitySince: Number.isFinite(record.statusUpdatedAt) ? record.statusUpdatedAt : undefined,
       startedAt: Number(record.startedAt) || 0,
+      kind: typeof record.kind === 'string' ? record.kind : undefined,
     }
     const existing = sessions.get(id)
     if (!existing || session.startedAt > existing.startedAt) sessions.set(id, session)

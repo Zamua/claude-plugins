@@ -15,12 +15,14 @@ export type TopicArchivePorts = {
   save: () => void
   rename: (topic: string, name: string) => Promise<void>
   harnessLocked: (topic: string) => boolean
+  /** The background job holding the topic's conversation, if one does. */
+  parkedJob: (topic: string) => string | undefined
   square?: string
   now?: () => Date
   log: (line: string) => void
 }
 
-export function createTopicArchive({ killSession, save, rename, harnessLocked, square, now = () => new Date(), log }: TopicArchivePorts) {
+export function createTopicArchive({ killSession, save, rename, harnessLocked, parkedJob, square, now = () => new Date(), log }: TopicArchivePorts) {
   const refusal = (topic: string) => notAProject(topic, topics.has(topic), square)
 
   function archive(list: readonly string[]): ArchiveResult[] {
@@ -31,7 +33,8 @@ export function createTopicArchive({ killSession, save, rename, harnessLocked, s
       if (st.archivedAt) return { topic, outcome: 'already_archived' }
       st.archivedAt = now().toISOString()
       const wasLive = killSession(st, topic)
-      log(`topic ${topic} "${st.name || topic}" archived${wasLive ? ', its session stopped' : ''}`)
+      const job = parkedJob(topic)
+      log(`topic ${topic} "${st.name || topic}" archived${wasLive ? ', its session stopped' : ''}${job ? `; its conversation runs on as background job ${job}` : ''}`)
       return { topic, outcome: 'archived' }
     })
     if (results.some(r => r.outcome === 'archived')) save()
@@ -99,6 +102,8 @@ export function createTopicArchive({ killSession, save, rename, harnessLocked, s
         conversation: !!st.claudeSessionId,
       })
       if (why) return { topic, outcome: 'refused', reason: why }
+      const job = owner === 'crook' ? parkedJob(topic) : undefined
+      if (job) return { topic, outcome: 'refused', reason: `its conversation runs as background job ${job}; stop it first (claude stop ${job})` }
       const wasLive = owner === 'crook' && killSession(st, topic)
       st.lifecycleOwner = owner
       log(`topic ${topic} "${st.name || topic}" now run by ${owner === 'crook' ? 'the Crook backend' : 'the proxy'}${wasLive ? ', the proxy\'s session stopped' : ''}`)

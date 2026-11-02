@@ -170,6 +170,8 @@ const {
   relaunch,
   kickoff,
   interrupt,
+  followAll,
+  parkedJob,
 } = createTopicLifecycle({
   chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
@@ -178,7 +180,10 @@ const {
   turnEnded: topic => turnEnded(topic),
   noticeDelivered: topic => noticeDelivered(topic),
   hcLaunched: () => hcFullDiskAccess?.check(),
+  followed: (topic, from, to) => void conductorLedger?.append({ kind: 'conversation_followed', topic, from, to }),
 })
+// A conversation moved to a background job takes its topic's binding with it.
+setInterval(followAll, 10_000).unref()
 const { topicDirectory, slugForTopic, handleSquareTag, handleSquareReply, handleSquareUserMessage } = createSquare({
   chat,
   harnessLocked,
@@ -381,7 +386,7 @@ async function renameEverywhere(topic: string, name: string): Promise<void> {
   learnTopicName(topic, name)
   harnessFor(topic)?.rename(topic, name)
 }
-const topicArchive = createTopicArchive({ killSession, save: saveRegistry, rename: renameEverywhere, harnessLocked, square: SQUARE_TOPIC || undefined, log })
+const topicArchive = createTopicArchive({ killSession, save: saveRegistry, rename: renameEverywhere, harnessLocked, parkedJob, square: SQUARE_TOPIC || undefined, log })
 // One instance writes the ledger, so its hash chain stays whole.
 const conductorLedger = conductorStore ? new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')) : undefined
 // What each working hc topic is doing, for the app's working strip.

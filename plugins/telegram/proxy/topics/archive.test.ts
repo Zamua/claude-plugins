@@ -3,7 +3,7 @@ import { createTopicArchive } from './archive'
 import { getTopic, topics } from './state'
 import type { TopicState } from './state'
 
-const ids = ['a1', 'a2', 'a3', 'general', 'sq']
+const ids = ['a1', 'a2', 'a3', 'general', 'sq', 'p1']
 afterEach(() => ids.forEach(id => topics.delete(id)))
 
 function setup() {
@@ -20,6 +20,7 @@ function setup() {
       getTopic(topic).name = name
     },
     harnessLocked: topic => topic === 'a3',
+    parkedJob: topic => (topic === 'p1' ? 'abcd1234' : undefined),
     square: 'sq',
     now: () => new Date('2026-11-02T01:00:00.000Z'),
     log: () => {},
@@ -101,4 +102,23 @@ test('the backend gets no topic it cannot run, and nothing changes for one it re
     { topic: 'nope', outcome: 'unknown' },
   ])
   expect([killed, saves(), getTopic('a3').lifecycleOwner]).toEqual([[], 0, undefined])
+})
+
+test('a conversation running as a background job stays where it is: no migrate, and archiving says it runs on', () => {
+  const lines: string[] = []
+  const archive = createTopicArchive({
+    killSession: () => true,
+    save: () => {},
+    rename: async () => {},
+    harnessLocked: () => false,
+    parkedJob: topic => (topic === 'p1' ? 'abcd1234' : undefined),
+    log: line => void lines.push(line),
+  })
+  getTopic('p1').claudeSessionId = 'abcd1234-0000-0000-0000-000000000000'
+  expect(archive.migrate(['p1'], 'crook')).toEqual([
+    { topic: 'p1', outcome: 'refused', reason: 'its conversation runs as background job abcd1234; stop it first (claude stop abcd1234)' },
+  ])
+  expect(getTopic('p1').lifecycleOwner).toBeUndefined()
+  archive.archive(['p1'])
+  expect(lines.at(-1)).toContain('runs on as background job abcd1234')
 })

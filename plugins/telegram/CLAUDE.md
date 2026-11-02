@@ -1273,6 +1273,25 @@ there is no agent to relaunch.
   which starts a fresh conversation in that topic (see the Relaunch section).
   Editing `registry.json` while the proxy runs does not work: the registry
   lives in memory and the next save overwrites the file.
+- **A conversation moved to a background job takes its topic with it.** Claude
+  Code's agents panel (`←` on an empty prompt) moves a running conversation into
+  a background job: a new session id, a `continued-in` entry naming it at the
+  end of the old transcript, `parkedJobId` on the terminal's session record and
+  `jobId` (the id's first 8 hex digits) on the job's. The terminal is left as a
+  viewer, and the job outlives it. Every 10 s, and before any start or
+  `/relaunch`, the proxy follows a running topic's `continued-in` chain
+  (`topics/domain/parked-conversation.ts`) and rebinds `claude_session_id` to
+  where the conversation lives, with a log line and a `conversation_followed`
+  ledger entry. A `continued-in` counts only when no user or assistant turn
+  follows it, since a conversation later resumed under the old id keeps its
+  stale entry. Process ancestry and argv prove nothing here: every job runs
+  under one machine-wide daemon that the first Claude to need it started, on a
+  pre-warmed process whose argv names no resume. While a live session record of
+  kind `bg` holds the bound id, the proxy resumes nothing: a start is refused
+  with a notice naming `claude stop <job>` (at most once a minute, the message
+  stays queued), `/relaunch` is refused up front, `migrate crook` is refused,
+  update restarts skip the topic, and archive notes the job runs on. Otherwise
+  two processes would write one conversation.
 - **Readable, stable session names.** A topic's tmux session is
   `claude-<slug>-<thread_id>` (e.g. `claude-hostthis-34`), with the numeric thread
   id as a short, collision-proof, stable suffix; the General topic is just
@@ -1625,7 +1644,8 @@ that is busy (mid-turn), `shell` (idle with background tasks running), or
 `waiting` (on the operator), or for which the proxy still holds a queued message,
 in-flight pane turn, or permission prompt, is left alone until it goes idle; it
 is then restarted and resumed at once, and the topic gets a one-line notice.
-A session that has been `shell` for over an hour (`LINGERING_SHELL_MS`, measured
+A topic whose conversation runs as a background job is skipped (see the
+moved-conversation gotcha above). A session that has been `shell` for over an hour (`LINGERING_SHELL_MS`, measured
 from the record's `statusUpdatedAt`) counts as idle: that is a leftover dev
 server, not work in progress, and stopping the session stops it too.
 Each topic is restarted at most once per installed version, so a launcher that

@@ -38,8 +38,9 @@ import { quietNotice } from './domain/quiet-notice'
 import { claudeSpawnEnv } from './claude-launch'
 import type { ClaudeSpawnSpec } from './claude-launch'
 import { effectiveClaudeSettings } from './claude-settings'
-import { claudeConversationExists } from './claude-transcript'
+import { claudeConversationExists, transcriptTails } from './claude-transcript'
 import { missingConversationNotice, planRelaunch, spawnConversation, spawnFailureNotice } from './domain/topic-conversation'
+import { continuedIn, jobIdOf, movesFrom, parkedNotice } from './domain/parked-conversation'
 import { nextAgent, sessionOf } from './domain/agent'
 import type { AgentEvent } from './domain/agent'
 import { nextTurn } from './domain/pane-turn'
@@ -63,6 +64,8 @@ export type TopicLifecyclePorts = {
   hcLaunched?: () => void
   /** Whether the topic's Claude is between turns, so moving it to another multiplexer cuts nothing short. */
   betweenTurns?: (st: TopicState) => boolean
+  /** The topic's binding followed its conversation to the session it moved to. */
+  followed?: (topic: string, from: string, to: string) => void
 }
 
 // Every message to a topic that cannot start retries ensureSession, so its
@@ -122,10 +125,46 @@ function claudeBetweenTurns(st: TopicState): boolean {
   return !claude || atTurnBoundary(claude.activity, claude.activitySince, Date.now())
 }
 
-export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog, turnEnded, noticeDelivered, hcLaunched, betweenTurns = claudeBetweenTurns }: TopicLifecyclePorts) {
+export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog, turnEnded, noticeDelivered, hcLaunched, betweenTurns = claudeBetweenTurns, followed }: TopicLifecyclePorts) {
   const panePumps = new Map<string, PanePumpState>()
   const lastSpawnNotice = new Map<string, number>()
   const lastRelaunch = new Map<string, number>()
+  const tails = transcriptTails()
+
+  /**
+   * Rebinds a topic to the session its conversation moved to (Claude Code's agents panel moves a
+   * running conversation into a background job under a new id), so a resume, verify.py and the
+   * update sweep all see the conversation where it lives.
+   */
+  function followMoves(topic: string, st: TopicState): void {
+    const bound = st.claudeSessionId
+    if (!bound) return
+    const moves = movesFrom(bound, id => continuedIn(tails(id) ?? []), id => claudeConversationExists(id))
+    if (!moves.length) return
+    const to = moves[moves.length - 1]
+    st.claudeSessionId = to
+    saveRegistry()
+    log(`topic ${topic} "${st.name || topic}" follows its conversation: ${[bound, ...moves].join(' -> ')}`)
+    followed?.(topic, bound, to)
+  }
+
+  /** Follows every running topic's conversation; a stopped one is followed when it starts. */
+  function followAll(): void {
+    for (const [topic, st] of topics) {
+      if (st.agent.state !== 'running' || harnessLocked(topic) || crookOwned(topic)) continue
+      if (SQUARE_TOPIC && topic === SQUARE_TOPIC) continue
+      followMoves(topic, st)
+    }
+  }
+
+  /** The background job holding the topic's conversation, if one does: resuming it here would make two writers. */
+  function parkedJob(topic: string): string | undefined {
+    const st = topics.get(topic)
+    if (!st?.claudeSessionId) return undefined
+    followMoves(topic, st)
+    const id = st.claudeSessionId
+    return liveClaudeSessions().get(id)?.kind === 'bg' ? jobIdOf(id) : undefined
+  }
 
   function enqueue(topic: string, msg: InboundMsg): void {
     const st = getTopic(topic)
@@ -264,7 +303,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     }
   }
 
-  function postSpawnNotice(kind: 'missing-conversation' | 'spawn-failed', topic: string, text: string): void {
+  function postSpawnNotice(kind: 'missing-conversation' | 'spawn-failed' | 'parked', topic: string, text: string): void {
     const key = `${kind}:${topic}`
     if (Date.now() - (lastSpawnNotice.get(key) ?? 0) < SPAWN_NOTICE_MS) return
     lastSpawnNotice.set(key, Date.now())
@@ -358,6 +397,13 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     if (st.claudeSessionId && !claudeConversationExists(st.claudeSessionId)) {
       return apply(topic, st, { type: 'conversation-missing', now: Date.now() })
     }
+    const job = parkedJob(topic)
+    if (job && st.claudeSessionId) {
+      log(`topic ${topic}: conversation ${st.claudeSessionId} is held by background job ${job}; not resuming it`)
+      postSpawnNotice('parked', topic, parkedNotice(st.claudeSessionId))
+      apply(topic, st, { type: 'start-failed', now: Date.now() })
+      return 'failed'
+    }
     try {
       const label = st.name || topicNames.get(topic) || topic
       st.name = label
@@ -442,8 +488,13 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
       await tell(`♻️ already relaunching; it answers within a few seconds.`)
       return
     }
-    lastRelaunch.set(topic, Date.now())
     const st = getTopic(topic)
+    // Stopping the terminal would leave the job writing and the respawn refused.
+    if (parkedJob(topic) && st.claudeSessionId) {
+      await tell(parkedNotice(st.claudeSessionId))
+      return
+    }
+    lastRelaunch.set(topic, Date.now())
     const wasLive = killSession(st, topic)
     const plan = planRelaunch(st.claudeSessionId, id => claudeConversationExists(id), wasLive, byOperator)
     if (plan.claudeSessionId !== st.claudeSessionId) {
@@ -511,5 +562,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     relaunch,
     kickoff,
     interrupt,
+    followAll,
+    parkedJob,
   }
 }
