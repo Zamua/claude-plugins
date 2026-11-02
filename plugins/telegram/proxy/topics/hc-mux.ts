@@ -140,4 +140,10 @@ export class HcMux implements MultiplexerPort {
     if (killed) this.call('terminal.rm', { terminal: terminal.address })
     return killed
   }
+
+  /** The terminal's foreground process, when hc reports its pid. */
+  agentPid(session: string): number | undefined {
+    const terminal = this.terminals().get(session)
+    return terminal?.state === 'live' ? terminal.foregroundPid : undefined
+  }
 }

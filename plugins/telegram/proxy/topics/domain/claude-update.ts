@@ -47,13 +47,15 @@ export function compareVersions(a: string, b: string): number {
   return 0
 }
 
+/** Claude is between turns: idle, or left only with background processes for LINGERING_SHELL_MS. */
+export function atTurnBoundary(activity: string | undefined, activitySince: number | undefined, now: number): boolean {
+  if (activity === 'idle') return true
+  return activity === 'shell' && activitySince !== undefined && now - activitySince >= LINGERING_SHELL_MS
+}
+
 export function updateRestartAction(input: UpdateRestartInput): UpdateRestartAction {
   if (!input.running || !input.installed || input.attempted) return 'none'
   if (compareVersions(input.running, input.installed) >= 0) return 'none'
-  const lingering =
-    input.activity === 'shell' &&
-    input.activitySince !== undefined &&
-    input.now - input.activitySince >= LINGERING_SHELL_MS
-  if ((input.activity !== 'idle' && !lingering) || input.proxyBusy) return 'wait'
+  if (!atTurnBoundary(input.activity, input.activitySince, input.now) || input.proxyBusy) return 'wait'
   return input.deferred ? 'restart' : 'stop'
 }

@@ -56,6 +56,7 @@ import {
   PLUGIN_ROOT,
   SENT_MESSAGES_FILE,
   SQUARE_TOPIC,
+  BROKER_SOCKET,
   STATE_DIR,
   TAILSCALE_BIN,
   TOKEN,
@@ -88,6 +89,10 @@ import { createRouting } from './routing/routing'
 import { createFullDiskAccessWatch, hcFullDiskAccessProbe } from './topics/hc-full-disk-access'
 import { createTopicLifecycle } from './topics/lifecycle'
 import { createUpdateRestarts } from './topics/update-restarts'
+import { serveBroker } from './broker/broker-server'
+import { createRelaunchBroker } from './broker/relaunch-broker'
+import { topicFacts } from './broker/topic-facts'
+import { ROOT } from './topics/domain/session-tree'
 import { createInboundRouter, registerCommands } from './chat/inbound-router'
 import { createHttpServer } from './http/server'
 import { createOutbound } from './http/outbound'
@@ -353,6 +358,8 @@ if (CONDUCTOR_LISTEN && !conductorMode) log(`CONDUCTOR_LISTEN="${CONDUCTOR_LISTE
 const hcTopics: HcTopics | undefined = conductorStore && conductorMode?.listener && HC_TOPICS.size
   ? { topics: HC_TOPICS, watch: watchHc({ socket: hcSocketPath(hcEnvironment(process.env, HC_SESSION)), log }) }
   : undefined
+// One instance writes the ledger, so its hash chain stays whole.
+const conductorLedger = conductorStore ? new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')) : undefined
 const conductorTopicList = () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf, hcTopics)
 const conductor = conductorStore && conductorMode?.listener
   ? startConductor({
@@ -363,7 +370,7 @@ const conductor = conductorStore && conductorMode?.listener
       tailnet: tailscaleCli(TAILSCALE_BIN, log),
       ports: {
         store: conductorStore,
-        ledger: new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')),
+        ledger: conductorLedger as Ledger,
         topics: () => conductorTopicList(),
         notify: text => void sayIn('', 'general', text),
         deliver: appDelivery({
@@ -462,6 +469,7 @@ function shutdown(): void {
   clearInterval(approvalSweep)
   conductorPush?.stop()
   conductor?.stop()
+  broker?.close()
   hcTopics?.watch.stop()
   releasePidFile(PID_FILE)
   // Force-exit if the current getUpdates outlasts 2s.
@@ -514,3 +522,25 @@ if (UPDATE_RESTART) {
   setInterval(sweep, UPDATE_SWEEP_MS).unref()
   log('update restarts enabled: live topics move to a newly installed Claude Code at their next idle turn boundary')
 }
+
+// The root's relaunches over a local socket, each a ledger entry: only with the conductor's ledger.
+const broker = conductorLedger
+  ? (() => {
+      const known = topicFacts({ harnessLocked, paneInFlight, square: SQUARE_TOPIC || undefined })
+      const service = createRelaunchBroker({
+        root: ROOT,
+        rootAgentPid: () => known.agentPid(ROOT),
+        facts: known.facts,
+        callerTopic: known.callerTopic,
+        relaunch: async topic => {
+          const harness = harnessFor(topic)
+          if (harness) await harness.relaunch({ chatId: String(GROUP_CHAT_ID), topic, fromId: `${ROOT} (broker)` })
+          else await relaunch(String(GROUP_CHAT_ID), topic, `${ROOT} (broker)`)
+        },
+        record: entry => void conductorLedger.append(entry),
+        log,
+      })
+      setInterval(() => void service.sweep().catch(e => log(`broker: sweep failed: ${reason(e)}`)), 5_000).unref()
+      return serveBroker(BROKER_SOCKET, service, log)
+    })()
+  : (log('broker: off, it needs the conductor ledger'), undefined)
