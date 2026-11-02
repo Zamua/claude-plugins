@@ -272,7 +272,7 @@ const sayIn = (_chatId: string, topic: string, t: string) =>
 
 // The hc core's Full Disk Access is pinned to its binary, so an hc update loses
 // it; the operator hears in general when a probe finds it lost or back.
-const hcFullDiskAccess = HC_TOPICS.size
+const hcFullDiskAccess = HC_TOPICS.any
   ? createFullDiskAccessWatch({
       probe: hcFullDiskAccessProbe(HC_BIN, HC_SESSION),
       notify: text => void sayIn('', 'general', text),
@@ -356,7 +356,7 @@ void antigravity.refreshUsage(false).catch(() => {})
 const conductorMode = CONDUCTOR_LISTEN ? listenMode(CONDUCTOR_LISTEN) : undefined
 if (CONDUCTOR_LISTEN && !conductorMode) log(`CONDUCTOR_LISTEN="${CONDUCTOR_LISTEN}" is neither store-only nor tailnet:<port>; no listener`)
 // hc topics' live states and screens, from one subscription to their core.
-const hcTopics: HcTopics | undefined = conductorStore && conductorMode?.listener && HC_TOPICS.size
+const hcTopics: HcTopics | undefined = conductorStore && conductorMode?.listener && HC_TOPICS.any
   ? { topics: HC_TOPICS, watch: watchHc({ socket: hcSocketPath(hcEnvironment(process.env, HC_SESSION)), log }) }
   : undefined
 // A rename reaches the chat, the registry and any harness that keeps its own name, from the app or the admin path alike.

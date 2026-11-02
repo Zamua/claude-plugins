@@ -1,6 +1,7 @@
 // The proxy's topics as the conductor lists them. A topic on hc reports its
 // agent's state, title and screen live from its terminal; any other topic only
 // what the proxy's lifecycle knows.
+import type { TopicSelection } from '../topics/domain/topic-selection'
 import { currentRoute, topicNames, topics } from '../topics/state'
 import type { TopicSummary } from './api'
 import { projectOf, sessionNode, topicRole } from '../topics/domain/session-tree'
@@ -8,7 +9,7 @@ import { agentState } from './domain/agent-state'
 import type { HcWatch } from './hc-watch'
 import type { ScreenView } from './wire'
 
-export type HcTopics = { topics: ReadonlySet<string>; watch: HcWatch }
+export type HcTopics = { topics: Pick<TopicSelection, 'has'>; watch: HcWatch }
 
 function hcTerminal(topic: string, hc: HcTopics | undefined) {
   const st = topics.get(topic)

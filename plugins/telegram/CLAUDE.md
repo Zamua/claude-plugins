@@ -246,10 +246,13 @@ store write is logged, never thrown. Unset, nothing is wrapped.
 
 The detached topic-Claudes are hosted by a terminal multiplexer, selectable via
 `TELEGRAM_TOPICS_MULTIPLEXER=tmux|herdr` (default `tmux`; read at proxy boot).
-The topics listed in `TELEGRAM_TOPICS_HC_TOPICS` run under herdr-core (`hc`)
+The topics listed in `TELEGRAM_TOPICS_HC_TOPICS` (thread ids and `general`, or
+`*` for every topic, including ones created later) run under herdr-core (`hc`)
 instead; `topics/topic-muxes.ts` picks each topic's backend, and a topic whose
 backend changed is stopped in the old one and resumed in the new one by
-`ensureSession`. hc's environment, permission and restart findings are in
+`ensureSession`. That move waits for a turn boundary: while Claude's own
+session record says it is mid-turn, the topic keeps running where it is (still
+taking its messages) and moves at a later wake. hc's environment, permission and restart findings are in
 `docs/herdr-core.md`.
 The code follows a ports-and-adapters split so neither backend leaks into the
 core:

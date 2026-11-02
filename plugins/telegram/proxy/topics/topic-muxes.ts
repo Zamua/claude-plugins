@@ -1,5 +1,6 @@
 // The multiplexers hosting Claude topics: the boot default for every topic, and
 // herdr-core for the topics configured onto it, so topics move one at a time.
+import type { TopicSelection } from './domain/topic-selection'
 import type { MultiplexerPort } from './multiplexer'
 
 export type TopicMuxes = {
@@ -13,7 +14,7 @@ export type TopicMuxes = {
 export function topicMuxes(
   fallback: MultiplexerPort,
   hc: MultiplexerPort | undefined,
-  hcTopics: ReadonlySet<string>,
+  hcTopics: Pick<TopicSelection, 'has'>,
 ): TopicMuxes {
   const all = hc ? [fallback, hc] : [fallback]
   const forTopic = (topic: string) => (hc && hcTopics.has(topic) ? hc : fallback)

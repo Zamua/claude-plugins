@@ -1137,7 +1137,17 @@ describe('the proxy, end to end', () => {
     expect(typed).toContain('<channel source="plugin:telegram:telegram"')
   }, 20_000)
 
-  test('a topic moved onto hc stops where it ran and resumes the same conversation under hc', async () => {
+  test('a topic moved onto hc stops where it ran and resumes the same conversation under hc, between turns only', async () => {
+    const sessions = join(home, '.claude', 'sessions')
+    mkdirSync(sessions, { recursive: true })
+    const record = (status: string) =>
+      writeFileSync(join(sessions, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: MOVING, status, statusUpdatedAt: Date.now(), startedAt: 1 }))
+    record('busy')
+    send(63, 'still working?')
+    await until('the move to wait', () => proxyLog().includes('topic 63 moves to hc once its turn ends'))
+    expect(spawns().some(s => s.session === 'claude-moving-63')).toBeFalse()
+    expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).toContain('claude-moving-63')
+    record('idle')
     send(63, 'moved')
     const moved = await until('topic 63 to resume under hc', () => spawns().find(s => s.session === 'claude-moving-63' && s.env.TG_MUX === 'hc'))
     expect(moved.env.TG_RESUME).toBe('1')

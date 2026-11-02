@@ -6,8 +6,8 @@ chosen topics' Claudes in it, beside the default tmux or herdr backend.
 
 ## How the proxy uses it
 
-- **Per topic.** `TELEGRAM_TOPICS_HC_TOPICS` (comma list of thread ids, or
-  `general`) puts those topics on hc; every other topic stays on
+- **Per topic.** `TELEGRAM_TOPICS_HC_TOPICS` (comma list of thread ids and
+  `general`, or `*` for every topic) puts those topics on hc; every other topic stays on
   `TELEGRAM_TOPICS_MULTIPLEXER`. `TELEGRAM_HC_BIN` names the binary (default
   `~/.local/bin/hc`).
 - **Naming.** A topic's terminal is `tg-<thread id>`, labelled

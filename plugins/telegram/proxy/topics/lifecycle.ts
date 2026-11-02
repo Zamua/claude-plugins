@@ -23,6 +23,8 @@ import {
 } from '../config'
 import { log, reason } from '../log'
 import { RESTORED_NOTICE } from './domain/archive'
+import { atTurnBoundary } from './domain/claude-update'
+import { liveClaudeSessions } from './claude-sessions'
 import { autoCompactWindow, auxiliaryModelForRoute } from '../routing/domain/model-routing'
 import type { TopicRoute } from '../routing/domain/model-routing'
 import type { ProviderCatalog } from '../routing/provider-catalog'
@@ -56,6 +58,8 @@ export type TopicLifecyclePorts = {
   noticeDelivered: (topic: string) => void
   /** A topic's Claude was started under herdr-core. */
   hcLaunched?: () => void
+  /** Whether the topic's Claude is between turns, so moving it to another multiplexer cuts nothing short. */
+  betweenTurns?: (st: TopicState) => boolean
 }
 
 // Every message to a topic that cannot start retries ensureSession, so its
@@ -109,7 +113,13 @@ type PanePumpState = {
   turn: PaneTurn
 }
 
-export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog, turnEnded, noticeDelivered, hcLaunched }: TopicLifecyclePorts) {
+/** Claude is between turns by its own session record; with no record there is nothing to wait for. */
+function claudeBetweenTurns(st: TopicState): boolean {
+  const claude = st.claudeSessionId ? liveClaudeSessions().get(st.claudeSessionId) : undefined
+  return !claude || atTurnBoundary(claude.activity, claude.activitySince, Date.now())
+}
+
+export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog, turnEnded, noticeDelivered, hcLaunched, betweenTurns = claudeBetweenTurns }: TopicLifecyclePorts) {
   const panePumps = new Map<string, PanePumpState>()
   const lastSpawnNotice = new Map<string, number>()
   const lastRelaunch = new Map<string, number>()
@@ -310,6 +320,11 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     // A topic moved to another multiplexer stops there and resumes here, never runs
     // twice; its dying MCP's long-polls are dropped, as killSession drops them.
     const moved = session ? muxes.elsewhere(topic, session) : []
+    // Mid-turn it keeps running where it is, still taking its messages, and moves at a later wake.
+    if (moved.length && !betweenTurns(st)) {
+      log(`topic ${topic} moves to ${mux.kind} once its turn ends; it keeps running in ${moved[0].kind}`)
+      return 'running'
+    }
     for (const old of moved) {
       log(`moving topic ${topic} from ${old.kind} to ${mux.kind}: stopping ${session} there`)
       if (session) old.kill(session)
