@@ -45,6 +45,14 @@ describe('topicMuxes', () => {
     expect(muxes.kill('claude-b-61')).toBeFalse()
   })
 
+  test('a session\'s agent pid is found on the backend that runs it, not only the one its topic is configured onto', () => {
+    const herdr = { ...fake('herdr', ['claude-general']), agentPid: (s: string) => (s === 'claude-general' ? 25267 : undefined) }
+    const hc = fake('hc', [])
+    const muxes = topicMuxes(herdr, hc, { has: () => true })
+    expect(muxes.forTopic('general')).toBe(hc)
+    expect([muxes.agentPid('claude-general'), muxes.agentPid('claude-gone')]).toEqual([25267, undefined])
+  })
+
   test('a previous backend is searched and stopped, never started on', () => {
     const herdr = fake('herdr', [])
     const hc = fake('hc', [])

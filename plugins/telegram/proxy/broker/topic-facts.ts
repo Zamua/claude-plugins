@@ -35,7 +35,7 @@ export function topicFacts({ harnessLocked, paneInFlight, square, sessions = liv
   function agentPid(topic: string): number | undefined {
     const agent = topics.get(topic)?.agent
     const session = agent ? sessionOf(agent) : undefined
-    return session ? muxes.forTopic(topic).agentPid(session) : undefined
+    return session ? muxes.agentPid(session) : undefined
   }
 
   function callerTopic(ancestry: readonly number[]): string | undefined {
