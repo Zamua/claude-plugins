@@ -526,6 +526,10 @@ conductor's ledger on.
   end, or dropped if its agent stops first. A topic with no running agent is
   `no_agent`: its next spawn starts fresh anyway. A harness-locked topic goes
   through its harness, which waits for its own boundary.
+- **Spacing**: relaunches run one at a time, at least 3 s apart
+  (`RELAUNCH_STAGGER_MS`), whether a list or the sweep asks, so the restarted
+  sessions' first replies do not all reach Telegram at once and trip its
+  per-group rate limit. A list of n holds the command about 3(n-1) s.
 - **The ledger**: every decision is a line before anything runs, `relaunch`
   (caller, caller pid, target, outcome, and `queued: true` when a queued one
   runs) or `relaunch_refused` (caller pid, the topic whose agent it descends

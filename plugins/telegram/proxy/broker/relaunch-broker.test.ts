@@ -25,6 +25,7 @@ function setup() {
       events.push(`ledger ${entry.kind} ${entry.target ?? (entry.targets as string[]).join(',')}`)
     },
     log: () => {},
+    staggerMs: 0,
   })
   return { broker, tree, events, ledger }
 }
@@ -76,4 +77,29 @@ test('a queued relaunch runs once its turn ends, and is dropped if its agent sto
   expect(broker.queued()).toEqual(new Set())
   expect(events.filter(e => e.startsWith('relaunch'))).toEqual(['relaunch 34', 'relaunch 35'])
   expect(ledger.at(-1)).toEqual({ kind: 'relaunch', caller: 'general', target: '35', outcome: 'applied', queued: true })
+})
+
+test('relaunches are spaced out, one at a time, whether a list or the sweep asks', async () => {
+  let clock = 0
+  const started: Array<[string, number]> = []
+  const tree: Record<string, TargetFacts> = Object.fromEntries(
+    ['a', 'b', 'c', 'd'].map(t => [t, { parent: 'general', running: true, idle: t !== 'd' }]),
+  )
+  const broker = createRelaunchBroker({
+    root: 'general',
+    rootAgentPid: () => ROOT_PID,
+    facts: topic => tree[topic],
+    relaunch: async topic => void started.push([topic, clock]),
+    callerTopic: () => undefined,
+    record: () => {},
+    log: () => {},
+    staggerMs: 3_000,
+    now: () => clock,
+    sleep: async ms => void (clock += ms),
+  })
+  await broker.request(700, [ROOT_PID], ['a', 'b', 'c', 'd'])
+  tree.d = { ...tree.d, idle: true }
+  clock += 1_000
+  await broker.sweep()
+  expect(started).toEqual([['a', 0], ['b', 3_000], ['c', 6_000], ['d', 9_000]])
 })
