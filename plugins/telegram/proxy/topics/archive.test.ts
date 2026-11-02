@@ -3,7 +3,7 @@ import { createTopicArchive } from './archive'
 import { getTopic, topics } from './state'
 import type { TopicState } from './state'
 
-const ids = ['a1', 'a2', 'general', 'sq']
+const ids = ['a1', 'a2', 'a3', 'general', 'sq']
 afterEach(() => ids.forEach(id => topics.delete(id)))
 
 function setup() {
@@ -57,4 +57,25 @@ test('a rename to the current name changes nothing', async () => {
   expect(await archive.rename('a1', 'build')).toEqual({ topic: 'a1', outcome: 'unchanged' })
   expect(await archive.rename('general', 'x')).toMatchObject({ outcome: 'refused' })
   expect(renamed).toEqual([['a1', 'build']])
+})
+
+test('reparenting makes a project another project\'s worker and back, saved once per change', () => {
+  const { archive, saves } = setup()
+  getTopic('a1').session = { parent: 'general', spawnedBy: 'operator', spawnedAt: 't' }
+  expect(archive.reparent('a1', 'a2')).toEqual({ topic: 'a1', outcome: 'reparented' })
+  expect([getTopic('a1').session, saves()]).toEqual([{ parent: 'a2', spawnedBy: 'operator', spawnedAt: 't' }, 1])
+  expect(archive.reparent('a1', 'a2')).toEqual({ topic: 'a1', outcome: 'unchanged' })
+  expect(archive.reparent('a1', 'general')).toEqual({ topic: 'a1', outcome: 'reparented' })
+  expect([getTopic('a1').session?.parent, saves()]).toEqual(['general', 2])
+})
+
+test('reparenting keeps the tree two levels deep and refuses the root, the square and unknown topics', () => {
+  const { archive, saves } = setup()
+  expect(archive.reparent('a1', 'a2')).toMatchObject({ outcome: 'reparented' })
+  expect(archive.reparent('a3', 'a1')).toEqual({ topic: 'a3', outcome: 'refused', reason: 'a1 is a worker, not a project' })
+  expect(archive.reparent('a2', 'a3')).toEqual({ topic: 'a2', outcome: 'refused', reason: 'a2 has workers of its own' })
+  expect(archive.reparent('a3', 'sq')).toEqual({ topic: 'a3', outcome: 'refused', reason: 'the square is not a project' })
+  expect(archive.reparent('general', 'a2')).toMatchObject({ outcome: 'refused' })
+  expect(archive.reparent('nope', 'a2')).toEqual({ topic: 'nope', outcome: 'unknown' })
+  expect(saves()).toBe(1)
 })

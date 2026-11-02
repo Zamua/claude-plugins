@@ -4,7 +4,7 @@ import { ROOT } from './session-tree'
 
 export const RESTORED_NOTICE = '📂 restored from the archive: same conversation, picking up where it left off.'
 
-export type ArchiveOutcome = 'archived' | 'already_archived' | 'restored' | 'not_archived' | 'renamed' | 'unchanged' | 'unknown' | 'refused'
+export type ArchiveOutcome = 'archived' | 'already_archived' | 'restored' | 'not_archived' | 'renamed' | 'reparented' | 'unchanged' | 'unknown' | 'refused'
 export type ArchiveResult = { topic: string; outcome: ArchiveOutcome; reason?: string }
 
 /** Why a topic cannot be archived or renamed from here, if it cannot: the root and the square are not projects. */

@@ -561,6 +561,12 @@ describe('the proxy, end to end', () => {
     expect([resumed.env.TG_RESUME, resumed.env.TG_CLAUDE_SESSION_ID]).toEqual(['1', first.env.TG_CLAUDE_SESSION_ID])
     expect(registry()['71'].archived_at).toBeUndefined()
     expect(await cli('restore', '71')).toEqual(['71 not_archived\n', 0])
+
+    expect(await cli('reparent', '71', '43')).toEqual(['71 reparented\n', 0])
+    expect(registry()['71'].session).toMatchObject({ parent: '43' })
+    expect(await cli('reparent', '43', '71')).toEqual(['43 refused (71 is a worker, not a project)\n', 1])
+    expect(await cli('reparent', '71', 'general')).toEqual(['71 reparented\n', 0])
+    expect(registry()['71'].session).toMatchObject({ parent: 'general' })
   }, 30_000)
 
   test('a topic run outside the proxy still gets its messages, but is never spawned, stopped or relaunched by it', async () => {
