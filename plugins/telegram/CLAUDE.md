@@ -905,7 +905,10 @@ Details that matter:
   bridge's `[1m]` model suffix and a
   deliberate 272k auto-compact window (the long-context pricing boundary).
   OpenCode Go reads each installed model's actual context window from
-  `opencode api model.list`, clamps it to Claude Code's 100k-1m
+  `opencode api --standalone model.list` (a private server of the installed
+  binary, since the shared background service keeps the build it started with;
+  refreshed in the background every 10 minutes through the process runner, the
+  catalog reading the last good answer), clamps it to Claude Code's 100k-1m
   accepted range, and falls back to 200k only when metadata is unavailable.
   This variable is the capacity used for compaction calculations, not the exact
   trigger; Claude Code still applies its normal near-capacity percentage.

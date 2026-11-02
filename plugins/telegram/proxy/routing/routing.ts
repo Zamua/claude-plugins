@@ -46,7 +46,7 @@ import type { ProviderCapacity } from './domain/provider-capacity'
 import { readOpenCodeGoCapacity } from './opencode-go-capacity'
 import { permissionNotice } from './permission-notice'
 import { sessionOf } from '../topics/domain/agent'
-import { catalogFromBridge, parseOpenCodeModels } from './provider-catalog'
+import { catalogFromBridge } from './provider-catalog'
 import type { ProviderCatalog, ProviderModel } from './provider-catalog'
 
 /** A route the operator picked: a catalog model, one of its efforts, and Ultracode. */
@@ -65,9 +65,11 @@ export type RoutingPorts = {
   paneInFlight: (topic: string) => boolean
   /** Keeps what a capacity probe read where the Crook backend reads usage. */
   keepUsage: (capacity: ProviderCapacity) => void
+  /** OpenCode's model metadata as last read. */
+  openCodeModels: () => Map<string, ProviderModel>
 }
 
-export function createRouting({ chat, sayIn, killSession, ensureSession, schedulePanePump, paneInFlight, keepUsage }: RoutingPorts) {
+export function createRouting({ chat, sayIn, killSession, ensureSession, schedulePanePump, paneInFlight, keepUsage, openCodeModels: readOpenCodeModels }: RoutingPorts) {
   const capacities = new Map<ProviderId, ProviderCapacity>()
   type ModelSelection = {
     topic: string
@@ -78,29 +80,21 @@ export function createRouting({ chat, sayIn, killSession, ensureSession, schedul
     effort?: Effort
   }
   const modelSelections = new Map<string, ModelSelection>()
-  let catalogCache: { value: ProviderCatalog; at: number } | undefined
+  let catalogCache: { value: ProviderCatalog; at: number; openCode: Map<string, ProviderModel> } | undefined
   let codexAccountModels: ProviderModel[] | undefined
   const resetTimers = new Map<ProviderId, ReturnType<typeof setTimeout>>()
 
   function modelCatalog(): ProviderCatalog {
-    if (catalogCache && Date.now() - catalogCache.at < 60_000) return catalogCache.value
+    const openCode = readOpenCodeModels()
+    if (catalogCache && catalogCache.openCode === openCode && Date.now() - catalogCache.at < 60_000) return catalogCache.value
     let bridgeOutput = ''
-    let openCodeModels = new Map<string, ProviderModel>()
     try {
       bridgeOutput = execFileSync(PROVIDER_PROXY_BIN, ['models'], { encoding: 'utf8', timeout: 15_000 })
     } catch (e) {
       log(`provider bridge model catalog failed: ${e}`)
     }
-    try {
-      const output = execFileSync(OPENCODE_BIN, ['api', 'model.list'], {
-        encoding: 'utf8', timeout: 20_000,
-      })
-      openCodeModels = parseOpenCodeModels(output)
-    } catch (e) {
-      log(`OpenCode model metadata failed: ${e}`)
-    }
-    const value = catalogFromBridge(bridgeOutput, codexAccountModels, openCodeModels)
-    catalogCache = { value, at: Date.now() }
+    const value = catalogFromBridge(bridgeOutput, codexAccountModels, openCode)
+    catalogCache = { value, at: Date.now(), openCode }
     return value
   }
 
