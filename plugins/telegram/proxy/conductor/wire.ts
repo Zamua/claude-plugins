@@ -2,6 +2,7 @@
 // golden fixtures in docs/conductor-v1/ as the exact shapes.
 import { PROVIDERS, providerLabel } from '../routing/domain/model-routing'
 import type { ProviderId } from '../routing/domain/model-routing'
+import type { Activity } from './domain/activity'
 import type { ProviderCapacity } from '../routing/domain/provider-capacity'
 import type { ProviderCatalog } from '../routing/provider-catalog'
 import type { Reminder } from '../reminders/domain/reminder'
@@ -32,6 +33,7 @@ export type TopicView = {
   spawnedBy: string | null
   spawnedAt: string | null
   archivedAt: string | null
+  activity: Activity | null
 }
 
 /** hc reports no cursor position, so screens carry none. */
@@ -95,6 +97,7 @@ export function wireTopic(t: TopicView): Record<string, unknown> {
     spawned_by: t.spawnedBy,
     spawned_at: t.spawnedAt,
     ...(t.archivedAt ? { archived_at: t.archivedAt } : {}),
+    ...(t.activity ? { activity: t.activity } : {}),
   }
 }
 
@@ -111,8 +114,7 @@ export function wireDevice(d: Device): Record<string, unknown> {
   }
 }
 
-/** The model catalog as the app picks from it: every provider, the models the bridge can run. */
-/** The route catalog; with `operatorOnly`, each provider says whether only the operator may pick it. */
+/** The model catalog as the app picks from it: every provider and the models the bridge can run; with `operatorOnly`, whether only the operator may pick each provider. */
 export function wireRoutes(catalog: ProviderCatalog, operatorOnly?: (provider: ProviderId) => boolean): Record<string, unknown> {
   return {
     providers: PROVIDERS.map(id => ({

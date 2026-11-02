@@ -3,7 +3,7 @@ import type { TopicSummary } from './api'
 import { topicTracker } from './topic-tracker'
 
 const topic = (over: Partial<TopicSummary> = {}): TopicSummary =>
-  ({ id: '7', name: 'build', kind: 'claude', title: null, route: null, state: 'idle', role: 'coordinator', projectId: '7', parentId: 'general', spawnedBy: null, spawnedAt: null, archivedAt: null, ...over })
+  ({ id: '7', name: 'build', kind: 'claude', title: null, route: null, state: 'idle', role: 'coordinator', projectId: '7', parentId: 'general', spawnedBy: null, spawnedAt: null, archivedAt: null, activity: null, ...over })
 
 function setup() {
   let listed = [topic()]
@@ -59,3 +59,14 @@ test('what extra reports about a topic is news too', () => {
   expect(changed).toEqual(['7'])
 })
 
+
+test('a new activity label is news; its moving token count alone is not', () => {
+  const { tracker, changed, set } = setup()
+  tracker.refresh()
+  const working = (label: string, tokens: number) => topic({ state: 'working', activity: { label, since: '2026-11-01T20:00:00.000Z', tokens } })
+  for (const t of [working('Thinking…', 100), working('Thinking…', 900), working('Bash: ls', 900)]) {
+    set([t])
+    tracker.refresh()
+  }
+  expect(changed).toEqual(['7', '7'])
+})
