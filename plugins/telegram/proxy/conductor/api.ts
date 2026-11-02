@@ -13,6 +13,7 @@ import type { Role } from '../topics/domain/session-tree'
 import type { ConductorControl, ControlResult } from './control'
 import type { Ledger } from './ledger'
 import type { ConductorStore } from './sqlite-store'
+import type { TopicArchive } from '../topics/archive'
 import type { Thumbnailer } from './thumbnails'
 import { topicTracker } from './topic-tracker'
 import { wireApproval, wireDevice, wireMessage, wireScreen, wireTopic } from './wire'
@@ -70,6 +71,8 @@ export type ConductorApiPorts = {
   features?: () => Features
   /** A blob's narrower copy for `?w=`. Absent, every blob is served whole. */
   thumbnail?: Thumbnailer
+  /** Archives and restores projects (topics/archive.ts). Absent, those paths answer 503. */
+  archive?: Pick<TopicArchive, 'archive' | 'restore'>
   /** Calls back whenever something the topic list reports may have changed. */
   watchTopics?: (changed: () => void) => void
   log: (message: string) => void
@@ -383,6 +386,18 @@ export function createConductorApi(ports: ConductorApiPorts) {
     return listed ? Response.json(wireTopic(topicView(listed)), { status: topic === undefined ? 201 : 200 }) : fail(502, 'not_listed', 'the topic was changed but is not listed')
   }
 
+  /** Archive or restore one project, recorded in the ledger before it is done. */
+  async function archiveAct(action: 'archive' | 'restore', topic: string, device: Device, write: SignedWrite): Promise<Response> {
+    const archive = ports.archive
+    if (!archive) return fail(503, 'not_available', 'archive is not wired on this server')
+    ports.ledger.append({ kind: 'topic', action, device: device.id, topic, ...signed(write) })
+    const [result] = archive[action]([topic])
+    if (result.outcome === 'unknown') return fail(404, 'not_found', 'no such topic')
+    if (result.outcome === 'refused') return fail(403, 'not_a_project', result.reason ?? 'not a project')
+    tracker.refresh()
+    return Response.json({ topic: result.topic, outcome: result.outcome })
+  }
+
   /**
    * A secret or a reminder, recorded in the ledger before it is done. A
    * secret's entry names it and never holds its value.
@@ -504,6 +519,11 @@ export function createConductorApi(ports: ConductorApiPorts) {
       const id = decodeURIComponent(reminderPath[1])
       return signedWrite(req, url, device, (body, by) => keptAct('reminder-cancel', id, device, body, by))
     }
+    const archivePath = url.pathname.match(/^\/v1\/topics\/([^/]+)\/(archive|restore)$/)
+    if (req.method === 'POST' && archivePath) {
+      const topic = decodeURIComponent(archivePath[1])
+      return signedWrite(req, url, device, (_body, signedBy) => archiveAct(archivePath[2] as 'archive' | 'restore', topic, device, signedBy))
+    }
     const topicPath = url.pathname.match(/^\/v1\/topics\/([^/]+)$/)
     if (req.method === 'PATCH' && topicPath) {
       const topic = decodeURIComponent(topicPath[1])
@@ -520,7 +540,9 @@ export function createConductorApi(ports: ConductorApiPorts) {
     }
     if (req.method !== 'GET') return fail(405, 'method_not_allowed', 'not yet served')
     if (url.pathname === '/v1/me') {
-      return Response.json({ device: wireDevice(device), server_version: ports.version, contract: 'v1', features: ports.features?.() ?? NO_FEATURES })
+      // Archive is offered exactly when it is wired, so the flag cannot promise a route that answers 503.
+      const features = { ...(ports.features?.() ?? NO_FEATURES), archive: ports.archive !== undefined }
+      return Response.json({ device: wireDevice(device), server_version: ports.version, contract: 'v1', features })
     }
     if (url.pathname === '/v1/topics') return topics(url)
     if (url.pathname === '/v1/approvals') {
