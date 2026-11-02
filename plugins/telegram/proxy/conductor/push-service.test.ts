@@ -107,6 +107,33 @@ test('a token Apple calls dead is dropped; any other refusal or a network error 
   }
 })
 
+test('each push is kept as sent, per device, with Apple\'s answer, in order', async () => {
+  const { store, phone } = setup(token => (token === 'aa' ? { status: 200, apnsId: 'apple-1' } : new Error('socket hang up')))
+  const pad = store.enroll({ name: 'pad', publicKey: 'BK2', nodeId: 'n1', apnsToken: 'bb', apnsEnv: 'sandbox' }).device
+  const text = store.append(agent('7', 'the new icon'))
+  await settle()
+  const photo = store.addBlob(new Uint8Array([1]), 'image/png')
+  const media = store.append({ ...agent('7', ''), blobs: [photo] })
+  await settle()
+  const kept = store.pushesAfter(0)
+  expect(kept.map(p => p.seq)).toEqual([1, 2, 3, 4])
+  expect(kept[0]).toEqual({
+    seq: 1, id: expect.stringMatching(/^push_[0-9a-f]{16}$/), device: phone.id, topic: '7', kind: 'message', author: 'agent',
+    messageId: text.id, messageSeq: 1, approvalId: null, title: 'build', body: 'the new icon', collapseId: text.id, silent: false,
+    sentAt: expect.any(String), apnsStatus: 200, apnsReason: null, apnsId: 'apple-1', error: null,
+  })
+  expect(kept[1]).toMatchObject({ device: pad.id, apnsStatus: null, apnsId: null, error: 'socket hang up' })
+  expect(kept[2]).toMatchObject({ messageId: media.id, messageSeq: 2, body: 'the new icon', collapseId: text.id, silent: true })
+  expect(store.pushesAfter(3).map(p => p.seq)).toEqual([4])
+})
+
+test('a reminder from the proxy is kept as a reminder, its refusal with Apple\'s reason', async () => {
+  const { store } = setup(() => ({ status: 429, reason: 'TooManyRequests' }))
+  store.append({ ...agent('7', '⏰ stretch'), author: 'proxy', kind: 'reminder' })
+  await settle()
+  expect(store.pushesAfter(0)[0]).toMatchObject({ kind: 'reminder', author: 'proxy', apnsStatus: 429, apnsReason: 'TooManyRequests' })
+})
+
 test('nothing is pushed once stopped', async () => {
   const { store, sent, service } = setup()
   service.stop()

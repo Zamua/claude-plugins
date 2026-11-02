@@ -76,6 +76,39 @@ export function messagePush(message: StoredMessage, topicName: string, badge: nu
   return { payload, collapseId: caption?.id ?? message.id }
 }
 
+/** One push to one device, as the conductor sent it and Apple answered. */
+export type PushRecord = {
+  /** Gapless order of recording, to tail from. */
+  seq: number
+  id: string
+  device: string
+  topic: string
+  kind: 'message' | 'reminder' | 'approval'
+  /** Whose message it was; null for an approval. */
+  author: 'agent' | 'proxy' | null
+  messageId: string | null
+  messageSeq: number | null
+  approvalId: string | null
+  title: string
+  body: string
+  collapseId: string | null
+  /** No sound: it replaces an earlier notification, as a photo does its caption's. */
+  silent: boolean
+  sentAt: string
+  /** Apple's answer; all three null when the request failed before one. */
+  apnsStatus: number | null
+  apnsReason: string | null
+  apnsId: string | null
+  /** Why the request failed without an answer. */
+  error: string | null
+}
+
+/** What a push shows as sent: its title, its body after fitting, and whether it plays no sound. */
+export function shown(push: Push): { title: string; body: string; silent: boolean } {
+  const aps = (push.payload.aps ?? {}) as { alert?: { title?: unknown; body?: unknown }; sound?: unknown }
+  return { title: String(aps.alert?.title ?? ''), body: String(aps.alert?.body ?? ''), silent: aps.sound === undefined }
+}
+
 export type ApprovalForPush = { id: string; topic: string; prompt: string }
 
 export function approvalPush(approval: ApprovalForPush, topicName: string): Push {

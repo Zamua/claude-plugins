@@ -15,7 +15,8 @@ export const APNS_ORIGINS: Record<ApnsEnv, string> = {
 
 export type ApnsCredentials = { keyPem: string; keyId: string; teamId: string }
 
-export type ApnsReply = { status: number; reason?: string }
+/** `apnsId` is Apple's id for the notification, from its `apns-id` header. */
+export type ApnsReply = { status: number; reason?: string; apnsId?: string }
 
 /** One POST to an APNs origin; the HTTP/2 detail stays behind it. */
 export type ApnsTransport = {
@@ -108,10 +109,14 @@ export function http2Transport(): ApnsTransport {
       return new Promise((resolve, reject) => {
         const req = session(origin).request({ ':method': 'POST', ':path': path, ...headers })
         let status = 0
+        let apnsId: string | undefined
         let text = ''
         req.setEncoding('utf8')
         req.setTimeout(REQUEST_TIMEOUT_MS, () => req.close(http2.constants.NGHTTP2_CANCEL))
-        req.on('response', h => (status = Number(h[':status'])))
+        req.on('response', h => {
+          status = Number(h[':status'])
+          if (typeof h['apns-id'] === 'string') apnsId = h['apns-id']
+        })
         req.on('data', (chunk: string) => (text += chunk))
         req.on('error', reject)
         req.on('close', () => {
@@ -122,7 +127,7 @@ export function http2Transport(): ApnsTransport {
           } catch {
             reason = text.slice(0, 200)
           }
-          resolve(reason ? { status, reason } : { status })
+          resolve({ status, ...(reason ? { reason } : {}), ...(apnsId ? { apnsId } : {}) })
         })
         req.end(body)
       })
