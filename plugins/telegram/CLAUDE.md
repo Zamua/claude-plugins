@@ -827,6 +827,12 @@ Details that matter:
   from `codex app-server` (`model/list`, `account/rateLimits/read`); OpenCode Go
   is read from its authenticated usage endpoint. A missing probe is “not
   observed,” never assumed available.
+- Each successful Codex and OpenCode Go probe is also written to Crook's usage
+  file (`routing/crook-usage-file.ts`, `CROOK_USAGE_FILE`) beside the hook's
+  Anthropic windows, replacing only that provider and naming a weekly window
+  `7 day`. A probe that fails or reads no windows leaves its provider as it was.
+  The hook and the proxy each read, merge and rename, so a write racing the
+  other's can drop that provider until its next write.
 - Every topic launch pins `CLAUDE_CODE_SUBAGENT_MODEL` to the Telegram-selected
   main model and, unless effort is `auto`, pins `CLAUDE_CODE_EFFORT_LEVEL` to
   the selected effort. Claude Code gives that environment variable precedence
@@ -1433,7 +1439,7 @@ there is no agent to relaunch.
   `~/.local/state/crook/usage.json` (`CROOK_USAGE_FILE` overrides) as
   `{"providers": {"anthropic": {"windows", "observed_at"}}}`, replacing only its
   own provider, written as a 0600 temp file renamed into place, for the Crook
-  backend to read.
+  backend to read. The proxy writes Codex and OpenCode Go there the same way.
 - `hooks/stop-reply-guard.py`: the Stop hook (reply guard). Blocks a
   Telegram-triggered turn that ended without a `reply` call and reminds Claude to
   resend via the reply tool (once per turn). Wired via `override-settings.json`

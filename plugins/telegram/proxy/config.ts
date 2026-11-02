@@ -38,6 +38,9 @@ export const HERDR_LAUNCH_SCRIPT = join(PLUGIN_ROOT, 'scripts', 'launch-herdr-to
 export const OPENCODE_TOPICS_FILE = join(STATE_DIR, 'opencode-topics.json')
 export const LOCALGEN_TOPICS_FILE = join(STATE_DIR, 'localgen-topics.json')
 export const REMINDERS_FILE = join(STATE_DIR, 'reminders.json')
+/** Where the Crook backend reads provider quota windows; the status-line hook writes it too. */
+export const CROOK_USAGE_FILE =
+  process.env.CROOK_USAGE_FILE || join(homedir(), '.local', 'state', 'crook', 'usage.json')
 export const SENT_MESSAGES_FILE = join(STATE_DIR, 'sent-messages.json')
 // The token-bearing .env files. assertSendable refuses to ship these so a
 // prompt-injected topic-Claude cannot exfil the bot token via reply(files:[...]).
