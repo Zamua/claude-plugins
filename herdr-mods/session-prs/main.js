@@ -51,6 +51,21 @@ function projects(files) {
 
 const stackedOn = (on) => (typeof on === "number" ? on : Number(/#(\d+)$/.exec(String(on ?? ""))?.[1]) || null);
 
+// Every PR row is this tall, so one row's rail meets the next row's
+const ROW = 22;
+
+// The stack bracket's piece for one row, drawn as borders so joined rows make one line.
+function rail(t, kind) {
+  const color = t.muted;
+  return v_flex().w(16).h(ROW).flex_none().pl(4)
+    .child(div().w(8).h(ROW / 2)
+      .when(kind === "│" || kind === "└", (el) => el.border_l(1).border_color(color))
+      .when(kind === "└", (el) => el.border_b(1).border_color(color).rounded_bl(3)))
+    .child(div().w(8).h(ROW / 2)
+      .when(kind === "│" || kind === "┌", (el) => el.border_l(1).border_color(color))
+      .when(kind === "┌", (el) => el.border_t(1).border_color(color).rounded_tl(3)));
+}
+
 const isMerged = (pr) => pr?.state === "MERGED";
 const isFinal = (pr) => pr?.state === "MERGED" || pr?.state === "CLOSED";
 const firstName = (a) => (a?.name || a?.login || "").split(/\s+/)[0];
@@ -154,7 +169,7 @@ export default class SessionPrs extends View {
     const stacks = [...roots, ...prs].map(chain).filter((run) => run.length);
     return stacks.flatMap((run) => run.map((p, k) => ({
       p,
-      rail: run.length < 2 ? "\u00a0" : k === 0 ? "┌" : k === run.length - 1 ? "└" : "│",
+      rail: run.length < 2 ? "" : k === 0 ? "┌" : k === run.length - 1 ? "└" : "│",
     })));
   }
 
@@ -163,7 +178,7 @@ export default class SessionPrs extends View {
     return stackedOn(p.on) ?? (pr?.base ? heads.get(`${p.owner}/${p.repo}:${pr.base}`) ?? null : null);
   }
 
-  row(t, { p, rail }, heads, who) {
+  row(t, { p, rail: kind }, heads, who) {
     const pr = this.live.get(p.id);
     const merged = isMerged(pr);
     const final = isFinal(pr);
@@ -175,10 +190,10 @@ export default class SessionPrs extends View {
     const on = this.onOf(p, heads);
     const tip = [pr?.threads ? `${pr.threads} unresolved` : "", pr?.mergeable === "CONFLICTING" ? "conflicting" : "", pr?.review === "CHANGES_REQUESTED" ? "changes requested" : ""].filter(Boolean).join(", ");
     const cell = (w, text, c) => div().w(w).flex_none().text_color(c).child(text);
-    return h_flex().id(`pr-${p.id}`).h(22).flex_none().px(12).items_center().rounded(5).whitespace_nowrap()
+    return h_flex().id(`pr-${p.id}`).h(ROW).flex_none().px(12).items_center().rounded(5).whitespace_nowrap()
       .hover((el) => el.bg(t.hover)).cursor_pointer().on_click(() => exec("open", [url]))
       .when(Boolean(tip), (el) => el.tooltip(tip))
-      .child(cell(16, rail, t.dim))
+      .child(rail(t, kind))
       .child(cell(16, merged ? "◆" : approved ? "✓" : "", merged ? t.ansi5 : t.ansi2))
       .child(cell(14, action ? "!" : "", t.ansi3))
       .child(cell(54, `#${p.number}`, final ? t.dim : t.foreground))
