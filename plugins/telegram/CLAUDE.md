@@ -216,7 +216,10 @@ With the listener on and hc topics configured, `hc-watch.ts` holds one
 hc CLI, so it cannot start a core) and keeps its snapshot current through
 `shared/hc-events.ts`; `topic-source.ts` turns it into each hc topic's state,
 title and screen (`domain/agent-state.ts`), and `topic-tracker.ts` makes each
-change of state, title, name or route a `topic` event in the store.
+change of state, title, name, route or activity label a `topic` event in the
+store. `activity-source.ts` refreshes each working hc topic's `activity` every
+second: the tool in flight from its transcript's tail, else the spinner on its
+screen (both parsed in `domain/activity.ts`).
 `control.ts` serves the app's commands (route switch, usage, relaunch,
 interrupt, topic create and rename, secrets through the `/secret` drop's own
 store, reminders through the reminder store) through routing's `requestRoute`, the one

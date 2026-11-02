@@ -75,7 +75,9 @@ import { Ledger } from './conductor/ledger'
 import { tailscaleCli } from './conductor/tailscale'
 import { conductorControl } from './conductor/control'
 import type { Features } from './conductor/api'
-import { conductorBlocked, conductorScreen, conductorScreenText, conductorTopics } from './conductor/topic-source'
+import { conductorBlocked, conductorScreen, conductorScreenText, conductorTopics, hcTerminal } from './conductor/topic-source'
+import { activitySource } from './conductor/activity-source'
+import { transcriptTails } from './topics/claude-transcript'
 import { trackApprovals } from './conductor/approvals'
 import type { HcTopics } from './conductor/topic-source'
 import { watchHc } from './conductor/hc-watch'
@@ -105,7 +107,7 @@ import { claimPidFile, releasePidFile } from './shared/pid-file'
 import { createReminders } from './reminders/reminders'
 import { createSecretDrop } from './secrets/secret-drop'
 import { learnTopicName, loadAndReconcileRegistry, saveRegistry } from './topics/registry'
-import { currentRoute, getTopic } from './topics/state'
+import { currentRoute, getTopic, topics } from './topics/state'
 import { loadConvs } from './square/conversations'
 import { createSquare } from './square/square'
 import { telegramDownloader, writeInboxFile } from './telegram/telegram-files'
@@ -372,7 +374,18 @@ async function renameEverywhere(topic: string, name: string): Promise<void> {
 const topicArchive = createTopicArchive({ killSession, save: saveRegistry, rename: renameEverywhere, square: SQUARE_TOPIC || undefined, log })
 // One instance writes the ledger, so its hash chain stays whole.
 const conductorLedger = conductorStore ? new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')) : undefined
-const conductorTopicList = () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf, hcTopics)
+// What each working hc topic is doing, for the app's working strip.
+const conductorActivity = hcTopics
+  ? activitySource({
+      topics: () => [...topics.keys()].filter(topic => hcTopics.topics.has(topic)),
+      terminal: topic => hcTerminal(topic, hcTopics),
+      sessionId: topic => topics.get(topic)?.claudeSessionId,
+      transcriptTail: transcriptTails(),
+      screen: address => hcTopics.watch.read(address),
+    })
+  : undefined
+if (conductorActivity) setInterval(() => void conductorActivity.refresh().catch(e => log(`activity: refresh failed: ${reason(e)}`)), 1_000).unref()
+const conductorTopicList = () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf, hcTopics, conductorActivity?.activity)
 // The app's commands; the loopback API takes its route changes too.
 const appControl = conductorStore
   ? conductorControl({
@@ -455,7 +468,10 @@ const conductor = conductorStore && appControl && conductorMode?.listener
         control: appControl,
         ...(hcTopics && {
           screen: (topic: string) => conductorScreen(topic, hcTopics),
-          watchTopics: (changed: () => void) => hcTopics.watch.onChange(changed),
+          watchTopics: (changed: () => void) => {
+            hcTopics.watch.onChange(changed)
+            conductorActivity?.onChange(changed)
+          },
         }),
         // Answering waits for sessions to be isolated from each other (C6b).
         features: (): Features => ({ answer_approvals: false, push: conductorPush !== undefined, screens: hcTopics !== undefined, secrets: secrets.secretsOn() }),

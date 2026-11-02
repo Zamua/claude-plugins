@@ -172,7 +172,13 @@ as is `spawned_at`. Until the broker can prove a caller, `spawned_by` from an
 agent is its own word and carries no authority
 (`conductor-v1/topics-projects.json`). `pinned` and `muted` are the app's own:
 `general` is pinned until changed, a muted topic gets no pushes and leaves the
-badge.
+badge. `activity` (`conductor-v1/topic-activity.json`), present only while a
+topic on hc is working or blocked and something is known, says what its agent
+is doing: `label` is the tool in flight with a short target (`Bash: npm test`,
+`Read: src/app.ts`) or else the spinner's verb (`Frolicking…`), at most 80
+characters and never the terminal's title; `since` is when that tool started,
+or the turn for a spinner; `tokens` is the spinner's token count, when it shows
+one.
 
 **Message:** `id`, `topic`, `seq`, `author` (`operator`, `agent`, `proxy`),
 `origin` (`app`, `telegram`, `proxy`), `kind` (`null`, `reminder` or `ask`),
@@ -355,6 +361,12 @@ connection or 45 s without a heartbeat resubscribes, retrying from 1 s up to
 Screens are `terminal.read` on a connection of their own, rendered to plain
 rows.
 
+A topic's `activity` comes from its transcript's tail first: the last
+`tool_use` after the last prompt with no `tool_result` yet. With none, it is the
+spinner line on its screen (`✢ Frolicking… (1m 25s · ↓ 7.4k tokens)`). It is
+refreshed every second. Claude Code writes its transcript about 3 s behind, so a
+tool shorter than that shows only the spinner.
+
 A topic on hc takes its state from its terminal: `done`, `idle` and `error`
 read `idle`, `working` `working`, `blocked` `blocked`, no report yet
 `starting`, and no terminal (or only a shell left) `missing`. Its `title` is the
@@ -364,8 +376,9 @@ stopped agent reads that way on hc too. `state_since` is when the conductor saw
 the state begin, `null` for a state that held when it started.
 
 The topic list is compared with what was last seen whenever hc reports a
-change and every 2 s (for the lifecycle's own changes); a changed state, title,
-name or route, or a new topic, is a `topic` event.
+change, when an activity label changes, and every 2 s (for the lifecycle's own
+changes); a changed state, title, name, route or activity label, or a new
+topic, is a `topic` event. A spinner's moving token count alone is not.
 
 ## Importing Telegram history
 

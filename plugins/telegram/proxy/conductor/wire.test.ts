@@ -36,7 +36,17 @@ describe('the wire matches the contract fixtures', () => {
     expect(wireTopic({
       id: f.id, name: f.name, kind: f.kind, title: f.title, pinned: f.pinned, muted: f.muted, state: f.state,
       stateSince: f.state_since, unread: f.unread, readSeq: f.read_seq, pendingApprovals: f.pending_approvals,
+      route: f.route, lastMessage: f.last_message, role: f.role, projectId: f.project_id, parentId: f.parent_id, spawnedBy: f.spawned_by, spawnedAt: f.spawned_at, archivedAt: null, activity: null,
+    })).toEqual(f)
+  })
+
+  test('topic-activity.json: a working topic carries what it is doing', () => {
+    const f = fixture('topic-activity.json')
+    expect(wireTopic({
+      id: f.id, name: f.name, kind: f.kind, title: f.title, pinned: f.pinned, muted: f.muted, state: f.state,
+      stateSince: f.state_since, unread: f.unread, readSeq: f.read_seq, pendingApprovals: f.pending_approvals,
       route: f.route, lastMessage: f.last_message, role: f.role, projectId: f.project_id, parentId: f.parent_id, spawnedBy: f.spawned_by, spawnedAt: f.spawned_at, archivedAt: null,
+      activity: f.activity,
     })).toEqual(f)
   })
 

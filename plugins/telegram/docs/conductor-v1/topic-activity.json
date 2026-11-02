@@ -1,0 +1,34 @@
+{
+  "id": "16832",
+  "name": "build",
+  "kind": "claude",
+  "title": "Fix the flaky upload test",
+  "role": "coordinator",
+  "project_id": "16832",
+  "parent_id": "general",
+  "spawned_by": "operator",
+  "spawned_at": "2026-10-30T14:02:11.000Z",
+  "pinned": false,
+  "muted": false,
+  "state": "working",
+  "state_since": "2026-11-01T20:25:37.123Z",
+  "unread": 2,
+  "read_seq": 40,
+  "pending_approvals": 1,
+  "route": {
+    "provider": "anthropic",
+    "model": "claude-opus-5-5",
+    "effort": "xhigh"
+  },
+  "last_message": {
+    "preview": "Running the suite now.",
+    "format": "plain",
+    "author": "agent",
+    "at": "2026-11-01T20:25:37.123Z"
+  },
+  "activity": {
+    "label": "Frolicking…",
+    "since": "2026-11-01T20:24:12.000Z",
+    "tokens": 7400
+  }
+}

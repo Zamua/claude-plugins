@@ -5,6 +5,7 @@ import type { Server, ServerWebSocket, WebSocketHandler } from 'bun'
 import { admit } from './domain/identity'
 import type { IdentityPolicy, Peer } from './domain/identity'
 import type { StoredEvent, StoredMessage } from './domain/message'
+import type { Activity } from './domain/activity'
 import { devicePublicKey } from './domain/signing'
 import { plainText } from './domain/plain-text'
 import { checkSignedWrite, replay } from './domain/write-auth'
@@ -40,6 +41,8 @@ export type TopicSummary = {
   spawnedAt: string | null
   /** When it was archived; archived topics leave the default list. */
   archivedAt: string | null
+  /** What its agent is doing while it works; null when not known. */
+  activity: Activity | null
 }
 
 export type AppImage = { bytes: Uint8Array; mime: 'image/jpeg' | 'image/png' }

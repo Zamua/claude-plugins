@@ -1,6 +1,6 @@
 // The proxy's topics as the conductor lists them. A topic on hc reports its
-// agent's state, title and screen live from its terminal; any other topic only
-// what the proxy's lifecycle knows.
+// agent's state, title, screen and activity live; any other topic only what
+// the proxy's lifecycle knows.
 import type { TopicSelection } from '../topics/domain/topic-selection'
 import { currentRoute, topicNames, topics } from '../topics/state'
 import type { TopicSummary } from './api'
@@ -8,16 +8,23 @@ import { projectOf, sessionNode, topicRole } from '../topics/domain/session-tree
 import { agentState } from './domain/agent-state'
 import type { HcWatch } from './hc-watch'
 import type { ScreenView } from './wire'
+import type { Activity } from './domain/activity'
 
 export type HcTopics = { topics: Pick<TopicSelection, 'has'>; watch: HcWatch }
 
-function hcTerminal(topic: string, hc: HcTopics | undefined) {
+/** The hc terminal of a topic whose session runs there now. */
+export function hcTerminal(topic: string, hc: HcTopics | undefined) {
   const st = topics.get(topic)
   if (!hc?.topics.has(topic) || st?.agent.state !== 'running') return undefined
   return hc.watch.terminal(st.agent.session)
 }
 
-export function conductorTopics(hidden: (topic: string) => boolean, kindOf: (topic: string) => string, hc?: HcTopics): TopicSummary[] {
+export function conductorTopics(
+  hidden: (topic: string) => boolean,
+  kindOf: (topic: string) => string,
+  hc?: HcTopics,
+  activity?: (topic: string) => Activity | undefined,
+): TopicSummary[] {
   return [...topics]
     .filter(([topic]) => !hidden(topic))
     .map(([topic, st]) => {
@@ -40,6 +47,7 @@ export function conductorTopics(hidden: (topic: string) => boolean, kindOf: (top
         route: kind === 'claude' ? { provider: route.provider, model: route.model, effort: route.effort } : null,
         state: agentState(st.agent.state, onHc),
         archivedAt: st.archivedAt ?? null,
+        activity: activity?.(topic) ?? null,
       }
     })
 }
