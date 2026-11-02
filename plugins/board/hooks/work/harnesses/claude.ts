@@ -34,6 +34,8 @@ const MINUTES = [
   'minutes',
 ]
 const COUNT_TIMEOUT_MS = 60_000
+// A transcript's first count reads all of it, at low priority, so it gets longer before it is left to a later pass
+const FULL_COUNT_TIMEOUT_MS = 5 * 60_000
 // A transcript counted from its start costs a full read, so a pass makes at most this many and leaves the rest to later passes
 const FULL_COUNTS_PER_PASS = 1
 
@@ -163,21 +165,22 @@ export async function claudeTime($: EngineInterface, ids: string[]): Promise<{ a
           continue
         }
         if (!isAppended) fullCounts++
+        // Claimed before counting, so the other sessions take this transcript as just counted and leave it
+        await saveEntry($, path, id, { path: transcript, at: now, activeMs: entry?.activeMs ?? 0 })
         const offset = isAppended ? (entry?.size ?? 0) + 1 : 1
-        const counted = await $.process.run([...MINUTES, transcript, String(offset)], { timeoutMs: COUNT_TIMEOUT_MS })
+        const timeoutMs = isAppended ? COUNT_TIMEOUT_MS : FULL_COUNT_TIMEOUT_MS
+        const counted = await $.process.run([...MINUTES, transcript, String(offset)], { timeoutMs })
         if (counted.exitCode !== 0 && counted.stdout === '') continue
         const span = spanOf(counted.stdout, isAppended ? entry?.last : undefined)
         const activeMs = (isAppended ? (entry?.activeMs ?? 0) : 0) + span.activeMs
-        cache.sessions[id] = {
-          ...entry,
+        await saveEntry($, path, id, {
           path: transcript,
           ...(stat && { mtimeMs: stat.mtimeMs, size: stat.size }),
           ...(span.last !== undefined && { last: span.last }),
           at: now,
           activeMs,
-        }
+        })
         active.set(id, activeMs)
-        await $.fs.write(path, JSON.stringify(cache)).catch(() => undefined)
       } catch {
         // A transcript that cannot be counted leaves its session's time as last counted
         if (entry) active.set(id, entry.activeMs)
@@ -191,6 +194,13 @@ export async function claudeTime($: EngineInterface, ids: string[]): Promise<{ a
   } finally {
     isCounting = false
   }
+}
+
+/** Writes one session's entry over the cache as it is now, so entries other sessions wrote meanwhile stay. */
+async function saveEntry($: EngineInterface, path: string, id: string, entry: TimeEntry) {
+  const cache = await readTimes($, path)
+  cache.sessions[id] = { ...cache.sessions[id], ...entry }
+  await $.fs.write(path, JSON.stringify(cache)).catch(() => undefined)
 }
 
 /** The times the cache holds, running agents' and finished ones', pruning entries past KEEP_MS from `cache`. */
