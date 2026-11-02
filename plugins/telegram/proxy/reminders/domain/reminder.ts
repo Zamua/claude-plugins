@@ -1,3 +1,5 @@
+import { quietNotice } from '../../topics/domain/quiet-notice'
+
 // Reminders a topic agent schedules for itself. The proxy owns them, so they
 // outlive the agent's session and fire into its topic even while it is dormant.
 
@@ -11,10 +13,12 @@ export type Reminder = {
   text: string
   // Instructions for the topic agent at fire time, never shown to the operator.
   prompt?: string
+  // Nothing is posted to the operator: the agent is woken and reports to general.
+  quiet?: boolean
   createdAt: number
 }
 
-export type ReminderRequest = { topic?: unknown; at?: unknown; text?: unknown; prompt?: unknown }
+export type ReminderRequest = { topic?: unknown; at?: unknown; text?: unknown; prompt?: unknown; quiet?: unknown }
 
 export const MAX_AHEAD_MS = 366 * 86_400_000
 export const LATE_AFTER_MS = 5 * 60_000
@@ -45,15 +49,16 @@ export function scheduleReminder(req: ReminderRequest, now: number, id: string):
   const prompt = typeof req.prompt === 'string' ? req.prompt.trim() : ''
   if (prompt.length > MAX_PROMPT) throw new InvalidReminder(`prompt must be at most ${MAX_PROMPT} characters`)
 
-  return { id, topic, at, atText, text, ...(prompt ? { prompt } : {}), createdAt: now }
+  return { id, topic, at, atText, text, ...(prompt ? { prompt } : {}), ...(req.quiet === true ? { quiet: true } : {}), createdAt: now }
 }
 
 export function dueReminders(list: Reminder[], now: number): Reminder[] {
   return list.filter(r => r.at <= now).sort((a, b) => a.at - b.at)
 }
 
-// The proxy has already posted `text` in the topic when the agent reads this.
+// The proxy has already posted `text` in the topic when the agent reads this, unless the reminder is quiet.
 export function reminderNotice(r: Reminder, now: number): string {
+  if (r.quiet) return quietNotice(`a quiet reminder scheduled for ${r.atText} is due ("${r.text}"); nothing was posted in this topic`, r.prompt)
   const lateBy = now - r.at
   const late = lateBy > LATE_AFTER_MS ? ` It fired ${Math.round(lateBy / 60_000)} min late, because the proxy was down at the scheduled time.` : ''
   const head =

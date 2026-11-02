@@ -148,6 +148,14 @@ export function parseTopicRoute(body: unknown): { topic: string; choice: Record<
   return { topic: topicKey(b), choice: b }
 }
 
+/** General starting a topic's session quietly: the topic and optional instructions. */
+export function parseTopicKickoff(body: unknown): { topic: string; prompt?: string } {
+  const b = object(body)
+  const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : ''
+  if (prompt.length > 4000) throw new BadRequest('prompt must be at most 4000 characters')
+  return { topic: topicKey(b), ...(prompt ? { prompt } : {}) }
+}
+
 export function parseTopicReparent(body: unknown): { topic: string; parent: string } {
   const b = object(body)
   return { topic: topicKey(b), parent: topicKey({ topic: b.parent }) }

@@ -18,7 +18,7 @@ import type { createOutbound } from './outbound'
 import type { TopicArchive } from '../topics/archive'
 import type { TargetResult } from '../broker/domain/relaunch'
 import type { ControlResult } from '../conductor/control'
-import { BadRequest, parsePermissionRequest, parseTopicCreate, parseTopicList, parseTopicRename, parseTopicReparent, parseTopicRoute } from './requests'
+import { BadRequest, parsePermissionRequest, parseTopicCreate, parseTopicKickoff, parseTopicList, parseTopicRename, parseTopicReparent, parseTopicRoute } from './requests'
 import { acknowledgedPoll, longPoll } from './long-poll'
 import { json } from './response'
 import { ROUTE } from './routes'
@@ -42,6 +42,8 @@ export type HttpPorts = {
   /** When Telegram polling last started, or null while it is down. */
   pollingSince: () => number | null
   archive: TopicArchive
+  /** Starts or wakes a topic's session for general without posting to the operator. */
+  kickoff: (topic: string, prompt?: string) => { topic: string; outcome: string; reason?: string }
   /** Relaunch and route change for the Crook backend; absent while the conductor's ledger is off. */
   topicControl?: {
     relaunch: (topics: string[]) => Promise<TargetResult[]>
@@ -156,6 +158,10 @@ export function createHttpServer(ports: HttpPorts) {
       case ROUTE.topicRename: if (post) {
         const { topic, name } = parseTopicRename(await req.json())
         return json({ results: [await ports.archive.rename(topic, name)] })
+      } break
+      case ROUTE.topicKickoff: if (post) {
+        const { topic, prompt } = parseTopicKickoff(await req.json())
+        return json({ results: [ports.kickoff(topic, prompt)] })
       } break
       case ROUTE.topicReparent: if (post) {
         const { topic, parent } = parseTopicReparent(await req.json())

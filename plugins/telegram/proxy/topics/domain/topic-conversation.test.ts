@@ -24,6 +24,16 @@ describe('planRelaunch', () => {
     expect(plan.notice).not.toMatch(/intact/)
   })
 
+  test('the operator\'s relaunch is answered in the topic; any other is reported to general, not posted there', () => {
+    const mine = planRelaunch('kept-id', () => true, true)
+    expect(mine.notice).toMatch(/the operator relaunched this session.*Reply with ONE short line/)
+    const theirs = planRelaunch('kept-id', () => true, true, false)
+    expect(theirs.notice).toMatch(/not by the operator/)
+    expect(theirs.notice).toMatch(/Do not post in this topic: report ONE line, "back, MCP: .*", to the general session with SendMessage/)
+    expect(theirs.notice).not.toMatch(/Reply with/)
+    expect(planRelaunch('gone-id', () => false, false, false).notice).toMatch(/NEW conversation.*to the general session with SendMessage/)
+  })
+
   test('an existing conversation is kept and resumed', () => {
     const plan = planRelaunch('kept-id', id => id === 'kept-id', true)
     expect(plan.missingSessionId).toBeUndefined()

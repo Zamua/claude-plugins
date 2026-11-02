@@ -5,6 +5,7 @@ import { join } from 'path'
 import { spawnSync } from 'child_process'
 import type { ChatPort } from '../chat/domain/chat-port'
 import {
+  ADMIN_USER_ID,
   CAPACITY_HOOK,
   EXTERNAL_TOPICS,
   
@@ -33,7 +34,8 @@ import type { ProviderCatalog } from '../routing/provider-catalog'
 import { requeueInflight } from '../shared/domain/inbox'
 import { inboundModeForRoute, renderPaneTurn } from '../shared/domain/inbound-delivery'
 import { writeJsonAtomic } from '../shared/json-file'
-import { RELAUNCH_META } from '../shared/domain/turn-meta'
+import { QUIET_META, RELAUNCH_META } from '../shared/domain/turn-meta'
+import { quietNotice } from './domain/quiet-notice'
 import { claudeSpawnEnv } from './claude-launch'
 import type { ClaudeSpawnSpec } from './claude-launch'
 import { effectiveClaudeSettings } from './claude-settings'
@@ -307,7 +309,8 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
 
   // Ensures a live Claude session for a topic. Single-flight: spawnSync blocks the event loop for the whole launch,
   // so two messages for a new topic cannot start two sessions. Dedup is on the RECORDED session name.
-  function ensureSession(topic: string, by: 'event' | 'timer' = 'event'): SpawnOutcome {
+  // `quiet` is a wake the operator did not ask for: an archived topic comes back without a notice in its thread.
+  function ensureSession(topic: string, by: 'event' | 'quiet' | 'timer' = 'event'): SpawnOutcome {
     // A locked topic must never fall through to the Claude launcher.
     if (harnessLocked(topic)) return 'skipped'
     // The square hosts conversations, not a Claude of its own.
@@ -320,7 +323,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
       st.archivedAt = undefined
       saveRegistry()
       log(`topic ${topic} "${st.name || topic}" restored from the archive`)
-      void sayIn(String(GROUP_CHAT_ID), topic, RESTORED_NOTICE).catch(e => log(`restore notice failed for topic ${topic}: ${reason(e)}`))
+      if (by === 'event') void sayIn(String(GROUP_CHAT_ID), topic, RESTORED_NOTICE).catch(e => log(`restore notice failed for topic ${topic}: ${reason(e)}`))
     }
     const mux = muxes.forTopic(topic)
     const session = sessionOf(st.agent)
@@ -341,7 +344,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     const legacy = legacySessionNameFor(topic)
     const outcome = apply(topic, st, {
       type: 'wanted',
-      by,
+      by: by === 'timer' ? 'timer' : 'event',
       now: Date.now(),
       live: !!session && live.has(session),
       ...(live.has(legacy) && { legacy }),
@@ -422,25 +425,28 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
 
   // /relaunch for a Claude topic: kill, ack, enqueue a nudge, respawn with the
   // same conversation. The nudge asks for one line back, so a respawn that
-  // fails is a visible silence.
+  // fails is a visible silence: in the topic when the operator asked, to
+  // general otherwise, with nothing posted in the topic.
   async function relaunch(chatId: string, topic: string, fromId: string): Promise<void> {
+    const byOperator = ADMIN_USER_ID !== '' && fromId === ADMIN_USER_ID
+    const tell = (text: string) => (byOperator ? sayIn(chatId, topic, text) : (log(`relaunch of topic ${topic}: ${text}`), undefined))
     if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
-      await sayIn(chatId, topic, '♻️ the square has no agent of its own; run /relaunch in a topic.')
+      await tell('♻️ the square has no agent of its own; run /relaunch in a topic.')
       return
     }
     if (EXTERNAL_TOPICS.has(topic)) {
-      await sayIn(chatId, topic, EXTERNAL_NOTICE)
+      await tell(EXTERNAL_NOTICE)
       return
     }
     const since = Date.now() - (lastRelaunch.get(topic) ?? 0)
     if (since < RELAUNCH_DEBOUNCE_MS) {
-      await sayIn(chatId, topic, `♻️ already relaunching; it answers within a few seconds.`)
+      await tell(`♻️ already relaunching; it answers within a few seconds.`)
       return
     }
     lastRelaunch.set(topic, Date.now())
     const st = getTopic(topic)
     const wasLive = killSession(st, topic)
-    const plan = planRelaunch(st.claudeSessionId, id => claudeConversationExists(id), wasLive)
+    const plan = planRelaunch(st.claudeSessionId, id => claudeConversationExists(id), wasLive, byOperator)
     if (plan.claudeSessionId !== st.claudeSessionId) {
       st.claudeSessionId = plan.claudeSessionId
       saveRegistry()
@@ -449,7 +455,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
       `relaunch of topic ${topic} "${st.name || topic}" requested by user ${fromId} (was ${wasLive ? 'live' : 'not running'})` +
         (plan.missingSessionId ? `; conversation ${plan.missingSessionId} missing on disk, starting a new one` : ''),
     )
-    await sayIn(chatId, topic, plan.ack)
+    await tell(plan.ack)
     enqueue(topic, {
       content: plan.notice,
       meta: {
@@ -459,9 +465,35 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
         ts: new Date().toISOString(),
         ...(topic !== 'general' ? { message_thread_id: topic } : {}),
         ...RELAUNCH_META,
+        ...(byOperator ? {} : QUIET_META),
       },
     })
-    ensureSession(topic)
+    ensureSession(topic, byOperator ? 'event' : 'quiet')
+  }
+
+  /**
+   * Starts or wakes a topic's session for general, with its instructions, and
+   * posts nothing in the topic: the session reports back to general.
+   */
+  function kickoff(topic: string, instructions?: string): { topic: string; outcome: 'kicked_off' | 'unknown' | 'refused'; reason?: string } {
+    if (!topics.has(topic)) return { topic, outcome: 'unknown' }
+    if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return { topic, outcome: 'refused', reason: 'the square has no agent of its own' }
+    if (harnessLocked(topic)) return { topic, outcome: 'refused', reason: 'locked to another harness' }
+    if (EXTERNAL_TOPICS.has(topic)) return { topic, outcome: 'refused', reason: 'run by the Crook backend' }
+    ensureSession(topic, 'quiet')
+    enqueue(topic, {
+      content: quietNotice('the general session started this turn', instructions),
+      meta: {
+        chat_id: String(GROUP_CHAT_ID),
+        user: 'telegram-topics-proxy',
+        user_id: '',
+        ts: new Date().toISOString(),
+        ...(topic !== 'general' ? { message_thread_id: topic } : {}),
+        ...QUIET_META,
+      },
+    })
+    log(`kickoff of topic ${topic} for general${instructions ? ' with instructions' : ''}`)
+    return { topic, outcome: 'kicked_off' }
   }
 
   /** Presses the topic's agent's stop key; false when it is not running. */
@@ -478,6 +510,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     paneInFlight,
     resumePendingPanes,
     relaunch,
+    kickoff,
     interrupt,
   }
 }

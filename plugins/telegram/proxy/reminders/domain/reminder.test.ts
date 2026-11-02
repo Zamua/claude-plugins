@@ -33,6 +33,12 @@ describe('scheduleReminder', () => {
     })
   })
 
+  test('a quiet reminder is marked quiet; anything but true is a normal one', () => {
+    const at = '2026-10-26T13:03:00Z'
+    expect(scheduleReminder({ topic: '7', at, text: 'start', quiet: true }, NOW, 'q').quiet).toBeTrue()
+    expect(scheduleReminder({ topic: '7', at, text: 'start', quiet: 'yes' }, NOW, 'q').quiet).toBeUndefined()
+  })
+
   test('keeps an optional prompt for the topic agent', () => {
     const r = scheduleReminder({ topic: 'general', at: '2026-10-26T13:03:00Z', text: 't', prompt: 'search Gmail first' }, NOW, 'x')
     expect(r).toMatchObject({ prompt: 'search Gmail first' })
@@ -66,6 +72,13 @@ describe('dueReminders', () => {
 })
 
 describe('reminderNotice', () => {
+  test('a quiet reminder posted nothing, and its agent reports to general', () => {
+    const n = reminderNotice(make({ quiet: true, prompt: 'start the migration' }), NOW + 60_000)
+    expect(n).toMatch(/quiet reminder .* is due \("check the flight"\); nothing was posted in this topic/)
+    expect(n).toContain('Instructions: start the migration')
+    expect(n).toMatch(/do not post in this topic\. Report to the general session with SendMessage\.$/)
+  })
+
   test('says no reply is needed when there is no follow-up prompt', () => {
     const n = reminderNotice(make(), NOW + 60_000)
     expect(n).toContain('check the flight')

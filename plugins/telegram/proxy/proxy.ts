@@ -168,6 +168,7 @@ const {
   paneInFlight,
   resumePendingPanes,
   relaunch,
+  kickoff,
   interrupt,
 } = createTopicLifecycle({
   chat,
@@ -559,6 +560,7 @@ const http = createHttpServer({
   reminders: { handleRemind, handleListReminders, handleCancelReminder },
   pollingSince: inbound.since,
   archive: topicArchive,
+  kickoff,
   topicControl: appControl && relaunchBroker && {
     relaunch: topics => relaunchBroker.requestLoopback(topics),
     route: (topic, choice) => appControl.route(topic, choice, 'loopback'),
