@@ -3,8 +3,8 @@
 // its conversation id and transcript; restoring only clears the flag, so the
 // next message resumes the same conversation.
 import { notAProject } from './domain/archive'
-import { ownerRefusal } from './domain/lifecycle-owner'
-import type { LifecycleOwner } from './domain/lifecycle-owner'
+import { handBackRefusal, ownerRefusal } from './domain/lifecycle-owner'
+import type { HandBackFacts, LifecycleOwner } from './domain/lifecycle-owner'
 import { ROOT, reparentRefusal, sessionNode, topicRole } from './domain/session-tree'
 import type { ArchiveResult } from './domain/archive'
 import { currentRoute, topics } from './state'
@@ -17,12 +17,14 @@ export type TopicArchivePorts = {
   harnessLocked: (topic: string) => boolean
   /** The background job holding the topic's conversation, if one does. */
   parkedJob: (topic: string) => string | undefined
+  /** What a hand-back's conversation would collide with: another topic, a live session, a missing transcript. */
+  conversationFacts: (topic: string, conversation: string) => HandBackFacts
   square?: string
   now?: () => Date
   log: (line: string) => void
 }
 
-export function createTopicArchive({ killSession, save, rename, harnessLocked, parkedJob, square, now = () => new Date(), log }: TopicArchivePorts) {
+export function createTopicArchive({ killSession, save, rename, harnessLocked, parkedJob, conversationFacts, square, now = () => new Date(), log }: TopicArchivePorts) {
   const refusal = (topic: string) => notAProject(topic, topics.has(topic), square)
 
   function archive(list: readonly string[]): ArchiveResult[] {
@@ -88,9 +90,10 @@ export function createTopicArchive({ killSession, save, rename, harnessLocked, p
   /**
    * Hands topics to the Crook backend or back. Going to crook stops the proxy's own
    * session first, since a crook topic's session is never stopped from here. Coming
-   * back flips the field only: the backend stops its session before asking.
+   * back flips the field, and takes the conversation the backend moved the topic to when it names
+   * one: the backend stops its session before asking.
    */
-  function migrate(list: readonly string[], owner: LifecycleOwner): ArchiveResult[] {
+  function migrate(list: readonly string[], owner: LifecycleOwner, conversation?: string): ArchiveResult[] {
     const results = [...new Set(list)].map((topic): ArchiveResult => {
       const st = topics.get(topic)
       if (!st) return { topic, outcome: 'unknown' }
@@ -102,11 +105,14 @@ export function createTopicArchive({ killSession, save, rename, harnessLocked, p
         conversation: !!st.claudeSessionId,
       })
       if (why) return { topic, outcome: 'refused', reason: why }
+      const collision = conversation === undefined ? undefined : handBackRefusal(conversation, conversationFacts(topic, conversation))
+      if (collision) return { topic, outcome: 'refused', reason: collision }
       const job = owner === 'crook' ? parkedJob(topic) : undefined
       if (job) return { topic, outcome: 'refused', reason: `its conversation runs as background job ${job}; stop it first (claude stop ${job})` }
       const wasLive = owner === 'crook' && killSession(st, topic)
       st.lifecycleOwner = owner
-      log(`topic ${topic} "${st.name || topic}" now run by ${owner === 'crook' ? 'the Crook backend' : 'the proxy'}${wasLive ? ', the proxy\'s session stopped' : ''}`)
+      if (conversation !== undefined) st.claudeSessionId = conversation
+      log(`topic ${topic} "${st.name || topic}" now run by ${owner === 'crook' ? 'the Crook backend' : 'the proxy'}${wasLive ? ', the proxy\'s session stopped' : ''}${conversation ? `, resuming ${conversation}` : ''}`)
       return { topic, outcome: 'migrated' }
     })
     if (results.some(r => r.outcome === 'migrated')) save()

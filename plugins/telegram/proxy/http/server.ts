@@ -168,8 +168,8 @@ export function createHttpServer(ports: HttpPorts) {
         return json({ results: [ports.archive.reparent(topic, parent)] })
       } break
       case ROUTE.topicMigrate: if (post) {
-        const { topics, to } = parseTopicMigrate(await req.json())
-        return json({ results: ports.archive.migrate(topics, to) })
+        const { topics, to, conversation } = parseTopicMigrate(await req.json())
+        return json({ results: ports.archive.migrate(topics, to, conversation) })
       } break
       case ROUTE.topicRelaunch: if (post) {
         if (!ports.topicControl) return json({ error: 'relaunch needs the conductor ledger' }, 503)

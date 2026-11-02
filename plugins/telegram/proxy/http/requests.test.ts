@@ -10,6 +10,7 @@ import {
   parseSend,
   parseSquareReply,
   parseTopicCreate,
+  parseTopicMigrate,
   parseTurnFailed,
 } from './requests'
 
@@ -19,6 +20,14 @@ const rejects = (parse: () => unknown, field: string) => {
 }
 
 describe('proxy HTTP request bodies', () => {
+  test('a migrate names its owner, and a conversation only when one topic comes back to the proxy', () => {
+    expect(parseTopicMigrate({ to: 'crook', topics: ['1', '2'] })).toEqual({ topics: ['1', '2'], to: 'crook' })
+    expect(parseTopicMigrate({ to: 'proxy', topics: ['1'], conversation: 'c' })).toEqual({ topics: ['1'], to: 'proxy', conversation: 'c' })
+    rejects(() => parseTopicMigrate({ to: 'crook', topics: ['1'], conversation: 'c' }), 'conversation')
+    rejects(() => parseTopicMigrate({ to: 'proxy', topics: ['1', '2'], conversation: 'c' }), 'conversation')
+    rejects(() => parseTopicMigrate({ to: 'proxy', topics: ['1'], conversation: 7 }), 'conversation')
+  })
+
   test('a reply from the MCP parses with its defaults', () => {
     expect(parseSend({ chat_id: '-1001', topic: '42', text: 'hi' })).toEqual({
       chatId: '-1001', topic: '42', text: 'hi', files: [], format: 'plain',
