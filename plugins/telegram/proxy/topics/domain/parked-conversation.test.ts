@@ -35,7 +35,7 @@ test('a chain longer than the cap stops at the cap', () => {
 })
 
 test('the notice names the job by the id claude stop takes', () => {
-  const id = '7efd5994-b9db-4303-b37d-d361f2d3be79'
-  expect(jobIdOf(id)).toBe('7efd5994')
-  expect(parkedNotice(id)).toContain('`claude stop 7efd5994`')
+  const id = 'abcd1234-0000-4000-8000-000000000000'
+  expect(jobIdOf(id)).toBe('abcd1234')
+  expect(parkedNotice(id)).toContain('`claude stop abcd1234`')
 })
