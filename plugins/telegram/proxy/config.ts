@@ -154,6 +154,12 @@ export const HC_SESSION = (process.env.TELEGRAM_HC_SESSION || 'topics').trim()
 export const HC_BIN = process.env.TELEGRAM_HC_BIN ||
   (existsSync(join(homedir(), '.local', 'bin', 'hc')) ? join(homedir(), '.local', 'bin', 'hc') : 'hc')
 export const HC_TOPICS: TopicSelection = topicSelection(process.env.TELEGRAM_TOPICS_HC_TOPICS ?? '', m => log(`TELEGRAM_TOPICS_HC_TOPICS: ${m}`))
+/**
+ * Topics whose sessions something else runs (the Crook backend): the proxy never
+ * spawns, kills, re-adopts or types into them, but still queues their Telegram
+ * messages for their own MCP's /poll and relays their replies.
+ */
+export const EXTERNAL_TOPICS: TopicSelection = topicSelection(process.env.TELEGRAM_TOPICS_EXTERNAL ?? '', m => log(`TELEGRAM_TOPICS_EXTERNAL: ${m}`))
 /** hc sessions topics ran in before HC_SESSION: their copies are found and stopped there, never started. */
 export const HC_PREVIOUS_SESSIONS: readonly string[] = (process.env.TELEGRAM_HC_PREVIOUS_SESSIONS ?? '')
   .split(',')

@@ -21,6 +21,7 @@ const ON_HC_PROXIED = '55555555-5555-4555-8555-555555555555'
 const MOVING = '66666666-6666-4666-8666-666666666666'
 const RELAUNCHED = '67676767-6767-4767-8767-676767676767'
 const ELDER = '68686868-6868-4868-8868-686868686868'
+const OUTSIDE = '69696969-6969-4969-8969-696969696969'
 
 const FAKE_TMUX = `#!/usr/bin/env bash
 live="$HOME/fake/live"; touch "$live"
@@ -323,10 +324,12 @@ beforeAll(async () => {
   writeFileSync(join(home, '.claude', 'projects', 'p', `${MOVING}.jsonl`), '{}\n')
   writeFileSync(join(home, '.claude', 'projects', 'p', `${RELAUNCHED}.jsonl`), '{}\n')
   writeFileSync(join(home, '.claude', 'projects', 'p', `${ELDER}.jsonl`), '{}\n')
+  writeFileSync(join(home, '.claude', 'projects', 'p', `${OUTSIDE}.jsonl`), '{}\n')
   // A topic still running in the hc session topics used before this one
   writeFileSync(join(home, 'fake', 'hc-old.json'), JSON.stringify({ n: 1, terminals: [{ address: 't1', name: 'tg-68', state: 'live', labels: { session: 'claude-elder-68', topic: '68' }, reported: true, status: { state: 'done' }, foreground: { name: 'claude' } }] }))
   // A session still running under tmux for a topic now configured onto hc
-  writeFileSync(join(home, 'fake', 'live'), 'claude-moving-63\nclaude-relaunched-67\n')
+  // claude-outside-69 is run by something other than the proxy (TELEGRAM_TOPICS_EXTERNAL)
+  writeFileSync(join(home, 'fake', 'live'), 'claude-moving-63\nclaude-relaunched-67\nclaude-outside-69\n')
   writeFileSync(join(home, 'fake', 'whisper.bin'), '')
   mkdirSync(join(root, 'keys'), { mode: 0o700 })
   writeFileSync(join(root, 'keys', 'telegram-ask-token'), `${ASK_TOKEN}\n`, { mode: 0o600 })
@@ -351,6 +354,7 @@ beforeAll(async () => {
     '63': { tmux_session: 'claude-moving-63', thread_id: 63, name: 'moving', spawned_at: 1, claude_session_id: MOVING },
     '67': { tmux_session: 'claude-relaunched-67', thread_id: 67, name: 'relaunched', spawned_at: 1, claude_session_id: RELAUNCHED },
     '68': { tmux_session: 'claude-elder-68', thread_id: 68, name: 'elder', spawned_at: 1, claude_session_id: ELDER },
+    '69': { tmux_session: 'claude-outside-69', thread_id: 69, name: 'outside', spawned_at: 1, claude_session_id: OUTSIDE },
   }))
 
   api = Bun.serve({
@@ -439,6 +443,7 @@ beforeAll(async () => {
       HC_SOCKET: join(root, 'hc.sock'),
       TELEGRAM_TOPICS_HC_TOPICS: '61,62,63,64,66,67,68',
       TELEGRAM_HC_PREVIOUS_SESSIONS: 'old',
+      TELEGRAM_TOPICS_EXTERNAL: '69',
       TELEGRAM_OPENCODE_BIN: join(home, '.local', 'bin', 'opencode'),
       TELEGRAM_OPENCODE_PROJECT_DIR: join(root, 'oc-project'),
       LOCALGEN_PORT: String(qwenImage.port),
@@ -557,6 +562,17 @@ describe('the proxy, end to end', () => {
     expect(registry()['71'].archived_at).toBeUndefined()
     expect(await cli('restore', '71')).toEqual(['71 not_archived\n', 0])
   }, 30_000)
+
+  test('a topic run outside the proxy still gets its messages, but is never spawned, stopped or relaunched by it', async () => {
+    send(69, 'hello from outside')
+    const turn = await fetch(`${proxyUrl}/poll?topic=69&ack=`, { signal: AbortSignal.timeout(5_000) }).then(r => r.json())
+    expect(turn.content).toContain('hello from outside')
+    send(69, '/relaunch')
+    await until('the external notice', () => calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 69 && /run by the Crook backend/.test(c.body.text)))
+    await Bun.sleep(500)
+    expect(spawns().some(s => s.session === 'claude-outside-69')).toBeFalse()
+    expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).toContain('claude-outside-69')
+  }, 20_000)
 
   test('a proxied topic whose agent cannot start tries again on the next message, not on a timer', async () => {
     send(53, 'hello?')

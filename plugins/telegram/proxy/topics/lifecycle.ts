@@ -6,6 +6,7 @@ import { spawnSync } from 'child_process'
 import type { ChatPort } from '../chat/domain/chat-port'
 import {
   CAPACITY_HOOK,
+  EXTERNAL_TOPICS,
   
   EFFECTIVE_SETTINGS_DIR,
   FAILOVER_HOOK,
@@ -23,6 +24,7 @@ import {
 } from '../config'
 import { log, reason } from '../log'
 import { RESTORED_NOTICE } from './domain/archive'
+import { EXTERNAL_NOTICE } from './domain/external'
 import { atTurnBoundary } from './domain/claude-update'
 import { liveClaudeSessions } from './claude-sessions'
 import { autoCompactWindow, auxiliaryModelForRoute } from '../routing/domain/model-routing'
@@ -150,6 +152,10 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
   // enqueue prefers a waiter to the queue, so a nudge enqueued right after a
   // bare mux.kill would be handed to the dying process and lost.
   function killSession(st: TopicState, topic: string): boolean {
+    if (EXTERNAL_TOPICS.has(topic)) {
+      log(`topic ${topic}: its session is run outside the proxy; not stopping it`)
+      return false
+    }
     const session = sessionOf(st.agent)
     const killed = !!session && muxes.kill(session)
     apply(topic, st, { type: 'stopped' })
@@ -198,7 +204,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
    */
   function pumpPane(topic: string): void {
     const st = getTopic(topic)
-    if (inboundModeForRoute(currentRoute(st)) !== 'pane') return
+    if (EXTERNAL_TOPICS.has(topic) || inboundModeForRoute(currentRoute(st)) !== 'pane') return
     requeueInflight(st)
 
     ensureSession(topic, 'timer')
@@ -306,6 +312,7 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     if (harnessLocked(topic)) return 'skipped'
     // The square hosts conversations, not a Claude of its own.
     if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return 'skipped'
+    if (EXTERNAL_TOPICS.has(topic)) return 'skipped'
     const st = getTopic(topic)
     // An archived topic stays down on a timer; anything that wakes it brings it back with its conversation.
     if (st.archivedAt) {
@@ -419,6 +426,10 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
   async function relaunch(chatId: string, topic: string, fromId: string): Promise<void> {
     if (SQUARE_TOPIC && topic === SQUARE_TOPIC) {
       await sayIn(chatId, topic, '♻️ the square has no agent of its own; run /relaunch in a topic.')
+      return
+    }
+    if (EXTERNAL_TOPICS.has(topic)) {
+      await sayIn(chatId, topic, EXTERNAL_NOTICE)
       return
     }
     const since = Date.now() - (lastRelaunch.get(topic) ?? 0)
