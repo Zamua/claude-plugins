@@ -29,6 +29,7 @@ function setup(over: Partial<ControlPorts> = {}) {
     relaunch: async topic => void relaunched.push(topic),
     interrupt: topic => topic === '42',
     say: async (_topic, text) => void said.push(text),
+    echo: async (_topic, text) => void said.push(`(silent) ${text}`),
     createTopic: async name => (name === 'boom' ? Promise.reject(new Error('Bad Request')) : '501'),
     renameTopic: async (topic, name) => void said.push(`renamed ${topic} to ${name}`),
     setPrefs: (topic, prefs) => void said.push(`prefs ${topic} ${JSON.stringify(prefs)}`),
@@ -51,7 +52,7 @@ describe('route', () => {
     const result = await control.route('42', { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' })
     expect(result).toEqual({ ok: { route: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' }, state: 'queued' } })
     expect(requested).toHaveLength(1)
-    expect(said).toEqual(['You (app): /model anthropic claude-opus-5-5 high', 'Queued claude-opus-5-5.'])
+    expect(said).toEqual(['(silent) You (app): /model anthropic claude-opus-5-5 high', 'Queued claude-opus-5-5.'])
   })
 
   test('a bad body, the square or a locked topic is refused before anything is requested or said', async () => {
@@ -74,7 +75,7 @@ describe('route', () => {
     expect(await control.route('42', { provider: 'codex', model: 'gpt-5.6-sol' }, 'loopback')).toMatchObject({ refused: { status: 403, code: 'needs_operator' } })
     expect([requested, said]).toEqual([[], []])
     expect(await control.route('42', { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' }, 'loopback')).toMatchObject({ ok: { state: 'queued' } })
-    expect(said[0]).toBe('Crook backend: /model anthropic claude-opus-5-5 high')
+    expect(said[0]).toBe('(silent) Crook backend: /model anthropic claude-opus-5-5 high')
     expect(await control.route('42', { provider: 'codex', model: 'gpt-5.6-sol' })).toMatchObject({ ok: { state: 'queued' } })
   })
 
@@ -93,7 +94,7 @@ describe('commands', () => {
     expect(await control.command('agy', { name: 'relaunch' })).toMatchObject({ ok: { name: 'relaunch' } })
     expect(await control.command('square', { name: 'relaunch' })).toMatchObject({ refused: { status: 409, code: 'no_agent' } })
     expect(relaunched).toEqual(['42', 'agy'])
-    expect(said).toEqual(['You (app): /relaunch', 'You (app): /relaunch'])
+    expect(said).toEqual(['(silent) You (app): /relaunch', '(silent) You (app): /relaunch'])
   })
 
   test('interrupt presses stop on a running agent, and says so only when it did', async () => {
@@ -101,7 +102,7 @@ describe('commands', () => {
     expect(await control.command('42', { name: 'interrupt' })).toMatchObject({ ok: { name: 'interrupt' } })
     expect(await control.command('7', { name: 'interrupt' })).toMatchObject({ refused: { status: 409, code: 'not_running' } })
     expect(await control.command('agy', { name: 'interrupt' })).toMatchObject({ refused: { status: 409, code: 'no_interrupt' } })
-    expect(said).toEqual(['You (app): interrupt'])
+    expect(said).toEqual(['(silent) You (app): interrupt'])
   })
 
   test('usage refreshes and answers with the text Telegram shows; an unknown name is 404', async () => {

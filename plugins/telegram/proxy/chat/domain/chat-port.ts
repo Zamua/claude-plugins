@@ -41,6 +41,8 @@ export type OutgoingText = {
   forceReply?: { placeholder: string }
   /** Buttons under the message; on a split text, under its last part. */
   actions?: Actions
+  /** Delivered without a notification, for an echo of what the reader just did. */
+  silent?: boolean
 }
 
 export type OutgoingFile = {
