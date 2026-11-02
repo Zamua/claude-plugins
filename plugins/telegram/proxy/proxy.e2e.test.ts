@@ -768,6 +768,38 @@ describe('the proxy, end to end', () => {
       calls.find(c => c.method === 'sendMessage' && c.body.message_thread_id === 42 && /^Provider usage/.test(c.body.text)))
   }, 40_000)
 
+  test('the loopback API relaunches at a turn boundary and changes routes, never for a topic another backend runs', async () => {
+    send(72, 'hello')
+    const first = await until('topic 72 to spawn', () => spawns().find(s => s.session === 'claude-72'))
+    const post = (path: string, body: unknown) => fetch(`${proxyUrl}${path}`, { method: 'POST', body: JSON.stringify(body) })
+
+    const relaunch = await post('/topic/relaunch', { topics: ['72', '69', '9999'] }).then(r => r.json())
+    expect(relaunch.results).toEqual([
+      { topic: '72', outcome: 'queued' },
+      { topic: '69', outcome: 'refused', reason: 'run by the Crook backend' },
+      { topic: '9999', outcome: 'refused', reason: 'unknown topic' },
+    ])
+    expect((await fetch(`${proxyUrl}/poll?topic=72`).then(r => r.json())).content).toContain('hello')
+    mkdirSync(join(home, '.claude', 'sessions'), { recursive: true })
+    writeFileSync(join(home, '.claude', 'sessions', `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: first.env.TG_CLAUDE_SESSION_ID, status: 'idle' }))
+    const relaunched = await until('topic 72 relaunched at its turn boundary', () => spawns().filter(s => s.session === 'claude-72')[1], 15_000)
+    expect([relaunched.env.TG_RESUME, relaunched.env.TG_CLAUDE_SESSION_ID]).toEqual(['1', first.env.TG_CLAUDE_SESSION_ID])
+
+    const routed = await post('/topic/route', { topic: '72', provider: 'anthropic', model: 'sonnet', effort: 'medium' })
+    const answer = await routed.json()
+    expect([routed.status, answer.route]).toEqual([200, { provider: 'anthropic', model: 'sonnet', effort: 'medium' }])
+    await until('the route echo', () => said(72, /^Crook backend: \/model anthropic sonnet medium$/))
+    if (answer.state === 'queued') await fetch(`${proxyUrl}/poll?topic=72`)
+    const switched = await until('topic 72 restarted on Sonnet', () =>
+      spawns().filter(s => s.session === 'claude-72').find(s => s.env.TG_MODEL === 'sonnet'))
+    expect([switched.env.TG_EFFORT, switched.env.TG_CLAUDE_SESSION_ID]).toEqual(['medium', first.env.TG_CLAUDE_SESSION_ID])
+
+    const outside = await post('/topic/route', { topic: '69', provider: 'anthropic', model: 'sonnet' })
+    expect([outside.status, (await outside.json()).error.code]).toEqual([409, 'external_lifecycle'])
+    const malformed = await post('/topic/route', { topic: 'nope', provider: 'anthropic', model: 'sonnet' })
+    expect(malformed.status).toBe(400)
+  }, 40_000)
+
   test('usage goes back to the providers, dismiss clears the buttons, and an expired reset picker falls back to its switch-back', async () => {
     const edits = () => calls.filter(c => c.method === 'editMessageText')
     const answered = (pattern: RegExp) => () => calls.find(c => c.method === 'answerCallbackQuery' && pattern.test(c.body.text ?? ''))

@@ -62,6 +62,22 @@ describe('route', () => {
     expect([requested, said]).toEqual([[], []])
   })
 
+  test('a loopback change is echoed as the Crook backend and never picks a route that skips permission checks', async () => {
+    const codex = [{ id: 'gpt-5.6-sol', label: 'Sol', efforts: ['medium' as const], defaultEffort: 'medium' as const }]
+    const { control, said, requested } = setup({
+      catalog: () => ({
+        anthropic: [{ id: 'claude-opus-5-5', label: 'Opus 5.5', efforts: ['high', 'xhigh'], defaultEffort: 'xhigh', supportsUltracode: true }],
+        codex,
+        'opencode-go': [],
+      }),
+    })
+    expect(await control.route('42', { provider: 'codex', model: 'gpt-5.6-sol' }, 'loopback')).toMatchObject({ refused: { status: 403, code: 'needs_operator' } })
+    expect([requested, said]).toEqual([[], []])
+    expect(await control.route('42', { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' }, 'loopback')).toMatchObject({ ok: { state: 'queued' } })
+    expect(said[0]).toBe('Crook backend: /model anthropic claude-opus-5-5 high')
+    expect(await control.route('42', { provider: 'codex', model: 'gpt-5.6-sol' })).toMatchObject({ ok: { state: 'queued' } })
+  })
+
   test('routing\'s refusals keep their meaning: too soon is 429, a provider at its limit 409', async () => {
     for (const [refused, status, code] of [['too-soon', 429, 'too_soon'], ['provider-exhausted', 409, 'provider_exhausted']] as const) {
       const { control } = setup({ requestRoute: () => ({ refused }) })

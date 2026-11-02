@@ -26,3 +26,16 @@ export function relaunchTarget(topic: string, root: string, facts: (topic: strin
   if (!own.running) return { topic, outcome: 'no_agent' }
   return { topic, outcome: own.idle ? 'applied' : 'queued' }
 }
+
+/** One target of a loopback request: any known topic, now or at its turn's end, except one another backend runs. */
+export function loopbackTarget(
+  topic: string,
+  facts: (topic: string) => TargetFacts | undefined,
+  external: (topic: string) => boolean,
+): TargetResult {
+  const own = facts(topic)
+  if (!own) return { topic, outcome: 'refused', reason: 'unknown topic' }
+  if (external(topic)) return { topic, outcome: 'refused', reason: 'run by the Crook backend' }
+  if (!own.running) return { topic, outcome: 'no_agent' }
+  return { topic, outcome: own.idle ? 'applied' : 'queued' }
+}

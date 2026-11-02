@@ -140,6 +140,12 @@ export function parseTopicRename(body: unknown): { topic: string; name: string }
   return { topic: topicKey(b), name }
 }
 
+/** A loopback route change: the topic, with the rest of the body read as the app's route choice. */
+export function parseTopicRoute(body: unknown): { topic: string; choice: Record<string, unknown> } {
+  const b = object(body)
+  return { topic: topicKey(b), choice: b }
+}
+
 export function parseCancelReminder(body: unknown): { topic: string; id: string } {
   const b = object(body)
   return { topic: topicKey(b), id: text(b, 'id') }
