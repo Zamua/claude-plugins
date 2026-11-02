@@ -72,7 +72,9 @@ home = os.environ['HOME']; fake = os.path.join(home, 'fake'); st = os.path.join(
 state = json.load(open(st)) if os.path.exists(st) else {'panes': [], 'n': 0}
 a = sys.argv[1:]
 open(os.path.join(fake, 'herdr.calls'), 'a').write(' '.join(a) + '\\n')
-def save(): json.dump(state, open(st, 'w'))
+def save():
+    with open(st + '.tmp', 'w') as f: json.dump(state, f)
+    os.replace(st + '.tmp', st)
 cmd = ' '.join(a[:2])
 if cmd == 'pane list':
     print(dumps({'result': {'panes': [{'label': p['label'], 'pane_id': p['id'], 'agent_status': 'idle'} for p in state['panes']]}}))
@@ -127,7 +129,9 @@ import json, os, re, subprocess, sys
 home = os.environ['HOME']; fake = os.path.join(home, 'fake'); session = os.environ.get('HC_SESSION') or 'topics'
 st = os.path.join(fake, 'hc.json' if session == 'topics' else 'hc-%s.json' % session)
 state = json.load(open(st)) if os.path.exists(st) else {'terminals': [], 'n': 0}
-def save(): json.dump(state, open(st, 'w'))
+def save():
+    with open(st + '.tmp', 'w') as f: json.dump(state, f)
+    os.replace(st + '.tmp', st)
 def find(ref): return next((t for t in state['terminals'] if ref in (t['address'], t['name'])), None)
 a = sys.argv[1:]
 open(os.path.join(fake, 'hc.calls'), 'a').write(' '.join(a) + '\\n')
@@ -154,7 +158,6 @@ elif a[0] == 'run':
     env = subprocess.run(['bash', '-c', 'eval "$(grep ^export "$1")"; env', '_', script], env={'HOME': home}, capture_output=True, text=True).stdout
     os.remove(script)
     keep = [l for l in env.splitlines() if l.startswith(('TG_', 'TELEGRAM_'))]
-    open(os.path.join(fake, 'spawns'), 'a').write('session=' + labels['session'] + '\\n' + '\\n'.join(keep + ['TG_MUX=hc']) + '\\n\\n')
     sid = re.search(r'^TG_CLAUDE_SESSION_ID=(.*)$', env, re.M).group(1)
     if not re.search(r'^TG_RESUME=1$', env, re.M):
         open(os.path.join(home, '.claude', 'projects', 'p', sid + '.jsonl'), 'w').write('{}\\n')
@@ -162,6 +165,7 @@ elif a[0] == 'run':
     state['terminals'].append({'address': 't%d' % state['n'], 'name': name, 'state': 'live', 'labels': labels,
                                'reported': True, 'status': {'state': 'done'}, 'foreground': {'name': 'claude'}})
     save()
+    open(os.path.join(fake, 'spawns'), 'a').write('session=' + labels['session'] + '\\n' + '\\n'.join(keep + ['TG_MUX=hc']) + '\\n\\n')
     print(json.dumps({'address': 't%d' % state['n'], 'state': 'live'}))
 elif a[0] == 'connect':
     for line in sys.stdin:
@@ -1180,7 +1184,7 @@ describe('the proxy, end to end', () => {
     expect(spawned.env.TG_MUX).toBe('hc')
     expect(spawned.env.TELEGRAM_TOPIC_ID).toBe('61')
     expect(hcTerminals().find(t => t.name === 'tg-61')?.labels).toEqual({ session: 'claude-61', topic: '61', 'herdr.space': 'topics', 'herdr.tab': 'tg-61' })
-    expect(registry()['61'].tmux_session).toBe('claude-61')
+    await until('topic 61 in the registry', () => registry()['61']?.tmux_session === 'claude-61')
     const turn = await fetch(`${proxyUrl}/poll?topic=61`).then(r => r.json())
     expect(turn.content).toContain('hello hc')
   }, 20_000)
