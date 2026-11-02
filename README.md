@@ -65,7 +65,9 @@ symlinked folder. Run it again after a pull.
   stacks from one GitHub query a minute while it shows; finished workstreams fold
   into Done, closed PRs drop off, and headers stay pinned while it scrolls. Reviews:
   the reviews project's PRs the same way, a section per review session. Asks: every
-  open ask by project, due soonest first, each opening to its detail.
+  open ask by project, due soonest first; a row opens a dialog whose options type
+  `[decision] <project>/<ask id>: <option>` into the root once its prompt is empty,
+  queued until then and logged to the root's `decisions.jsonl`.
 - **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the
   session tree as its sidebar and the PRs pane beside the terminals, toggled with
   Cmd+Shift+R once `keys.json` binds it.

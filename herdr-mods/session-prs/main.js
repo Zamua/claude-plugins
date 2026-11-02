@@ -2,14 +2,15 @@
 // projects in their `order`, a section per `group` inside each (ungrouped PRs first), workstreams
 // whose PRs are all merged folded into Done, and stacks bracketed by their base branches or an
 // entry's `stack_on`. PR Reviews: the reviews project's PRs the same way, a section per review
-// session, marked by the person's own review. Asks: every open ask, by project, due soonest first.
+// session, marked by the person's own review. Asks: every open ask, by project, due soonest first;
+// a row opens a dialog whose options send `[decision] <project>/<ask id>: <option>` to the root.
 // props: { folder } (the projects folder), { reviews } (the project whose sessions review other
 // people's PRs, default "reviews") and { block }, the layout block that shows it, left alone while
 // hidden.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, v_virtual_list, Scrollbar } from "gpui-base";
-import { exec, theme, props, run, layout, watchFolder, closeOverlay, settings, terminals } from "herdr";
+import { v_flex, h_flex, v_virtual_list, Scrollbar, InputState, Input } from "gpui-base";
+import { exec, hc, theme, props, run, layout, watchFolder, openOverlay, closeOverlay, notify, settings, terminals, shared, setShared, readTextFile, writeTextFile } from "herdr";
 import { folderOf, readFiles } from "./files.js";
 
 const REFRESH_MS = 60000;
@@ -17,6 +18,11 @@ const FIELDS = "title url state isDraft reviewDecision mergeable baseRefName hea
   "latestOpinionatedReviews(first:30){nodes{state author{login}}} latestReviews(first:30){nodes{state author{login}}} " +
   "commits(last:1){nodes{commit{statusCheckRollup{state}}}} reviewThreads(first:100){nodes{isResolved}}";
 const TABS = [["prs", "PRs"], ["reviews", "PR Reviews"], ["asks", "Asks"]];
+// Decisions waiting for the root to be free, and the asks already answered from here, kept in
+// shared state so the pane and its dialog see the same
+const QUEUE = "session-prs.queue";
+const SENT = "session-prs.sent";
+const URL = /https?:\/\/[^\s)>"]+/g;
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -80,6 +86,49 @@ function openAsks(files) {
   return [...groups.values()].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
 }
 
+const optionText = (v) => (typeof v === "string" ? v : v?.label ?? v?.text ?? v?.option ?? JSON.stringify(v));
+
+function rootTerminal() {
+  return terminals().filter((t) => t.state === "live" && t.labels?.["tree.role"] === "root")
+    .sort((a, b) => (b.created_ms ?? 0) - (a.created_ms ?? 0))[0] ?? null;
+}
+
+// The root takes a decision only while it waits for input with nothing typed, so a draft of the
+// person's is never added to or sent.
+async function rootReady(t) {
+  if (!t || t.status === "working" || t.status === "blocked") return false;
+  const r = await hc(["read", t.address, "--json"]);
+  const lines = JSON.parse(r.stdout || "{}").text?.split("\n") ?? [];
+  const rules = lines.flatMap((l, i) => (l.startsWith("─".repeat(20)) ? [i] : []));
+  if (rules.length < 2) return false;
+  const typed = lines.slice(rules.at(-2) + 1, rules.at(-1)).map((l) => l.split("│")[0].replace(/\u00a0/g, " ").replace(/^❯/, "").trim());
+  return typed.every((l) => l === "");
+}
+
+async function logDecision(folder, d, outcome) {
+  const root = rootTerminal()?.labels?.["tree.project"] ?? "root";
+  const path = `${folder}/${root}/decisions.jsonl`;
+  const line = `${JSON.stringify({ at: new Date().toISOString(), project: d.project, ask: d.id, option: d.option, outcome })}\n`;
+  for (let tries = 0; tries < 3; tries++) {
+    const old = await readTextFile(path);
+    try {
+      return await writeTextFile(path, (old ?? "") + line, old);
+    } catch {
+      // Another write landed between the read and this one; read again
+    }
+  }
+}
+
+async function deliver(folder, d) {
+  const t = rootTerminal();
+  if (!(await rootReady(t))) return false;
+  await hc(["send", t.address, d.line]);
+  setShared(SENT, { ...(shared(SENT) ?? {}), [d.key]: Date.now() });
+  await logDecision(folder, d, "sent");
+  notify({ title: "Decision sent to root", body: d.line, level: "success", timeout: 4000 });
+  return true;
+}
+
 const stackedOn = (on) => (typeof on === "number" ? on : Number(/#(\d+)$/.exec(String(on ?? ""))?.[1]) || null);
 
 // Every PR row is this tall, so one row's rail meets the next row's
@@ -126,6 +175,7 @@ function dueLabel(due) {
 export default class SessionPrs extends View {
   init(_props, cx) {
     this.folder = folderOf(props());
+    if (props()?.mode === "ask") return this.initAsk(cx);
     this.reviewsProject = props()?.reviews ?? "reviews";
     this.files = new Map();
     this.live = new Map(JSON.parse(localStorage.getItem("live") ?? "[]"));
@@ -133,7 +183,6 @@ export default class SessionPrs extends View {
     this.checked = new Set();
     this.doneOpen = new Set(JSON.parse(localStorage.getItem("doneOpen") ?? "[]"));
     this.tab = localStorage.getItem("tab") ?? "prs";
-    this.expanded = new Set();
     cx.spawn(async (cx) => {
       this.files = await readFiles(this.folder);
       cx.notify();
@@ -155,6 +204,96 @@ export default class SessionPrs extends View {
     cx.timer.every(REFRESH_MS, (cx) => cx.spawn(async (cx) => {
       await this.refresh(cx);
     }));
+    cx.timer.every(3000, (cx) => cx.spawn(async () => {
+      await this.drain();
+    }));
+  }
+
+  // Queued decisions go out one at a time, oldest first, whenever the root is free.
+  async drain() {
+    const queue = shared(QUEUE) ?? [];
+    if (!queue.length || this.draining) return;
+    this.draining = true;
+    try {
+      if (await deliver(this.folder, queue[0])) setShared(QUEUE, (shared(QUEUE) ?? []).filter((d) => d.key !== queue[0].key));
+    } finally {
+      this.draining = false;
+    }
+  }
+
+  initAsk(cx) {
+    this.handle = cx.focus_handle();
+    this.handle.focus();
+    this.other = InputState.new({ placeholder: "Your answer" });
+    this.other.on("submit", (_e, cx) => this.decide(this.other.value(), cx));
+  }
+
+  decide(option, cx) {
+    const a = props().ask;
+    const text = String(option ?? "").trim();
+    if (!text) return;
+    const d = { key: a.key, project: a.project, id: a.id ?? a.key, option: text, line: `[decision] ${a.project}/${a.id ?? a.key}: ${text}` };
+    closeOverlay(props().overlay);
+    cx.spawn(async () => {
+      if (await deliver(this.folder, d)) return;
+      setShared(QUEUE, [...(shared(QUEUE) ?? []).filter((q) => q.key !== d.key), d]);
+      setShared(SENT, { ...(shared(SENT) ?? {}), [d.key]: Date.now() });
+      await logDecision(this.folder, d, "queued");
+      notify({ title: "Decision queued", body: "The root is busy or has a draft typed; it goes in once the prompt is free.", level: "info", timeout: 5000 });
+    });
+  }
+
+  askDialog(t) {
+    const a = props().ask;
+    const [due] = dueLabel(a.due);
+    const rec = String(a.recommend ?? a.recommendation ?? "").trim();
+    const options = (Array.isArray(a.options) ? a.options : []).map(optionText);
+    const isRec = (o) => rec && (o === rec || rec.startsWith(o) || o.startsWith(rec));
+    const links = [...new Set(`${a.ask ?? ""} ${a.detail ?? ""} ${a.url ?? ""} ${(a.links ?? []).join(" ")}`.match(URL) ?? [])];
+    const button = (id, label, primary, action) => h_flex().id(id).h(30).px(12).items_center().rounded(7).cursor_pointer()
+      .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised)
+      .text_color(primary ? t.solid_foreground : t.foreground).hover((el) => el.opacity(0.88)).on_click(action).child(label);
+    return v_flex().id("ask-dialog").track_focus(this.handle)
+      .on_key_down((e, cx) => {
+        if (e.key === "escape") {
+          closeOverlay(props().overlay);
+          cx.stop_propagation();
+        }
+      })
+      .w_full().p(18).gap(12).bg(t.popover).text_color(t.foreground).text_size(13)
+      .child(h_flex().items_start().gap(10)
+        .child(div().flex_1().min_w(0).text_size(15).font_semibold().child(a.ask ?? a.id ?? ""))
+        .child(div().flex_none().text_size(11).text_color(t.dim).child("Esc")))
+      .child(div().text_size(11.5).text_color(t.dim).child([a.project, a.session, due && `due ${due}`, a.created && `asked ${age(Date.parse(a.created))}`].filter(Boolean).join(" · ")))
+      .when(Boolean(a.detail), (el) => el.child(div().id("ask-detail").max_h(260).overflow_y_scrollbar().text_size(12.5).line_height("19px").text_color(t.muted).child(a.detail)))
+      .when(links.length > 0, (el) => el.child(v_flex().gap(2).children(links.map((u, k) => div().id(`ask-link-${k}`).truncate().text_size(12)
+        .text_color(t.accent).cursor_pointer().hover((el) => el.underline()).on_click(() => exec("open", [u])).child(u)))))
+      .child(v_flex().gap(6)
+        .children(options.map((o, k) => h_flex().id(`ask-opt-${k}`).min_h(32).px(12).py(6).gap(8).items_center().rounded(7).cursor_pointer()
+          .border_1().border_color(isRec(o) ? t.accent : t.input).bg(t.raised).hover((el) => el.bg(t.hover))
+          .on_click((_e, cx) => this.decide(o, cx))
+          .child(div().flex_1().min_w(0).child(o))
+          .when(isRec(o), (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child("Recommended")))))
+        .when(Boolean(rec) && !options.some(isRec), (el) => el.child(div().text_size(12).text_color(t.muted).child(`Recommendation: ${rec}`)))
+        .child(this.showOther
+          ? h_flex().gap(8).items_center()
+            .child(Input.new(this.other).flex_1().h(32).px(10).rounded(7).border_1().border_color(t.accent).bg(t.background).text_size(12.5).text_color(t.foreground))
+            .child(button("ask-other-send", "Send", true, (_e, cx) => this.decide(this.other.value(), cx)))
+          : h_flex().id("ask-other").min_h(32).px(12).items_center().rounded(7).cursor_pointer().border_1().border_color(t.input)
+            .text_color(t.muted).hover((el) => el.bg(t.hover))
+            .on_click((_e, cx) => {
+              this.showOther = true;
+              this.other.focus();
+              cx.notify();
+            })
+            .child("Other…")))
+      .child(h_flex().gap(8).pt(4)
+        .child(button("ask-open", "Open session", false, () => {
+          closeOverlay(props().overlay);
+          this.focusSession(a.project, a.session);
+        }))
+        .child(div().flex_1())
+        .child(button("ask-cancel", "Cancel", false, () => closeOverlay(props().overlay))));
   }
 
   hidden() {
@@ -390,42 +529,25 @@ export default class SessionPrs extends View {
 
   askList(t, groups) {
     if (!groups.length) return div().px(12).py(8).text_color(t.dim).child("Nothing waits on you.");
-    const urls = (a) => [...new Set(`${a.ask ?? ""} ${a.detail ?? ""} ${a.url ?? ""} ${(a.links ?? []).join(" ")}`.match(/https?:\/\/[^\s)>"]+/g) ?? [])];
-    const text = (v) => (typeof v === "string" ? v : v?.label ?? v?.text ?? v?.option ?? JSON.stringify(v));
+    const sent = shared(SENT) ?? {};
     const rows = groups.flatMap((g, i) => [
       h_flex().h(ROW).px(12).mt(i ? 10 : 2).items_center().border_b(1).border_color(t.border)
         .child(div().font_bold().text_color(t.foreground).child(g.title)),
-      ...g.asks.flatMap((a) => {
+      ...g.asks.map((a) => {
         const [due, tone] = dueLabel(a.due);
-        const open = this.expanded.has(a.key);
-        const detail = v_flex().pl(108).pr(12).pb(6).gap(3).text_size(11.5).text_color(t.muted)
-          .when(Boolean(a.detail), (el) => el.child(div().child(a.detail)))
-          .when(Array.isArray(a.options) && a.options.length > 0, (el) => el.children(a.options.map((o) => div().child(`• ${text(o)}`))))
-          .when(Boolean(a.recommend ?? a.recommendation), (el) => el.child(div().text_color(t.foreground).child(`Recommend: ${text(a.recommend ?? a.recommendation)}`)))
-          .children(urls(a).map((u, k) => div().id(`ask-u-${a.key}-${k}`).truncate().text_color(t.accent).cursor_pointer()
-            .hover((el) => el.underline()).on_click((_e, cx) => {
-              cx.stop_propagation();
-              exec("open", [u]);
-            }).child(u)));
-        return [
-          h_flex().id(`ask-${a.key}`).h(ROW).px(12).gap(8).items_center().whitespace_nowrap().rounded(5).cursor_pointer()
-            .hover((el) => el.bg(t.hover))
+        const isSent = Boolean(sent[a.key]);
+        return h_flex().id(`ask-${a.key}`).h(ROW).px(12).gap(8).items_center().whitespace_nowrap().rounded(5).cursor_pointer()
+          .hover((el) => el.bg(t.hover))
+          .on_click(() => openOverlay({ mod: "session-prs", kind: "dialog", width: 640, props: { mode: "ask", ask: a, folder: props()?.folder } }))
+          .child(div().w(70).flex_none().text_color(isSent ? t.dim : tone === "late" ? t.blocked : tone === "soon" ? t.ansi3 : t.dim).child(isSent ? "sent" : due))
+          .child(div().flex_1().min_w(0).truncate().text_color(isSent ? t.dim : t.foreground).child(a.ask ?? a.id ?? ""))
+          .child(div().id(`ask-s-${a.key}`).w(96).flex_none().truncate().text_color(t.dim).cursor_pointer()
+            .hover((el) => el.text_color(t.foreground))
             .on_click((_e, cx) => {
-              open ? this.expanded.delete(a.key) : this.expanded.add(a.key);
-              cx.notify();
+              cx.stop_propagation();
+              this.focusSession(a.project, a.session);
             })
-            .child(div().w(10).flex_none().text_color(t.dim).child(open ? "▾" : "▸"))
-            .child(div().w(70).flex_none().text_color(tone === "late" ? t.blocked : tone === "soon" ? t.ansi3 : t.dim).child(due))
-            .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(a.ask ?? a.id ?? ""))
-            .child(div().id(`ask-s-${a.key}`).w(96).flex_none().truncate().text_color(t.dim).cursor_pointer()
-              .hover((el) => el.text_color(t.foreground))
-              .on_click((_e, cx) => {
-                cx.stop_propagation();
-                this.focusSession(a.project, a.session);
-              })
-              .child(a.session)),
-          ...(open ? [detail] : []),
-        ];
+            .child(a.session));
       }),
     ]);
     return v_flex().id("ask-list").flex_1().min_h(0).py(4).overflow_y_scrollbar().children(rows);
@@ -433,6 +555,7 @@ export default class SessionPrs extends View {
 
   render() {
     const t = theme();
+    if (props()?.mode === "ask") return this.askDialog(t);
     const all = projects(this.files);
     const asks = openAsks(this.files);
     const count = asks.reduce((n, g) => n + g.asks.length, 0);
