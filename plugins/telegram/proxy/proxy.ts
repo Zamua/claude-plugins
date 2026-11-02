@@ -327,7 +327,7 @@ const ask = createAsk({
   log,
 })
 
-const inbound = createTelegramInbound(bot, String(GROUP_CHAT_ID), ADMIN_USER_ID)
+const inbound = createTelegramInbound(bot, String(GROUP_CHAT_ID), ADMIN_USER_ID, log)
 inbound.listen(createInboundRouter({
   chat,
   harnesses: HARNESSES,
