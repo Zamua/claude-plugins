@@ -86,6 +86,7 @@ export default class SessionPrs extends View {
     this.live = new Map(JSON.parse(localStorage.getItem("live") ?? "[]"));
     this.viewer = localStorage.getItem("viewer");
     this.checked = new Set();
+    this.doneOpen = new Set(JSON.parse(localStorage.getItem("doneOpen") ?? "[]"));
     cx.spawn(async (cx) => {
       this.files = await readFiles(this.folder);
       cx.notify();
@@ -114,12 +115,12 @@ export default class SessionPrs extends View {
     return Boolean(block && find(layout(), block)?.hidden);
   }
 
-  // One GraphQL call for every PR that can still change; merged and closed ones are asked once
-  // per pane start. `onlyNew`: just the PRs not asked yet, for a state file that gained one.
+  // One GraphQL call for every PR that can still change; merged ones are asked once per pane start,
+  // closed ones every time, since one may be reopened. `onlyNew`: just the PRs not asked yet, for a state file that gained one.
   async refresh(cx, all = false, onlyNew = false) {
     if (this.busy || (this.hidden() && !all)) return;
     const prs = projects(this.files).flatMap((p) => p.prs)
-      .filter((p) => (onlyNew ? !this.checked.has(p.id) : all || !this.checked.has(p.id) || !isFinal(this.live.get(p.id))));
+      .filter((p) => (onlyNew ? !this.checked.has(p.id) : all || !this.checked.has(p.id) || !isMerged(this.live.get(p.id))));
     if (!prs.length) return;
     this.busy = true;
     cx.notify();
@@ -219,7 +220,11 @@ export default class SessionPrs extends View {
     const who = (author) => firstName(author).toLowerCase();
     // One flat list of same-height rows, so the visible range says which headers to pin
     const items = [];
-    list.forEach((proj, i) => {
+    // A PR closed without merging is off the board until it is reopened
+    const shown = list
+      .map((proj) => ({ ...proj, prs: proj.prs.filter((p) => this.live.get(p.id)?.state !== "CLOSED") }))
+      .filter((proj) => proj.prs.length);
+    shown.forEach((proj, i) => {
       if (i) items.push({ kind: "gap" });
       const project = items.length;
       items.push({ kind: "project", title: proj.title, project });
@@ -230,24 +235,42 @@ export default class SessionPrs extends View {
         if (!g) (title ? groups.push((g = { title, prs: [] })) : groups.unshift((g = { title, prs: [] })));
         g.prs.push(p);
       }
-      groups.forEach((g, j) => {
-        if (j && g.title) items.push({ kind: "gap", project });
+      const emit = (g, gap, done) => {
+        if (gap && g.title) items.push({ kind: "gap", project, done });
         const group = g.title ? items.length : null;
-        if (g.title) items.push({ kind: "group", title: g.title, project, group });
-        for (const n of this.runs(g.prs, heads)) items.push({ kind: "pr", n, project, group });
-      });
+        if (g.title) items.push({ kind: "group", title: g.title, project, group, done });
+        for (const n of this.runs(g.prs, heads)) items.push({ kind: "pr", n, project, group, done });
+      };
+      // A workstream whose PRs are all merged waits, folded, in Done at the project's foot
+      const finished = (g) => Boolean(g.title) && g.prs.every((p) => isMerged(this.live.get(p.id)));
+      groups.filter((g) => !finished(g)).forEach((g, j) => emit(g, j > 0));
+      const done = groups.filter(finished);
+      if (!done.length) return;
+      items.push({ kind: "gap", project });
+      const at = items.length;
+      const open = this.doneOpen.has(proj.name);
+      items.push({ kind: "done", title: `Done · ${done.length} workstream${done.length === 1 ? "" : "s"}`, name: proj.name, open, project, done: at });
+      if (open) done.forEach((g, j) => emit(g, j > 0, at));
     });
     const header = (item) => item.kind === "project"
       ? h_flex().h(ROW).px(12).items_center().border_b(1).border_color(t.border).bg(t.surface)
         .child(div().font_bold().text_color(t.foreground).child(item.title))
-      : h_flex().h(ROW).px(12).items_center().whitespace_nowrap().bg(t.surface)
-        .child(div().font_semibold().text_color(t.foreground).child(item.title));
+      : item.kind === "done"
+        ? h_flex().h(ROW).px(12).gap(6).items_center().whitespace_nowrap().bg(t.surface).cursor_pointer().text_color(t.dim)
+          .child(div().w(10).child(item.open ? "▾" : "▸")).child(div().child(item.title))
+        : h_flex().h(ROW).px(12).items_center().whitespace_nowrap().bg(t.surface)
+          .child(div().font_semibold().text_color(t.foreground).child(item.title));
+    const toggleDone = (name, cx) => {
+      this.doneOpen.has(name) ? this.doneOpen.delete(name) : this.doneOpen.add(name);
+      localStorage.setItem("doneOpen", JSON.stringify([...this.doneOpen]));
+      cx.notify();
+    };
     const draw = (item) => (item.kind === "pr" ? this.row(t, item.n, heads, who) : item.kind === "gap" ? div().h(ROW) : header(item));
-    const keyOf = (k) => (items[k]?.kind === "pr" ? items[k].n.p.id : `row-${k}`);
+    const keyOf = (k) => (items[k]?.kind === "pr" ? items[k].n.p.id : items[k]?.kind === "done" ? `done:${items[k].name}` : `row-${k}`);
     const at = this.top ?? 0;
     const top = items[at];
     const pinned = top?.project !== undefined && at > top.project
-      ? [items[top.project], ...(top.group != null && at >= top.group ? [items[top.group]] : [])]
+      ? [items[top.project], ...(top.done != null && at >= top.done ? [items[top.done]] : []), ...(top.group != null && at >= top.group ? [items[top.group]] : [])]
       : [];
     const close = () => {
       const block = props()?.block;
@@ -272,11 +295,13 @@ export default class SessionPrs extends View {
           .child(v_virtual_list("pr-list", items.length, ROW, keyOf, (range) => {
             this.top = range.start;
             return items.slice(range.start, range.end).map(draw);
-          }).size_full().on_item_click((key) => {
+          }).size_full().on_item_click((key, cx) => {
+            if (key.startsWith("done:")) return toggleDone(key.slice(5), cx);
             const p = items.find((item) => item.kind === "pr" && item.n.p.id === key)?.n.p;
             if (p) exec("open", [this.live.get(p.id)?.url ?? `https://github.com/${p.owner}/${p.repo}/pull/${p.number}`]);
           }))
-          .when(pinned.length > 0, (el) => el.child(v_flex().absolute().top(0).left(0).right(0).children(pinned.map(header))))
+          .when(pinned.length > 0, (el) => el.child(v_flex().absolute().top(0).left(0).right(0).children(pinned.map((item, k) =>
+            item.kind === "done" ? div().id(`pin-${k}`).on_click((_e, cx) => toggleDone(item.name, cx)).child(header(item)) : header(item)))))
           .child(Scrollbar.vertical("pr-list").absolute().inset_0())
         : div().px(12).py(8).text_color(t.dim).child("No session lists a pull request yet."));
   }
