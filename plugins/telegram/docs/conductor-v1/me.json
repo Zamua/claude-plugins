@@ -13,6 +13,7 @@
     "answer_approvals": false,
     "push": true,
     "screens": true,
-    "secrets": true
+    "secrets": true,
+    "archive": true
   }
 }

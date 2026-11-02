@@ -36,6 +36,7 @@ let logged: string[]
 let kept: Map<string, string>
 let reminderList: Reminder[]
 
+let archivedIds = new Set<string>()
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'conductor-api-'))
   store = new ConductorStore(dir)
@@ -53,6 +54,7 @@ beforeEach(() => {
   logged = []
   kept = new Map()
   reminderList = []
+  archivedIds = new Set()
   api = createConductorApi({
     store,
     ledger: new Ledger(join(dir, 'ledger.jsonl')),
@@ -119,6 +121,16 @@ beforeEach(() => {
       if (width >= 100) return undefined
       writeFileSync(`${source}.w${width}`, new Uint8Array([width]))
       return `${source}.w${width}`
+    },
+    archive: {
+      archive: topics => topics.map(topic => {
+        if (topic === 'general') return { topic, outcome: 'refused' as const, reason: 'general is the root, not a project' }
+        if (!listed.some(t => t.id === topic)) return { topic, outcome: 'unknown' as const }
+        if (archivedIds.has(topic)) return { topic, outcome: 'already_archived' as const }
+        archivedIds.add(topic)
+        return { topic, outcome: 'archived' as const }
+      }),
+      restore: topics => topics.map(topic => ({ topic, outcome: archivedIds.delete(topic) ? 'restored' as const : 'not_archived' as const })),
     },
     log: line => void logged.push(line),
     version: '1.0.0-test',
@@ -515,6 +527,28 @@ describe('signed writes', () => {
     expect(brokenLine(readFileSync(join(dir, 'ledger.jsonl'), 'utf8'))).toBeUndefined()
     const unsigned = await fetch(`${base}/v1/topics/42/commands`, { method: 'POST', body: '{"name":"relaunch"}', headers: { 'X-Device': d.device } })
     expect(unsigned.status).toBe(400)
+  })
+
+  test('a project is archived and restored by signed writes, each in the ledger; the root and unknown topics are refused', async () => {
+    const d = await setupDevice()
+    const post = (path: string, clientId: string) => {
+      const bytes = new TextEncoder().encode('{}')
+      return fetch(`${base}${path}`, { method: 'POST', body: bytes as unknown as BodyInit, headers: { 'X-Device': d.device, ...d.key.headers('POST', path, clientId, bytes) } })
+    }
+    const answer = async (path: string, id: string) => { const r = await post(path, id); return [r.status, await r.json()] }
+    const first = await answer('/v1/topics/42/archive', 'arch-00001')
+    expect(first).toEqual([200, { topic: '42', outcome: 'archived' }])
+    expect(Object.keys(first[1]).sort()).toEqual(Object.keys(readJson('archive-result.json')).sort())
+    expect(await answer('/v1/topics/42/archive', 'arch-00002')).toEqual([200, { topic: '42', outcome: 'already_archived' }])
+    expect((await post('/v1/topics/general/archive', 'arch-00003')).status).toBe(403)
+    expect((await post('/v1/topics/nope/archive', 'arch-00004')).status).toBe(404)
+    expect(await answer('/v1/topics/42/restore', 'arch-00005')).toEqual([200, { topic: '42', outcome: 'restored' }])
+    expect(await answer('/v1/topics/42/restore', 'arch-00006')).toEqual([200, { topic: '42', outcome: 'not_archived' }])
+    const ledger = readFileSync(join(dir, 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+    expect(ledger.filter(l => l.kind === 'topic').map(l => [l.action, l.topic])).toEqual([
+      ['archive', '42'], ['archive', '42'], ['archive', 'general'], ['archive', 'nope'], ['restore', '42'], ['restore', '42'],
+    ])
+    expect((await (await get('/v1/me', d.device)).json()).features.archive).toBeTrue()
   })
 
   test('the palette, the catalog and usage are reads', async () => {

@@ -210,12 +210,13 @@ All under `/v1`. "Signed" marks a write that needs the device headers.
 
 | Method and path | | Purpose |
 | --- | --- | --- |
-| `GET /me` | | the device, the server version, and `features`: whether this server answers approvals, pushes, shows screens and keeps secrets now |
+| `GET /me` | | the device, the server version, and `features`: whether this server answers approvals, pushes, shows screens, keeps secrets and archives projects now |
 | `POST /devices` | enrollment | `public_key`, `name`, `apns_token`, `apns_env`; returns the device |
 | `PUT /devices/{id}/push` | signed | the device's own `apns_token` (hex, or null for no push) and `apns_env`; returns the device |
 | `GET /topics?archived=` | | `{cursor, history_since, topics}`: every topic, the cursor they are current to, and when the kept history begins (older messages are only in Telegram). Archived topics are left out unless `archived=1`; they carry `archived_at` |
 | `POST /topics` | signed | create: `name`; returns the topic (201) |
 | `PATCH /topics/{id}` | signed | any of `name` (renames the Telegram topic), `pinned`, `muted`; returns the topic |
+| `POST /topics/{id}/archive`, `/restore` | signed | archives a project (stops its session, hides it from the list, keeps its conversation) or restores it; `{topic, outcome}`, outcome `archived`, `already_archived`, `restored` or `not_archived`; the root and the square are refused with 403 |
 | `GET /topics/{id}/messages?before_seq=&limit=` | | `{cursor, messages}`: history, newest first, at most 100 |
 | `POST /topics/{id}/messages` | signed | multipart: `text` (at most 64 KB), `client_id`, `reply_to`, `image[]` (JPEG or PNG, at most 10, 20 MB each); returns the message with `delivery: accepted`; a repeated `client_id` returns the first result |
 | `POST /topics/{id}/read` | signed | `seq`; read state is shared by every device |

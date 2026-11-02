@@ -430,6 +430,7 @@ const conductor = conductorStore && conductorMode?.listener
         }),
         // Answering waits for sessions to be isolated from each other (C6b).
         features: (): Features => ({ answer_approvals: false, push: conductorPush !== undefined, screens: hcTopics !== undefined, secrets: secrets.secretsOn() }),
+        archive: topicArchive,
         thumbnail: sipsThumbnailer(log),
         log,
         version: '1',
