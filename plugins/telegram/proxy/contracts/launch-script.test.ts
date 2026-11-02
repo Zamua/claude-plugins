@@ -232,7 +232,7 @@ describe('launch-topic.sh', () => {
     expect(run.result.status).toBe(0)
     expect(run.calls[0]).toBe('ls --all --json --label session=claude-hostthis-34')
     expect(run.calls[1]).toMatch(
-      /^run --bg --json --no-parent --no-notify --name tg-34 --label session=claude-hostthis-34 --label topic=34 --label herdr.space=topics --label herdr.tab=tg-34 --cwd \/tmp\/spawn dir bash \S+tg-topic-\w+$/,
+      /^run --bg --json --no-parent --no-notify --name tg-34 --label session=claude-hostthis-34 --label topic=34 --label herdr.space=topics --label herdr.tab=tg-34 --cwd \/tmp\/spawn dir \/bin\/zsh -lic exec "\$0" "\$@" bash \S+tg-topic-\w+$/,
     )
   })
 

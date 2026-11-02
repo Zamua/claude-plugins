@@ -443,10 +443,15 @@ else:
   # The Herdr app shows a terminal carrying a space and a tab label: every topic
   # gets its own tab in one "topics" space. The ids are ours, so a relaunch lands
   # in the same tab.
+  # An hc terminal starts in the core's minimal launchd environment. A login zsh
+  # in front of the script loads what a herdr pane's shell has (Homebrew, nvm, the
+  # dev-scratch cache paths, EDITOR); the script's own exports still win.
+  local login=()
+  [ -x /bin/zsh ] && login=(/bin/zsh -lic 'exec "$0" "$@"')
   if ! hc_cli run --bg --json --no-parent --no-notify --name "$name" \
       --label "session=$TG_SESSION" --label "topic=$TELEGRAM_TOPIC_ID" \
       --label "herdr.space=topics" --label "herdr.tab=$name" \
-      --cwd "$TG_SPAWN_DIR" bash "$script" >/dev/null 2>&1; then
+      --cwd "$TG_SPAWN_DIR" ${login[@]+"${login[@]}"} bash "$script" >/dev/null 2>&1; then
     echo "telegram-topics: hc could not start terminal $name for $TG_SESSION" >&2
     rm -f "$script"
     exit 1
