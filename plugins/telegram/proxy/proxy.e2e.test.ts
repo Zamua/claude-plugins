@@ -19,6 +19,7 @@ const PROXIED = '33333333-3333-4333-8333-333333333333'
 const STUCK = '44444444-4444-4444-8444-444444444444'
 const ON_HC_PROXIED = '55555555-5555-4555-8555-555555555555'
 const MOVING = '66666666-6666-4666-8666-666666666666'
+const RELAUNCHED = '67676767-6767-4767-8767-676767676767'
 
 const FAKE_TMUX = `#!/usr/bin/env bash
 live="$HOME/fake/live"; touch "$live"
@@ -318,8 +319,9 @@ beforeAll(async () => {
   writeFileSync(join(home, 'fake', 'fail-spawn'), 'claude-stuck-53\n')
   writeFileSync(join(home, '.claude', 'projects', 'p', `${ON_HC_PROXIED}.jsonl`), '{}\n')
   writeFileSync(join(home, '.claude', 'projects', 'p', `${MOVING}.jsonl`), '{}\n')
+  writeFileSync(join(home, '.claude', 'projects', 'p', `${RELAUNCHED}.jsonl`), '{}\n')
   // A session still running under tmux for a topic now configured onto hc
-  writeFileSync(join(home, 'fake', 'live'), 'claude-moving-63\n')
+  writeFileSync(join(home, 'fake', 'live'), 'claude-moving-63\nclaude-relaunched-67\n')
   writeFileSync(join(home, 'fake', 'whisper.bin'), '')
   mkdirSync(join(root, 'keys'), { mode: 0o700 })
   writeFileSync(join(root, 'keys', 'telegram-ask-token'), `${ASK_TOKEN}\n`, { mode: 0o600 })
@@ -342,6 +344,7 @@ beforeAll(async () => {
       route: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', ultracode: false },
     },
     '63': { tmux_session: 'claude-moving-63', thread_id: 63, name: 'moving', spawned_at: 1, claude_session_id: MOVING },
+    '67': { tmux_session: 'claude-relaunched-67', thread_id: 67, name: 'relaunched', spawned_at: 1, claude_session_id: RELAUNCHED },
   }))
 
   api = Bun.serve({
@@ -428,7 +431,7 @@ beforeAll(async () => {
       TELEGRAM_HERDR_BIN: join(home, '.local', 'bin', 'herdr'),
       TELEGRAM_HC_BIN: join(home, '.local', 'bin', 'hc'),
       HC_SOCKET: join(root, 'hc.sock'),
-      TELEGRAM_TOPICS_HC_TOPICS: '61,62,63,64,66',
+      TELEGRAM_TOPICS_HC_TOPICS: '61,62,63,64,66,67',
       TELEGRAM_OPENCODE_BIN: join(home, '.local', 'bin', 'opencode'),
       TELEGRAM_OPENCODE_PROJECT_DIR: join(root, 'oc-project'),
       LOCALGEN_PORT: String(qwenImage.port),
@@ -1154,6 +1157,15 @@ describe('the proxy, end to end', () => {
     expect(moved.env.TG_CLAUDE_SESSION_ID).toBe(MOVING)
     expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).not.toContain('claude-moving-63')
     expect(proxyLog()).toContain('moving topic 63 from tmux to hc')
+  }, 20_000)
+
+  test('relaunching a topic moved onto hc stops its old copy, so exactly one runs', async () => {
+    send(67, '/relaunch')
+    const resumed = await until('topic 67 to resume under hc', () => spawns().find(s => s.session === 'claude-relaunched-67' && s.env.TG_MUX === 'hc'))
+    expect([resumed.env.TG_RESUME, resumed.env.TG_CLAUDE_SESSION_ID]).toEqual(['1', RELAUNCHED])
+    expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).not.toContain('claude-relaunched-67')
+    const copies = hcTerminals().filter(t => t.state === 'live' && t.labels.session === 'claude-relaunched-67')
+    expect(copies).toHaveLength(1)
   }, 20_000)
 
   test('the operator hears in general when the hc core loses Full Disk Access, and when it is back', async () => {

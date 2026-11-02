@@ -36,6 +36,15 @@ describe('topicMuxes', () => {
     expect([...muxes.liveSessions()].sort()).toEqual(['claude-a-1', 'claude-b-61'])
   })
 
+  test('a session is stopped on whichever backend runs it, also after its topic moved to another', () => {
+    const herdr = fake('herdr', ['claude-b-61'])
+    const hc = fake('hc', [])
+    const muxes = topicMuxes(herdr, hc, new Set(['61']))
+    expect(muxes.kill('claude-b-61')).toBeTrue()
+    expect([herdr.killed, hc.killed, [...herdr.liveSessions()]]).toEqual([['claude-b-61'], [], []])
+    expect(muxes.kill('claude-b-61')).toBeFalse()
+  })
+
   test('a moved topic\'s session still running in its old backend is found there, and only there', () => {
     const herdr = fake('herdr', ['claude-b-61'])
     const hc = fake('hc', [])

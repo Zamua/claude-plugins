@@ -794,7 +794,9 @@ Quota recovery:
 Details that matter:
 
 - Always kill through `killSession`, never `mux.kill` directly, before a nudge.
-  It drains stale long-poll waiters so a notice cannot be handed to a dead MCP.
+  It drains stale long-poll waiters so a notice cannot be handed to a dead MCP,
+  and it stops the session on every backend where it runs: a topic whose backend
+  changed would otherwise keep its old copy alongside the new one.
 - Anthropic capacity is reported by `provider-capacity-status.py`; Codex is read
   from `codex app-server` (`model/list`, `account/rateLimits/read`); OpenCode Go
   is read from its authenticated usage endpoint. A missing probe is “not
