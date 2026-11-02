@@ -1,5 +1,6 @@
 // Request bodies of the proxy's HTTP API, checked where they enter. A malformed
 // body is a 400 naming the field, never a NaN id or a phantom topic downstream.
+import type { TextFormat } from '../chat/domain/chat-port'
 import type { TopicHarness } from '../harness/domain/topic-harness'
 
 export class BadRequest extends Error {}
@@ -43,7 +44,8 @@ function topicKey(b: Body, fallback?: string): string {
   return topic
 }
 
-const markdown = (b: Body) => b.format === 'markdownv2'
+/** The tools' `format`: 'markdown' is GitHub Markdown, 'markdownv2' Telegram's own dialect, anything else plain. */
+const textFormat = (b: Body): TextFormat => (b.format === 'markdown' ? 'gfm' : b.format === 'markdownv2' ? 'markdown' : 'plain')
 
 export type SendRequest = {
   chatId: string
@@ -51,7 +53,7 @@ export type SendRequest = {
   text: string
   replyTo?: number
   files: string[]
-  markdown: boolean
+  format: TextFormat
 }
 
 export function parseSend(body: unknown): SendRequest {
@@ -66,7 +68,7 @@ export function parseSend(body: unknown): SendRequest {
     text: text(b, 'text', ''),
     ...(b.reply_to != null ? { replyTo: integer(b, 'reply_to') } : {}),
     files,
-    markdown: markdown(b),
+    format: textFormat(b),
   }
 }
 
@@ -77,7 +79,7 @@ export function parseReact(body: unknown): ReactRequest {
   return { chatId: text(b, 'chat_id'), messageId: integer(b, 'message_id'), emoji: text(b, 'emoji') }
 }
 
-export type EditRequest = { chatId: string; messageId: number; text: string; markdown: boolean }
+export type EditRequest = { chatId: string; messageId: number; text: string; format: TextFormat }
 
 export function parseEdit(body: unknown): EditRequest {
   const b = object(body)
@@ -85,7 +87,7 @@ export function parseEdit(body: unknown): EditRequest {
     chatId: text(b, 'chat_id'),
     messageId: integer(b, 'message_id'),
     text: text(b, 'text'),
-    markdown: markdown(b),
+    format: textFormat(b),
   }
 }
 

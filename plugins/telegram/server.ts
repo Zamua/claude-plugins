@@ -119,7 +119,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: 'reply',
       description:
-        'Send a message to the Telegram topic this session is bound to; it always posts to this session\'s own topic (answer a #square message with square_reply instead). It is the only way the user sees anything: transcript text never reaches them. Pass chat_id from the inbound <channel> block. Optionally pass reply_to (message_id) to quote-reply, and files (absolute paths). Text over 4096 characters is split into several messages on character count, which can cut a MarkdownV2 entity, so keep formatted replies under that length. A MarkdownV2 parse error fails the call; parts already sent stay sent. Files are sent after the text, one message each: .jpg/.jpeg/.png/.gif/.webp as photos, anything else as a document, 50MB max each; files in the proxy\'s state directory and its .env files are refused. Returns the sent message id(s), which edit_message accepts.',
+        'Send a message to the Telegram topic this session is bound to; it always posts to this session\'s own topic (answer a #square message with square_reply instead). It is the only way the user sees anything: transcript text never reaches them. Pass chat_id from the inbound <channel> block. Optionally pass reply_to (message_id) to quote-reply, and files (absolute paths). For anything with structure, pass format \'markdown\' and write ordinary GitHub Markdown (headings, lists, tables, code blocks, links, bold, italic, strikethrough) with no escaping: the app shows it as written, and Telegram gets the nearest rendering it has (headings bold, lists as bullets, tables as monospace blocks). Text over 4096 characters is split into several messages: \'markdown\' splits between blocks and never fails to parse, since a part Telegram refuses goes as plain text; with \'markdownv2\' a split can cut an entity, and a parse error fails the call (parts already sent stay sent). Files are sent after the text, one message each: .jpg/.jpeg/.png/.gif/.webp as photos, anything else as a document, 50MB max each; files in the proxy\'s state directory and its .env files are refused. Returns the sent message id(s), which edit_message accepts.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -136,8 +136,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           format: {
             type: 'string',
-            enum: ['text', 'markdownv2'],
-            description: "Rendering mode. 'markdownv2' enables Telegram formatting (bold, italic, code, links). Caller must escape special chars per MarkdownV2 rules. Default: 'text' (plain, no escaping needed).",
+            enum: ['text', 'markdown', 'markdownv2'],
+            description: "Rendering mode. 'markdown' (use it for anything formatted): GitHub-flavored Markdown, written as is with no escaping. 'markdownv2': Telegram's own dialect; the caller escapes special characters per its rules. Default: 'text' (plain).",
           },
         },
         required: ['chat_id', 'text'],
@@ -178,8 +178,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
           text: { type: 'string' },
           format: {
             type: 'string',
-            enum: ['text', 'markdownv2'],
-            description: "Rendering mode. 'markdownv2' enables Telegram formatting (bold, italic, code, links). Caller must escape special chars per MarkdownV2 rules. Default: 'text' (plain, no escaping needed).",
+            enum: ['text', 'markdown', 'markdownv2'],
+            description: "Rendering mode. 'markdown' (use it for anything formatted): GitHub-flavored Markdown, written as is with no escaping. 'markdownv2': Telegram's own dialect; the caller escapes special characters per its rules. Default: 'text' (plain).",
           },
         },
         required: ['chat_id', 'message_id', 'text'],

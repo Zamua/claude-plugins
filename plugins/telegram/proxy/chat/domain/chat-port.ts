@@ -11,8 +11,11 @@ declare const messageIdBrand: unique symbol
  */
 export type MessageId = number & { readonly [messageIdBrand]: true }
 
-/** `markdown` means this transport's own dialect, named in its capabilities. */
-export type TextFormat = 'plain' | 'markdown'
+/**
+ * `markdown` means this transport's own dialect, named in its capabilities;
+ * `gfm` is GitHub-flavored Markdown, which each transport renders as best it can.
+ */
+export type TextFormat = 'plain' | 'markdown' | 'gfm'
 
 export type MarkdownDialect = 'telegram-markdownv2' | 'commonmark' | 'none'
 
