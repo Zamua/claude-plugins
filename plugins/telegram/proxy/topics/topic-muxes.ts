@@ -9,6 +9,8 @@ export type TopicMuxes = {
   liveSessions(): Set<string>
   /** The other backends where `session` still runs: a topic moved since it started. */
   elsewhere(topic: string, session: string): MultiplexerPort[]
+  /** Stops `session` on every backend where it runs, so a topic moved since it started never keeps a copy behind. */
+  kill(session: string): boolean
 }
 
 export function topicMuxes(
@@ -22,5 +24,6 @@ export function topicMuxes(
     forTopic,
     liveSessions: () => new Set(all.flatMap(m => [...m.liveSessions()])),
     elsewhere: (topic, session) => all.filter(m => m !== forTopic(topic) && m.liveSessions().has(session)),
+    kill: session => all.filter(m => m.liveSessions().has(session)).map(m => m.kill(session)).some(Boolean),
   }
 }

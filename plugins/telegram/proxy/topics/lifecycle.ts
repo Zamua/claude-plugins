@@ -144,14 +144,14 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     else st.queue.push(msg)
   }
 
-  // Kills a topic's session AND drops its long-polls. A killed MCP's /poll
+  // Kills a topic's session on whichever backend runs it, so a topic moved since
+  // it started keeps no copy behind, AND drops its long-polls. A killed MCP's /poll
   // waiter stays registered until the proxy sees its connection close, and
   // enqueue prefers a waiter to the queue, so a nudge enqueued right after a
   // bare mux.kill would be handed to the dying process and lost.
   function killSession(st: TopicState, topic: string): boolean {
     const session = sessionOf(st.agent)
-    const mux = muxes.forTopic(topic)
-    const killed = !!session && mux.liveSessions().has(session) && mux.kill(session)
+    const killed = !!session && muxes.kill(session)
     apply(topic, st, { type: 'stopped' })
     const pump = panePumps.get(topic)
     if (pump) pump.turn = nextTurn(pump.turn, { type: 'stopped' })
