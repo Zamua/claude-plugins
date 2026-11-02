@@ -9,7 +9,7 @@ const fixture = (name: string) =>
 
 const photo = { id: 'blob_9a1', mime: 'image/png', bytes: 1, width: null, height: null }
 const message = (over: Partial<StoredMessage> = {}): StoredMessage => ({
-  id: 'msg_1', topic: '16832', seq: 42, author: 'agent', origin: 'proxy', kind: null, text: 'Running the suite now.',
+  id: 'msg_1', topic: '100', seq: 42, author: 'agent', origin: 'proxy', kind: null, text: 'Running the suite now.',
   format: 'plain', blobs: [], replyTo: null, chatIds: [], at: '2026-11-01T20:25:37.123Z', editedAt: null,
   reactions: [], clientId: null, delivery: null, failure: null, imported: false, ...over,
 })
@@ -25,7 +25,7 @@ describe('the payloads match the contract fixtures', () => {
   })
 
   test('push-approval.json', () => {
-    const push = approvalPush({ id: 'ap_7f3c', topic: '16832', prompt: 'Allow running `bun test`?' }, 'build')
+    const push = approvalPush({ id: 'ap_7f3c', topic: '100', prompt: 'Allow running `bun test`?' }, 'build')
     expect(push).toEqual({ payload: fixture('push-approval.json'), collapseId: 'ap_7f3c' })
   })
 })

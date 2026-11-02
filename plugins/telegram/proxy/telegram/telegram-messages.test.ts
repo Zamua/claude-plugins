@@ -38,11 +38,11 @@ describe('telegram messages', () => {
 
 describe('messageLink', () => {
   test('links a message in a supergroup topic, and in General with no thread', () => {
-    expect(messageLink('-1007770000001', '16854', 16901)).toBe('https://t.me/c/7770000001/16854/16901')
+    expect(messageLink('-1007770000001', '101', 16901)).toBe('https://t.me/c/7770000001/101/16901')
     expect(messageLink('-1007770000001', 'general', 16901)).toBe('https://t.me/c/7770000001/16901')
   })
 
   test('a chat that is not a supergroup has no message links', () => {
-    expect(messageLink('-7770000001', '16854', 1)).toBeNull()
+    expect(messageLink('-7770000001', '101', 1)).toBeNull()
   })
 })
