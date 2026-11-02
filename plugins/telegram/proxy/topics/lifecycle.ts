@@ -22,6 +22,7 @@ import {
   TOPIC_LAUNCH_PROFILE_VERSION,
 } from '../config'
 import { log, reason } from '../log'
+import { RESTORED_NOTICE } from './domain/archive'
 import { autoCompactWindow, auxiliaryModelForRoute } from '../routing/domain/model-routing'
 import type { TopicRoute } from '../routing/domain/model-routing'
 import type { ProviderCatalog } from '../routing/provider-catalog'
@@ -296,6 +297,14 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     // The square hosts conversations, not a Claude of its own.
     if (SQUARE_TOPIC && topic === SQUARE_TOPIC) return 'skipped'
     const st = getTopic(topic)
+    // An archived topic stays down on a timer; anything that wakes it brings it back with its conversation.
+    if (st.archivedAt) {
+      if (by === 'timer') return 'skipped'
+      st.archivedAt = undefined
+      saveRegistry()
+      log(`topic ${topic} "${st.name || topic}" restored from the archive`)
+      void sayIn(String(GROUP_CHAT_ID), topic, RESTORED_NOTICE).catch(e => log(`restore notice failed for topic ${topic}: ${reason(e)}`))
+    }
     const mux = muxes.forTopic(topic)
     const session = sessionOf(st.agent)
     // A topic moved to another multiplexer stops there and resumes here, never runs

@@ -15,7 +15,8 @@ import { resumeNoticeTurn } from '../topics/lifecycle'
 import { pendingPerms, prunePendingPerms } from '../topics/permissions'
 import { currentRoute, getTopic, topics } from '../topics/state'
 import type { createOutbound } from './outbound'
-import { BadRequest, parsePermissionRequest, parseTopicCreate } from './requests'
+import type { TopicArchive } from '../topics/archive'
+import { BadRequest, parsePermissionRequest, parseTopicCreate, parseTopicList, parseTopicRename } from './requests'
 import { acknowledgedPoll, longPoll } from './long-poll'
 import { json } from './response'
 import { ROUTE } from './routes'
@@ -38,6 +39,7 @@ export type HttpPorts = {
   reminders: Pick<ReturnType<typeof createReminders>, 'handleRemind' | 'handleListReminders' | 'handleCancelReminder'>
   /** When Telegram polling last started, or null while it is down. */
   pollingSince: () => number | null
+  archive: TopicArchive
 }
 
 export function createHttpServer(ports: HttpPorts) {
@@ -141,6 +143,12 @@ export function createHttpServer(ports: HttpPorts) {
       case ROUTE.turnFailed: if (post) return routing.handleTurnFailed(req); break
       case ROUTE.topics: if (get) return json({ square: SQUARE_TOPIC || null, topics: square.topicDirectory() }); break
       case ROUTE.topicCreate: if (post) return handleTopicCreate(req); break
+      case ROUTE.topicArchive: if (post) return json({ results: ports.archive.archive(parseTopicList(await req.json())) }); break
+      case ROUTE.topicRestore: if (post) return json({ results: ports.archive.restore(parseTopicList(await req.json())) }); break
+      case ROUTE.topicRename: if (post) {
+        const { topic, name } = parseTopicRename(await req.json())
+        return json({ results: [await ports.archive.rename(topic, name)] })
+      } break
       case ROUTE.squareTag: if (post) return square.handleSquareTag(req); break
       case ROUTE.squareReply: if (post) return square.handleSquareReply(req); break
       case ROUTE.remind: if (post) return reminders.handleRemind(req); break

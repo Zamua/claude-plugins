@@ -38,6 +38,7 @@ export function conductorTopics(hidden: (topic: string) => boolean, kindOf: (top
         title: terminal?.title ?? null,
         route: kind === 'claude' ? { provider: route.provider, model: route.model, effort: route.effort } : null,
         state: agentState(st.agent.state, onHc),
+        archivedAt: st.archivedAt ?? null,
       }
     })
 }

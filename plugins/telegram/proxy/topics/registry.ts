@@ -51,6 +51,7 @@ export function saveRegistry(): void {
       ...(st.routing.exhausted.length ? { exhausted_routes: st.routing.exhausted } : {}),
       ...(st.routing.resumeNotice ? { pending_resume_notice: st.routing.resumeNotice } : {}),
       ...(st.session ? { session: { parent: st.session.parent, spawned_by: st.session.spawnedBy, spawned_at: st.session.spawnedAt } } : {}),
+      ...(st.archivedAt ? { archived_at: st.archivedAt } : {}),
     }
   }
   writeRegistryFile(REGISTRY_FILE, out)
@@ -68,6 +69,7 @@ export function loadAndReconcileRegistry(): void {
     st.name = entry.name
     st.claudeSessionId = entry.claude_session_id ?? undefined
     st.session = sessionNodeFrom(entry.session)
+    st.archivedAt = typeof entry.archived_at === 'string' ? entry.archived_at : undefined
     const pending = pendingRouteFromRegistry(entry.pending_route)
     st.routing = {
       route: routeFromRegistry(entry.route),

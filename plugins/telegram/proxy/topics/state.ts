@@ -35,6 +35,8 @@ export type TopicState = {
   routing: RouteFlow
   /** Where the topic hangs in the session tree, when recorded at its creation. */
   session?: SessionNode
+  /** When it was archived: hidden and stopped, its conversation kept, until something wakes it. */
+  archivedAt?: string
 }
 
 export const topics = new Map<string, TopicState>()

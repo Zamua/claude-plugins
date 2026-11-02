@@ -124,6 +124,22 @@ export function parseTopicCreate(body: unknown): TopicCreateRequest {
   return { name, harness, ...(caller ? { by: caller } : {}) }
 }
 
+/** Topic ids for archive and restore: 1 to 100 of them. */
+export function parseTopicList(body: unknown): string[] {
+  const topics = object(body).topics
+  if (!Array.isArray(topics) || topics.length < 1 || topics.length > 100 || !topics.every(t => typeof t === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(t))) {
+    throw new BadRequest('topics must be 1 to 100 topic ids')
+  }
+  return topics
+}
+
+export function parseTopicRename(body: unknown): { topic: string; name: string } {
+  const b = object(body)
+  const name = text(b, 'name', '').trim()
+  if (!name || name.length > 128) throw new BadRequest('name must be 1 to 128 characters')
+  return { topic: topicKey(b), name }
+}
+
 export function parseCancelReminder(body: unknown): { topic: string; id: string } {
   const b = object(body)
   return { topic: topicKey(b), id: text(b, 'id') }

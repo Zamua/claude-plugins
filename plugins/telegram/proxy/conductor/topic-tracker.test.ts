@@ -3,7 +3,7 @@ import type { TopicSummary } from './api'
 import { topicTracker } from './topic-tracker'
 
 const topic = (over: Partial<TopicSummary> = {}): TopicSummary =>
-  ({ id: '7', name: 'build', kind: 'claude', title: null, route: null, state: 'idle', role: 'coordinator', projectId: '7', parentId: 'general', spawnedBy: null, spawnedAt: null, ...over })
+  ({ id: '7', name: 'build', kind: 'claude', title: null, route: null, state: 'idle', role: 'coordinator', projectId: '7', parentId: 'general', spawnedBy: null, spawnedAt: null, archivedAt: null, ...over })
 
 function setup() {
   let listed = [topic()]

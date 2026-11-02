@@ -30,7 +30,7 @@ export function createSquare({ chat, harnessLocked, ensureSession, enqueue }: Sq
     const live = muxes.liveSessions()
     const out: Array<{ slug: string; name: string; topic: string; live: boolean }> = []
     for (const [topic, st] of topics) {
-      if (topic === SQUARE_TOPIC || harnessLocked(topic)) continue
+      if (topic === SQUARE_TOPIC || harnessLocked(topic) || st.archivedAt) continue
       const name = st.name || topicNames.get(topic) || ''
       const slug = topic === 'general' ? 'general' : topicSlug(name) !== 'topic' ? topicSlug(name) : topic
       out.push({ slug, name: name || topic, topic, live: st.agent.state === 'running' && live.has(st.agent.session) })

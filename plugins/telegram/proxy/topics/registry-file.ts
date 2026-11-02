@@ -16,6 +16,7 @@ export type RegistryEntry = {
   pending_resume_notice?: string | null
   /** Where the topic hangs in the session tree; absent for a topic that predates it. */
   session?: { parent: string | null; spawned_by: string | null; spawned_at: string | null } | null
+  archived_at?: string | null
 }
 
 export type Registry = Record<string, RegistryEntry>
