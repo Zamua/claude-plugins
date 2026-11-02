@@ -440,8 +440,12 @@ else:
     echo "telegram-topics: could not create the hc spawn script" >&2
     exit 1
   }
+  # The Herdr app shows a terminal carrying a space and a tab label: every topic
+  # gets its own tab in one "topics" space. The ids are ours, so a relaunch lands
+  # in the same tab.
   if ! hc_cli run --bg --json --no-parent --no-notify --name "$name" \
       --label "session=$TG_SESSION" --label "topic=$TELEGRAM_TOPIC_ID" \
+      --label "herdr.space=topics" --label "herdr.tab=$name" \
       --cwd "$TG_SPAWN_DIR" bash "$script" >/dev/null 2>&1; then
     echo "telegram-topics: hc could not start terminal $name for $TG_SESSION" >&2
     rm -f "$script"
@@ -459,6 +463,22 @@ else:
       sleep 0.25
     done
   ) </dev/null >/dev/null 2>&1 &
+
+  # Names the topic's tab, and the space, once the app's window has picked the
+  # terminal up. Only a running window is asked, so a launch never opens the app.
+  local app="${HERDR_APP_BIN:-$HOME/.local/bin/herdr-app}"
+  local app_socket="${HERDR_APP_HOME:-$HOME/.config/herdr-app}/herdr-app.sock"
+  if [ -x "$app" ] && /usr/bin/perl -MIO::Socket::UNIX -e 'exit(IO::Socket::UNIX->new(Peer => $ARGV[0]) ? 0 : 1)' "$app_socket" 2>/dev/null; then
+    (
+      for ((try = 0; try < 20; try++)); do
+        if "$app" do tab.rename --id "$name" --name "${TG_TOPIC_NAME:-$name}" >/dev/null 2>&1; then
+          "$app" do space.rename --id topics --name topics >/dev/null 2>&1
+          break
+        fi
+        sleep 1
+      done
+    ) </dev/null >/dev/null 2>&1 &
+  fi
 }
 
 case "$TG_MUX" in

@@ -299,7 +299,11 @@ core:
     Bg sessions are identified by `CLAUDE_CODE_SESSION_KIND=bg`; they keep the
     outbound tools but never start the inbound/permission polls.
   - hc: one terminal per topic, `tg-<thread id>`, labelled `session=` and
-    `topic=`, started with `hc run --bg --no-parent --no-notify` running the
+    `topic=`, plus `herdr.space=topics` and `herdr.tab=tg-<thread id>` so the
+    Herdr app (on the same core) shows every topic as a tab of one "topics"
+    space. When an app window is running, the launcher names the tab after the
+    topic in the background (`herdr-app do tab.rename`, never opening the app).
+    Started with `hc run --bg --no-parent --no-notify` running the
     same exported-variable script as herdr (an hc terminal also starts in the
     core's environment). `HcMux` sends one JSON-RPC request per `hc connect`;
     every hc call runs with a minimal environment, because a call that finds
