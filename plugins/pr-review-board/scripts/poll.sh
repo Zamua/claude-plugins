@@ -115,6 +115,17 @@ _slug_umbrella() {  # <anchor-pr> <title>
   printf '%s-%s' "$s" "$(_pr_num "$1")"
 }
 
+# Ship the review rules INTO the review workspace. The agent's cwd is the reviews
+# root, so a copy here is readable without a permission prompt; the canonical doc
+# in the plugin directory is outside any agent cwd and reading it stalls a
+# background worker that has nobody to approve it. Every pass ships it again, so a
+# rule change reaches running reviews without a scope change.
+_ship_rules() {  # <meta dir>
+  local src="$HERE/../docs/REVIEW-RULES.md"
+  [ -f "$src" ] && [ -d "$1" ] || return 0
+  cmp -s "$src" "$1/REVIEW-RULES.md" || cp "$src" "$1/REVIEW-RULES.md"
+}
+
 # ---- assignment ----
 # The worker's contract, rewritten from state after every scope change so it is
 # always the full current picture rather than a diff the worker has to replay.
@@ -124,11 +135,7 @@ _write_assignment() {  # <key>
   [ -n "$dir" ] || return 1
   meta="$(prb_meta_dir "$key")"
   mkdir -p "$meta" || return 1
-  # Ship the review rules INTO the review workspace. The agent's cwd is the reviews
-  # root, so a copy here is readable without a permission prompt; the canonical doc
-  # in the plugin directory is outside any agent cwd and reading it stalls a
-  # background worker that has nobody to approve it.
-  [ -f "$HERE/../docs/REVIEW-RULES.md" ] && cp "$HERE/../docs/REVIEW-RULES.md" "$meta/REVIEW-RULES.md"
+  _ship_rules "$meta"
   f="$meta/assignment.json"
   prb_state_read --arg k "$key" \
       --arg meta "$meta" \
@@ -279,6 +286,10 @@ cmd_once() {
   # Only a clean pass advances the watermark. A failed scan leaves it alone, so the
   # widening window re-covers the gap instead of dropping a reaction.
   prb_set_last_poll "$started_at"
+
+  while IFS= read -r k; do
+    [ -n "$k" ] && _ship_rules "$(prb_meta_dir "$k")"
+  done < <(prb_active_keys)
 
   while IFS= read -r k; do
     [ -n "$k" ] && { _refresh_facts "$k" || true; }
