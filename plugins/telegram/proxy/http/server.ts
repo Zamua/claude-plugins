@@ -16,7 +16,9 @@ import { pendingPerms, prunePendingPerms } from '../topics/permissions'
 import { currentRoute, getTopic, topics } from '../topics/state'
 import type { createOutbound } from './outbound'
 import type { TopicArchive } from '../topics/archive'
-import { BadRequest, parsePermissionRequest, parseTopicCreate, parseTopicList, parseTopicRename } from './requests'
+import type { TargetResult } from '../broker/domain/relaunch'
+import type { ControlResult } from '../conductor/control'
+import { BadRequest, parsePermissionRequest, parseTopicCreate, parseTopicList, parseTopicRename, parseTopicRoute } from './requests'
 import { acknowledgedPoll, longPoll } from './long-poll'
 import { json } from './response'
 import { ROUTE } from './routes'
@@ -40,6 +42,11 @@ export type HttpPorts = {
   /** When Telegram polling last started, or null while it is down. */
   pollingSince: () => number | null
   archive: TopicArchive
+  /** Relaunch and route change for the Crook backend; absent while the conductor's ledger is off. */
+  topicControl?: {
+    relaunch: (topics: string[]) => Promise<TargetResult[]>
+    route: (topic: string, choice: unknown) => Promise<ControlResult>
+  }
 }
 
 export function createHttpServer(ports: HttpPorts) {
@@ -148,6 +155,18 @@ export function createHttpServer(ports: HttpPorts) {
       case ROUTE.topicRename: if (post) {
         const { topic, name } = parseTopicRename(await req.json())
         return json({ results: [await ports.archive.rename(topic, name)] })
+      } break
+      case ROUTE.topicRelaunch: if (post) {
+        if (!ports.topicControl) return json({ error: 'relaunch needs the conductor ledger' }, 503)
+        return json({ results: await ports.topicControl.relaunch(parseTopicList(await req.json())) })
+      } break
+      case ROUTE.topicRoute: if (post) {
+        if (!ports.topicControl) return json({ error: 'route changes need the conductor' }, 503)
+        const { topic, choice } = parseTopicRoute(await req.json())
+        const result = await ports.topicControl.route(topic, choice)
+        if ('ok' in result) return json(result.ok)
+        const { status, code, message } = result.refused
+        return json({ error: { code, message } }, status)
       } break
       case ROUTE.squareTag: if (post) return square.handleSquareTag(req); break
       case ROUTE.squareReply: if (post) return square.handleSquareReply(req); break

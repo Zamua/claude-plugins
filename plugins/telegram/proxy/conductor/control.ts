@@ -10,13 +10,19 @@ import type { Reminder, ReminderRequest } from '../reminders/domain/reminder'
 import { nameError, SecretExists, SecretMissing } from '../secrets/secret'
 import type { SecretEntry, StoredSecret } from '../secrets/secret'
 import { tilde } from '../log'
+import { bypassesPermissions } from '../routing/domain/model-routing'
 import { routeChoice } from './domain/route-choice'
 import { topicName, topicPatch } from './domain/topic-edit'
 import { wireReminder, wireRoutes, wireSecrets, wireUsage } from './wire'
 
 export type ControlResult =
   | { ok: Record<string, unknown> }
-  | { refused: { status: 400 | 404 | 409 | 429 | 500 | 502 | 503; code: string; message: string } }
+  | { refused: { status: 400 | 403 | 404 | 409 | 429 | 500 | 502 | 503; code: string; message: string } }
+
+/** Who asked for a route change: the app (a signed device) or the unauthenticated loopback API. */
+export type RouteOrigin = 'app' | 'loopback'
+
+const ECHO: Record<RouteOrigin, string> = { app: 'You (app)', loopback: 'Crook backend' }
 
 export type ControlPorts = {
   catalog: () => ProviderCatalog
@@ -70,7 +76,7 @@ const REFUSALS: Record<RouteRefusal, { status: 409 | 429; code: string }> = {
 }
 
 export function conductorControl(ports: ControlPorts) {
-  const refuse = (status: 400 | 404 | 409 | 429 | 500 | 502 | 503, code: string, message: string): ControlResult => ({ refused: { status, code, message } })
+  const refuse = (status: 400 | 403 | 404 | 409 | 429 | 500 | 502 | 503, code: string, message: string): ControlResult => ({ refused: { status, code, message } })
 
   function secretsGate(): ControlResult | undefined {
     return ports.secretsOn() ? undefined : refuse(503, 'secrets_off', 'secrets are not configured on this server')
@@ -148,12 +154,16 @@ export function conductorControl(ports: ControlPorts) {
     return { ok: {} }
   }
 
-  async function route(topic: string, body: unknown): Promise<ControlResult> {
+  async function route(topic: string, body: unknown, origin: RouteOrigin = 'app'): Promise<ControlResult> {
     const why = ports.noAgent(topic) ?? ports.locked(topic)
     if (why) return refuse(409, 'no_route', why)
     const choice = routeChoice(ports.catalog(), body, ports.ultracode(topic))
     if ('code' in choice) return refuse(400, choice.code, choice.message)
-    await ports.say(topic, `You (app): /model ${choice.provider} ${choice.model.id} ${choice.effort}`)
+    // Any local process can call the loopback API, so it never turns off a topic's permission checks.
+    if (origin === 'loopback' && bypassesPermissions(choice.provider)) {
+      return refuse(403, 'needs_operator', 'a route that skips permission checks is chosen from Telegram or the app')
+    }
+    await ports.say(topic, `${ECHO[origin]}: /model ${choice.provider} ${choice.model.id} ${choice.effort}`)
     const request = ports.requestRoute(topic, choice)
     if ('refused' in request) {
       const { status, code } = REFUSALS[request.refused]

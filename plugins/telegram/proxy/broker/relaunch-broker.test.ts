@@ -11,6 +11,7 @@ function setup() {
     '34': { parent: 'general', running: true, idle: true },
     '35': { parent: 'general', running: true, idle: false },
     '36': { parent: 'general', running: false, idle: false },
+    '37': { parent: 'general', running: false, idle: false },
   }
   const events: string[] = []
   const ledger: LedgerRecord[] = []
@@ -18,7 +19,8 @@ function setup() {
     root: 'general',
     rootAgentPid: () => ROOT_PID,
     facts: topic => tree[topic],
-    relaunch: async topic => void events.push(`relaunch ${topic}`),
+    external: topic => topic === '37',
+    relaunch: async (topic, by) => void events.push(by === 'general' ? `relaunch ${topic}` : `relaunch ${topic} by ${by}`),
     callerTopic: ancestry => (ancestry.includes(600) ? '35' : undefined),
     record: entry => {
       ledger.push(entry)
@@ -89,6 +91,7 @@ test('relaunches are spaced out, one at a time, whether a list or the sweep asks
     root: 'general',
     rootAgentPid: () => ROOT_PID,
     facts: topic => tree[topic],
+    external: () => false,
     relaunch: async topic => void started.push([topic, clock]),
     callerTopic: () => undefined,
     record: () => {},
@@ -102,4 +105,29 @@ test('relaunches are spaced out, one at a time, whether a list or the sweep asks
   clock += 1_000
   await broker.sweep()
   expect(started).toEqual([['a', 0], ['b', 3_000], ['c', 6_000], ['d', 9_000]])
+})
+
+test('a loopback request relaunches any known topic, the root included, and never one another backend runs', async () => {
+  const { broker, events, ledger } = setup()
+  expect(await broker.requestLoopback(['general', '35', '36', '37', '99', 'general'])).toEqual([
+    { topic: 'general', outcome: 'applied' },
+    { topic: '35', outcome: 'queued' },
+    { topic: '36', outcome: 'no_agent' },
+    { topic: '37', outcome: 'refused', reason: 'run by the Crook backend' },
+    { topic: '99', outcome: 'refused', reason: 'unknown topic' },
+  ])
+  expect(events.slice(0, 2)).toEqual(['ledger relaunch general', 'relaunch general by loopback'])
+  expect(ledger.map(e => [e.caller, e.caller_pid, e.target, e.outcome])).toEqual([
+    ['loopback', null, 'general', 'applied'], ['loopback', null, '35', 'queued'], ['loopback', null, '36', 'no_agent'],
+    ['loopback', null, '37', 'refused'], ['loopback', null, '99', 'refused'],
+  ])
+})
+
+test('a queued loopback relaunch runs at its turn\'s end under the caller that asked', async () => {
+  const { broker, tree, events, ledger } = setup()
+  await broker.requestLoopback(['35'])
+  tree['35'] = { ...tree['35'], idle: true }
+  await broker.sweep()
+  expect(events.filter(e => e.startsWith('relaunch'))).toEqual(['relaunch 35 by loopback'])
+  expect(ledger.at(-1)).toEqual({ kind: 'relaunch', caller: 'loopback', target: '35', outcome: 'applied', queued: true })
 })

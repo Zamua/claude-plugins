@@ -35,6 +35,11 @@ export const DEFAULT_ROUTE: TopicRoute = {
   ultracode: false,
 }
 
+/** Codex routes launch with --dangerously-skip-permissions; the others keep checked auto mode. */
+export function bypassesPermissions(provider: ProviderId): boolean {
+  return provider === 'codex'
+}
+
 export function isProviderId(value: unknown): value is ProviderId {
   return typeof value === 'string' && (PROVIDERS as readonly string[]).includes(value)
 }

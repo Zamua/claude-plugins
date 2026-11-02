@@ -12,6 +12,8 @@ export const ROUTE = {
   topicArchive: '/topic/archive',
   topicRestore: '/topic/restore',
   topicRename: '/topic/rename',
+  topicRelaunch: '/topic/relaunch',
+  topicRoute: '/topic/route',
   squareTag: '/square/tag',
   squareReply: '/square/reply',
   remind: '/remind',

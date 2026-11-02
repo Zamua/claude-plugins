@@ -18,6 +18,7 @@ async function serve(rootAgentPid: number, relaunchMs = 0) {
     root: 'general',
     rootAgentPid: () => rootAgentPid,
     facts: topic => (topic === '34' ? { parent: 'general', running: true, idle: true } : undefined),
+    external: () => false,
     relaunch: async topic => {
       relaunched.push(topic)
       await Bun.sleep(relaunchMs)
@@ -89,7 +90,7 @@ test('only a well-formed relaunch request is read', () => {
 test('a socket it cannot bind is logged, never thrown', async () => {
   const lines: string[] = []
   const broker = createRelaunchBroker({
-    root: 'general', rootAgentPid: () => undefined, facts: () => undefined, relaunch: async () => {},
+    root: 'general', rootAgentPid: () => undefined, facts: () => undefined, external: () => false, relaunch: async () => {},
     callerTopic: () => undefined, record: () => {}, log: () => {},
   })
   const server = serveBroker('/nonexistent-dir/broker.sock', broker, line => void lines.push(line))

@@ -58,6 +58,7 @@ import {
   SQUARE_TOPIC,
   BROKER_SOCKET,
   CROOK_USAGE_FILE,
+  EXTERNAL_TOPICS,
   STATE_DIR,
   TAILSCALE_BIN,
   TOKEN,
@@ -372,7 +373,60 @@ const topicArchive = createTopicArchive({ killSession, save: saveRegistry, renam
 // One instance writes the ledger, so its hash chain stays whole.
 const conductorLedger = conductorStore ? new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')) : undefined
 const conductorTopicList = () => conductorTopics(topic => topic === SQUARE_TOPIC, topicHarnessOf, hcTopics)
-const conductor = conductorStore && conductorMode?.listener
+// The app's commands; the loopback API takes its route changes too.
+const appControl = conductorStore
+  ? conductorControl({
+      catalog: () => modelCatalog(),
+      capacities: () => capacitySnapshot(),
+      refreshCapacity: () => refreshProviderCapacity(),
+      usageText: () => capacityText(),
+      ultracode: topic => currentRoute(getTopic(topic)).ultracode,
+      requestRoute: (topic, choice) => requestRoute(topic, choice, 'manual'),
+      routeChangeText: request => routeChangeText(request.outcome, request.route),
+      noAgent: topic => (SQUARE_TOPIC && topic === SQUARE_TOPIC ? 'the square has no agent of its own' : undefined),
+      locked: topic => (harnessLocked(topic) ? 'this topic is locked to another harness; use Telegram' : undefined),
+      relaunch: async topic => {
+        const harness = harnessFor(topic)
+        if (harness) await harness.relaunch({ chatId: String(GROUP_CHAT_ID), topic, fromId: ADMIN_USER_ID })
+        else await relaunch(String(GROUP_CHAT_ID), topic, ADMIN_USER_ID)
+      },
+      interrupt,
+      // Unmirrored, like the app's own messages: the app already shows what it did.
+      say: async (topic, text) => void (await telegramChat.send(topic, { text }).catch(noticeFailed('app command echo', topic))),
+      createTopic: name => createTopic(name, 'claude', 'operator'),
+      renameTopic: renameEverywhere,
+      setPrefs: (topic, prefs) => conductorStore.setPrefs(topic, prefs),
+      listed: topic => conductorTopicList().some(t => t.id === topic),
+      secretsOn: () => secrets.secretsOn(),
+      listSecrets: () => secrets.listSecrets(),
+      storeSecret: (name, value, replace, topic) => secrets.storeFromApp(name, value, replace, topic),
+      deleteSecret: (name, topic) => secrets.deleteFromApp(name, topic),
+      topicReminders,
+      addReminder,
+      cancelReminder: id => cancelReminder(id),
+    })
+  : undefined
+// Relaunches for the root's agent (the socket) and the loopback API, paced and queued in one place.
+const relaunchBroker = conductorLedger
+  ? (() => {
+      const known = topicFacts({ harnessLocked, paneInFlight, square: SQUARE_TOPIC || undefined })
+      return createRelaunchBroker({
+        root: ROOT,
+        rootAgentPid: () => known.agentPid(ROOT),
+        facts: known.facts,
+        external: topic => EXTERNAL_TOPICS.has(topic),
+        callerTopic: known.callerTopic,
+        relaunch: async (topic, by) => {
+          const harness = harnessFor(topic)
+          if (harness) await harness.relaunch({ chatId: String(GROUP_CHAT_ID), topic, fromId: `${by} (broker)` })
+          else await relaunch(String(GROUP_CHAT_ID), topic, `${by} (broker)`)
+        },
+        record: entry => void conductorLedger.append(entry),
+        log,
+      })
+    })()
+  : undefined
+const conductor = conductorStore && appControl && conductorMode?.listener
   ? startConductor({
       mode: conductorMode,
       dir: CONDUCTOR_DIR,
@@ -397,36 +451,7 @@ const conductor = conductorStore && conductorMode?.listener
           // Unmirrored: the store already holds the operator's message.
           echo: async (topic, text) => (await telegramChat.send(topic, { text }))[0],
         }),
-        control: conductorControl({
-          catalog: () => modelCatalog(),
-          capacities: () => capacitySnapshot(),
-          refreshCapacity: () => refreshProviderCapacity(),
-          usageText: () => capacityText(),
-          ultracode: topic => currentRoute(getTopic(topic)).ultracode,
-          requestRoute: (topic, choice) => requestRoute(topic, choice, 'manual'),
-          routeChangeText: request => routeChangeText(request.outcome, request.route),
-          noAgent: topic => (SQUARE_TOPIC && topic === SQUARE_TOPIC ? 'the square has no agent of its own' : undefined),
-          locked: topic => (harnessLocked(topic) ? 'this topic is locked to another harness; use Telegram' : undefined),
-          relaunch: async topic => {
-            const harness = harnessFor(topic)
-            if (harness) await harness.relaunch({ chatId: String(GROUP_CHAT_ID), topic, fromId: ADMIN_USER_ID })
-            else await relaunch(String(GROUP_CHAT_ID), topic, ADMIN_USER_ID)
-          },
-          interrupt,
-          // Unmirrored, like the app's own messages: the app already shows what it did.
-          say: async (topic, text) => void (await telegramChat.send(topic, { text }).catch(noticeFailed('app command echo', topic))),
-          createTopic: name => createTopic(name, 'claude', 'operator'),
-          renameTopic: renameEverywhere,
-          setPrefs: (topic, prefs) => conductorStore.setPrefs(topic, prefs),
-          listed: topic => conductorTopicList().some(t => t.id === topic),
-          secretsOn: () => secrets.secretsOn(),
-          listSecrets: () => secrets.listSecrets(),
-          storeSecret: (name, value, replace, topic) => secrets.storeFromApp(name, value, replace, topic),
-          deleteSecret: (name, topic) => secrets.deleteFromApp(name, topic),
-          topicReminders,
-          addReminder,
-          cancelReminder: id => cancelReminder(id),
-        }),
+        control: appControl,
         ...(hcTopics && {
           screen: (topic: string) => conductorScreen(topic, hcTopics),
           watchTopics: (changed: () => void) => hcTopics.watch.onChange(changed),
@@ -508,6 +533,10 @@ const http = createHttpServer({
   reminders: { handleRemind, handleListReminders, handleCancelReminder },
   pollingSince: inbound.since,
   archive: topicArchive,
+  topicControl: appControl && relaunchBroker && {
+    relaunch: topics => relaunchBroker.requestLoopback(topics),
+    route: (topic, choice) => appControl.route(topic, choice, 'loopback'),
+  },
 })
 await http.serve()
 void createAskServer({ port: ASK_PORT, tokenFile: ASK_TOKEN_FILE, images: ASK_IMAGES, ask: ask.ask, log }).serve()
@@ -533,23 +562,7 @@ if (UPDATE_RESTART) {
 }
 
 // The root's relaunches over a local socket, each a ledger entry: only with the conductor's ledger.
-const broker = conductorLedger
-  ? (() => {
-      const known = topicFacts({ harnessLocked, paneInFlight, square: SQUARE_TOPIC || undefined })
-      const service = createRelaunchBroker({
-        root: ROOT,
-        rootAgentPid: () => known.agentPid(ROOT),
-        facts: known.facts,
-        callerTopic: known.callerTopic,
-        relaunch: async topic => {
-          const harness = harnessFor(topic)
-          if (harness) await harness.relaunch({ chatId: String(GROUP_CHAT_ID), topic, fromId: `${ROOT} (broker)` })
-          else await relaunch(String(GROUP_CHAT_ID), topic, `${ROOT} (broker)`)
-        },
-        record: entry => void conductorLedger.append(entry),
-        log,
-      })
-      setInterval(() => void service.sweep().catch(e => log(`broker: sweep failed: ${reason(e)}`)), 5_000).unref()
-      return serveBroker(BROKER_SOCKET, service, log)
-    })()
+const broker = relaunchBroker
+  ? (setInterval(() => void relaunchBroker.sweep().catch(e => log(`broker: sweep failed: ${reason(e)}`)), 5_000).unref(),
+    serveBroker(BROKER_SOCKET, relaunchBroker, log))
   : (log('broker: off, it needs the conductor ledger'), undefined)

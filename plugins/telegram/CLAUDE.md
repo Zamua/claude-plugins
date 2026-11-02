@@ -553,6 +553,27 @@ and `general`, or `*`) names topics whose sessions something else runs.
 
 Unset, nothing changes.
 
+## Relaunch and route changes over loopback (until Crook's cutover)
+
+So the Crook backend can restart a topic and switch its model before it runs
+sessions itself, the loopback API has two more routes, unauthenticated like the
+rest of it:
+
+- `POST /topic/relaunch {topics: [...]}` goes through the broker's own
+  decision, pacing, queue and ledger (caller `loopback`): any known topic,
+  general included, `applied` now or `queued` until its turn ends, `no_agent`,
+  or `refused` for an unknown topic or one in `TELEGRAM_TOPICS_EXTERNAL`. It
+  answers `{results: [{topic, outcome, reason?}]}`.
+- `POST /topic/route {topic, provider, model, effort?}` is the app's
+  `route_change` (`control.route`, so `requestRoute`, queued while a turn
+  runs), echoed in the topic as `Crook backend: /model ...`. It answers
+  `{route, state}` or the app API's `{error: {code, message}}`, with
+  `external_lifecycle` for an external topic. Any local process can call it, so
+  it never picks a route that skips permission checks (Codex): that is 403
+  `needs_operator`, left to Telegram or the signed app.
+
+Both need the conductor's store and ledger (503 without them).
+
 ## Relaunch from the root (`broker/`)
 
 General's agent, the root of the session tree, can relaunch the topics under it
