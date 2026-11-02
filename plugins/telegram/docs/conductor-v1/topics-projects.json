@@ -61,7 +61,7 @@
       }
     },
     {
-      "id": "w_16832_1",
+      "id": "w_100_1",
       "name": "tests",
       "kind": "claude",
       "title": "Run the upload suite",
@@ -90,7 +90,7 @@
       }
     },
     {
-      "id": "w_16832_2",
+      "id": "w_100_2",
       "name": "migration",
       "kind": "claude",
       "title": "Draft the schema migration",
