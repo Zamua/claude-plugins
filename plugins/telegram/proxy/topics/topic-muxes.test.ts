@@ -45,6 +45,17 @@ describe('topicMuxes', () => {
     expect(muxes.kill('claude-b-61')).toBeFalse()
   })
 
+  test('a previous backend is searched and stopped, never started on', () => {
+    const herdr = fake('herdr', [])
+    const hc = fake('hc', [])
+    const old = fake('hc', ['claude-b-61'])
+    const muxes = topicMuxes(herdr, hc, new Set(['61']), [old])
+    expect(muxes.forTopic('61')).toBe(hc)
+    expect([...muxes.liveSessions()]).toEqual(['claude-b-61'])
+    expect(muxes.elsewhere('61', 'claude-b-61')).toEqual([old])
+    expect([muxes.kill('claude-b-61'), old.killed]).toEqual([true, ['claude-b-61']])
+  })
+
   test('a moved topic\'s session still running in its old backend is found there, and only there', () => {
     const herdr = fake('herdr', ['claude-b-61'])
     const hc = fake('hc', [])

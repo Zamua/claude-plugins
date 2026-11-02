@@ -1446,7 +1446,9 @@ Env (see `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`
 backends" above; applies to Claude topics); `TELEGRAM_TOPICS_HC_TOPICS`,
 `TELEGRAM_HC_BIN` and `TELEGRAM_HC_SESSION` (the topics run under herdr-core, its
 binary, and the hc session, default `topics`, whose core its own launchd agent
-starts); `TELEGRAM_ANTIGRAVITY_BIN` (optional
+starts); `TELEGRAM_HC_PREVIOUS_SESSIONS` (hc sessions topics ran in before the
+session changed: copies still running there are found and stopped when a topic
+moves, never started); `TELEGRAM_ANTIGRAVITY_BIN` (optional
 path to official `agy`, defaults to the Nix per-user profile and then PATH);
 `TELEGRAM_OPENCODE_BIN` (the `opencode` 2.x CLI, default
 `/opt/homebrew/bin/opencode` then PATH; the OpenCode Go catalog reads
