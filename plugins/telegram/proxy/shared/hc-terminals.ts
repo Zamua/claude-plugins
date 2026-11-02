@@ -13,6 +13,7 @@ export type HcTerminal =
       session?: string
       status?: HcStatus
       foreground?: string
+      foregroundPid?: number
       title?: string
       cols?: number
       /** What a blocked program said it waits on: the kind (permission, question, auth) and its message. */
@@ -33,12 +34,13 @@ export function parseHcTerminals(listed: unknown): HcTerminal[] {
     if (t.state !== 'live') return [{ state: 'finished', address: t.address, ...session }]
     const status = t.reported && STATUSES.has(t.status?.state) ? { status: t.status.state as HcStatus } : {}
     const foreground = typeof t.foreground?.name === 'string' ? { foreground: t.foreground.name as string } : {}
+    const foregroundPid = Number.isInteger(t.foreground?.pid) && t.foreground.pid > 0 ? { foregroundPid: t.foreground.pid as number } : {}
     const title = typeof t.title === 'string' && t.title.trim() ? { title: t.title.trim() as string } : {}
     const cols = Number.isInteger(t.cols) ? { cols: t.cols as number } : {}
     const blocked = t.reported && t.status?.state === 'blocked'
       ? { blocked: { kind: typeof t.status.kind === 'string' ? t.status.kind : null, msg: typeof t.status.msg === 'string' ? t.status.msg : '' } }
       : {}
-    return [{ state: 'live', address: t.address, ...session, ...status, ...foreground, ...title, ...cols, ...blocked }]
+    return [{ state: 'live', address: t.address, ...session, ...status, ...foreground, ...foregroundPid, ...title, ...cols, ...blocked }]
   })
 }
 

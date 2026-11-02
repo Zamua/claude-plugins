@@ -26,6 +26,13 @@ export type UpdateRestartPorts = {
   liveSessions?: () => Map<string, LiveClaudeSession>
 }
 
+/** The proxy still holds work for the topic: a queued message, an in-flight pane turn, or an unanswered permission prompt. */
+export function proxyHoldsWork(topic: string, st: TopicState, paneInFlight: (topic: string) => boolean): boolean {
+  if (st.queue.length > 0 || paneInFlight(topic)) return true
+  for (const pending of pendingPerms.values()) if (pending.topic === topic) return true
+  return false
+}
+
 export function createUpdateRestarts({
   sayIn,
   harnessLocked,
@@ -37,12 +44,6 @@ export function createUpdateRestarts({
 }: UpdateRestartPorts) {
   const deferred = new Set<string>()
   const attempted = new Map<string, string>()
-
-  function proxyHoldsWork(topic: string, st: TopicState): boolean {
-    if (st.queue.length > 0 || paneInFlight(topic)) return true
-    for (const pending of pendingPerms.values()) if (pending.topic === topic) return true
-    return false
-  }
 
   function sweep(): void {
     const installed = installedVersion()
@@ -58,7 +59,7 @@ export function createUpdateRestarts({
         activity: claude?.activity,
         activitySince: claude?.activitySince,
         now: Date.now(),
-        proxyBusy: proxyHoldsWork(topic, st),
+        proxyBusy: proxyHoldsWork(topic, st, paneInFlight),
         deferred: deferred.has(topic),
         attempted: attempted.get(topic) === installed,
       })

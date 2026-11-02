@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { claudePromptVisible } from './multiplexer'
+import { claudePromptVisible, parseHerdrProcessInfo } from './multiplexer'
 
 describe('Claude foreground prompt detection', () => {
   test('reads a blank foreground prompt as ready while background work continues', () => {
@@ -31,4 +31,11 @@ describe('Claude foreground prompt detection', () => {
     expect(claudePromptVisible('Thinking…\n  esc to interrupt')).toBeFalse()
     expect(claudePromptVisible('❯ partially typed text\n---\n  Claude · codex')).toBeFalse()
   })
+})
+
+test('herdr\'s process info gives the pane\'s foreground group, and nothing for an answer it cannot read', () => {
+  const answer = JSON.stringify({ id: 'cli:pane:process_info', result: { process_info: { foreground_process_group_id: 25267, foreground_processes: [{ name: 'claude' }] } } })
+  expect(parseHerdrProcessInfo(answer)?.foreground_process_group_id).toBe(25267)
+  expect(parseHerdrProcessInfo('not json')).toBeUndefined()
+  expect(parseHerdrProcessInfo('{"result":{}}')).toBeUndefined()
 })

@@ -12,6 +12,12 @@ export interface MultiplexerPort {
   /** Presses the agent's stop key (Escape), ending its current turn; false when the session is not there. */
   interrupt(session: string): boolean
   kill(session: string): boolean
+  /**
+   * The pid of the session's agent as the multiplexer sees it (the process
+   * holding the terminal), from which every process the agent starts descends;
+   * undefined when it cannot say.
+   */
+  agentPid(session: string): number | undefined
 }
 
 export function claudePromptVisible(visible: string): boolean {
@@ -68,6 +74,12 @@ export class TmuxMux implements MultiplexerPort {
   kill(session: string): boolean {
     return spawnSync('tmux', ['kill-session', '-t', `=${session}`], { encoding: 'utf8' }).status === 0
   }
+
+  agentPid(session: string): number | undefined {
+    const result = spawnSync('tmux', ['display-message', '-p', '-t', session, '#{pane_pid}'], { encoding: 'utf8' })
+    const pid = Number((result.stdout ?? '').trim())
+    return result.status === 0 && Number.isInteger(pid) && pid > 0 ? pid : undefined
+  }
 }
 
 export class HerdrMux implements MultiplexerPort {
@@ -79,17 +91,15 @@ export class HerdrMux implements MultiplexerPort {
     return result.status === 0 ? parseHerdrPanes(result.stdout ?? '') : new Map()
   }
 
-  private foregroundIsAgent(paneId: string): boolean {
+  private processInfo(paneId: string): HerdrProcessInfo | undefined {
     const result = spawnSync(this.bin, ['pane', 'process-info', '--pane', paneId], { encoding: 'utf8' })
-    if (result.status !== 0) return false
-    try {
-      const processes = JSON.parse(result.stdout ?? '{}')?.result?.process_info?.foreground_processes ?? []
-      return processes.some((process: any) =>
-        !/^(zsh|bash|sh|fish|dash|ksh)$/.test(String(process?.name ?? '')),
-      )
-    } catch {
-      return false
-    }
+    return result.status === 0 ? parseHerdrProcessInfo(result.stdout ?? '') : undefined
+  }
+
+  private foregroundIsAgent(paneId: string): boolean {
+    return (this.processInfo(paneId)?.foreground_processes ?? []).some(process =>
+      !/^(zsh|bash|sh|fish|dash|ksh)$/.test(String(process?.name ?? '')),
+    )
   }
 
   private foregroundPromptVisible(paneId: string): boolean {
@@ -136,6 +146,24 @@ export class HerdrMux implements MultiplexerPort {
     const paneId = this.panes().get(session)?.paneId
     if (!paneId) return false
     return spawnSync(this.bin, ['pane', 'close', paneId], { encoding: 'utf8' }).status === 0
+  }
+
+  /** The pane's foreground process group: the agent leads it while it holds the terminal. */
+  agentPid(session: string): number | undefined {
+    const paneId = this.panes().get(session)?.paneId
+    const group = paneId ? this.processInfo(paneId)?.foreground_process_group_id : undefined
+    return Number.isInteger(group) && (group as number) > 0 ? group : undefined
+  }
+}
+
+type HerdrProcessInfo = { foreground_process_group_id?: number; foreground_processes?: Array<{ name?: unknown }> }
+
+export function parseHerdrProcessInfo(output: string): HerdrProcessInfo | undefined {
+  try {
+    const info = JSON.parse(output)?.result?.process_info
+    return info && typeof info === 'object' ? info : undefined
+  } catch {
+    return undefined
   }
 }
 

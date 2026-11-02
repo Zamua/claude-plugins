@@ -16,7 +16,7 @@ test('a snapshot and the events after it keep each terminal as terminal.list wou
   applyHcEvent(known, { type: 'status', seq: 6, terminal: 't2', data: { records: {}, reported: true, status: { app: 'claude-code', state: 'working' } } })
   expect(parseHcTerminals({ terminals: [...known.values()] })).toEqual([
     { state: 'live', address: 't1', session: 's1', status: 'done' },
-    { state: 'live', address: 't2', session: 'claude-build-42', status: 'working', foreground: 'claude', title: 'Fix the flaky test', cols: 200 },
+    { state: 'live', address: 't2', session: 'claude-build-42', status: 'working', foreground: 'claude', foregroundPid: 9, title: 'Fix the flaky test', cols: 200 },
   ])
   applyHcEvent(known, { type: 'finished', seq: 7, terminal: 't2', data: { exit_code: 0, reason: 'exited', signal: null, finished_ms: 1 } })
   expect(parseHcTerminals({ terminals: [known.get('t2')] })).toEqual([{ state: 'finished', address: 't2', session: 'claude-build-42' }])

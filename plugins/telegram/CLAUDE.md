@@ -255,7 +255,10 @@ The code follows a ports-and-adapters split so neither backend leaks into the
 core:
 
 - **The port** (`proxy/topics/multiplexer.ts`): `interface MultiplexerPort
-  { kind; liveSessions(); runtime(); prompt(); interrupt(); kill() }`. `runtime` and `prompt`
+  { kind; liveSessions(); runtime(); prompt(); interrupt(); kill(); agentPid() }`.
+  `agentPid` is the process holding the session's terminal (herdr's foreground
+  process group, tmux's `pane_pid`, hc's foreground pid), which the broker uses
+  to tell whose descendant a caller is. `runtime` and `prompt`
   provide safe idle-turn delivery for custom provider routes. `TmuxMux` shells
   to `tmux`; `HerdrMux`
   shells to `herdr pane list` (JSON; the pane `label` is our session name) /
@@ -499,6 +502,34 @@ ack names the missing id and says a new conversation was started, and the
 notice tells the agent it has no earlier history. Nothing is lost that was not
 already gone. The decision and both messages are pure in
 `proxy/topics/domain/topic-conversation.ts` (`planRelaunch`, `spawnConversation`).
+
+## Relaunch from the root (`broker/`)
+
+General's agent, the root of the session tree, can relaunch the topics under it
+without the operator typing `/relaunch` in each: `bun proxy/broker/relaunch-cli.ts
+<topic>...` prints `applied`, `queued`, `no_agent` or `refused (<why>)` per
+topic and exits 1 when anything was refused. It talks to a unix socket,
+`broker.sock` in the state dir (0600), which the proxy serves only with the
+conductor's ledger on.
+
+- **Who asks** is what the kernel says, never the request: the peer's pid
+  (`LOCAL_PEERPID`) and its parents (`proc_pidinfo`), in `broker/peer.ts`. The
+  caller speaks for the root only when the root's agent pid, as its
+  multiplexer reports it at that moment, is among them, so only processes
+  general's Claude started qualify. Anyone else is refused in full.
+- **Which targets**: topics under the root in the session tree
+  (`descendsFrom`), so never general itself; an unknown topic is refused.
+- **When**: a topic whose Claude is between turns (Claude Code's own session
+  status, as for update restarts, and nothing held by the proxy) is relaunched
+  at once through the same `relaunch` as `/relaunch` (ack, `relaunch=1`
+  notice). A busy one is `queued` and relaunched by a 5 s sweep at its turn's
+  end, or dropped if its agent stops first. A topic with no running agent is
+  `no_agent`: its next spawn starts fresh anyway. A harness-locked topic goes
+  through its harness, which waits for its own boundary.
+- **The ledger**: every decision is a line before anything runs, `relaunch`
+  (caller, caller pid, target, outcome, and `queued: true` when a queued one
+  runs) or `relaunch_refused` (caller pid, the topic whose agent it descends
+  from if any, targets, reason).
 
 ## Reminders (`remind`, `list_reminders`, `cancel_reminder`)
 
@@ -1290,6 +1321,10 @@ there is no agent to relaunch.
     `antigravity/`, `opencode/` and `localgen/` each hold that harness's
     Telegram front end (`*-harness.ts`), application service, ports, runtime
     adapters and `domain/` aggregate.
+  - `proxy/broker/`: relaunches the root's agent asks for over a local socket
+    (`domain/relaunch.ts` the rule, `relaunch-broker.ts` the service,
+    `broker-server.ts` the socket, `peer.ts` the kernel's view of the caller,
+    `relaunch-cli.ts` the command).
   - `proxy/square/`: the agent-to-agent square and its conversation registry.
   - `proxy/reminders/`: reminders; `domain/reminder.ts` validates.
   - `proxy/chat/`: the chat port (`domain/chat-port.ts`): what the proxy

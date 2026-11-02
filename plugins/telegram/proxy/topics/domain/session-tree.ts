@@ -47,3 +47,13 @@ export function sessionNodeFrom(value: unknown): SessionNode | undefined {
   const textOrNull = (x: unknown) => (typeof x === 'string' && x ? x : null)
   return { parent: textOrNull(v.parent), spawnedBy: textOrNull(v.spawned_by), spawnedAt: textOrNull(v.spawned_at) }
 }
+
+/** Whether `topic` hangs under `ancestor`, following each node's parent. */
+export function descendsFrom(topic: string, ancestor: string, parentOf: (topic: string) => string | null): boolean {
+  const seen = new Set<string>()
+  for (let parent = parentOf(topic); parent !== null && !seen.has(parent); parent = parentOf(parent)) {
+    if (parent === ancestor) return true
+    seen.add(parent)
+  }
+  return false
+}

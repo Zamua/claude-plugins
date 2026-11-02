@@ -18,6 +18,8 @@ export const STATE_DIR =
 export const INBOX_DIR = join(STATE_DIR, 'inbox')
 export const REGISTRY_FILE = join(STATE_DIR, 'registry.json')
 export const PID_FILE = join(STATE_DIR, 'proxy.pid')
+/** The broker's socket: relaunches the root's agent asks for (`broker/`). */
+export const BROKER_SOCKET = join(STATE_DIR, 'broker.sock')
 export const OVERRIDE_SETTINGS = join(PLUGIN_ROOT, 'override-settings.json')
 // The Stop hook that keeps replies out of the transcript. override-settings.json
 // references it as $TG_HOOK (passed to the session via `tmux new-session -e`) so

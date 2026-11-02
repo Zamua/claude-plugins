@@ -12,6 +12,7 @@ function fake(kind: MultiplexerPort['kind'], live: string[]): MultiplexerPort & 
     prompt: () => true,
     interrupt: s => sessions.has(s),
     kill: s => (killed.push(s), sessions.delete(s)),
+    agentPid: () => undefined,
   }
 }
 
