@@ -55,6 +55,7 @@ import {
   PID_FILE,
   PLUGIN_ROOT,
   SENT_MESSAGES_FILE,
+  SILENT,
   SQUARE_TOPIC,
   BROKER_SOCKET,
   CROOK_USAGE_FILE,
@@ -152,7 +153,7 @@ process.on('uncaughtException', err => {
 
 const bot = new Bot(TOKEN, BOT_API_ROOT ? { client: { apiRoot: BOT_API_ROOT } } : undefined)
 const downloadFile = telegramDownloader(bot.api, TOKEN, INBOX_DIR, log, BOT_API_ROOT)
-const telegramChat = createTelegramChat(bot.api, String(GROUP_CHAT_ID), downloadFile)
+const telegramChat = createTelegramChat(bot.api, String(GROUP_CHAT_ID), downloadFile, { silent: SILENT })
 // With the conductor on, every message a topic sees is also kept in its store; the
 // chat each service gets says who that service's messages are from.
 const conductorStore = CONDUCTOR_LISTEN ? new ConductorStore(CONDUCTOR_DIR) : undefined

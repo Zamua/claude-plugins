@@ -77,7 +77,9 @@ const parseMode = (format?: TextFormat) => (format === 'markdown' ? { parse_mode
 const unparsed = (error: unknown) => error instanceof GrammyError && error.error_code === 400 && /can't parse entities/i.test(error.description)
 const replyTo = (id?: MessageId) => (id != null ? { reply_parameters: { message_id: id } } : {})
 
-export function createTelegramChat(api: TelegramApi, chatId: string, download: Downloader): ChatPort {
+/** `silent` posts every message without a notification: Telegram as a quiet mirror while another client pings. */
+export function createTelegramChat(api: TelegramApi, chatId: string, download: Downloader, options: { silent?: boolean } = {}): ChatPort {
+  const quiet = (silent?: boolean) => (silent || options.silent ? { disable_notification: true } : {})
   /** GitHub Markdown, converted per message part; a part Telegram cannot parse goes as its Markdown source, plain. */
   async function sendMarkdown(topic: string, message: OutgoingText): Promise<MessageId[]> {
     let parts: Array<{ v2?: string; source: string }>
@@ -91,7 +93,7 @@ export function createTelegramChat(api: TelegramApi, chatId: string, download: D
       const options = {
         ...threadOf(topic),
         ...(i === 0 ? replyTo(message.replyTo) : {}),
-        ...(message.silent ? { disable_notification: true } : {}),
+        ...quiet(message.silent),
         ...(message.actions && i === parts.length - 1 ? { reply_markup: renderActions(message.actions) } : {}),
       }
       const { v2, source } = parts[i]
@@ -116,7 +118,7 @@ export function createTelegramChat(api: TelegramApi, chatId: string, download: D
         ...threadOf(topic),
         ...(i === 0 ? replyTo(message.replyTo) : {}),
         ...parseMode(message.format),
-        ...(message.silent ? { disable_notification: true } : {}),
+        ...quiet(message.silent),
         ...(message.forceReply
           ? { reply_markup: { force_reply: true, input_field_placeholder: message.forceReply.placeholder } }
           : message.actions && i === parts.length - 1
@@ -130,7 +132,7 @@ export function createTelegramChat(api: TelegramApi, chatId: string, download: D
 
   async function sendFile(topic: string, out: OutgoingFile): Promise<MessageId> {
     const input = 'path' in out.file ? new InputFile(out.file.path) : new InputFile(out.file.bytes, out.file.name)
-    const options = { ...threadOf(topic), ...replyTo(out.replyTo), ...(out.caption != null ? { caption: out.caption } : {}) }
+    const options = { ...threadOf(topic), ...replyTo(out.replyTo), ...quiet(), ...(out.caption != null ? { caption: out.caption } : {}) }
     const sent = out.kind === 'photo'
       ? await api.sendPhoto(chatId, input, options)
       : await api.sendDocument(chatId, input, options)

@@ -90,6 +90,15 @@ describe('send', () => {
     expect(calls.slice(-2).map(c => c.args.slice(2))).toEqual([['*odd*', { parse_mode: 'MarkdownV2' }], ['**odd**']])
   })
 
+  test('a silent chat posts every text, Markdown part and file without a notification', async () => {
+    const fake = fakeApi()
+    const chat = createTelegramChat(fake.api, CHAT, async () => null, { silent: true })
+    await chat.send('42', { text: 'plain' })
+    await chat.send('42', { text: '**md**', format: 'gfm' })
+    await chat.sendFile('42', { file: { bytes: new Uint8Array([1]), name: 'a.png' }, kind: 'photo' })
+    expect(fake.calls.map(c => (c.args[2] as { disable_notification?: boolean }).disable_notification)).toEqual([true, true, true])
+  })
+
   test('a forced reply opens the reply box with its placeholder', async () => {
     const { chat, calls } = chatOver()
     await chat.send('42', { text: 'name?', forceReply: { placeholder: 'secret name' } })
