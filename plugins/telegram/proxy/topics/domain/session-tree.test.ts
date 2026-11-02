@@ -1,11 +1,24 @@
 import { expect, test } from 'bun:test'
-import { ROOT, mayCreateProject, projectOf, sessionNode, sessionNodeFrom, spawnedNode, spawns, topicRole } from './session-tree'
+import { ROOT, mayCreateProject, projectOf, reparentRefusal, sessionNode, sessionNodeFrom, spawnedNode, spawns, topicRole } from './session-tree'
 
-test('general is the root; every other topic is a project, hanging under the root whoever made it', () => {
+test('general is the root; a topic recorded under a project is its worker; every other topic is a project under the root', () => {
   expect([topicRole('general'), topicRole('42')]).toEqual(['root', 'coordinator'])
   expect(sessionNode('general')).toEqual({ parent: null, spawnedBy: null, spawnedAt: null })
-  expect(sessionNode('42', { parent: '43', spawnedBy: '43', spawnedAt: 't' })).toEqual({ parent: ROOT, spawnedBy: '43', spawnedAt: 't' })
+  expect(sessionNode('42', { parent: ROOT, spawnedBy: 'operator', spawnedAt: 't' })).toEqual({ parent: ROOT, spawnedBy: 'operator', spawnedAt: 't' })
+  const worker = { parent: '43', spawnedBy: 'operator', spawnedAt: 't' }
+  expect([topicRole('42', worker), sessionNode('42', worker).parent]).toEqual(['worker', '43'])
+  expect(topicRole('42', { parent: '42', spawnedBy: null, spawnedAt: null })).toBe('coordinator')
   expect(spawnedNode('44', 'operator', 't')).toEqual({ parent: ROOT, spawnedBy: 'operator', spawnedAt: 't' })
+})
+
+test('a topic goes under the root or a project, never under a worker or itself, and one with workers stays a project', () => {
+  const roles: Record<string, 'root' | 'coordinator' | 'worker'> = { general: 'root', p: 'coordinator', w: 'worker', t: 'coordinator' }
+  const why = (topic: string, parent: string, hasWorkers = false) => reparentRefusal(topic, parent, t => roles[t], () => hasWorkers)
+  expect([why('t', 'p'), why('t', ROOT), why('t', ROOT, true)]).toEqual([undefined, undefined, undefined])
+  expect(why('t', 't')).toBe('a topic cannot hang under itself')
+  expect(why('t', 'w')).toBe('w is a worker, not a project')
+  expect(why('t', 'nope')).toBe('no project nope')
+  expect(why('t', 'p', true)).toBe('t has workers of its own')
 })
 
 test('two levels at most: the root makes projects, a coordinator workers, a worker nothing', () => {

@@ -1,8 +1,9 @@
-// Archive, restore and rename projects from the proxy's own side (the loopback
-// API and topics-admin), each idempotent. Archiving stops the session and keeps
+// Archive, restore, rename and reparent topics from the proxy's own side (the
+// loopback API and topics-admin), each idempotent. Archiving stops the session and keeps
 // its conversation id and transcript; restoring only clears the flag, so the
 // next message resumes the same conversation.
 import { notAProject } from './domain/archive'
+import { ROOT, reparentRefusal, sessionNode, topicRole } from './domain/session-tree'
 import type { ArchiveResult } from './domain/archive'
 import { topics } from './state'
 import type { TopicState } from './state'
@@ -56,7 +57,29 @@ export function createTopicArchive({ killSession, save, rename, square, now = ()
     return { topic, outcome: 'renamed' }
   }
 
-  return { archive, restore, rename: renameTopic }
+  const parentOf = (topic: string) => sessionNode(topic, topics.get(topic)?.session).parent
+
+  /** Hangs a topic under a project as its worker, or under the root as a project again. */
+  function reparent(topic: string, parent: string): ArchiveResult {
+    const refused = refusal(topic)
+    if (refused) return refused
+    if (square && parent === square) return { topic, outcome: 'refused', reason: 'the square is not a project' }
+    const st = topics.get(topic) as TopicState
+    if (parentOf(topic) === parent) return { topic, outcome: 'unchanged' }
+    const why = reparentRefusal(
+      topic,
+      parent,
+      t => (topics.has(t) ? topicRole(t, topics.get(t)?.session) : undefined),
+      t => [...topics.keys()].some(other => other !== t && parentOf(other) === t),
+    )
+    if (why) return { topic, outcome: 'refused', reason: why }
+    st.session = { parent, spawnedBy: st.session?.spawnedBy ?? null, spawnedAt: st.session?.spawnedAt ?? null }
+    save()
+    log(`topic ${topic} "${st.name || topic}" now hangs under ${parent}${parent === ROOT ? ' as a project' : ' as its worker'}`)
+    return { topic, outcome: 'reparented' }
+  }
+
+  return { archive, restore, rename: renameTopic, reparent }
 }
 
 export type TopicArchive = ReturnType<typeof createTopicArchive>

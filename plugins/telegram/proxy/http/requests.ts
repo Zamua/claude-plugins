@@ -146,6 +146,11 @@ export function parseTopicRoute(body: unknown): { topic: string; choice: Record<
   return { topic: topicKey(b), choice: b }
 }
 
+export function parseTopicReparent(body: unknown): { topic: string; parent: string } {
+  const b = object(body)
+  return { topic: topicKey(b), parent: topicKey({ topic: b.parent }) }
+}
+
 export function parseCancelReminder(body: unknown): { topic: string; id: string } {
   const b = object(body)
   return { topic: topicKey(b), id: text(b, 'id') }

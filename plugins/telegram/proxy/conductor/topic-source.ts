@@ -33,7 +33,7 @@ export function conductorTopics(
       const terminal = hcTerminal(topic, hc)
       const onHc = hc?.topics.has(topic) ? { core: hc.watch.connected(), terminal } : undefined
       const node = sessionNode(topic, st.session)
-      const role = topicRole(topic)
+      const role = topicRole(topic, st.session)
       return {
         role,
         projectId: projectOf(role, topic, node.parent),

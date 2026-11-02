@@ -163,8 +163,9 @@ same text a push for that message shows, so `format` is `plain`; `author`, `at`)
 the session tree, at most two levels below the root: `general` is the `root`
 (`project_id` and `parent_id` null); every other topic is a project whose
 session is its `coordinator` (`project_id` its own id, `parent_id` `general`);
-a `worker` is a session a coordinator spawns, with no Telegram topic (`project_id`
-and `parent_id` its coordinator's). Only the root and the operator make projects
+a `worker` is a session a coordinator spawns, with no Telegram topic, or a
+project's topic the admin hung under another project (`topics-admin-cli.ts
+reparent`); its `project_id` and `parent_id` are its coordinator's. Only the root and the operator make projects
 (`create_topic` from another topic is refused), only a coordinator spawns
 workers, and a worker spawns nothing. `spawned_by` is `operator`, `proxy`
 (asks), the creating session's id, or null for a topic that predates the tree,

@@ -229,7 +229,8 @@ path the `/model` picker also takes, the lifecycle and the chat port; each is a
 ledger entry before it runs. Pin and mute are the store's own (`topic_prefs`). The session tree
 (`topics/domain/session-tree.ts`: general the root, every other topic a
 project with its session as coordinator, workers under a coordinator, nothing
-deeper) is recorded at creation in the registry's `session` field and served
+deeper; a topic becomes a worker only through `reparent`) is recorded in the
+registry's `session` field and served
 as `role`, `project_id`, `parent_id`, `spawned_by` and `spawned_at`; only the
 root and the operator make projects, so `/topic/create` refuses another topic.
 `approvals.ts` opens an approval while an hc topic's session is blocked on a
@@ -533,12 +534,16 @@ app, a reminder, `/relaunch`, a square delivery. That is, any `ensureSession`
 except the pane pump's timer. The flag is cleared, the topic gets one line
 (`📂 restored from the archive...`), and the same conversation resumes.
 
-`bun proxy/topics/topics-admin-cli.ts archive|restore <topic>...` or `rename
-<topic> <name>` drives it through the loopback API (`/topic/archive`,
-`/topic/restore`, `/topic/rename`; no auth, like every loopback route). It
-prints one outcome per topic: `archived`, `already_archived`, `restored`,
-`not_archived`, `renamed`, `unchanged`, `unknown`, or `refused` for the root and
-the square. It exits 1 on any unknown or refused. Each verb is idempotent. A
+`bun proxy/topics/topics-admin-cli.ts archive|restore <topic>...`, `rename
+<topic> <name>` or `reparent <topic> <parent>` drives it through the loopback
+API (`/topic/archive`, `/topic/restore`, `/topic/rename`, `/topic/reparent`;
+no auth, like every loopback route). It prints one outcome per topic:
+`archived`, `already_archived`, `restored`, `not_archived`, `renamed`,
+`reparented`, `unchanged`, `unknown`, or `refused` with its reason. It exits 1
+on any unknown or refused. `reparent` hangs a project's topic under another
+project as its worker (or back under `general`): the session tree's rule
+(`reparentRefusal`) keeps it two levels deep, so the parent must be `general`
+or a coordinator, and a topic with workers of its own stays a project. Each verb is idempotent. A
 rename goes through the same path as the app's: the Telegram thread, the
 registry and any harness. Archiving leaves the Telegram topic as it is.
 
