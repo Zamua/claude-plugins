@@ -1,13 +1,13 @@
 // Three tabs over the sessions' state files. PRs: every session's `prs`, one dense row each,
 // projects in their `order`, a section per `group` inside each (ungrouped PRs first), workstreams
 // whose PRs are all merged folded into Done, and stacks bracketed by their base branches or an
-// entry's `stack_on`. Reviews: the reviews project's PRs the same way, a section per review
+// entry's `stack_on`. PR Reviews: the reviews project's PRs the same way, a section per review
 // session, marked by the person's own review. Asks: every open ask, by project, due soonest first.
 // props: { folder } (the projects folder), { reviews } (the project whose sessions review other
 // people's PRs, default "reviews") and { block }, the layout block that shows it, left alone while
 // hidden.
 
-import { View, div } from "gpui-kit";
+import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar } from "gpui-base";
 import { exec, theme, props, run, layout, watchFolder, closeOverlay, settings, terminals } from "herdr";
 import { folderOf, readFiles } from "./files.js";
@@ -40,7 +40,7 @@ function projects(files) {
   for (const [key, f] of entries) {
     const [name, session] = key.split("/");
     const p = byName.get(name) ?? { name, title: name, order: Infinity, closed: false, prs: new Map() };
-    if (f.title !== undefined) Object.assign(p, { title: f.title || name, order: f.order ?? Infinity, closed: Boolean(f.closed) });
+    if (f.title !== undefined) Object.assign(p, { title: f.title || name, order: f.order ?? Infinity, closed: Boolean(f.closed), lead: session });
     for (const x of f.prs ?? []) {
       const id = typeof x === "string" ? x : x?.pr;
       if (!id || !parse(id)) continue;
@@ -253,7 +253,6 @@ export default class SessionPrs extends View {
     const { approved, action } = this.marks(pr, reviewing);
     const ci = final ? t.dim : { SUCCESS: t.ansi2, FAILURE: t.ansi1, ERROR: t.ansi1, PENDING: t.ansi3, EXPECTED: t.ansi3 }[pr?.ci] ?? t.dim;
     const [word, color] = !pr ? ["", t.dim] : merged ? ["merged", t.ansi5] : pr.state === "CLOSED" ? ["closed", t.ansi1] : pr.draft ? ["draft", t.muted] : ["ready", t.ansi4];
-    const on = this.onOf(p, heads);
     const cell = (w, text, c) => div().w(w).flex_none().text_color(c).child(text);
     // Drawn inside a virtual list, where a row may register no handler; the list's on_item_click opens it
     return h_flex().id(`pr-${p.id}`).h(ROW).flex_none().px(12).items_center().whitespace_nowrap().cursor_pointer()
@@ -265,7 +264,6 @@ export default class SessionPrs extends View {
         .when(!final && pr?.ci === "PENDING", (el) => el.loop("opacity", { from: 0.3, to: 1, period: 1200 }))))
       .child(cell(56, word, color))
       .child(div().w(64).flex_none().mr(6).truncate().text_color(t.dim).child(who(pr?.author)))
-      .when(Boolean(on), (el) => el.child(div().flex_none().mr(6).text_color(t.dim).child(`on #${on}`)))
       .child(div().flex_1().min_w(0).truncate().text_color(final ? t.dim : t.muted).child(pr?.title ?? p.id));
   }
 
@@ -283,10 +281,8 @@ export default class SessionPrs extends View {
     const shown = list
       .map((proj) => ({ ...proj, prs: proj.prs.filter((p) => this.live.get(p.id)?.state !== "CLOSED") }))
       .filter((proj) => proj.prs.length);
-    shown.forEach((proj, i) => {
-      if (i) items.push({ kind: "gap" });
-      const project = items.length;
-      items.push({ kind: "project", title: proj.title, project });
+    const finished = (g) => g.prs.every((p) => isMerged(this.live.get(p.id)));
+    const groupsOf = (proj) => {
       const groups = [];
       for (const p of proj.prs) {
         const title = p.group ?? "";
@@ -294,46 +290,78 @@ export default class SessionPrs extends View {
         if (!g) (title ? groups.push((g = { title, prs: [] })) : groups.unshift((g = { title, prs: [] })));
         g.prs.push(p);
       }
+      return groups;
+    };
+    const emitProject = (proj, first, top) => {
+      if (!first) items.push({ kind: "gap", top });
+      const project = items.length;
+      items.push({ kind: "project", title: proj.title, project, top, open: proj.lead ? `${proj.name}/${proj.lead}` : null });
+      const groups = groupsOf(proj);
       const emit = (g, gap, done, title = g.title) => {
-        if (gap && title) items.push({ kind: "gap", project, done });
+        if (gap && title) items.push({ kind: "gap", project, done, top });
         const group = title ? items.length : null;
-        if (title) items.push({ kind: "group", title, project, group, done });
-        for (const n of this.runs(g.prs, heads)) items.push({ kind: "pr", n, project, group, done });
+        if (title) items.push({ kind: "group", title, project, group, done, top, open: reviewing && g.title ? `${proj.name}/${g.title}` : null });
+        for (const n of this.runs(g.prs, heads)) items.push({ kind: "pr", n, project, group, done, top });
       };
       // A workstream whose PRs are all merged waits, folded, in Done at the project's foot; the
       // ungrouped PRs count as one, named for the project there
-      const finished = (g) => g.prs.every((p) => isMerged(this.live.get(p.id)));
       groups.filter((g) => !finished(g)).forEach((g, j) => emit(g, j > 0));
       const done = groups.filter(finished);
       if (!done.length) return;
-      if (items.length - 1 > project) items.push({ kind: "gap", project });
+      if (items.length - 1 > project) items.push({ kind: "gap", project, top });
       const at = items.length;
       const key = `${reviewing ? "r" : "p"}:${proj.name}`;
       const open = this.doneOpen.has(key);
-      items.push({ kind: "done", title: `Done · ${done.length} workstream${done.length === 1 ? "" : "s"}`, name: key, open, project, done: at });
+      items.push({ kind: "done", title: `Done · ${done.length} workstream${done.length === 1 ? "" : "s"}`, name: key, open, project, done: at, top });
       if (open) done.forEach((g, j) => emit(g, j > 0, at, g.title || proj.title));
-    });
+    };
+    // A project with every workstream done moves, folded, into one Done at the foot of the tab
+    const allDone = (proj) => groupsOf(proj).every(finished);
+    const active = shown.filter((proj) => !allDone(proj));
+    const resting = shown.filter(allDone);
+    active.forEach((proj, i) => emitProject(proj, i === 0));
+    if (resting.length) {
+      if (items.length) items.push({ kind: "gap" });
+      const top = items.length;
+      const key = `${reviewing ? "r" : "p"}:*`;
+      const open = this.doneOpen.has(key);
+      items.push({ kind: "done", title: `Done · ${resting.length} project${resting.length === 1 ? "" : "s"}`, name: key, open, top, done: top, project: top });
+      if (open) resting.forEach((proj) => emitProject(proj, false, top));
+    }
 
+    // A header that belongs to a session ends in a terminal icon; the header opens that session
+    const go = (item) => (item.open ? (el) => el.cursor_pointer().child(div().flex_1())
+      .child(svg("mods/session-prs/terminal.svg").size(12).flex_none().text_color(t.dim)) : (el) => el);
     const header = (item) => item.kind === "project"
-      ? h_flex().h(ROW).px(12).items_center().border_b(1).border_color(t.border).bg(t.surface)
-        .child(div().font_bold().text_color(t.foreground).child(item.title))
+      ? go(item)(h_flex().h(ROW).px(12).items_center().border_b(1).border_color(t.border).bg(t.surface)
+        .child(div().font_bold().text_color(t.foreground).child(item.title)))
       : item.kind === "done"
         ? h_flex().h(ROW).px(12).gap(6).items_center().whitespace_nowrap().bg(t.surface).cursor_pointer().text_color(t.dim)
           .child(div().w(10).child(item.open ? "▾" : "▸")).child(div().child(item.title))
-        : h_flex().h(ROW).px(12).items_center().whitespace_nowrap().bg(t.surface)
-          .child(div().font_semibold().text_color(t.foreground).child(item.title));
+        : go(item)(h_flex().h(ROW).px(12).items_center().whitespace_nowrap().bg(t.surface)
+          .child(div().font_semibold().text_color(t.foreground).child(item.title)));
+    const openSession = (path) => this.focusSession(...path.split("/"));
     const toggleDone = (name, cx) => {
       this.doneOpen.has(name) ? this.doneOpen.delete(name) : this.doneOpen.add(name);
       localStorage.setItem("doneOpen", JSON.stringify([...this.doneOpen]));
       cx.notify();
     };
     const draw = (item) => (item.kind === "pr" ? this.row(t, item.n, heads, who, reviewing) : item.kind === "gap" ? div().h(ROW) : header(item));
-    const keyOf = (k) => (items[k]?.kind === "pr" ? items[k].n.p.id : items[k]?.kind === "done" ? `done:${items[k].name}` : `row-${k}`);
+    const keyOf = (k) => {
+      const item = items[k];
+      if (item?.kind === "pr") return item.n.p.id;
+      if (item?.kind === "done") return `done:${item.name}`;
+      return item?.open && item.kind !== "done" ? `open:${k}:${item.open}` : `row-${k}`;
+    };
     const at = this.top ?? 0;
     const top = items[at];
-    const pinned = top?.project !== undefined && at > top.project
-      ? [items[top.project], ...(top.done != null && at >= top.done ? [items[top.done]] : []), ...(top.group != null && at >= top.group ? [items[top.group]] : [])]
-      : [];
+    const pin = (k) => (k != null && at >= k ? [items[k]] : []);
+    const pinned = !top ? [] : [...new Set([
+      ...(top.top != null && at > top.top ? [items[top.top]] : []),
+      ...(top.project != null && at > top.project ? [items[top.project]] : []),
+      ...(top.project != null && at > top.project ? pin(top.done) : []),
+      ...(top.project != null && at > top.project ? pin(top.group) : []),
+    ])];
     if (!items.length) return div().px(12).py(8).text_color(t.dim).child(reviewing ? "No review session lists a pull request." : "No session lists a pull request yet.");
     const id = reviewing ? "rv-list" : "pr-list";
     return div().id(`${id}-body`).flex_1().min_h(0).w_full().relative()
@@ -344,11 +372,13 @@ export default class SessionPrs extends View {
         return items.slice(range.start, range.end).map(draw);
       }).size_full().on_item_click((key, cx) => {
         if (key.startsWith("done:")) return toggleDone(key.slice(5), cx);
+        if (key.startsWith("open:")) return openSession(key.split(":").slice(2).join(":"));
         const p = items.find((item) => item.kind === "pr" && item.n.p.id === key)?.n.p;
         if (p) exec("open", [this.live.get(p.id)?.url ?? `https://github.com/${p.owner}/${p.repo}/pull/${p.number}`]);
       }))
       .when(pinned.length > 0, (el) => el.child(v_flex().absolute().top(0).left(0).right(0).children(pinned.map((item, k) =>
-        item.kind === "done" ? div().id(`pin-${k}`).on_click((_e, cx) => toggleDone(item.name, cx)).child(header(item)) : header(item)))))
+        item.kind === "done" ? div().id(`pin-${k}`).on_click((_e, cx) => toggleDone(item.name, cx)).child(header(item))
+          : item.open ? div().id(`pin-${k}`).on_click(() => openSession(item.open)).child(header(item)) : header(item)))))
       .child(Scrollbar.vertical(id).absolute().inset_0());
   }
 
