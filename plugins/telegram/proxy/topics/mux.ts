@@ -9,6 +9,6 @@ import { topicMuxes } from './topic-muxes'
 
 export const muxes = topicMuxes(
   createMultiplexer(MUX_KIND, HERDR_BIN),
-  HC_TOPICS.size ? new HcMux(hcConnect(HC_BIN, HC_SESSION, log)) : undefined,
+  HC_TOPICS.any ? new HcMux(hcConnect(HC_BIN, HC_SESSION, log)) : undefined,
   HC_TOPICS,
 )

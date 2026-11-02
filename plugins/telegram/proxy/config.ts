@@ -1,5 +1,7 @@
 // The proxy's configuration: paths, the .env files loaded into the environment,
 // and every setting read from it. Importing this module loads the .env files.
+import { topicSelection } from './topics/domain/topic-selection'
+import type { TopicSelection } from './topics/domain/topic-selection'
 import { chmodSync, existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join, sep } from 'path'
@@ -151,14 +153,7 @@ export const HERDR_BIN = process.env.TELEGRAM_HERDR_BIN ||
 export const HC_SESSION = (process.env.TELEGRAM_HC_SESSION || 'topics').trim()
 export const HC_BIN = process.env.TELEGRAM_HC_BIN ||
   (existsSync(join(homedir(), '.local', 'bin', 'hc')) ? join(homedir(), '.local', 'bin', 'hc') : 'hc')
-export const HC_TOPICS: ReadonlySet<string> = new Set(
-  (process.env.TELEGRAM_TOPICS_HC_TOPICS ?? '').split(',').map(t => t.trim()).filter(t => {
-    if (!t) return false
-    if (t === 'general' || /^\d+$/.test(t)) return true
-    log(`TELEGRAM_TOPICS_HC_TOPICS: "${t}" is neither a thread id nor general; ignored`)
-    return false
-  }),
-)
+export const HC_TOPICS: TopicSelection = topicSelection(process.env.TELEGRAM_TOPICS_HC_TOPICS ?? '', m => log(`TELEGRAM_TOPICS_HC_TOPICS: ${m}`))
 
 export const PROXY_URL = `http://localhost:${PORT}`
 
