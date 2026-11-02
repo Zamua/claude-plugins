@@ -10,7 +10,7 @@ Change the process here, not in two places.
 A review reads from GitHub and writes nothing to it until the operator says so.
 Before that: no comments, no review submissions, no pushes, no branch, label, or
 title edits, and nothing posted to Slack. The only writes are local: the review
-checkouts, the board, and scratch tests.
+checkouts, the board, scratch tests, and the pick raised on the work tree.
 
 Three writes are permitted. Two need their own instruction: posting the comments the
 operator picked by number, worded as they approved them, and approving a pull
@@ -284,6 +284,31 @@ even one that adds a test confirming it. The thread already tells the author. A 
 belongs on the list only when it gives the thread something it lacks: a correction, a
 narrower or wider scope, or a fix nobody named. Record the confirmation in the report
 instead.
+
+### Raising the pick
+
+The operator does not watch every review pane. Each round of proposed comments, the
+first and every later one, also goes where they collect what waits on them, when the
+board plugin's work tool, `mcp__board__work`, is available:
+
+1. **Find where it goes.** Read the work tree, the tool with no fields. The pull
+   request's Item is the one its `pr:<owner/repo#N>` line sits under. Without one,
+   use the Item this session sits under. Without either, give it no parent, so it
+   lands in the Inbox.
+2. **Add one needs Decision there:** `kind: "Decision"`, `status: "needs"`,
+   `origin: { type: "asked", by: "<this session's label>" }`, title
+   `<owner/repo#N>: pick from <count> proposed comments`. Its `detail` lists each
+   number on its own line with a one-line gist, its severity and your
+   recommendation, post or drop and why, then where to pick: "post N, M" in this
+   session's pane, named by its label, or relayed through the root. A pull request
+   keeps one open Decision: a later round while it is open updates its title and
+   detail instead of adding another.
+3. **Message the session that coordinates this one,** or the root session when none
+   does, with the same list. Take its message name from the same tree read.
+4. **Keep it current.** After numbers are posted or dropped, update the Decision.
+   Once none of its comments is still `proposed`, close it with `answer`: which
+   numbers were posted and which dropped. A partial pick only updates the title and
+   detail to what still waits.
 
 ### Writing a comment body
 

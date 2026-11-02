@@ -57,7 +57,9 @@ rules.
    In the conversation, give the verdict, the blast radius in one line, and the
    comments by number with a few words each.
 
-5. **Propose the comments.** Name the numbers that are ready and stop. Walk the user
+5. **Propose the comments.** Name the numbers that are ready, raise the pick on the
+   work tree and with this session's coordinator or the root, per raising the pick
+   in the review rules, and stop. Walk the user
    through the findings, answer questions, and reword entries on the board as they
    ask, keeping each number fixed and saying which numbers changed. Never paste a
    comment's body into the conversation; the board shows it. Do not start changing
@@ -65,7 +67,7 @@ rules.
 
 6. **Post the numbers they pick.** Re-check the head SHA first, then one batched
    review per pull request built with `board.sh payload`, then `board.sh mark` each
-   number posted with its url. Once the author settles a posted comment and you have
+   number posted with its url, and update the pick's Decision. Once the author settles a posted comment and you have
    verified it, `board.sh addressed` it. The proposed comments section of the review
    rules carries the calls and the failure modes.
 

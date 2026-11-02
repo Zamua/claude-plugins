@@ -17,7 +17,8 @@ you add 👀 to a PR        ─▶  poller sees it (1 GraphQL call, cost 1)
                                   ├─ clones + worktrees the PR head
                                   ├─ reviews it, proves bugs with failing tests
                                   ├─ writes its board as it goes, shown in /board review
-                                  └─ proposes numbered comments, then waits
+                                  ├─ proposes numbered comments
+                                  └─ asks you to pick on the board's work tree, then waits
 PR gets new commits       ─▶  the agent re-reads the diff and revises everything
 you ask it questions      ─▶  it answers in its pane
 you tick 1 and 3, send    ─▶  it posts those two, signed off, and nothing else
