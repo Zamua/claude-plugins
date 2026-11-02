@@ -16,8 +16,14 @@ const minutesOf = (text: string) =>
     .map(match => (match[1] ?? '').slice(0, 16))
     .filter((minute, at, all) => minute !== all[at - 1])
     .join('\n')
-const counting = (host: World['run'], files: Record<string, string>): World['run'] => argv =>
-  argv[0] === 'sh' ? { exitCode: 0, stdout: minutesOf(files[argv[argv.length - 1] ?? ''] ?? ''), stderr: '' } : host(argv)
+/** Answers the count pipeline from the transcript's bytes at its offset on, as `tail -c +<offset>` hands them to grep. */
+const counting = (host: World['run'], files: Record<string, string>, counts: string[] = []): World['run'] => argv => {
+  if (argv[0] !== 'sh') return host(argv)
+  const text = (files[argv[argv.length - 2] ?? ''] ?? '').slice(Number(argv[argv.length - 1]) - 1)
+  counts.push(text)
+
+  return { exitCode: 0, stdout: minutesOf(text), stderr: '' }
+}
 
 test('a target inside two hours counts down in red, and inside a day in yellow', async ($, on) => {
   const items = [
@@ -53,6 +59,30 @@ test("an Item's time is its sessions' active time, gaps over five minutes cut, s
   expect(read).toContain('file:gross [Workstream, needs, 1 need you, 5m spent] Gross funding')
   expect(read).toContain('file:fee #3 [Task, needs, 5m spent] Settle the fee account')
   expect(read).toContain('file:scope #4 [Task, flight, 180m spent] Scope the split')
+})
+
+test('a transcript that grew is counted again over only what was appended, its time going on from the last count', async ($, on) => {
+  const path = `${HOME}/.claude/projects/-home-test/h1.jsonl`
+  const file = { ...TREE, links: [{ child: 'session:herdr:default/w4:p1', parent: 'file:fee', at: at(0) }] }
+  const files = { [path]: transcript([0, 2, 4, 20, 21]) }
+  const counts: string[] = []
+  const w = withLive(file, counting(herdrHost([{ id: 'w4:p1', label: 'fee-work', harnessId: 'h1' }]), files, counts), files)
+  const clock = engine(on, w, NOW)
+  await start($)
+  const first = await open($, 'work')
+  await first.unmount()
+
+  // Two more minutes, the first a minute on from the last counted
+  const appended = `\n${transcript([22, 24])}`
+  files[path] += appended
+  w.files[path] += appended
+  await clock.advance(6 * 60_000)
+  const again = await open($, 'work')
+  await clock.advance(16_000)
+  await again.unmount()
+
+  expect(counts.at(-1)).toBe(appended)
+  expect(JSON.parse(w.files[TIME_FILE] ?? '{}').sessions.h1).toMatchObject({ activeMs: 8 * 60_000 })
 })
 
 const PERIODS = [{ name: 'Q4 2026-27', start: '2026-11-01', end: '2027-01-31' }]

@@ -6,7 +6,17 @@ type SessionRecord = { sessionId?: string; name?: string; updatedAt?: number }
 
 export type HarnessInfo = { messageName?: string; lastActive?: number; activeMs?: number }
 
-type TimeEntry = { path?: string; mtimeMs?: number; at: number; activeMs: number; item?: string }
+type TimeEntry = {
+  path?: string
+  mtimeMs?: number
+  /** Bytes of the transcript counted so far, so a recount reads only what was appended. */
+  size?: number
+  /** The last minute counted, as epoch milliseconds, where the appended minutes continue from. */
+  last?: number
+  at: number
+  activeMs: number
+  item?: string
+}
 type TimeCache = { sessions: Record<string, TimeEntry> }
 
 const TIME_FILE = '.cache/board/time.json'
@@ -14,10 +24,18 @@ const GAP_MS = 5 * 60_000
 // A transcript still being written is counted again at most this often, since a long one takes a while to read
 const RECOUNT_MS = 5 * 60_000
 const KEEP_MS = 90 * 24 * 3600e3
-// A transcript runs to hundreds of megabytes, past what one file read takes, so grep cuts it to the minutes it has
-// entries in, in order, one line each
-const MINUTES = ['sh', '-c', 'grep -o \'"timestamp":"[^"]*\' "$1" | cut -c14-29 | uniq', 'minutes']
+// A transcript runs to hundreds of megabytes, past what one file read takes, so grep cuts the bytes from an offset on
+// to the minutes they have entries in, in order, one line each. Every session counts the same transcripts, so a count
+// runs at low priority and only over what was appended since the last one.
+const MINUTES = [
+  'sh',
+  '-c',
+  'tail -c +"$2" "$1" | nice -n 15 grep -o \'"timestamp":"[^"]*\' | cut -c14-29 | uniq',
+  'minutes',
+]
 const COUNT_TIMEOUT_MS = 60_000
+// A transcript counted from its start costs a full read, so a pass makes at most this many and leaves the rest to later passes
+const FULL_COUNTS_PER_PASS = 1
 
 async function configDir($: EngineInterface) {
   return (await $.env.get('CLAUDE_CONFIG_DIR')) || `${await $.env.get('HOME')}/.claude`
@@ -65,16 +83,23 @@ export function claudeArgs(config: unknown, model?: string): string[] {
  * five minutes cut out, so idle hours do not count.
  */
 export function activeTime(minutes: string): number {
+  return spanOf(minutes).activeMs
+}
+
+/** `activeTime` over minutes that continue from `from`, the last minute already counted, with the new last minute. */
+function spanOf(minutes: string, from?: number): { activeMs: number; last?: number } {
   const stamps = [...new Set(minutes.split('\n').map(line => Date.parse(`${line.trim()}Z`)))]
-    .filter(at => !Number.isNaN(at))
+    .filter(at => !Number.isNaN(at) && (from === undefined || at >= from))
     .sort((a, b) => a - b)
+  if (from !== undefined && stamps[0] !== from) stamps.unshift(from)
   let total = 0
   for (let at = 1; at < stamps.length; at++) {
     const gap = (stamps[at] as number) - (stamps[at - 1] as number)
     if (gap <= GAP_MS) total += gap
   }
+  const last = stamps[stamps.length - 1]
 
-  return total
+  return { activeMs: total, ...(last !== undefined && { last }) }
 }
 
 async function readTimes($: EngineInterface, path: string): Promise<TimeCache> {
@@ -102,50 +127,90 @@ async function transcriptOf($: EngineInterface, id: string): Promise<string | un
   return undefined
 }
 
+// Set while this process counts, so a refresh that starts before the last one finished reads the cache instead
+let isCounting = false
+
 /**
  * Each running agent's active time, and the time of agents no Host lists any more, by the Item they last sat under.
- * A transcript is read again only once it has changed.
+ * A transcript is read again only once it has changed, and then only from where the last count stopped.
  */
 export async function claudeTime($: EngineInterface, ids: string[]): Promise<{ active: Map<string, number>; past: PastTime[] }> {
   const path = `${await $.env.get('HOME')}/${TIME_FILE}`
-  const cache = await readTimes($, path)
   const now = await $.clock.now()
-  const active = new Map<string, number>()
-  let isChanged = false
-  for (const id of ids) {
-    const entry = cache.sessions[id]
-    try {
-      const transcript = entry?.path ?? (await transcriptOf($, id))
-      if (!transcript) continue
-      const mtimeMs = (await $.fs.stat(transcript).catch(() => undefined))?.mtimeMs
-      if (entry && (entry.mtimeMs === mtimeMs || now - entry.at < RECOUNT_MS)) {
-        active.set(id, entry.activeMs)
-        continue
-      }
-      const counted = await $.process.run([...MINUTES, transcript], { timeoutMs: COUNT_TIMEOUT_MS })
-      if (counted.exitCode !== 0 && counted.stdout === '') continue
-      const activeMs = activeTime(counted.stdout)
-      cache.sessions[id] = { ...entry, path: transcript, ...(mtimeMs !== undefined && { mtimeMs }), at: now, activeMs }
-      active.set(id, activeMs)
-      isChanged = true
-    } catch {
-      // A transcript that cannot be counted leaves its session's time as last counted
-      if (entry) active.set(id, entry.activeMs)
-    }
+  if (isCounting) {
+    const { active, past } = timesOf(await readTimes($, path), ids, now)
+    return { active, past }
   }
+  isCounting = true
+  try {
+    const active = new Map<string, number>()
+    let fullCounts = 0
+    for (const id of ids) {
+      // Read again before each transcript, since another session may have just counted it
+      const cache = await readTimes($, path)
+      const entry = cache.sessions[id]
+      try {
+        const transcript = entry?.path ?? (await transcriptOf($, id))
+        if (!transcript) continue
+        const stat = await $.fs.stat(transcript).catch(() => undefined)
+        if (entry && (entry.mtimeMs === stat?.mtimeMs || now - entry.at < RECOUNT_MS)) {
+          active.set(id, entry.activeMs)
+          continue
+        }
+        const isAppended = entry?.size !== undefined && stat !== undefined && stat.size >= entry.size
+        if (!isAppended && fullCounts >= FULL_COUNTS_PER_PASS) {
+          if (entry) active.set(id, entry.activeMs)
+          continue
+        }
+        if (!isAppended) fullCounts++
+        const offset = isAppended ? (entry?.size ?? 0) + 1 : 1
+        const counted = await $.process.run([...MINUTES, transcript, String(offset)], { timeoutMs: COUNT_TIMEOUT_MS })
+        if (counted.exitCode !== 0 && counted.stdout === '') continue
+        const span = spanOf(counted.stdout, isAppended ? entry?.last : undefined)
+        const activeMs = (isAppended ? (entry?.activeMs ?? 0) : 0) + span.activeMs
+        cache.sessions[id] = {
+          ...entry,
+          path: transcript,
+          ...(stat && { mtimeMs: stat.mtimeMs, size: stat.size }),
+          ...(span.last !== undefined && { last: span.last }),
+          at: now,
+          activeMs,
+        }
+        active.set(id, activeMs)
+        await $.fs.write(path, JSON.stringify(cache)).catch(() => undefined)
+      } catch {
+        // A transcript that cannot be counted leaves its session's time as last counted
+        if (entry) active.set(id, entry.activeMs)
+      }
+    }
+    const cache = await readTimes($, path)
+    const { past, isPruned } = timesOf(cache, ids, now)
+    if (isPruned) await $.fs.write(path, JSON.stringify(cache)).catch(() => undefined)
+
+    return { active, past }
+  } finally {
+    isCounting = false
+  }
+}
+
+/** The times the cache holds, running agents' and finished ones', pruning entries past KEEP_MS from `cache`. */
+function timesOf(cache: TimeCache, ids: string[], now: number) {
   const live = new Set(ids)
+  const active = new Map<string, number>()
   const past: PastTime[] = []
+  let isPruned = false
   for (const [id, entry] of Object.entries(cache.sessions)) {
     if (now - entry.at > KEEP_MS) {
       delete cache.sessions[id]
-      isChanged = true
-    } else if (!live.has(id) && entry.item && entry.activeMs > 0) {
+      isPruned = true
+    } else if (live.has(id)) {
+      active.set(id, entry.activeMs)
+    } else if (entry.item && entry.activeMs > 0) {
       past.push({ item: entry.item, activeMs: entry.activeMs })
     }
   }
-  if (isChanged) await $.fs.write(path, JSON.stringify(cache)).catch(() => undefined)
 
-  return { active, past }
+  return { active, past, isPruned }
 }
 
 /** Remembers the Item each running agent sits under, so its time stays there once it has finished. */
