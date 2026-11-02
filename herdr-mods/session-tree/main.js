@@ -1,48 +1,35 @@
 // A sidebar of the session tree: the root, each project's coordinator as a folder, its workers
-// under it. props: { folder } (the projects folder), { part: "header" } for the bar above it,
-// { mode: "asks" } for the bell's popup and { mode: "new" } for the new-session dialog.
+// under it. props: { folder } (the projects folder), { part: "header" } for the bar above it
+// and { mode: "new" } for the new-session dialog.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { run, theme, props, openOverlay, closeOverlay, watchFolder, window, spaces, exec, setAgentOrder, layout, focused, shared, setShared, home } from "herdr";
-import { folderOf, readFiles, model, needs } from "./state.js";
+import { run, theme, props, openOverlay, closeOverlay, watchFolder, window, spaces, exec, setAgentOrder, focused, home, nextCommand, panes, terminals } from "herdr";
+import { folderOf, readFiles, model } from "./state.js";
 
 const ICON = (name) => `mods/session-tree/${name}.svg`;
-// Set by the header's hand, read by the list: two copies of this mod
-const ONLY = "session-tree.only";
 // Every tree row is this tall, so each row's guide lines meet the next row's
-const ROW = 30;
+const ROW = 24;
+const GUIDE = 12;
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
-
-function find(node, id) {
-  if (node?.id === id) return node;
-  for (const child of node?.children ?? []) {
-    const found = find(child, id);
-    if (found) return found;
-  }
-  return null;
-}
 
 const expand = (path) => (path.startsWith("~") ? home() + path.slice(1) : path);
 const focus = (s) => s && run("pane.focus", { terminal: s.address });
 
-function openPrs() {
-  if (find(layout(), "prs")) run("layout.toggle", { id: "prs" });
-  else openOverlay({ mod: "session-prs", kind: "window", key: "session-prs", width: 760, height: 640, props: { folder: props()?.folder } });
-}
-
 // One indent step of the tree's lines: "│" passes by, "├" branches off, "└" ends, "" is blank.
-function guide(t, kind, width) {
+function guide(t, kind) {
   const color = t.input;
   return v_flex()
-    .w(width)
+    .w(GUIDE)
     .h(ROW)
     .flex_none()
-    .child(div().w(Math.min(14, width - 4)).h(ROW / 2)
+    .child(div().w(GUIDE - 3).h(ROW / 2)
       .when(kind !== "", (el) => el.border_l(1).border_color(color))
-      .when(kind === "├" || kind === "└", (el) => el.border_b(1).border_color(color).when(kind === "└", (el) => el.rounded_bl(6))))
+      .when(kind === "├" || kind === "└", (el) => el.border_b(1).border_color(color).when(kind === "└", (el) => el.rounded_bl(4))))
     .child(div().h(ROW / 2).when(kind === "│" || kind === "├", (el) => el.border_l(1).border_color(color)));
 }
+
+const WORD = { working: "working", done: "finished", idle: "idle", blocked: "waiting on a dialog" };
 
 export default class SessionTree extends View {
   init(_props, cx) {
@@ -57,6 +44,14 @@ export default class SessionTree extends View {
       this.input.on("change", (_e, cx) => {
         this.search = this.input.value();
         cx.notify();
+      });
+      this.lastRoot = JSON.parse(localStorage.getItem("root") ?? "null");
+      cx.spawn(async (cx) => {
+        for (;;) {
+          const command = await nextCommand();
+          if (command === "close" || command === "close-pane") this.guardClose(command === "close-pane");
+          cx.notify();
+        }
       });
     }
     cx.spawn(async (cx) => {
@@ -78,159 +73,177 @@ export default class SessionTree extends View {
     });
   }
 
-  // "needs you" with a hand, else the status word.
-  state(t, s) {
-    if (s.needs) {
-      return h_flex().flex_none().gap(4).items_center().text_size(11.5).font_semibold().text_color(t.blocked)
-        .child(svg(ICON("hand")).size(12)).child("needs you");
-    }
-    const color = s.status === "done" ? t.done : s.status === "working" ? t.muted : t.dim;
-    return div().flex_none().text_size(11.5).text_color(color).child(s.status);
+  // Cmd+W and Cmd+Shift+W, bound to this mod in keys.json: closing what holds a live agent asks first.
+  guardClose(isPane) {
+    const f = focused();
+    const target = isPane ? f?.pane : f?.tab;
+    if (!target) return;
+    const live = new Map(terminals().filter((t) => t.state === "live").map((t) => [t.address, t]));
+    const agents = panes()
+      .filter((p) => p.terminal && (isPane ? p.pane === target : p.tab === target))
+      .map((p) => live.get(p.terminal))
+      .filter((t) => t && (t.labels?.["tree.role"] || t.program?.agent));
+    if (!agents.length) return run(isPane ? "pane.close" : "tab.close", isPane ? { pane: target } : { id: target });
+    const isRoot = agents.some((t) => t.labels?.["tree.role"] === "root");
+    const names = agents.map((t) => t.name || t.labels?.["tree.project"] || t.program?.name || t.address).join(", ");
+    openOverlay({
+      mod: "confirm", kind: "dialog", width: 440, height: 190,
+      props: {
+        title: isRoot ? "Close the root session?" : `Close ${names}?`,
+        detail: isRoot
+          ? "This ends root, the session you talk to. The tree shows a Reopen row for it afterwards."
+          : `This ends the Claude session${agents.length > 1 ? "s" : ""} running here.`,
+        command: isPane ? { name: "pane.close", args: { pane: target } } : { name: "tab.close", args: { id: target, confirmed: true } },
+      },
+    });
   }
 
-  dot(t, s) {
-    if (s.needs) return svg(ICON("hand")).size(13).flex_none().text_color(t.blocked);
-    const color = t[s.status] ?? t.dim;
-    return h_flex().w(13).flex_none().justify_center()
-      .child(div().size(7).rounded_full().bg(color).when(s.status === "working", (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 })));
+  reopenRoot(cx) {
+    const r = this.lastRoot;
+    if (!r?.sid || this.reopening) return;
+    this.reopening = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const done = await exec(`${this.folder}/bin/tree-start`, [r.name, r.project, "root", r.cwd || home(), "--resume", r.sid]);
+        if (done.code !== 0) this.reopenError = (done.stderr || done.stdout).trim().split("\n")[0];
+      } catch (e) {
+        this.reopenError = String(e?.message ?? e);
+      }
+      this.reopening = false;
+      cx.notify();
+    });
   }
 
-  round(t, id, icon, tip, on, action, badge = 0) {
-    return div().id(id).relative().size(28).flex_none().flex().items_center().justify_center().rounded_full()
-      .bg(on ? t.selected : t.raised).text_color(on ? t.foreground : t.muted)
+  // One glyph per status, its word in the tooltip: a red ! waits on a dialog, a red hand has open
+  // asks, a spinner works, a dot is done or idle.
+  glyph(t, id, s) {
+    if (!s) return div().w(14).flex_none();
+    const box = h_flex().id(`st-g-${id}`).w(14).h(ROW).flex_none().items_center().justify_center();
+    if (s.status === "blocked") return box.tooltip(WORD.blocked).child(div().text_size(13).font_bold().text_color(t.blocked).child("!"));
+    if (s.needs) return box.tooltip(`${s.asks?.length ?? ""} open ask${s.asks?.length === 1 ? "" : "s"}`.trim()).child(svg(ICON("hand")).size(12).text_color(t.blocked));
+    if (s.status === "working") return box.tooltip(WORD.working).child(svg(ICON("spinner")).size(10).text_color(t.working).spin(900));
+    return box.tooltip(WORD[s.status] ?? s.status).child(div().size(5).rounded_full().bg(s.status === "done" ? t.done : t.dim));
+  }
+
+  fold(t, p, open) {
+    return div().id(`st-f-${p.name}`).w(14).h(ROW).flex_none().flex().items_center().justify_center().rounded(4)
+      .text_color(t.dim).hover((el) => el.text_color(t.foreground))
+      .on_click((_e, cx) => {
+        cx.stop_propagation();
+        open ? this.folded.add(p.name) : this.folded.delete(p.name);
+        localStorage.setItem("folded", JSON.stringify([...this.folded]));
+        cx.notify();
+      })
+      .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(10));
+  }
+
+  round(t, id, icon, tip, action) {
+    return div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded_full()
+      .bg(t.raised).text_color(t.muted)
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).cursor_pointer().tooltip(tip)
-      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click(action)
-      .child(svg(ICON(icon)).size(15))
-      .when(badge > 0, (el) => el.child(div().absolute().top(-4).right(-6).h(15).min_w(15).px(4).rounded_full().bg(t.blocked)
-        .text_size(9.5).font_bold().text_color(t.background).flex().items_center().justify_center().child(String(badge))));
+      .child(svg(ICON(icon)).size(14));
   }
 
-  header(t, m) {
+  header(t) {
     const w = window();
-    const only = Boolean(shared(ONLY));
-    const prs = find(layout(), "prs");
-    const count = needs(m).length;
-    return h_flex().size_full().bg(t.chrome).pl(w?.platform === "macos" && !w?.fullscreen ? 80 : 14).pr(10).gap(6).items_center()
-      .child(h_flex().flex_1().min_w(0).gap(8).items_center()
-        .child(image("frame/welcome/herdr.png").size(18).rounded(5))
-        .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground).child("Herdr")))
-      .child(this.round(t, "st-prs", "gauge", "Pull requests", Boolean(prs && !prs.hidden), openPrs))
-      .child(this.round(t, "st-bell", "bell", count ? `${count} need you` : "Nothing needs you", false,
-        () => openOverlay({ mod: "session-tree", kind: "popup", width: 380, height: 440, props: { mode: "asks", folder: props()?.folder } }), count))
-      .child(this.round(t, "st-only", "hand", only ? "Show every session" : "Show only what needs you", only, () => setShared(ONLY, !only)));
+    return h_flex().size_full().bg(t.chrome).pl(w?.platform === "macos" && !w?.fullscreen ? 80 : 14).pr(10).gap(8).items_center()
+      .child(image("frame/welcome/herdr.png").size(18).rounded(5))
+      .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground).child("Herdr"));
   }
 
   list(t, m) {
-    const only = Boolean(shared(ONLY));
     const q = this.search.trim().toLowerCase();
-    const hit = (s) => Boolean(s) && (!only || s.needs) && (!q || s.name.toLowerCase().includes(q));
+    const hit = (s) => Boolean(s) && (!q || s.name.toLowerCase().includes(q));
     const shown = focused()?.terminal;
     const order = [];
     const rows = [];
     const row = (id, s) => {
       if (s) order.push(s.address);
-      return h_flex().id(id).h(ROW).flex_none().mx(8).pl(18).pr(10).items_center().rounded(8)
+      return h_flex().id(id).h(ROW).flex_none().mx(4).pl(8).pr(4).items_center().rounded(6)
         .when(Boolean(s) && s.address === shown, (el) => el.bg(t.selected))
         .hover((el) => el.bg(t.hover))
         .when(Boolean(s), (el) => el.cursor_pointer().on_click(() => focus(s)));
     };
+    const name = (text, color, weight) => div().flex_1().min_w(0).truncate().text_size(12.5).text_color(color)
+      .when(weight, (el) => el.font_medium()).child(text);
 
+    if (m.root?.sid && (m.root.sid !== this.lastRoot?.sid || m.root.cwd !== this.lastRoot?.cwd)) {
+      this.lastRoot = { sid: m.root.sid, cwd: m.root.cwd, name: m.root.name, project: m.root.project };
+      localStorage.setItem("root", JSON.stringify(this.lastRoot));
+    }
+    if (!m.root && this.lastRoot && !q) {
+      rows.push(row("st-root-gone", null).cursor_pointer().on_click((_e, cx) => this.reopenRoot(cx))
+        .child(svg(ICON("layers")).size(12).flex_none().mr(6).text_color(t.blocked))
+        .child(name(this.reopenError ?? `${this.lastRoot.name} closed`, t.muted, false))
+        .child(div().flex_none().text_size(11.5).font_semibold().text_color(t.blocked).child(this.reopening ? "…" : "Reopen")));
+    }
     if (hit(m.root)) {
-      order.push(m.root.address);
-      rows.push(h_flex().id("st-root").h(36).flex_none().mx(8).mb(2).px(10).gap(10).items_center().rounded(10)
-        .bg(m.root.address === shown ? t.selected : t.raised).hover((el) => el.bg(t.hover)).cursor_pointer()
-        .on_click(() => focus(m.root))
-        .child(svg(ICON("layers")).size(16).flex_none().text_color(t.foreground))
-        .child(div().flex_1().min_w(0).truncate().text_size(13.5).font_medium().text_color(t.foreground).child(m.root.name))
-        .child(this.state(t, m.root)));
+      rows.push(row("st-root", m.root)
+        .child(svg(ICON("layers")).size(12).flex_none().mr(6).text_color(t.foreground))
+        .child(name(m.root.name, t.foreground, true))
+        .child(div().w(14).flex_none())
+        .child(this.glyph(t, "root", m.root)));
     }
 
     const projects = m.projects
       .map((p) => {
-        const titled = q && p.title.toLowerCase().includes(q) && !only;
+        const titled = q && p.title.toLowerCase().includes(q);
         const workers = titled ? p.workers : p.workers.filter(hit);
         return { p, workers, show: titled || hit(p.lead) || workers.length > 0 };
       })
       .filter((x) => x.show);
     projects.forEach(({ p, workers }, i) => {
       const last = i === projects.length - 1;
-      const open = Boolean(q || only) || !this.folded.has(p.name);
-      const needy = Boolean(p.lead?.needs) || (!open && p.workers.some((w) => w.needs));
+      const open = Boolean(q) || !this.folded.has(p.name);
+      const hidden = open ? [] : p.workers;
+      const blocked = p.lead?.status === "blocked" || hidden.some((w) => w.status === "blocked");
+      const needs = Boolean(p.lead?.needs) || hidden.some((w) => w.needs);
       rows.push(row(`st-p-${p.name}`, p.lead)
-        .child(guide(t, last ? "└" : "├", 24))
-        .child(svg(ICON("folder")).size(16).flex_none().text_color(t.muted))
-        .child(div().flex_1().min_w(0).ml(10).truncate().text_size(13).text_color(t.foreground).child(p.title))
-        .child(this.state(t, { status: p.status, needs: needy }))
-        .when(p.workers.length > 0 && !q && !only, (el) => el.child(div().id(`st-f-${p.name}`).ml(6).p(2).rounded(4).flex_none()
-          .text_color(t.dim).hover((s) => s.bg(t.raised).text_color(t.foreground))
-          .on_click((_e, cx) => {
-            cx.stop_propagation();
-            open ? this.folded.add(p.name) : this.folded.delete(p.name);
-            localStorage.setItem("folded", JSON.stringify([...this.folded]));
-            cx.notify();
-          })
-          .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12)))));
+        .child(guide(t, last ? "└" : "├"))
+        .child(name(p.title, t.foreground, true))
+        .child(p.workers.length > 0 && !q ? this.fold(t, p, open) : div().w(14).flex_none())
+        .child(this.glyph(t, `p-${p.name}`, { status: blocked ? "blocked" : p.status, needs, asks: p.lead?.asks })));
       if (!open) return;
       workers.forEach((w, j) => rows.push(row(`st-w-${w.address}`, w)
-        .child(guide(t, last ? "" : "│", 32))
-        .child(guide(t, j === workers.length - 1 ? "└" : "├", 20))
-        .child(this.dot(t, w))
-        .child(div().flex_1().min_w(0).ml(10).truncate().text_size(12.8).text_color(w.status === "idle" && !w.needs ? t.muted : t.foreground).child(w.name))
-        .when(w.needs, (el) => el.child(this.state(t, w)))));
+        .child(guide(t, last ? "" : "│"))
+        .child(guide(t, j === workers.length - 1 ? "└" : "├"))
+        .child(name(w.name, w.status === "idle" && !w.needs ? t.dim : t.muted, false))
+        .child(div().w(14).flex_none())
+        .child(this.glyph(t, `w-${w.address}`, w))));
     });
 
     // Spaces outside the tree stay reachable from here, since this sidebar replaces the spaces list
-    const tree = new Set([m.root?.project, ...m.projects.map((p) => p.name)]);
-    const others = only ? [] : spaces().filter((sp) => !tree.has(sp.id) && (!q || sp.name.toLowerCase().includes(q)));
+    const tree = new Set(m.sessions.map((s) => s.space));
+    const others = spaces().filter((sp) => !tree.has(sp.id) && (!q || sp.name.toLowerCase().includes(q)));
     if (others.length) {
-      rows.push(div().px(18).pt(14).pb(4).text_size(11).font_medium().text_color(t.dim).child("Other spaces"));
+      rows.push(div().pl(12).pt(10).pb(2).text_size(11).text_color(t.dim).child("Other spaces"));
       for (const sp of others) {
-        rows.push(h_flex().id(`st-s-${sp.id}`).h(28).flex_none().mx(8).px(10).gap(10).items_center().rounded(8)
-          .when(sp.active, (el) => el.bg(t.selected)).hover((el) => el.bg(t.hover)).cursor_pointer()
+        rows.push(row(`st-s-${sp.id}`, null).when(sp.active, (el) => el.bg(t.selected)).cursor_pointer()
           .on_click(() => run("space.select", { id: sp.id }))
-          .child(svg(ICON("folder")).size(14).flex_none().text_color(t.dim))
-          .child(div().flex_1().min_w(0).truncate().text_size(12.8).text_color(t.muted).child(sp.name))
-          .when(Boolean(sp.status) && sp.status !== "idle", (el) => el.child(this.state(t, { status: sp.status, needs: sp.status === "blocked" }))));
+          .child(name(sp.name, t.muted, false))
+          .child(div().w(14).flex_none())
+          .child(this.glyph(t, `s-${sp.id}`, sp.status ? { status: sp.status } : null)));
       }
     }
     setAgentOrder(order);
 
-    const empty = only ? "Nothing needs you." : q ? "No session matches." : "No sessions in the tree yet.";
+    const empty = q ? "No session matches." : "No sessions in the tree yet.";
     return v_flex().id("root").size_full().min_h(0).bg(t.chrome).text_color(t.foreground)
-      .child(div().mx(16).mb(8).h(1).flex_none().bg(t.border))
-      .child(v_flex().id("st-list").flex_1().min_h(0).pb(8).overflow_y_scrollbar()
-        .children(rows.length ? rows : [div().px(18).py(6).text_size(12).text_color(t.dim).child(empty)]))
-      .child(h_flex().flex_none().h(52).px(10).gap(8).items_center().border_t(1).border_color(t.border)
-        .child(this.round(t, "st-settings", "settings", "Settings", false, () => run("app.settings")))
-        .child(h_flex().id("st-search").flex_1().min_w(0).h(30).px(10).gap(6).items_center().rounded_full().bg(t.raised)
+      .child(div().mx(10).mb(4).h(1).flex_none().bg(t.border))
+      .child(v_flex().id("st-list").flex_1().min_h(0).pb(6).overflow_y_scrollbar()
+        .children(rows.length ? rows : [div().px(12).py(6).text_size(12).text_color(t.dim).child(empty)]))
+      .child(h_flex().flex_none().h(44).px(8).gap(6).items_center().border_t(1).border_color(t.border)
+        .child(this.round(t, "st-settings", "settings", "Settings", () => run("app.settings")))
+        .child(h_flex().id("st-search").flex_1().min_w(0).h(26).px(8).gap(6).items_center().rounded_full().bg(t.raised)
           .border_1().border_color(t.border).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-          .child(svg(ICON("search")).size(13).flex_none().text_color(t.dim))
-          .child(Input.new(this.input).flex_1().h_full().text_size(12.5).text_color(t.foreground)))
-        .child(this.round(t, "st-new", "square-pen", "New session", false, () => {
+          .child(svg(ICON("search")).size(12).flex_none().text_color(t.dim))
+          .child(Input.new(this.input).flex_1().h_full().text_size(12).text_color(t.foreground)))
+        .child(this.round(t, "st-new", "square-pen", "New session", () => {
           const project = m.sessions.find((s) => s.address === focused()?.terminal)?.project;
           openOverlay({ mod: "session-tree", kind: "dialog", width: 520, props: { mode: "new", folder: props()?.folder, project: project === m.root?.project ? "" : project } });
         })));
-  }
-
-  asks(t, m) {
-    const list = needs(m);
-    const text = (a) => a.ask ?? a.question ?? a.title ?? a.id;
-    return v_flex().size_full().min_h(0).bg(t.popover).p(6).text_size(12.5)
-      .child(h_flex().px(8).pt(6).pb(8).items_center()
-        .child(div().flex_1().text_size(12).font_semibold().text_color(t.foreground).child("Needs you"))
-        .child(div().text_size(11).text_color(t.dim).child(String(list.length))))
-      .when(list.length === 0, (el) => el.child(div().px(8).py(6).text_color(t.dim).child("Nothing needs you.")))
-      .child(v_flex().id("st-asks").flex_1().min_h(0).overflow_y_scrollbar().children(list.map((n, i) =>
-        v_flex().id(`st-ask-${i}`).flex_none().px(8).py(6).gap(2).rounded(7).hover((el) => el.bg(t.hover)).cursor_pointer()
-          .on_click(() => {
-            closeOverlay(props().overlay);
-            focus(n.s);
-          })
-          .child(h_flex().gap(7).items_center()
-            .child(svg(ICON("hand")).size(12).flex_none().text_color(t.blocked))
-            .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(n.ask ? text(n.ask) : "Waiting on a dialog")))
-          .child(div().pl(19).truncate().text_size(11).text_color(t.dim).child([n.s.name, n.ask?.due].filter(Boolean).join(" · "))))));
   }
 
   initNew(cx) {
@@ -317,9 +330,8 @@ export default class SessionTree extends View {
     const t = theme();
     const mode = props()?.mode;
     if (mode === "new") return this.newDialog(t);
+    if (props()?.part === "header") return this.header(t);
     const m = model(this.files);
-    if (mode === "asks") return this.asks(t, m);
-    if (props()?.part === "header") return this.header(t, m);
     return this.list(t, m);
   }
 }

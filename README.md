@@ -46,25 +46,29 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
 
 ## Herdr mods
 
-Panels for the [Herdr app](https://herdr.dev), in [herdr-mods/](herdr-mods/). Link
-each folder into `~/.config/herdr-app/mods/` and the layout into
-`~/.config/herdr-app/layouts/`.
+Panels for the [Herdr app](https://herdr.dev), in [herdr-mods/](herdr-mods/).
+`herdr-mods/install.sh` hard-links each mod into `~/.config/herdr-app/mods/` and
+links the layouts; Herdr refuses symlinked mod code and serves no icons through a
+symlinked folder. Run it again after a pull.
 
 - **[session-tree](herdr-mods/session-tree/)**: a sidebar of a tree of Claude
-  sessions, root first, then each project's coordinator as a folder with its
-  workers under it, from the terminals' `tree.role`, `tree.project` and
-  `tree.parent` labels and each session's state file. A bell counts open asks
-  and blocked sessions, a hand filters to what needs you, and a pen starts a
-  new session.
-- **[session-prs](herdr-mods/session-prs/)**: every session's pull requests,
-  grouped by project, with draft, CI, review and unresolved-thread state from
-  one GitHub query a minute while it shows.
+  sessions, root first, then each project's coordinator with its workers under it,
+  from the terminals' `tree.role`, `tree.project` and `tree.parent` labels and each
+  session's state file. One glyph per row says its status: a spinner works, a dot
+  is done, a red hand has open asks, a red ! waits on a dialog. Cmd+W and
+  Cmd+Shift+W ask before closing a tab or pane that holds a live Claude session,
+  and a closed root gets a Reopen row that resumes it.
+- **[session-prs](herdr-mods/session-prs/)**: every session's pull requests, one
+  dense row each, in sections by each entry's `group` inside its project, with
+  draft, CI, review, author and stack ("on #N") from one GitHub query a minute
+  while it shows.
 - **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the
-  session tree as its sidebar and the PRs pane beside the terminals.
+  session tree as its sidebar and the PRs pane beside the terminals, toggled with
+  Cmd+Shift+R once `keys.json` binds it.
 - **[quiet-toast](herdr-mods/quiet-toast/)**: drops Herdr's "an agent finished"
   toasts and keeps the rest, by patching Herdr's own toast mod, since no setting
-  picks which toasts show. Herdr restores its mod when it starts, so run
-  `apply.sh` again after a restart; `apply.sh --undo` puts it back.
+  picks which toasts show. Herdr restores its mod on every start; `apply.sh --agent`
+  adds a launchd agent that patches it again each time, and `--undo` reverses either.
 
 ## License
 

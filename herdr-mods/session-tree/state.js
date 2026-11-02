@@ -1,7 +1,7 @@
 // The session tree: terminals labelled tree.role, tree.project and tree.parent, joined to
 // the state file each session keeps at <folder>/<project>/<session>.json.
 
-import { readTextFile, home, terminals } from "herdr";
+import { readTextFile, home, terminals, spaces } from "herdr";
 import { readdir } from "fs/promises";
 
 export const RANK = { blocked: 4, working: 3, done: 2, idle: 1 };
@@ -43,16 +43,21 @@ const statusOf = (t) => (t.status === "error" ? "blocked" : RANK[t.status] ? t.s
 const top = (list) => list.reduce((m, s) => (RANK[s.status] > RANK[m] ? s.status : m), "idle");
 
 export function model(files) {
+  const tabs = new Map(spaces().flatMap((sp) => sp.tabs.filter((tab) => tab.named).map((tab) => [tab.id, tab.name])));
   const sessions = terminals()
     .filter((t) => t.state === "live" && t.labels?.["tree.role"])
     .map((t) => {
       const project = t.labels["tree.project"] ?? "";
-      const file = files.get(`${project}/${t.name}`) ?? {};
+      const role = t.labels["tree.role"];
+      // A terminal started by hand has no name, so its session goes by its tab, else its project
+      const name = t.name || tabs.get(t.labels["herdr.tab"]) || (role === "worker" ? t.address : project);
+      const file = files.get(`${project}/${name}`) ?? {};
       const asks = (file.asks ?? []).filter((a) => a?.status === "open");
       const status = statusOf(t);
-      return { name: t.name, address: t.address, role: t.labels["tree.role"], project, status, file, asks, needs: status === "blocked" || asks.length > 0 };
+      return { name, address: t.address, role, project, space: t.labels["herdr.space"], sid: t.labels["claude.sid"], cwd: t.cwd, created: t.created_ms ?? 0, status, file, asks, needs: status === "blocked" || asks.length > 0 };
     });
-  const root = sessions.find((s) => s.role === "root") ?? null;
+  // Two terminals may claim the root for a moment while it is restarted; the newest one is it
+  const root = sessions.filter((s) => s.role === "root").sort((a, b) => b.created - a.created)[0] ?? null;
   const names = new Set([...sessions.map((s) => s.project), ...[...files.keys()].map((k) => k.split("/")[0])]);
   names.delete(root?.project);
   const projects = [...names]
@@ -65,12 +70,4 @@ export function model(files) {
     .filter((p) => !p.closed && (p.lead || p.workers.length))
     .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
   return { root, projects, sessions };
-}
-
-/** What needs the person: every open ask, then every session waiting on a dialog. */
-export function needs({ sessions }) {
-  return [
-    ...sessions.filter((s) => s.status === "blocked").map((s) => ({ s, ask: null })),
-    ...sessions.flatMap((s) => s.asks.map((ask) => ({ s, ask }))),
-  ];
 }

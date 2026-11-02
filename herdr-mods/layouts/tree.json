@@ -20,7 +20,7 @@
       "id": "sidebar",
       "type": "column",
       "size": {
-        "px": 288
+        "px": 304
       },
       "min": 220,
       "max": 480,
