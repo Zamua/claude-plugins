@@ -123,6 +123,17 @@ export async function startHerdr(
       pane = created.root_pane.pane_id
       if (area && created.tab) await herdr($, session, ['tab', 'rename', created.tab.tab_id, start.label])
     }
+    // An agent takes longer to come up than a tool call's hook may run, so it starts once the call has answered
+    $.clock.after(0, () => void bootAgent($, session, pane, start))
+
+    return { address: `${session}/${pane}` }
+  } catch (err) {
+    return { error: `herdr could not start ${start.label}: ${messageOf(err)}` }
+  }
+}
+
+async function bootAgent($: EngineInterface, session: string, pane: string, start: HostStart) {
+  try {
     await herdr(
       $,
       session,
@@ -130,10 +141,8 @@ export async function startHerdr(
       START_TIMEOUT_MS + 10_000,
     )
     await herdr($, session, ['agent', 'prompt', start.label, start.brief])
-
-    return { address: `${session}/${pane}` }
   } catch (err) {
-    return { error: `herdr could not start ${start.label}: ${messageOf(err)}` }
+    $.ui.toast(`herdr could not start ${start.label}: ${messageOf(err)}`)
   }
 }
 

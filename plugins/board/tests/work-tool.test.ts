@@ -99,10 +99,10 @@ const SELF = { id: 'w4:p1', label: 'coordinator', harnessId: 's1' }
 const SELF_ID = 'session:herdr:default/w4:p1'
 const NEW_ID = 'session:herdr:default/w9:p1'
 
-test('start opens a session for an Item through herdr, briefed and linked under it with this session coordinating', async ($, on) => {
+test('start opens a session for an Item through herdr, linked under it with this session coordinating, and briefs it once the call has answered', async ($, on) => {
   const created = { id: 'w9:p1', label: 'scope-the-split', harnessId: 'h-new' }
   const w = withLive(TREE, herdrHost([SELF], created), sessionRecord(9, 'h-new', 'sam-9', NOW))
-  engine(on, w, NOW)
+  const clock = engine(on, w, NOW)
   await start($)
 
   const started = await $.tool.call({ tool: TOOL, start: [{ item: 'scope', brief: 'Split the scope doc in two.' }] })
@@ -110,6 +110,9 @@ test('start opens a session for an Item through herdr, briefed and linked under 
   expect(w.runs).toContainEqual([
     'herdr', '--session', 'default', 'tab', 'create', '--workspace', 'w4', '--cwd', HOME, '--label', 'scope-the-split', '--no-focus', '--env', 'BOARD_WORK_ITEM=file:scope',
   ])
+  // Waiting for an agent to come up would outrun the tool call's hook budget
+  expect(w.runs.some(argv => argv.includes('agent'))).toBe(false)
+  await clock.advance(1)
   expect(w.runs).toContainEqual([
     'herdr', '--session', 'default', 'agent', 'start', 'scope-the-split', '--kind', 'claude', '--pane', 'w9:p1', '--timeout', '60000', '--', '--model', 'opus',
   ])
@@ -211,10 +214,11 @@ test('a session resumed in another place keeps its place in the tree, and the ne
 test('a start can run its session on another model than the configured one', async ($, on) => {
   const created = { id: 'w9:p1', label: 'scope-the-split', harnessId: 'h-new' }
   const w = withLive(TREE, herdrHost([SELF], created))
-  engine(on, w, NOW)
+  const clock = engine(on, w, NOW)
   await start($)
 
   await $.tool.call({ tool: TOOL, start: [{ item: 'scope', brief: 'Check for new asks.', model: 'sonnet' }] })
+  await clock.advance(1)
   expect(w.runs.find(argv => argv.includes('agent') && argv.includes('start'))?.slice(-2)).toEqual(['--model', 'sonnet'])
 })
 
