@@ -173,6 +173,7 @@ const {
   interrupt,
   followAll,
   parkedJob,
+  conversationFacts,
 } = createTopicLifecycle({
   chat,
   sayIn: (chatId, topic, text) => sayIn(chatId, topic, text),
@@ -387,7 +388,7 @@ async function renameEverywhere(topic: string, name: string): Promise<void> {
   learnTopicName(topic, name)
   harnessFor(topic)?.rename(topic, name)
 }
-const topicArchive = createTopicArchive({ killSession, save: saveRegistry, rename: renameEverywhere, harnessLocked, parkedJob, square: SQUARE_TOPIC || undefined, log })
+const topicArchive = createTopicArchive({ killSession, save: saveRegistry, rename: renameEverywhere, harnessLocked, parkedJob, conversationFacts, square: SQUARE_TOPIC || undefined, log })
 // One instance writes the ledger, so its hash chain stays whole.
 const conductorLedger = conductorStore ? new Ledger(join(CONDUCTOR_DIR, 'ledger.jsonl')) : undefined
 // What each working hc topic is doing, for the app's working strip.

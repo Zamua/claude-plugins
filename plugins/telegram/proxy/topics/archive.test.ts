@@ -4,6 +4,10 @@ import { getTopic, topics } from './state'
 import type { TopicState } from './state'
 
 const ids = ['a1', 'a2', 'a3', 'general', 'sq', 'p1']
+const CONV_NEW = '11111111-1111-4111-8111-111111111111'
+const CONV_A2 = '22222222-2222-4222-8222-222222222222'
+const CONV_LIVE = '33333333-3333-4333-8333-333333333333'
+const CONV_GONE = '44444444-4444-4444-8444-444444444444'
 afterEach(() => ids.forEach(id => topics.delete(id)))
 
 function setup() {
@@ -21,6 +25,11 @@ function setup() {
     },
     harnessLocked: topic => topic === 'a3',
     parkedJob: topic => (topic === 'p1' ? 'abcd1234' : undefined),
+    conversationFacts: (topic, conversation) => ({
+      otherTopic: conversation === CONV_A2 ? 'a2' : undefined,
+      live: conversation === CONV_LIVE,
+      onDisk: conversation !== CONV_GONE,
+    }),
     square: 'sq',
     now: () => new Date('2026-11-02T01:00:00.000Z'),
     log: () => {},
@@ -91,6 +100,22 @@ test('handing a topic to crook stops the proxy\'s session; handing it back only 
   expect([getTopic('a1').lifecycleOwner, killed, saves()]).toEqual(['proxy', ['a1'], 2])
 })
 
+test('handing back with the backend\'s newer conversation resumes it there; a colliding one changes nothing', () => {
+  const { archive, saves } = setup()
+  archive.migrate(['a1'], 'crook')
+  for (const [conversation, reason] of [
+    ['conv-x', 'not a Claude conversation id'],
+    [CONV_A2, "the conversation is topic a2's"],
+    [CONV_LIVE, 'a live session holds the conversation; stop it first'],
+    [CONV_GONE, 'no transcript of that conversation is on disk'],
+  ]) {
+    expect(archive.migrate(['a1'], 'proxy', conversation)).toEqual([{ topic: 'a1', outcome: 'refused', reason }])
+  }
+  expect([getTopic('a1').lifecycleOwner, getTopic('a1').claudeSessionId, saves()]).toEqual(['crook', 'conv-1', 1])
+  expect(archive.migrate(['a1'], 'proxy', CONV_NEW)).toEqual([{ topic: 'a1', outcome: 'migrated' }])
+  expect([getTopic('a1').lifecycleOwner, getTopic('a1').claudeSessionId, saves()]).toEqual(['proxy', CONV_NEW, 2])
+})
+
 test('the backend gets no topic it cannot run, and nothing changes for one it refuses', () => {
   const { archive, killed, saves } = setup()
   getTopic('a3').claudeSessionId = 'conv-3'
@@ -112,6 +137,7 @@ test('a conversation running as a background job stays where it is: no migrate, 
     rename: async () => {},
     harnessLocked: () => false,
     parkedJob: topic => (topic === 'p1' ? 'abcd1234' : undefined),
+    conversationFacts: () => ({ live: false, onDisk: true }),
     log: line => void lines.push(line),
   })
   getTopic('p1').claudeSessionId = 'abcd1234-0000-0000-0000-000000000000'

@@ -5,6 +5,7 @@
 //   bun topics/topics-admin-cli.ts rename <topic> <name>
 //   bun topics/topics-admin-cli.ts reparent <topic> <parent>   (a project's id, or general)
 //   bun topics/topics-admin-cli.ts migrate crook|proxy <topic>...  (who runs the session)
+//   bun topics/topics-admin-cli.ts migrate proxy <topic> --conversation <id>  (back, resuming the backend's conversation)
 //
 // Prints `<topic> <outcome>` per topic and exits 1 when any was unknown or refused.
 const proxy = process.env.TELEGRAM_PROXY_URL ?? `http://127.0.0.1:${process.env.TELEGRAM_PROXY_PORT ?? 8790}`
@@ -19,11 +20,13 @@ const request =
       ? { path: '/topic/rename', body: { topic: rest[0], name: rest.slice(1).join(' ') } }
       : verb === 'reparent' && rest.length === 2
         ? { path: '/topic/reparent', body: { topic: rest[0], parent: rest[1] } }
-        : verb === 'migrate' && rest.length >= 2
-          ? { path: '/topic/migrate', body: { to: rest[0], topics: rest.slice(1) } }
+        : verb === 'migrate' && rest.length === 4 && rest[2] === '--conversation'
+          ? { path: '/topic/migrate', body: { to: rest[0], topics: [rest[1]], conversation: rest[3] } }
+          : verb === 'migrate' && rest.length >= 2 && !rest.includes('--conversation')
+            ? { path: '/topic/migrate', body: { to: rest[0], topics: rest.slice(1) } }
           : undefined
 if (!request) {
-  console.error('usage: topics-admin-cli.ts archive|restore <topic>...  |  rename <topic> <name>  |  reparent <topic> <parent>  |  migrate crook|proxy <topic>...')
+  console.error('usage: topics-admin-cli.ts archive|restore <topic>...  |  rename <topic> <name>  |  reparent <topic> <parent>  |  migrate crook|proxy <topic>...  |  migrate proxy <topic> --conversation <id>')
   process.exit(2)
 }
 async function main(path: string, body: unknown): Promise<number> {

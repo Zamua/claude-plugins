@@ -583,7 +583,9 @@ writes the field on every entry. Absent or unrecognized reads as `proxy`.
 
 It changes only through `bun proxy/topics/topics-admin-cli.ts migrate
 crook|proxy <topic>...`, which is `POST /topic/migrate {topics, to}`, never as a
-side effect of anything else (a route switch included). Outcomes: `migrated`,
+side effect of anything else (a route switch included). `migrate proxy <topic>
+--conversation <id>` (`{topics: [topic], to: "proxy", conversation}`) also hands
+it the conversation the backend moved it to. Outcomes: `migrated`,
 `unchanged`, `unknown`, or `refused` with its reason.
 
 - **To `crook`:** only a topic with a conversation already (`claude_session_id`;
@@ -591,7 +593,10 @@ side effect of anything else (a route switch included). Outcomes: `migrated`,
   not harness-locked, not the square. The proxy stops its own session first.
 - **To `proxy`:** flips the field and nothing else. The backend stops its
   session before asking, since the proxy can neither see nor stop it and the
-  next message would start a second copy.
+  next message would start a second copy. With a conversation id, the topic
+  resumes that one instead of the registry's older one; refused, changing
+  nothing, when the id is not a Claude conversation id, another topic's, held
+  by a live session, or has no transcript on disk.
 
 For a `crook` topic:
 

@@ -25,6 +25,7 @@ import {
 import { log, reason } from '../log'
 import { RESTORED_NOTICE } from './domain/archive'
 import { CROOK_OWNED_NOTICE } from './domain/lifecycle-owner'
+import type { HandBackFacts } from './domain/lifecycle-owner'
 import { atTurnBoundary } from './domain/claude-update'
 import { liveClaudeSessions } from './claude-sessions'
 import { autoCompactWindow, auxiliaryModelForRoute } from '../routing/domain/model-routing'
@@ -164,6 +165,12 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     followMoves(topic, st)
     const id = st.claudeSessionId
     return liveClaudeSessions().get(id)?.kind === 'bg' ? jobIdOf(id) : undefined
+  }
+
+  /** What handing `topic` back on `conversation` would collide with. */
+  function conversationFacts(topic: string, conversation: string): HandBackFacts {
+    const otherTopic = [...topics].find(([other, st]) => other !== topic && st.claudeSessionId === conversation)?.[0]
+    return { otherTopic, live: liveClaudeSessions().has(conversation), onDisk: claudeConversationExists(conversation) }
   }
 
   function enqueue(topic: string, msg: InboundMsg): void {
@@ -564,5 +571,6 @@ export function createTopicLifecycle({ chat, sayIn, harnessLocked, modelCatalog,
     interrupt,
     followAll,
     parkedJob,
+    conversationFacts,
   }
 }

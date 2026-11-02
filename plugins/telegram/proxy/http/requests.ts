@@ -163,10 +163,14 @@ export function parseTopicReparent(body: unknown): { topic: string; parent: stri
 }
 
 /** Topics handed to one lifecycle owner: the proxy or the Crook backend. */
-export function parseTopicMigrate(body: unknown): { topics: string[]; to: LifecycleOwner } {
-  const to = object(body).to
+export function parseTopicMigrate(body: unknown): { topics: string[]; to: LifecycleOwner; conversation?: string } {
+  const { to, conversation } = object(body)
   if (to !== 'proxy' && to !== 'crook') throw new BadRequest('to must be proxy or crook')
-  return { topics: parseTopicList(body), to }
+  const topics = parseTopicList(body)
+  if (conversation === undefined) return { topics, to }
+  if (typeof conversation !== 'string') throw new BadRequest('conversation must be a string')
+  if (to !== 'proxy' || topics.length !== 1) throw new BadRequest('conversation goes with to: proxy and one topic')
+  return { topics, to, conversation }
 }
 
 export function parseCancelReminder(body: unknown): { topic: string; id: string } {
