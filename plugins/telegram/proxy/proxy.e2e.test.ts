@@ -294,6 +294,10 @@ const spawns = () =>
 const proxyLog = () => (existsSync(join(root, 'proxy.log')) ? readFileSync(join(root, 'proxy.log'), 'utf8').slice(-3000) : '')
 
 const registry = () => JSON.parse(readFileSync(join(state, 'registry.json'), 'utf8'))
+const cli = async (...args: string[]) => {
+  const run = Bun.spawn(['bun', join(import.meta.dir, 'topics', 'topics-admin-cli.ts'), ...args], { env: { ...process.env, TELEGRAM_PROXY_URL: proxyUrl }, stdout: 'pipe' })
+  return [await new Response(run.stdout).text(), await run.exited]
+}
 
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'tg-proxy-e2e-'))
@@ -332,7 +336,7 @@ beforeAll(async () => {
   // A topic still running in the hc session topics used before this one
   writeFileSync(join(home, 'fake', 'hc-old.json'), JSON.stringify({ n: 1, terminals: [{ address: 't1', name: 'tg-68', state: 'live', labels: { session: 'claude-elder-68', topic: '68' }, reported: true, status: { state: 'done' }, foreground: { name: 'claude' } }] }))
   // A session still running under tmux for a topic now configured onto hc
-  // claude-outside-69 is run by something other than the proxy (TELEGRAM_TOPICS_EXTERNAL)
+  // claude-outside-69 is run by the Crook backend (lifecycle_owner crook)
   writeFileSync(join(home, 'fake', 'live'), 'claude-moving-63\nclaude-relaunched-67\nclaude-outside-69\n')
   writeFileSync(join(home, 'fake', 'whisper.bin'), '')
   mkdirSync(join(root, 'keys'), { mode: 0o700 })
@@ -358,7 +362,7 @@ beforeAll(async () => {
     '63': { tmux_session: 'claude-moving-63', thread_id: 63, name: 'moving', spawned_at: 1, claude_session_id: MOVING },
     '67': { tmux_session: 'claude-relaunched-67', thread_id: 67, name: 'relaunched', spawned_at: 1, claude_session_id: RELAUNCHED },
     '68': { tmux_session: 'claude-elder-68', thread_id: 68, name: 'elder', spawned_at: 1, claude_session_id: ELDER },
-    '69': { tmux_session: 'claude-outside-69', thread_id: 69, name: 'outside', spawned_at: 1, claude_session_id: OUTSIDE },
+    '69': { tmux_session: 'claude-outside-69', thread_id: 69, name: 'outside', spawned_at: 1, claude_session_id: OUTSIDE, lifecycle_owner: 'crook' },
   }))
 
   api = Bun.serve({
@@ -447,7 +451,6 @@ beforeAll(async () => {
       HC_SOCKET: join(root, 'hc.sock'),
       TELEGRAM_TOPICS_HC_TOPICS: '61,62,63,64,66,67,68',
       TELEGRAM_HC_PREVIOUS_SESSIONS: 'old',
-      TELEGRAM_TOPICS_EXTERNAL: '69',
       TELEGRAM_OPENCODE_BIN: join(home, '.local', 'bin', 'opencode'),
       TELEGRAM_OPENCODE_PROJECT_DIR: join(root, 'oc-project'),
       LOCALGEN_PORT: String(qwenImage.port),
@@ -549,10 +552,6 @@ describe('the proxy, end to end', () => {
   test('an archived topic stops and leaves the directory; the next message restores the same conversation', async () => {
     send(71, 'hello')
     const first = await until('topic 71 to spawn', () => spawns().find(s => s.session === 'claude-71'))
-    const cli = async (...args: string[]) => {
-      const run = Bun.spawn(['bun', join(import.meta.dir, 'topics', 'topics-admin-cli.ts'), ...args], { env: { ...process.env, TELEGRAM_PROXY_URL: proxyUrl }, stdout: 'pipe' })
-      return [await new Response(run.stdout).text(), await run.exited]
-    }
     expect(await cli('archive', '71', 'general', '9999')).toEqual(['71 archived\ngeneral refused (general is the root, not a project)\n9999 unknown\n', 1])
     expect(await cli('archive', '71')).toEqual(['71 already_archived\n', 0])
     expect(registry()['71']).toMatchObject({ archived_at: expect.any(String), claude_session_id: first.env.TG_CLAUDE_SESSION_ID, tmux_session: '' })
@@ -582,6 +581,23 @@ describe('the proxy, end to end', () => {
     await Bun.sleep(500)
     expect(spawns().some(s => s.session === 'claude-outside-69')).toBeFalse()
     expect(readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')).toContain('claude-outside-69')
+    expect(registry()['69'].lifecycle_owner).toBe('crook')
+  }, 20_000)
+
+  test('migrate hands a topic to the backend, stopping the proxy\'s session, and back', async () => {
+    const live = () => readFileSync(join(home, 'fake', 'live'), 'utf8').split('\n')
+    send(73, 'hello')
+    await until('topic 73 to spawn', () => live().includes('claude-73'))
+    expect(await cli('migrate', 'crook', '73', '69', '9999')).toEqual(['73 migrated\n69 unchanged\n9999 unknown\n', 1])
+    expect([registry()['73'].lifecycle_owner, live().includes('claude-73')]).toEqual(['crook', false])
+    send(73, 'for the backend')
+    const poll = (ack: string) => fetch(`${proxyUrl}/poll?topic=73&ack=${ack}`, { signal: AbortSignal.timeout(5_000) }).then(r => r.json())
+    const queued = await poll('')
+    expect(queued.content).toContain('hello')
+    expect((await poll(queued.delivery)).content).toContain('for the backend')
+    expect(spawns().filter(s => s.session === 'claude-73')).toHaveLength(1)
+    expect(await cli('migrate', 'proxy', '73')).toEqual(['73 migrated\n', 0])
+    expect(registry()['73'].lifecycle_owner).toBe('proxy')
   }, 20_000)
 
   test('a proxied topic whose agent cannot start tries again on the next message, not on a timer', async () => {

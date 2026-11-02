@@ -568,10 +568,26 @@ or a coordinator, and a topic with workers of its own stays a project. Each verb
 rename goes through the same path as the app's: the Telegram thread, the
 registry and any harness. Archiving leaves the Telegram topic as it is.
 
-## Topics run outside the proxy (`TELEGRAM_TOPICS_EXTERNAL`)
+## Who runs a topic's session (`lifecycle_owner`)
 
-For the hand-over to the Crook backend, `TELEGRAM_TOPICS_EXTERNAL` (thread ids
-and `general`, or `*`) names topics whose sessions something else runs.
+Each registry entry carries `lifecycle_owner`: `proxy`, or `crook` for a topic
+whose session the Crook backend runs. Both sides read it; only the proxy writes
+it (the registry lives in its memory and every save rewrites the file), and it
+writes the field on every entry. Absent or unrecognized reads as `proxy`.
+
+It changes only through `bun proxy/topics/topics-admin-cli.ts migrate
+crook|proxy <topic>...`, which is `POST /topic/migrate {topics, to}`, never as a
+side effect of anything else (a route switch included). Outcomes: `migrated`,
+`unchanged`, `unknown`, or `refused` with its reason.
+
+- **To `crook`:** only a topic with a conversation already (`claude_session_id`;
+  the backend resumes it and never writes the registry), on an Anthropic route,
+  not harness-locked, not the square. The proxy stops its own session first.
+- **To `proxy`:** flips the field and nothing else. The backend stops its
+  session before asking, since the proxy can neither see nor stop it and the
+  next message would start a second copy.
+
+For a `crook` topic:
 
 - **Unchanged:** the proxy still queues their Telegram messages, for the
   session's own MCP to take with `/poll`, and relays their replies.
@@ -582,8 +598,6 @@ and `general`, or `*`) names topics whose sessions something else runs.
 - **Refused, with a pointer to the backend:** `/relaunch` and route changes
   (`/model`, the app's `route_change` as 409 `external_lifecycle`).
 
-Unset, nothing changes.
-
 ## Relaunch and route changes over loopback (until Crook's cutover)
 
 So the Crook backend can restart a topic and switch its model before it runs
@@ -593,13 +607,13 @@ rest of it:
 - `POST /topic/relaunch {topics: [...]}` goes through the broker's own
   decision, pacing, queue and ledger (caller `loopback`): any known topic,
   general included, `applied` now or `queued` until its turn ends, `no_agent`,
-  or `refused` for an unknown topic or one in `TELEGRAM_TOPICS_EXTERNAL`. It
+  or `refused` for an unknown topic or one the Crook backend runs. It
   answers `{results: [{topic, outcome, reason?}]}`.
 - `POST /topic/route {topic, provider, model, effort?}` is the app's
   `route_change` (`control.route`, so `requestRoute`, queued while a turn
   runs), echoed in the topic as `Crook backend: /model ...`. It answers
   `{route, state}` or the app API's `{error: {code, message}}`, with
-  `external_lifecycle` for an external topic. Any local process can call it, so
+  `external_lifecycle` for a topic the Crook backend runs. Any local process can call it, so
   it never picks a route that skips permission checks (Codex): that is 403
   `needs_operator`, left to Telegram or the signed app.
 
@@ -608,7 +622,7 @@ general, posting nothing to the operator: an archived topic comes back without
 its restore notice, and the session gets general's instructions as a turn
 marked `quiet="1"` that it answers to general with SendMessage. It answers
 `{results: [{topic, outcome}]}`, `kicked_off`, `unknown`, or `refused` for the
-square, a locked harness or an external topic. A reminder posted to `/remind`
+square, a locked harness or a topic the Crook backend runs. A reminder posted to `/remind`
 with `quiet: true` does the same at its time: no `⏰` post, the same quiet turn.
 
 `GET /routes` is the catalog the app's `/v1/routes` serves, with
@@ -1552,8 +1566,7 @@ backends" above; applies to Claude topics); `TELEGRAM_TOPICS_HC_TOPICS`,
 binary, and the hc session, default `topics`, whose core its own launchd agent
 starts); `TELEGRAM_HC_PREVIOUS_SESSIONS` (hc sessions topics ran in before the
 session changed: copies still running there are found and stopped when a topic
-moves, never started); `TELEGRAM_TOPICS_EXTERNAL` (topics whose sessions
-something else runs; see "Topics run outside the proxy"); `TELEGRAM_TOPICS_SILENT`
+moves, never started); `TELEGRAM_TOPICS_SILENT`
 (`on`: the Telegram adapter posts every message with `disable_notification`, so
 Telegram is a quiet mirror while Crook's push is the only ping); `TELEGRAM_ANTIGRAVITY_BIN` (optional
 path to official `agy`, defaults to the Nix per-user profile and then PATH);

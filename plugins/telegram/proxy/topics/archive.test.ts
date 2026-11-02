@@ -19,6 +19,7 @@ function setup() {
       renamed.push([topic, name])
       getTopic(topic).name = name
     },
+    harnessLocked: topic => topic === 'a3',
     square: 'sq',
     now: () => new Date('2026-11-02T01:00:00.000Z'),
     log: () => {},
@@ -78,4 +79,26 @@ test('reparenting keeps the tree two levels deep and refuses the root, the squar
   expect(archive.reparent('general', 'a2')).toMatchObject({ outcome: 'refused' })
   expect(archive.reparent('nope', 'a2')).toEqual({ topic: 'nope', outcome: 'unknown' })
   expect(saves()).toBe(1)
+})
+
+test('handing a topic to crook stops the proxy\'s session; handing it back only flips the owner', () => {
+  const { archive, killed, saves } = setup()
+  expect(archive.migrate(['a1', 'a1'], 'crook')).toEqual([{ topic: 'a1', outcome: 'migrated' }])
+  expect([getTopic('a1').lifecycleOwner, killed, saves()]).toEqual(['crook', ['a1'], 1])
+  expect(archive.migrate(['a1'], 'crook')).toEqual([{ topic: 'a1', outcome: 'unchanged' }])
+  expect(archive.migrate(['a1'], 'proxy')).toEqual([{ topic: 'a1', outcome: 'migrated' }])
+  expect([getTopic('a1').lifecycleOwner, killed, saves()]).toEqual(['proxy', ['a1'], 2])
+})
+
+test('the backend gets no topic it cannot run, and nothing changes for one it refuses', () => {
+  const { archive, killed, saves } = setup()
+  getTopic('a3').claudeSessionId = 'conv-3'
+  getTopic('sq').claudeSessionId = 'conv-sq'
+  expect(archive.migrate(['a2', 'a3', 'sq', 'nope'], 'crook')).toEqual([
+    { topic: 'a2', outcome: 'refused', reason: 'no conversation yet; the proxy starts it first' },
+    { topic: 'a3', outcome: 'refused', reason: 'locked to another harness, which only the proxy runs' },
+    { topic: 'sq', outcome: 'refused', reason: 'the square has no session' },
+    { topic: 'nope', outcome: 'unknown' },
+  ])
+  expect([killed, saves(), getTopic('a3').lifecycleOwner]).toEqual([[], 0, undefined])
 })

@@ -2,6 +2,7 @@
 // body is a 400 naming the field, never a NaN id or a phantom topic downstream.
 import type { TextFormat } from '../chat/domain/chat-port'
 import type { TopicHarness } from '../harness/domain/topic-harness'
+import type { LifecycleOwner } from '../topics/domain/lifecycle-owner'
 
 export class BadRequest extends Error {}
 
@@ -159,6 +160,13 @@ export function parseTopicKickoff(body: unknown): { topic: string; prompt?: stri
 export function parseTopicReparent(body: unknown): { topic: string; parent: string } {
   const b = object(body)
   return { topic: topicKey(b), parent: topicKey({ topic: b.parent }) }
+}
+
+/** Topics handed to one lifecycle owner: the proxy or the Crook backend. */
+export function parseTopicMigrate(body: unknown): { topics: string[]; to: LifecycleOwner } {
+  const to = object(body).to
+  if (to !== 'proxy' && to !== 'crook') throw new BadRequest('to must be proxy or crook')
+  return { topics: parseTopicList(body), to }
 }
 
 export function parseCancelReminder(body: unknown): { topic: string; id: string } {

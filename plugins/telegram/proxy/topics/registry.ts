@@ -2,7 +2,8 @@
 // change and reconciled against the live multiplexer at boot.
 import { readRegistryFile, writeRegistryFile } from './registry-file'
 import type { Registry } from './registry-file'
-import { DEFAULT_TOPIC_ROUTE, EXTERNAL_TOPICS, REGISTRY_FILE, TOPIC_LAUNCH_PROFILE_VERSION } from '../config'
+import { DEFAULT_TOPIC_ROUTE, REGISTRY_FILE, TOPIC_LAUNCH_PROFILE_VERSION } from '../config'
+import { lifecycleOwnerFrom } from './domain/lifecycle-owner'
 import { launchProfileNeedsRefresh } from './domain/launch-profile'
 import { topicRouteFromRecord } from '../routing/domain/model-routing'
 import type { PendingRouteChange, TopicRoute } from '../routing/domain/model-routing'
@@ -52,6 +53,7 @@ export function saveRegistry(): void {
       ...(st.routing.resumeNotice ? { pending_resume_notice: st.routing.resumeNotice } : {}),
       ...(st.session ? { session: { parent: st.session.parent, spawned_by: st.session.spawnedBy, spawned_at: st.session.spawnedAt } } : {}),
       ...(st.archivedAt ? { archived_at: st.archivedAt } : {}),
+      lifecycle_owner: st.lifecycleOwner ?? 'proxy',
     }
   }
   writeRegistryFile(REGISTRY_FILE, out)
@@ -83,8 +85,9 @@ export function loadAndReconcileRegistry(): void {
       ...(entry.pending_resume_notice && { resumeNotice: entry.pending_resume_notice }),
     }
     if (entry.name) topicNames.set(topic, entry.name)
-    // A session run outside the proxy is never adopted, so nothing here can stop or restart it.
-    const isLive = !EXTERNAL_TOPICS.has(topic) && !!entry.tmux_session && live.has(entry.tmux_session)
+    st.lifecycleOwner = lifecycleOwnerFrom(entry.lifecycle_owner)
+    // A session the Crook backend runs is never adopted, so nothing here can stop or restart it.
+    const isLive = st.lifecycleOwner !== 'crook' && !!entry.tmux_session && live.has(entry.tmux_session)
     st.agent = nextAgent(st.agent, {
       type: 'restored',
       session: entry.tmux_session ?? '',

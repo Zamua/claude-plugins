@@ -1,23 +1,26 @@
-// Archive, restore, rename and reparent topics from the proxy's own side (the
-// loopback API and topics-admin), each idempotent. Archiving stops the session and keeps
+// Archive, restore, rename, reparent and hand over topics from the proxy's own side
+// (the loopback API and topics-admin), each idempotent. Archiving stops the session and keeps
 // its conversation id and transcript; restoring only clears the flag, so the
 // next message resumes the same conversation.
 import { notAProject } from './domain/archive'
+import { ownerRefusal } from './domain/lifecycle-owner'
+import type { LifecycleOwner } from './domain/lifecycle-owner'
 import { ROOT, reparentRefusal, sessionNode, topicRole } from './domain/session-tree'
 import type { ArchiveResult } from './domain/archive'
-import { topics } from './state'
+import { currentRoute, topics } from './state'
 import type { TopicState } from './state'
 
 export type TopicArchivePorts = {
   killSession: (st: TopicState, topic: string) => boolean
   save: () => void
   rename: (topic: string, name: string) => Promise<void>
+  harnessLocked: (topic: string) => boolean
   square?: string
   now?: () => Date
   log: (line: string) => void
 }
 
-export function createTopicArchive({ killSession, save, rename, square, now = () => new Date(), log }: TopicArchivePorts) {
+export function createTopicArchive({ killSession, save, rename, harnessLocked, square, now = () => new Date(), log }: TopicArchivePorts) {
   const refusal = (topic: string) => notAProject(topic, topics.has(topic), square)
 
   function archive(list: readonly string[]): ArchiveResult[] {
@@ -79,7 +82,33 @@ export function createTopicArchive({ killSession, save, rename, square, now = ()
     return { topic, outcome: 'reparented' }
   }
 
-  return { archive, restore, rename: renameTopic, reparent }
+  /**
+   * Hands topics to the Crook backend or back. Going to crook stops the proxy's own
+   * session first, since a crook topic's session is never stopped from here. Coming
+   * back flips the field only: the backend stops its session before asking.
+   */
+  function migrate(list: readonly string[], owner: LifecycleOwner): ArchiveResult[] {
+    const results = [...new Set(list)].map((topic): ArchiveResult => {
+      const st = topics.get(topic)
+      if (!st) return { topic, outcome: 'unknown' }
+      if ((st.lifecycleOwner ?? 'proxy') === owner) return { topic, outcome: 'unchanged' }
+      const why = ownerRefusal(owner, {
+        square: !!square && topic === square,
+        harnessLocked: harnessLocked(topic),
+        provider: currentRoute(st).provider,
+        conversation: !!st.claudeSessionId,
+      })
+      if (why) return { topic, outcome: 'refused', reason: why }
+      const wasLive = owner === 'crook' && killSession(st, topic)
+      st.lifecycleOwner = owner
+      log(`topic ${topic} "${st.name || topic}" now run by ${owner === 'crook' ? 'the Crook backend' : 'the proxy'}${wasLive ? ', the proxy\'s session stopped' : ''}`)
+      return { topic, outcome: 'migrated' }
+    })
+    if (results.some(r => r.outcome === 'migrated')) save()
+    return results
+  }
+
+  return { archive, restore, rename: renameTopic, reparent, migrate }
 }
 
 export type TopicArchive = ReturnType<typeof createTopicArchive>
