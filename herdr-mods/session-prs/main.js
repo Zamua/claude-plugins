@@ -449,8 +449,10 @@ export default class SessionPrs extends View {
     const streams = all.flatMap((proj) => [...new Set(proj.prs.map((p) => p.group ?? ""))]
       .map((g) => ({ key: `${proj.name}/${g}`, name: g, project: proj.title })));
     const named = (name) => streams.filter((x) => x.name === name).length;
+    const me = who([...this.live.values()].find((pr) => pr?.author?.login === this.viewer)?.author);
     const options = {
-      author: [...new Set(all.flatMap((proj) => proj.prs.map((p) => who(this.live.get(p.id)?.author))).filter(Boolean))].sort().map((a) => ({ key: a, label: a })),
+      author: [...new Set(all.flatMap((proj) => proj.prs.map((p) => who(this.live.get(p.id)?.author))).filter(Boolean))]
+        .sort((a, b) => (b === me) - (a === me) || a.localeCompare(b)).map((a) => ({ key: a, label: a === me ? `${a} (me)` : a })),
       status: STATUSES.map(([key, label]) => ({ key, label })),
       stream: streams.map((x) => ({ key: x.key, label: reviewing ? this.labels?.get(x.key) ?? x.name : !x.name ? x.project : named(x.name) > 1 ? `${x.project} / ${x.name}` : x.name })),
     };
@@ -588,7 +590,7 @@ export default class SessionPrs extends View {
     }
     if (was && !was.closed) closeOverlay(was.id);
     const id = openOverlay({
-      mod: "session-prs", kind: "popup", width: 260, height: Math.min(52 + Math.max(options.length, 1) * 28, 400),
+      mod: "session-prs", kind: "popup", width: 260, height: Math.min(52 + Math.max(options.length, 1) * 28, 560),
       ...(bounds && { at: { x: bounds.x, y: bounds.y + bounds.height + 4 } }),
       props: { mode: "filter", tab, dim, title, options },
     });
@@ -611,7 +613,7 @@ export default class SessionPrs extends View {
         .when(chosen.length > 0, (el) => el.child(div().id("flt-none").text_size(11).text_color(t.dim).cursor_pointer()
           .hover((el) => el.text_color(t.foreground)).on_click(() => set([])).child("clear"))))
       .when(!options?.length, (el) => el.child(div().px(8).py(4).text_color(t.dim).child("Nothing to filter by yet.")))
-      .child(v_flex().id("flt-list").max_h(340).overflow_y_scrollbar().children((options ?? []).map((o, k) => {
+      .child(v_flex().id("flt-list").max_h(500).overflow_y_scrollbar().children((options ?? []).map((o, k) => {
         const on = chosen.includes(o.key);
         return h_flex().id(`flt-o-${k}`).h(28).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer().hover((el) => el.bg(t.hover))
           .on_click(() => set(on ? chosen.filter((x) => x !== o.key) : [...chosen, o.key]))
