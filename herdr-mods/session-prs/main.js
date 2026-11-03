@@ -11,7 +11,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, InputState, Input } from "gpui-base";
-import { exec, hc, theme, props, run, layout, watchFolder, openOverlay, closeOverlay, notify, settings, terminals, shared, setShared, readTextFile, writeTextFile } from "herdr";
+import { exec, hc, theme, props, run, layout, watchFolder, openOverlay, closeOverlay, notify, settings, terminals, focused, shared, setShared, readTextFile, writeTextFile } from "herdr";
 import { folderOf, readFiles } from "./files.js";
 
 const REFRESH_MS = 60000;
@@ -23,6 +23,8 @@ const TABS = [["prs", "PRs"], ["reviews", "PR Reviews"], ["asks", "Asks"]];
 // shared state so the pane and its dialog see the same
 const QUEUE = "session-prs.queue";
 const SENT = "session-prs.sent";
+// When a copy began typing a decision, so no other copy types at the same time
+const SENDING = "session-prs.sending";
 // The PR tabs' filters by tab, then by dropdown: { prs: { author: [...], status: [...], stream: [...] } }
 const FILTERS = "session-prs.filters";
 // Which filter dropdown is open, and when it last closed: a press on its own button closes it, and
@@ -102,10 +104,16 @@ function rootTerminal() {
     .sort((a, b) => (b.created_ms ?? 0) - (a.created_ms ?? 0))[0] ?? null;
 }
 
-// The root takes a decision only while it waits for input with nothing typed, so a draft of the
-// person's is never added to or sent.
-async function rootReady(t) {
+// hc send pastes once nobody has typed for ~3 s, onto whatever the prompt box holds by then, so a
+// box seen empty stays empty only while nobody can type into it. Keys reach only the focused
+// terminal: the root is free while it waits for input and is not focused.
+function rootFree(t) {
   if (!t || t.status === "working" || t.status === "blocked") return false;
+  const f = focused();
+  return !f || ![f.agent, f.terminal, f.shown].includes(t.address);
+}
+
+async function boxEmpty(t) {
   const r = await hc(["read", t.address, "--json"]);
   const lines = JSON.parse(r.stdout || "{}").text?.split("\n") ?? [];
   const rules = lines.flatMap((l, i) => (l.startsWith("─".repeat(20)) ? [i] : []));
@@ -154,16 +162,6 @@ async function logDecision(folder, d, outcome) {
       // Another write landed between the read and this one; read again
     }
   }
-}
-
-async function deliver(folder, d) {
-  const t = rootTerminal();
-  if (!(await rootReady(t))) return false;
-  await hc(["send", t.address, d.line]);
-  setShared(SENT, { ...(shared(SENT) ?? {}), [d.key]: Date.now() });
-  await logDecision(folder, d, "sent");
-  notify({ title: "Decision sent to root", body: d.line, level: "success", timeout: 4000 });
-  return true;
 }
 
 const stackedOn = (on) => (typeof on === "number" ? on : Number(/#(\d+)$/.exec(String(on ?? ""))?.[1]) || null);
@@ -252,15 +250,36 @@ export default class SessionPrs extends View {
     }));
   }
 
-  // Queued decisions go out one at a time, oldest first, whenever the root is free.
+  // Queued decisions go out one at a time, oldest first, once the root has been free with an empty
+  // prompt box on two checks a drain apart. A decision leaves the queue before it is typed, so a
+  // failed or doubled send never types it twice.
   async drain() {
-    const queue = shared(QUEUE) ?? [];
-    if (!queue.length || this.draining) return;
-    this.draining = true;
+    const t = rootTerminal();
+    if (!(shared(QUEUE) ?? []).length || !rootFree(t)) return void (this.calm = null);
+    const since = shared(SENDING);
+    if (since && Date.now() - since < 60000) return;
+    setShared(SENDING, Date.now());
     try {
-      if (await deliver(this.folder, queue[0])) setShared(QUEUE, (shared(QUEUE) ?? []).filter((d) => d.key !== queue[0].key));
+      const calm = (await boxEmpty(t)) && rootFree(terminals().find((x) => x.address === t.address));
+      const was = this.calm;
+      this.calm = calm ? (was ?? Date.now()) : null;
+      if (!calm || !was || Date.now() - was < 2500) return;
+      const d = (shared(QUEUE) ?? [])[0];
+      if (!d) return;
+      setShared(QUEUE, (shared(QUEUE) ?? []).filter((q) => q.key !== d.key));
+      this.calm = null;
+      const r = await hc(["send", t.address, d.line]);
+      if (r.code === 0) {
+        await logDecision(this.folder, d, "sent");
+        notify({ title: "Decision sent to root", body: d.line, level: "success", timeout: 4000 });
+      } else {
+        const { [d.key]: _, ...rest } = shared(SENT) ?? {};
+        setShared(SENT, rest);
+        await logDecision(this.folder, d, "failed");
+        notify({ title: "Decision not sent", body: `${r.stderr.trim().split("\n")[0] || `hc exited ${r.code}`}. Pick it again.`, level: "error", timeout: 8000 });
+      }
     } finally {
-      this.draining = false;
+      setShared(SENDING, null);
     }
   }
 
@@ -276,14 +295,11 @@ export default class SessionPrs extends View {
     const text = String(option ?? "").trim();
     if (!text) return;
     const d = { key: a.key, short: a.short, project: a.project, id: a.id ?? a.key, option: text, line: `[decision] ${a.short ? `${a.short} ` : ""}${askRef(a)}: ${text}` };
+    // The pane's drain types it; a task here would end with the dialog
+    setShared(QUEUE, [...(shared(QUEUE) ?? []).filter((q) => q.key !== d.key), d]);
+    setShared(SENT, { ...(shared(SENT) ?? {}), [d.key]: Date.now() });
+    if (!rootFree(rootTerminal())) notify({ title: "Decision queued", body: "It goes to root once root is idle and you are out of its pane.", level: "info", timeout: 5000 });
     closeOverlay(props().overlay);
-    cx.spawn(async () => {
-      if (await deliver(this.folder, d)) return;
-      setShared(QUEUE, [...(shared(QUEUE) ?? []).filter((q) => q.key !== d.key), d]);
-      setShared(SENT, { ...(shared(SENT) ?? {}), [d.key]: Date.now() });
-      await logDecision(this.folder, d, "queued");
-      notify({ title: "Decision queued", body: "The root is busy or has a draft typed; it goes in once the prompt is free.", level: "info", timeout: 5000 });
-    });
   }
 
   askDialog(t) {

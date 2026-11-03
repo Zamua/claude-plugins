@@ -67,8 +67,9 @@ symlinked folder. Run it again after a pull.
   the reviews project's PRs the same way, a section per review session. Asks: every
   open ask by project, due soonest first, each with a short id (A1 and up) it keeps
   for good in the root's `ask-ids.json`; a row opens a dialog whose options type
-  `[decision] <short id> <project>/<ask id>: <option>` into the root once its prompt
-  is empty, queued until then and logged to the root's `decisions.jsonl`.
+  `[decision] <short id> <project>/<ask id>: <option>` into the root once it is idle,
+  not focused, and its prompt has stayed empty for a few seconds, queued until then
+  and logged to the root's `decisions.jsonl`.
 - **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the
   session tree as its sidebar and the PRs pane beside the terminals, toggled with
   Cmd+Shift+R once `keys.json` binds it.
