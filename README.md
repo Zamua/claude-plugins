@@ -36,11 +36,11 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   and reviews in a tab per section, and any board another process writes as JSON, such as a rollout, named
   in `~/.config/board/boards.json`. `/board` toggles the pane, `/board <name>` opens
   it on one board, `/board <name> clear` empties one.
-- **[clean-code-audit](plugins/clean-code-audit/)**: eleven smells that make code
-  hard to change safely, from implicit coupling and illegal states to validation
-  deep inside instead of at the boundary, tests that pin the implementation, and
-  lifecycles that live only in scattered flags
-  instead of the behaviour. Use it as a
+- **[clean-code-audit](plugins/clean-code-audit/)**: thirteen smells that make code
+  hard to change safely or slow on its hot paths, from implicit coupling and illegal
+  states to validation deep inside instead of at the boundary, tests that pin the
+  implementation, lifecycles that live only in scattered flags, independent awaits
+  run one after another, and whole rows loaded for a few fields. Use it as a
   set of questions while designing a change, as a checklist when self-reviewing a
   diff, or to audit a whole repo with path:line evidence and every fix it calls for.
 
