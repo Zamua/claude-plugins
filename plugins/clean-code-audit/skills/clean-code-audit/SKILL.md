@@ -1,11 +1,12 @@
 ---
-description: Check code against eleven smells (implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary, change-detector tests, implicit state machines). Use while designing or implementing a change, for a self-review of a diff before committing or opening a PR, when asked to audit a repo, or when the user triggers /clean-code-audit. Every finding needs a path:line.
+description: Check code against thirteen smells (implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary, change-detector tests, implicit state machines, unnecessary sequential async calls, whole-row loads). Use while designing or implementing a change, for a self-review of a diff before committing or opening a PR, when asked to audit a repo, or when the user triggers /clean-code-audit. Every finding needs a path:line.
 ---
 
 # clean-code-audit
 
-Eleven smells that make a codebase hard to change safely. This is about structure,
-not style and not bugs: formatting, naming taste and lint rules are out of scope.
+Thirteen smells that make a codebase hard to change safely or needlessly slow on its
+hot paths. This is about structure and hot-path efficiency, not style and not bugs:
+formatting, naming taste and lint rules are out of scope.
 A bug found along the way is reported separately (see "Bugs are not smells").
 
 Three ways to use it:
@@ -14,10 +15,10 @@ Three ways to use it:
   forms, when fixing a smell costs a line instead of a refactor.
 - **Self-review of a diff**: check what the diff added or made worse, before the
   commit or the PR. Not the whole repo.
-- **Repo audit**: rate all eleven across a codebase, with evidence, and list every
+- **Repo audit**: rate all thirteen across a codebase, with evidence, and list every
   finding with its fix.
 
-## The eleven smells
+## The thirteen smells
 
 For each: what it is, how to find it, what the fix looks like, and what does not count.
 
@@ -215,9 +216,72 @@ only by a guard one handler has and its sibling lacks.
   the data; this one covers who may change it and when. The two are usually fixed
   together.
 
+### 12. Unnecessary sequential async calls
+
+Independent awaits run one after another (`await a(); await b()`), or an `await`
+sits inside a loop, so the latency is the sum of the calls instead of the longest.
+It matters on hot paths: request handlers, boot and startup, polling loops, and
+fan-outs over sessions, rows or files.
+
+- **Find it**: go through each `await` and ask "does the next call use this
+  result, or depend on its side effect?" If neither, they can overlap. Grep for
+  `await` inside `for`, `while`, `.forEach` and `.map` bodies, and for runs of
+  adjacent awaits on storage, RPC, file or HTTP calls (the same shape in other
+  languages: sequential `.get()`s, an N+1 query loop). Read request handlers and
+  boot paths first. Wall time near the sum of the call times confirms it.
+- **Fix**: start the independent calls, then await them together (`Promise.all`,
+  `asyncio.gather`, an errgroup). For a loop over N items, a bounded-concurrency
+  pool, or one batched query or RPC (`WHERE id IN (...)`, a bulk get) instead of N.
+- **Safety rules**:
+  - Keep the order where the order is the contract: delivery sequencing, writes to
+    one store or row, transaction and ledger ordering, any step with a side effect
+    the next one relies on, calls under a rate limit.
+  - Error semantics change. `Promise.all` rejects on the first failure and the
+    rest keep running unobserved; use `allSettled` when partial results matter or
+    each failure needs its own handling.
+  - Cap the concurrency. An unbounded fan-out over N items exhausts connections
+    and file handles or trips rate limits.
+  - Every fix needs a test that pins the ordering-sensitive cases: order kept where
+    it is the contract, results returned in input order, one failure handled as
+    before, the cap holding.
+- **Not it**: sequential on purpose (the comment says why), a cold path that runs
+  once, a call that needs the previous result, awaits already overlapped.
+
+### 13. Whole-row loads
+
+Loading a full row or object (`SELECT *`, a whole document, a whole file, a full
+session record) when the caller uses a few of its fields. It costs bandwidth,
+memory and parse time, drags large columns along, and ties the caller to the
+whole shape.
+
+- **Find it**: `SELECT *` or a get-by-id followed by reading one or two fields; a
+  `list()` whose callers only count, test for existence or map to a name; rows
+  loaded for an existence check that carry big text, JSON or blob columns; a whole
+  file read to get its size or its head; any of these inside a loop (with 12). For
+  each load, list the fields the caller reads. A small subset is the smell. Poll
+  loops, list views, per-request lookups and boot paths first.
+- **Fix**: project only the needed columns or fields. Give the question its own
+  narrow port method (`exists`, `count`, `nameOf`, `idsFor`) instead of loading the
+  entity and discarding it. Keep large columns out of hot reads. Read a head or
+  tail slice, not the whole file.
+- **Safety rules**:
+  - The narrow read must give the same answer: check the dropped fields are not
+    read later, for example by a mapper that validates the whole row or a default
+    filled from a dropped column.
+  - One definition of the shape: a projection type derived from the entity, not a
+    hand-copied partial that drifts (smells 1, 3).
+  - Do not narrow a read-modify-write, or a read whose fields must come from one
+    snapshot with the rest of a transaction; it needs the full state it changes.
+  - The narrow method belongs on the port, not in the caller (smell 7).
+  - Every fix needs a test that the narrow read returns what the full load would
+    for the fields used, using a fixture whose unrelated large or invalid column
+    would break or slow a full load.
+- **Not it**: a caller that really uses most of the object, a small row where every
+  field is used, a cache that is meant to hold the whole entity.
+
 ## Before you write it
 
-The cheap moment to avoid all eleven is before the code exists. While designing a
+The cheap moment to avoid all thirteen is before the code exists. While designing a
 change, answer these:
 
 1. Where does untrusted input enter, and what typed value does it become there?
@@ -234,10 +298,14 @@ change, answer these:
    behaviour? If not, it pins the implementation.
 9. Does this thing have a lifecycle? Where is the one place its state changes,
    and what happens to an event that does not fit the current state?
+10. Do these awaits depend on each other? If not, do they run together, and with a
+    cap when it is a loop? Where the order is the contract, is that said?
+11. Does this read fetch only the fields the caller uses, or a whole row for two of
+    them?
 
 ## Self-review of a diff
 
-Run through the eleven against the diff, not the codebase. Report only what the
+Run through the thirteen against the diff, not the codebase. Report only what the
 diff introduces or worsens; a pre-existing smell the diff touches gets one line
 at most, and is not a reason to grow the change. Fix what is cheap now. Anything
 deferred gets named in the PR or the commit summary, never silently left.
@@ -245,7 +313,7 @@ deferred gets named in the PR or the commit summary, never silently left.
 ## Repo audit
 
 1. Read the repo's own docs first (CLAUDE.md, README, architecture notes). Judge
-   against the eleven and against the design the repo says it follows. Drift from
+   against the thirteen and against the design the repo says it follows. Drift from
    its own stated design is a finding.
 2. Skip generated and vendored code, build output, lockfiles and fixtures.
 3. Rate each smell: **clean**, **minor**, **notable**, **severe**. Clean is a
@@ -268,6 +336,8 @@ REPO <name> (<language>, <approx source lines>)
 9. Errors/validation at the boundary: minor - <evidence>
 10. Change-detector tests: clean
 11. Implicit state machines: notable - <evidence>
+12. Sequential async calls: notable - <evidence>
+13. Whole-row loads: minor - <evidence>
 Findings, most severe first:
 1. <smell number> <path:line>: <the problem>. Fix: <one line>
 ```
