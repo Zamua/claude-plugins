@@ -59,15 +59,19 @@ symlinked folder. Run it again after a pull.
   space order in the tree's order. Cmd+W and Cmd+Shift+W ask before closing a tab
   or pane that holds a live Claude session, a closed root gets a Reopen row that
   resumes it, and `session-tree.new` opens a dialog that starts a session.
-- **[session-prs](herdr-mods/session-prs/)**: three tabs over the sessions' state
-  files. PRs: every session's pull requests, one dense row each, in sections by each
+- **[session-prs](herdr-mods/session-prs/)**: tabs over the sessions' state files,
+  plus one per tracker file. PRs: every session's pull requests, one dense row each, in sections by each
   entry's `group` inside its project, with draft, CI, your approval, author and
   stacks from one GitHub query a minute while it shows; finished workstreams fold
   into Done, closed PRs drop off, and headers stay pinned while it scrolls. Reviews:
   the reviews project's PRs the same way, a section per review session. Asks: every
   open ask by project, due soonest first, each with a short id (A1 and up) it keeps
   for good in the root's `ask-ids.json`; a row opens a dialog that numbers the ask's
-  options, so you can name one in chat, such as "A25 option 2".
+  options, so you can name one in chat, such as "A25 option 2". Trackers: each JSON
+  file listed in `~/.config/herdr-app/session-prs.json` as `{"trackers": [path]}`
+  gets a read-only tab named by its `title`: the count by status, every gap up top,
+  then each section with its items' status, owner, note or what they wait on, and
+  per-environment values; a row opens the item's detail and links.
 - **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the
   session tree as its sidebar and the PRs pane beside the terminals, toggled with
   Cmd+Shift+R once `keys.json` binds it.

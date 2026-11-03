@@ -1,5 +1,5 @@
-// Three tabs over the sessions' state files. PRs: every session's `prs`, one dense row each,
-// projects in their `order`, a section per `group` inside each (ungrouped PRs first), workstreams
+// Tabs over the sessions' state files, then a tab per tracker file (see tracker.js). PRs: every
+// session's `prs`, one dense row each, projects in their `order`, a section per `group` inside each (ungrouped PRs first), workstreams
 // whose PRs are all merged folded into Done, and stacks bracketed by their base branches or an
 // entry's `stack_on`. PR Reviews: the reviews project's PRs the same way, a section per review
 // session, marked by the person's own review. Asks: every open ask, by project, due soonest first;
@@ -13,6 +13,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar } from "gpui-base";
 import { exec, theme, props, run, layout, watchFolder, openOverlay, closeOverlay, settings, terminals, shared, setShared, readTextFile, writeTextFile } from "herdr";
 import { folderOf, readFiles } from "./files.js";
+import { readTrackers, trackerTitle, gapCount, trackerBody, trackerDialog } from "./tracker.js";
 
 const REFRESH_MS = 60000;
 const FIELDS = "title url state isDraft reviewDecision mergeable baseRefName headRefName author{login ... on User{name}} " +
@@ -173,7 +174,7 @@ function dueLabel(due) {
 export default class SessionPrs extends View {
   init(_props, cx) {
     this.folder = folderOf(props());
-    if (props()?.mode === "ask") return this.initAsk(cx);
+    if (props()?.mode === "ask" || props()?.mode === "tracker-item") return this.initAsk(cx);
     if (props()?.mode === "filter") return;
     this.reviewsProject = props()?.reviews ?? "reviews";
     this.files = new Map();
@@ -183,6 +184,23 @@ export default class SessionPrs extends View {
     this.doneOpen = new Set(JSON.parse(localStorage.getItem("doneOpen") ?? "[]"));
     this.tab = localStorage.getItem("tab") ?? "prs";
     this.ids = {};
+    this.trackers = [];
+    this.trackerOpen = JSON.parse(localStorage.getItem("trackerOpen") ?? "{}");
+    cx.spawn(async (cx) => {
+      await this.loadTrackers(cx);
+      const dirs = [...new Set(this.trackers.map((tr) => tr.dir))];
+      if (!dirs.length) return;
+      try {
+        for (;;) {
+          await Promise.race(dirs.map((d) => watchFolder(d)));
+          await this.loadTrackers(cx);
+        }
+      } catch {
+        cx.timer.every(30000, (cx) => cx.spawn(async (cx) => {
+          await this.loadTrackers(cx);
+        }));
+      }
+    });
     const load = async () => {
       this.files = await readFiles(this.folder);
       this.ids = await askIds(this.folder, openAsks(this.files).flatMap((g) => g.asks));
@@ -208,6 +226,11 @@ export default class SessionPrs extends View {
     cx.timer.every(REFRESH_MS, (cx) => cx.spawn(async (cx) => {
       await this.refresh(cx);
     }));
+  }
+
+  async loadTrackers(cx) {
+    this.trackers = await readTrackers();
+    cx.notify();
   }
 
   initAsk(cx) {
@@ -632,6 +655,7 @@ export default class SessionPrs extends View {
   render() {
     const t = theme();
     if (props()?.mode === "ask") return this.askDialog(t);
+    if (props()?.mode === "tracker-item") return trackerDialog(t, props(), () => closeOverlay(props().overlay), this.handle);
     if (props()?.mode === "filter") return this.filterPopup(t);
     const all = projects(this.files);
     const asks = openAsks(this.files);
@@ -652,24 +676,43 @@ export default class SessionPrs extends View {
       prs: p.prs.map((pr) => ({ ...pr, group: pr.sessions.find((s) => s !== p.name) ?? pr.group ?? p.title })),
     }));
     this.labels = this.reviewLabels(reviews);
-    const body = this.tab === "asks" ? this.askList(t, asks)
-      : this.tab === "reviews" ? this.prList(t, once(reviews), true)
-        : this.prList(t, once(all.filter((p) => p.name !== this.reviewsProject)), false);
-    const status = this.tab === "asks" ? "" : this.error ?? (this.at ? `GitHub checked ${age(this.at)}` : this.busy ? "checking GitHub…" : "");
+    const tabs = [...TABS, ...this.trackers.map((tr, i) => [`tracker:${i}`, trackerTitle(tr)])];
+    const tracker = this.tab.startsWith("tracker:") ? this.trackers[Number(this.tab.slice(8))] : null;
+    const tab = tracker || !this.tab.startsWith("tracker:") ? this.tab : "prs";
+    const trackerOpen = (tr) => new Set(this.trackerOpen[tr.path] ?? ["gaps", tr.data?.sections?.[0]?.id]);
+    const toggleTracker = (id, cx) => {
+      const open = trackerOpen(tracker);
+      open.has(id) ? open.delete(id) : open.add(id);
+      this.trackerOpen = { ...this.trackerOpen, [tracker.path]: [...open] };
+      localStorage.setItem("trackerOpen", JSON.stringify(this.trackerOpen));
+      cx.notify();
+    };
+    const updated = Date.parse(tracker?.data?.updated_at ?? "");
+    const body = tracker ? trackerBody(t, tracker, trackerOpen(tracker), toggleTracker, Number.isNaN(updated) ? "" : `updated ${age(updated)}`)
+      : tab === "asks" ? this.askList(t, asks)
+        : tab === "reviews" ? this.prList(t, once(reviews), true)
+          : this.prList(t, once(all.filter((p) => p.name !== this.reviewsProject)), false);
+    const status = tracker || tab === "asks" ? "" : this.error ?? (this.at ? `GitHub checked ${age(this.at)}` : this.busy ? "checking GitHub…" : "");
     return v_flex().id("root").size_full().min_h(0).bg(t.surface).text_color(t.foreground)
       .font_family(settings().font_family ?? "JetBrains Mono").text_size(12)
       .child(h_flex().h(34).flex_none().px(8).gap(4).items_center().border_b(1).border_color(t.border)
-        .children(TABS.map(([id, label]) => h_flex().id(`tab-${id}`).h(24).px(8).gap(5).items_center().rounded(5).cursor_pointer()
-          .when(this.tab === id, (el) => el.bg(t.raised).text_color(t.foreground))
-          .when(this.tab !== id, (el) => el.text_color(t.dim).hover((el) => el.text_color(t.foreground)))
-          .on_click((_e, cx) => pick(id, cx))
-          .child(label)
-          .when(id === "asks" && count > 0, (el) => el.child(div().px(5).h(15).flex().items_center().rounded_full().bg(t.blocked)
-            .text_size(10).font_bold().text_color(t.background).child(String(count))))))
+        .children(tabs.map(([id, label], k) => {
+          const gaps = k >= TABS.length ? gapCount(this.trackers[k - TABS.length]) : 0;
+          return h_flex().id(`tab-${id}`).h(24).px(8).gap(5).items_center().rounded(5).cursor_pointer().whitespace_nowrap()
+            .when(tab === id, (el) => el.bg(t.raised).text_color(t.foreground))
+            .when(tab !== id, (el) => el.text_color(t.dim).hover((el) => el.text_color(t.foreground)))
+            .on_click((_e, cx) => pick(id, cx))
+            .child(label)
+            .when(id === "asks" && count > 0, (el) => el.child(div().px(5).h(15).flex().items_center().rounded_full().bg(t.blocked)
+              .text_size(10).font_bold().text_color(t.background).child(String(count))))
+            .when(gaps > 0, (el) => el.child(div().px(5).h(15).flex().items_center().rounded_full().bg(t.ansi3)
+              .text_size(10).font_bold().text_color(t.background).child(String(gaps))));
+        }))
         .child(div().flex_1().min_w(0).ml(6).truncate().text_size(11).text_color(this.error ? t.blocked : t.dim).child(status))
-        .when(this.tab !== "asks", (el) => el.child(div().id("pr-refresh").px(6).h(22).flex().items_center().rounded(5).text_color(t.muted).cursor_pointer()
+        .when(tab !== "asks", (el) => el.child(div().id("pr-refresh").px(6).h(22).flex().items_center().rounded(5).text_color(t.muted).cursor_pointer()
           .hover((el) => el.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => cx.spawn(async (cx) => {
-            await this.refresh(cx, true);
+            if (tracker) await this.loadTrackers(cx);
+            else await this.refresh(cx, true);
           })).child("refresh")))
         .child(div().id("pr-close").px(6).h(22).flex().items_center().rounded(5).text_color(t.muted).cursor_pointer()
           .hover((el) => el.bg(t.hover).text_color(t.foreground)).on_click(close).child("×")))
