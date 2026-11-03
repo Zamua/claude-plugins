@@ -3,7 +3,8 @@
 // whose PRs are all merged folded into Done, and stacks bracketed by their base branches or an
 // entry's `stack_on`. PR Reviews: the reviews project's PRs the same way, a section per review
 // session, marked by the person's own review. Asks: every open ask, by project, due soonest first;
-// a row opens a dialog whose options send `[decision] <project>/<ask id>: <option>` to the root.
+// a row opens a dialog whose options send `[decision] <short id> <project>/<ask id>: <option>` to
+// the root. Each ask keeps the short id, A1 and up, it was first given, in <root project>/ask-ids.json.
 // props: { folder } (the projects folder), { reviews } (the project whose sessions review other
 // people's PRs, default "reviews") and { block }, the layout block that shows it, left alone while
 // hidden.
@@ -74,6 +75,9 @@ function once(list) {
   return list.map((p) => ({ ...p, prs: p.prs.filter((pr) => !seen.has(pr.id) && seen.add(pr.id)) })).filter((p) => p.prs.length);
 }
 
+const dueAt = (a) => (a.due ? Date.parse(a.due) || Infinity : Infinity);
+const askRef = (a) => `${a.project}/${a.id ?? a.key}`;
+
 function openAsks(files) {
   const titles = new Map();
   for (const [key, f] of files) if (f.title !== undefined) titles.set(key.split("/")[0], { title: f.title || key.split("/")[0], order: f.order ?? Infinity });
@@ -82,9 +86,8 @@ function openAsks(files) {
     const [project, session] = key.split("/");
     for (const a of f.asks ?? []) if (a?.status === "open") asks.push({ ...a, project, session, key: `${key}#${a.id ?? asks.length}` });
   }
-  const due = (a) => (a.due ? Date.parse(a.due) || Infinity : Infinity);
   const groups = new Map();
-  for (const a of asks.sort((x, y) => due(x) - due(y))) {
+  for (const a of asks.sort((x, y) => dueAt(x) - dueAt(y))) {
     const g = groups.get(a.project) ?? { project: a.project, ...(titles.get(a.project) ?? { title: a.project, order: Infinity }), asks: [] };
     g.asks.push(a);
     groups.set(a.project, g);
@@ -111,10 +114,38 @@ async function rootReady(t) {
   return typed.every((l) => l === "");
 }
 
+const rootFile = (folder, name) => `${folder}/${rootTerminal()?.labels?.["tree.project"] ?? "root"}/${name}`;
+
+// Gives every open ask not seen before the next short id, soonest due first, and returns the whole
+// map. An id is never reused or moved, so a file that does not parse is left alone, not restarted.
+async function askIds(folder, asks) {
+  const path = rootFile(folder, "ask-ids.json");
+  for (let tries = 0; tries < 3; tries++) {
+    const old = await readTextFile(path).catch(() => null);
+    let map = { next: 1, ids: {} };
+    if (old) {
+      try {
+        map = JSON.parse(old);
+      } catch {
+        return {};
+      }
+    }
+    const fresh = [...asks].sort((x, y) => dueAt(x) - dueAt(y)).map(askRef).filter((r) => !map.ids[r]);
+    if (!fresh.length) return map.ids;
+    for (const r of fresh) map.ids[r] = `A${map.next++}`;
+    try {
+      await writeTextFile(path, `${JSON.stringify(map, null, 2)}\n`, old);
+      return map.ids;
+    } catch {
+      // Another copy wrote first; read its ids again
+    }
+  }
+  return {};
+}
+
 async function logDecision(folder, d, outcome) {
-  const root = rootTerminal()?.labels?.["tree.project"] ?? "root";
-  const path = `${folder}/${root}/decisions.jsonl`;
-  const line = `${JSON.stringify({ at: new Date().toISOString(), project: d.project, ask: d.id, option: d.option, outcome })}\n`;
+  const path = rootFile(folder, "decisions.jsonl");
+  const line = `${JSON.stringify({ at: new Date().toISOString(), short: d.short, project: d.project, ask: d.id, option: d.option, outcome })}\n`;
   for (let tries = 0; tries < 3; tries++) {
     const old = await readTextFile(path);
     try {
@@ -190,20 +221,25 @@ export default class SessionPrs extends View {
     this.checked = new Set();
     this.doneOpen = new Set(JSON.parse(localStorage.getItem("doneOpen") ?? "[]"));
     this.tab = localStorage.getItem("tab") ?? "prs";
-    cx.spawn(async (cx) => {
+    this.ids = {};
+    const load = async () => {
       this.files = await readFiles(this.folder);
+      this.ids = await askIds(this.folder, openAsks(this.files).flatMap((g) => g.asks));
+    };
+    cx.spawn(async (cx) => {
+      await load();
       cx.notify();
       await this.refresh(cx, true);
       try {
         for (;;) {
           await watchFolder(this.folder);
-          this.files = await readFiles(this.folder);
+          await load();
           cx.notify();
           await this.refresh(cx, false, true);
         }
       } catch {
         cx.timer.every(30000, (cx) => cx.spawn(async (cx) => {
-          this.files = await readFiles(this.folder);
+          await load();
           cx.notify();
         }));
       }
@@ -239,7 +275,7 @@ export default class SessionPrs extends View {
     const a = props().ask;
     const text = String(option ?? "").trim();
     if (!text) return;
-    const d = { key: a.key, project: a.project, id: a.id ?? a.key, option: text, line: `[decision] ${a.project}/${a.id ?? a.key}: ${text}` };
+    const d = { key: a.key, short: a.short, project: a.project, id: a.id ?? a.key, option: text, line: `[decision] ${a.short ? `${a.short} ` : ""}${askRef(a)}: ${text}` };
     closeOverlay(props().overlay);
     cx.spawn(async () => {
       if (await deliver(this.folder, d)) return;
@@ -255,7 +291,8 @@ export default class SessionPrs extends View {
     const [due] = dueLabel(a.due);
     const rec = String(a.recommend ?? a.recommendation ?? "").trim();
     const options = (Array.isArray(a.options) ? a.options : []).map(optionText);
-    const isRec = (o) => rec && (o === rec || rec.startsWith(o) || o.startsWith(rec));
+    const nth = Number(/^option\s*(\d+)$/i.exec(rec)?.[1]);
+    const isRec = (o, k) => (nth ? k === nth - 1 : rec && (o === rec || rec.startsWith(o) || o.startsWith(rec)));
     const links = [...new Set(`${a.ask ?? ""} ${a.detail ?? ""} ${a.url ?? ""} ${(a.links ?? []).join(" ")}`.match(URL) ?? [])];
     const button = (id, label, primary, action) => h_flex().id(id).h(30).px(12).items_center().rounded(7).cursor_pointer()
       .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised)
@@ -269,6 +306,7 @@ export default class SessionPrs extends View {
       })
       .w_full().p(18).gap(12).bg(t.popover).text_color(t.foreground).text_size(13)
       .child(h_flex().items_start().gap(10)
+        .when(Boolean(a.short), (el) => el.child(div().flex_none().text_size(15).font_semibold().text_color(t.accent).child(a.short)))
         .child(div().flex_1().min_w(0).text_size(15).font_semibold().child(a.ask ?? a.id ?? ""))
         .child(div().flex_none().text_size(11).text_color(t.dim).child("Esc")))
       .child(div().text_size(11.5).text_color(t.dim).child([a.project, a.session, due && `due ${due}`, a.created && `asked ${age(Date.parse(a.created))}`].filter(Boolean).join(" · ")))
@@ -277,10 +315,10 @@ export default class SessionPrs extends View {
         .text_color(t.accent).cursor_pointer().hover((el) => el.underline()).on_click(() => exec("open", [u])).child(u)))))
       .child(v_flex().gap(6)
         .children(options.map((o, k) => h_flex().id(`ask-opt-${k}`).min_h(32).px(12).py(6).gap(8).items_center().rounded(7).cursor_pointer()
-          .border_1().border_color(isRec(o) ? t.accent : t.input).bg(t.raised).hover((el) => el.bg(t.hover))
+          .border_1().border_color(isRec(o, k) ? t.accent : t.input).bg(t.raised).hover((el) => el.bg(t.hover))
           .on_click((_e, cx) => this.decide(o, cx))
           .child(div().flex_1().min_w(0).child(o))
-          .when(isRec(o), (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child("Recommended")))))
+          .when(isRec(o, k), (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child("Recommended")))))
         .when(Boolean(rec) && !options.some(isRec), (el) => el.child(div().text_size(12).text_color(t.muted).child(`Recommendation: ${rec}`)))
         .child(this.showOther
           ? h_flex().gap(8).items_center()
@@ -652,12 +690,14 @@ export default class SessionPrs extends View {
     const rows = groups.flatMap((g, i) => [
       h_flex().h(ROW).px(12).mt(i ? 10 : 2).items_center().border_b(1).border_color(t.border)
         .child(div().font_bold().text_color(t.foreground).child(g.title)),
-      ...g.asks.map((a) => {
+      ...g.asks.map((ask) => {
+        const a = { ...ask, short: this.ids[askRef(ask)] };
         const [due, tone] = dueLabel(a.due);
         const isSent = Boolean(sent[a.key]);
         return h_flex().id(`ask-${a.key}`).h(ROW).px(12).gap(8).items_center().whitespace_nowrap().rounded(5).cursor_pointer()
           .hover((el) => el.bg(t.hover))
           .on_click(() => openOverlay({ mod: "session-prs", kind: "dialog", width: 640, props: { mode: "ask", ask: a, folder: props()?.folder } }))
+          .child(div().w(36).flex_none().text_color(t.dim).child(a.short ?? ""))
           .child(div().w(70).flex_none().text_color(isSent ? t.dim : tone === "late" ? t.blocked : tone === "soon" ? t.ansi3 : t.dim).child(isSent ? "sent" : due))
           .child(div().flex_1().min_w(0).truncate().text_color(isSent ? t.dim : t.foreground).child(a.ask ?? a.id ?? ""))
           .child(div().id(`ask-s-${a.key}`).w(96).flex_none().truncate().text_color(t.dim).cursor_pointer()
