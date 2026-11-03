@@ -8,7 +8,6 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
 import { exec, home, readTextFile, openOverlay } from "herdr";
 
-const CONFIG = "/.config/herdr-app/session-prs.json";
 const ROW = 22;
 // Most urgent first, the order a section's counts are listed in
 const ORDER = ["gap", "blocked", "doing", "ready", "todo", "watching", "done"];
@@ -17,13 +16,8 @@ const tagOf = (status) => TAGS[status] ?? status;
 
 const expand = (p) => (p.startsWith("~") ? home() + p.slice(1) : p);
 
-export async function readTrackers() {
-  let paths = [];
-  try {
-    paths = JSON.parse((await readTextFile(home() + CONFIG)) ?? "{}").trackers ?? [];
-  } catch {
-    return [];
-  }
+export async function readTrackers(config) {
+  const paths = Array.isArray(config?.trackers) ? config.trackers : [];
   return Promise.all(paths.filter((p) => typeof p === "string").map(async (path) => {
     const full = expand(path);
     const tracker = { path: full, dir: full.slice(0, full.lastIndexOf("/")), name: full.split("/").pop().replace(/\.json$/, "") };

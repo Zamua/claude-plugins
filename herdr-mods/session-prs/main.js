@@ -5,6 +5,9 @@
 // session, marked by the person's own review. Asks: every open ask, by project, due soonest first;
 // a row opens a dialog that numbers its options, so the person can name one in chat ("A25 option 2").
 // Each ask keeps the short id, A1 and up, it was first given, in <root project>/ask-ids.json.
+// With `authored: { owners: [..] }` in ~/.config/herdr-app/session-prs.json, every open PR the
+// person authored under those owners is listed too, from GitHub's search. A PR no session lists
+// goes where the root's pr-groups.json places it, else under Untracked at the top of the PRs tab.
 // props: { folder } (the projects folder), { reviews } (the project whose sessions review other
 // people's PRs, default "reviews") and { block }, the layout block that shows it, left alone while
 // hidden.
@@ -12,7 +15,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar } from "gpui-base";
 import { exec, theme, props, run, layout, watchFolder, openOverlay, closeOverlay, settings, terminals, shared, setShared, readTextFile, writeTextFile } from "herdr";
-import { folderOf, readFiles } from "./files.js";
+import { folderOf, readFiles, readConfig } from "./files.js";
 import { readTrackers, trackerTitle, gapCount, trackerBody, trackerDialog } from "./tracker.js";
 
 const REFRESH_MS = 60000;
@@ -51,7 +54,7 @@ function projects(files) {
     const [name, session] = key.split("/");
     const p = byName.get(name) ?? { name, title: name, order: Infinity, closed: false, prs: new Map() };
     if (f.title !== undefined) Object.assign(p, { title: f.title || name, order: f.order ?? Infinity, closed: Boolean(f.closed), lead: session });
-    for (const x of f.prs ?? []) {
+    for (const x of Array.isArray(f.prs) ? f.prs : []) {
       const id = typeof x === "string" ? x : x?.pr;
       if (!id || !parse(id)) continue;
       const had = p.prs.get(id);
@@ -64,6 +67,33 @@ function projects(files) {
     .filter((p) => !p.closed)
     .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title))
     .map((p) => ({ ...p, prs: [...p.prs.values()] }));
+}
+
+// Adds the PRs no session lists. Those placed in the root's pr-groups.json go under the project
+// or workstream it names; the person's own open PRs placed nowhere go under Untracked, first.
+function placed(all, entries, authored) {
+  const key = (p) => `${p.owner}/${p.repo}#${p.number}`.toLowerCase();
+  const listed = new Set(all.flatMap((proj) => proj.prs.map(key)));
+  const out = all.map((proj) => ({ ...proj, prs: [...proj.prs] }));
+  const byName = new Map(out.map((proj) => [proj.name, proj]));
+  const streams = new Map();
+  for (const [ref, to] of Object.entries(entries ?? {})) {
+    const p = parse(ref);
+    if (!p || !to || listed.has(key(p))) continue;
+    listed.add(key(p));
+    const pr = { id: `${p.owner}/${p.repo}#${p.number}`, ...p, group: to.group, sessions: [] };
+    const proj = to.project && byName.get(to.project);
+    if (proj) {
+      proj.prs.push(pr);
+      continue;
+    }
+    const name = to.workstream ?? to.project;
+    if (!name) continue;
+    if (!streams.has(name)) streams.set(name, { name: `~ws:${name}`, title: name, order: Infinity, closed: false, prs: [] });
+    streams.get(name).prs.push(pr);
+  }
+  const loose = [...authored.values()].filter((p) => !listed.has(key(p))).map((p) => ({ ...p, sessions: [] }));
+  return [...(loose.length ? [{ name: "~untracked", title: "Untracked", order: -Infinity, closed: false, prs: loose }] : []), ...out, ...streams.values()];
 }
 
 // Each PR once, under the first project that lists it.
@@ -184,6 +214,8 @@ export default class SessionPrs extends View {
     this.doneOpen = new Set(JSON.parse(localStorage.getItem("doneOpen") ?? "[]"));
     this.tab = localStorage.getItem("tab") ?? "prs";
     this.ids = {};
+    this.config = {};
+    this.authored = new Map(JSON.parse(localStorage.getItem("authored") ?? "[]"));
     this.trackers = [];
     this.trackerOpen = JSON.parse(localStorage.getItem("trackerOpen") ?? "{}");
     cx.spawn(async (cx) => {
@@ -206,6 +238,7 @@ export default class SessionPrs extends View {
       this.ids = await askIds(this.folder, openAsks(this.files).flatMap((g) => g.asks));
     };
     cx.spawn(async (cx) => {
+      this.config = await readConfig();
       await load();
       cx.notify();
       await this.refresh(cx, true);
@@ -228,8 +261,14 @@ export default class SessionPrs extends View {
     }));
   }
 
+  // { "<owner>/<repo>#<n>": { project, group } or { workstream } }, kept by the root
+  prGroups() {
+    return this.files.get(`${rootTerminal()?.labels?.["tree.project"] ?? "root"}/pr-groups`)?.groups ?? {};
+  }
+
   async loadTrackers(cx) {
-    this.trackers = await readTrackers();
+    this.config = await readConfig();
+    this.trackers = await readTrackers(this.config);
     cx.notify();
   }
 
@@ -293,30 +332,43 @@ export default class SessionPrs extends View {
   // state file that gained one.
   async refresh(cx, all = false, onlyNew = false) {
     if (this.busy || (this.hidden() && !all)) return;
-    const prs = once(projects(this.files)).flatMap((p) => p.prs)
+    const prs = once(placed(projects(this.files), this.prGroups(), this.authored)).flatMap((p) => p.prs)
       .filter((p) => (onlyNew ? !this.checked.has(p.id) : all || !this.checked.has(p.id) || !isMerged(this.live.get(p.id))));
-    if (!prs.length) return;
+    const owners = this.config.authored ? [].concat(this.config.authored.owners ?? []) : null;
+    const search = !onlyNew && owners ? `is:pr is:open author:@me${owners.map((o) => ` user:${o}`).join("")}` : null;
+    if (!prs.length && !search) return;
     this.busy = true;
     cx.notify();
-    const query = `query{viewer{login} ${prs.map((p, i) => `p${i}:repository(owner:${JSON.stringify(p.owner)},name:${JSON.stringify(p.repo)}){pullRequest(number:${p.number}){${FIELDS}}}`).join(" ")}}`;
+    const mine = search ? `mine:search(query:${JSON.stringify(search)},type:ISSUE,first:100){nodes{... on PullRequest{number repository{owner{login} name} ${FIELDS}}}} ` : "";
+    const query = `query{viewer{login} ${mine}${prs.map((p, i) => `p${i}:repository(owner:${JSON.stringify(p.owner)},name:${JSON.stringify(p.repo)}){pullRequest(number:${p.number}){${FIELDS}}}`).join(" ")}}`;
     try {
       const r = await exec("gh", ["api", "graphql", "-f", `query=${query}`]);
       const data = JSON.parse(r.stdout || "{}").data ?? {};
       if (data.viewer?.login) localStorage.setItem("viewer", (this.viewer = data.viewer.login));
+      const reviews = (nodes) => (nodes ?? []).map((n) => ({ login: n.author?.login, state: n.state }));
+      const live = (pr) => ({
+        title: pr.title, url: pr.url, state: pr.state, draft: pr.isDraft, review: pr.reviewDecision, mergeable: pr.mergeable,
+        base: pr.baseRefName, head: pr.headRefName, author: pr.author ? { login: pr.author.login, name: pr.author.name } : null,
+        ci: pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null,
+        threads: (pr.reviewThreads?.nodes ?? []).filter((n) => !n.isResolved).length,
+        reviews: reviews(pr.latestOpinionatedReviews?.nodes),
+        latest: reviews(pr.latestReviews?.nodes),
+      });
       prs.forEach((p, i) => {
         const pr = data[`p${i}`]?.pullRequest;
         this.checked.add(p.id);
-        if (!pr) return;
-        const reviews = (nodes) => (nodes ?? []).map((n) => ({ login: n.author?.login, state: n.state }));
-        this.live.set(p.id, {
-          title: pr.title, url: pr.url, state: pr.state, draft: pr.isDraft, review: pr.reviewDecision, mergeable: pr.mergeable,
-          base: pr.baseRefName, head: pr.headRefName, author: pr.author ? { login: pr.author.login, name: pr.author.name } : null,
-          ci: pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null,
-          threads: (pr.reviewThreads?.nodes ?? []).filter((n) => !n.isResolved).length,
-          reviews: reviews(pr.latestOpinionatedReviews?.nodes),
-          latest: reviews(pr.latestReviews?.nodes),
-        });
+        if (pr) this.live.set(p.id, live(pr));
       });
+      // A search that failed keeps the last list, so a PR never drops off for a bad minute
+      if (data.mine?.nodes) {
+        this.authored = new Map(data.mine.nodes.filter((pr) => pr?.number).map((pr) => {
+          const ref = { owner: pr.repository.owner.login, repo: pr.repository.name, number: pr.number };
+          const id = `${ref.owner}/${ref.repo}#${ref.number}`;
+          this.live.set(id, live(pr));
+          return [id, { id, ...ref }];
+        }));
+        localStorage.setItem("authored", JSON.stringify([...this.authored]));
+      }
       this.error = r.code === 0 || Object.keys(data).length ? null : (r.stderr.trim().split("\n")[0] || `gh exited ${r.code}`);
       this.at = Date.now();
       localStorage.setItem("live", JSON.stringify([...this.live]));
@@ -390,6 +442,7 @@ export default class SessionPrs extends View {
         .when(!final && pr?.ci === "PENDING", (el) => el.loop("opacity", { from: 0.3, to: 1, period: 1200 }))))
       .child(cell(56, word, color))
       .child(div().w(64).flex_none().mr(6).truncate().text_color(t.dim).child(who(pr?.author)))
+      .when(p.repo !== this.usualRepo, (el) => el.child(div().flex_none().max_w(110).mr(6).truncate().text_color(t.dim).child(p.repo)))
       .child(div().flex_1().min_w(0).truncate().text_color(final ? t.dim : t.muted).child(pr?.title ?? p.id));
   }
 
@@ -402,6 +455,10 @@ export default class SessionPrs extends View {
       if (pr?.head) heads.set(`${p.owner}/${p.repo}:${pr.head}`, p.number);
     }
     const who = (author) => firstName(author).toLowerCase();
+    // Most PRs share one repo; a row names its repo only when it is another one
+    const repos = new Map();
+    for (const proj of list) for (const p of proj.prs) repos.set(p.repo, (repos.get(p.repo) ?? 0) + 1);
+    this.usualRepo = [...repos].sort((a, b) => b[1] - a[1])[0]?.[0];
     const items = [];
     // A PR closed without merging is off the board until it is reopened
     const all = list
@@ -691,7 +748,7 @@ export default class SessionPrs extends View {
     const body = tracker ? trackerBody(t, tracker, trackerOpen(tracker), toggleTracker, Number.isNaN(updated) ? "" : `updated ${age(updated)}`)
       : tab === "asks" ? this.askList(t, asks)
         : tab === "reviews" ? this.prList(t, once(reviews), true)
-          : this.prList(t, once(all.filter((p) => p.name !== this.reviewsProject)), false);
+          : this.prList(t, once(placed(all, this.prGroups(), this.authored).filter((p) => p.name !== this.reviewsProject)), false);
     const status = tracker || tab === "asks" ? "" : this.error ?? (this.at ? `GitHub checked ${age(this.at)}` : this.busy ? "checking GitHub…" : "");
     return v_flex().id("root").size_full().min_h(0).bg(t.surface).text_color(t.foreground)
       .font_family(settings().font_family ?? "JetBrains Mono").text_size(12)

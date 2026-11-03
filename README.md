@@ -63,7 +63,11 @@ symlinked folder. Run it again after a pull.
   plus one per tracker file. PRs: every session's pull requests, one dense row each, in sections by each
   entry's `group` inside its project, with draft, CI, your approval, author and
   stacks from one GitHub query a minute while it shows; finished workstreams fold
-  into Done, closed PRs drop off, and headers stay pinned while it scrolls. Reviews:
+  into Done, closed PRs drop off, and headers stay pinned while it scrolls. With
+  `{"authored": {"owners": [..]}}` in `~/.config/herdr-app/session-prs.json` it also
+  lists every open PR you authored under those owners, from the same query's search;
+  one no session lists goes where the root's `pr-groups.json` places it, under a
+  project and section or a named workstream, else under Untracked at the top. Reviews:
   the reviews project's PRs the same way, a section per review session. Asks: every
   open ask by project, due soonest first, each with a short id (A1 and up) it keeps
   for good in the root's `ask-ids.json`; a row opens a dialog that numbers the ask's

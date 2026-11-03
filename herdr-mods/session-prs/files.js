@@ -8,6 +8,15 @@ export const folderOf = (p) => {
   return f.startsWith("~") ? home() + f.slice(1) : f;
 };
 
+// The person's own settings for this mod, kept outside any repo
+export async function readConfig() {
+  try {
+    return JSON.parse((await readTextFile(`${home()}/.config/herdr-app/session-prs.json`)) ?? "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
 export async function readFiles(folder) {
   const files = new Map();
   let dirs = [];
