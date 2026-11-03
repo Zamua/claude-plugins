@@ -128,13 +128,12 @@ export default class SessionTree extends View {
     });
   }
 
-  // One glyph per status, its word in the tooltip: a red ! waits on a dialog, a red hand has open
-  // asks, a spinner works, a dot is done or idle.
+  // One glyph per status, its word in the tooltip: a red ! waits on a dialog, a spinner works, a
+  // dot is done or idle.
   glyph(t, id, s) {
     if (!s) return div().w(14).flex_none();
     const box = h_flex().id(`st-g-${id}`).w(14).h(ROW).flex_none().items_center().justify_center();
     if (s.status === "blocked") return box.tooltip(WORD.blocked).child(div().text_size(13).font_bold().text_color(t.blocked).child("!"));
-    if (s.needs) return box.tooltip(`${s.asks?.length ?? ""} open ask${s.asks?.length === 1 ? "" : "s"}`.trim()).child(svg(ICON("hand")).size(12).text_color(t.blocked));
     if (s.status === "working") return box.tooltip(WORD.working).child(svg(ICON("spinner")).size(10).text_color(t.working).spin(900));
     return box.tooltip(WORD[s.status] ?? s.status).child(div().size(5).rounded_full().bg(s.status === "done" ? t.done : t.dim));
   }
@@ -196,17 +195,16 @@ export default class SessionTree extends View {
       const open = !this.folded.has(p.name);
       const hidden = open ? [] : p.workers;
       const blocked = p.lead?.status === "blocked" || hidden.some((w) => w.status === "blocked");
-      const needs = Boolean(p.lead?.needs) || hidden.some((w) => w.needs);
       rows.push(row(`st-p-${p.name}`, p.lead)
         .child(guide(t, last ? "└" : "├"))
         .child(name(p.title, t.foreground, true))
         .child(p.workers.length > 0 ? this.fold(t, p, open) : div().w(14).flex_none())
-        .child(this.glyph(t, `p-${p.name}`, { status: blocked ? "blocked" : p.status, needs, asks: p.lead?.asks })));
+        .child(this.glyph(t, `p-${p.name}`, { status: blocked ? "blocked" : p.status })));
       if (!open) return;
       workers.forEach((w, j) => rows.push(row(`st-w-${w.address}`, w)
         .child(guide(t, last ? "" : "│"))
         .child(guide(t, j === workers.length - 1 ? "└" : "├"))
-        .child(name(w.name, w.status === "idle" && !w.needs ? t.dim : t.muted, false))
+        .child(name(w.name, w.status === "idle" ? t.dim : t.muted, false))
         .child(div().w(14).flex_none())
         .child(this.glyph(t, `w-${w.address}`, w))));
     });

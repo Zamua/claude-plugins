@@ -55,9 +55,7 @@ export function model(files) {
       const name = t.name || tabs.get(t.labels["herdr.tab"]) || (role === "worker" ? t.address : project);
       // A coordinator's state file may be named for its project rather than its terminal
       const file = files.get(`${project}/${name}`) ?? (isLead(role) ? files.get(`${project}/${project}`) : null) ?? {};
-      const asks = (file.asks ?? []).filter((a) => a?.status === "open");
-      const status = statusOf(t);
-      return { name, address: t.address, role, project, space: t.labels["herdr.space"], sid: t.labels["claude.sid"], cwd: t.cwd, created: t.created_ms ?? 0, status, file, asks, needs: status === "blocked" || asks.length > 0 };
+      return { name, address: t.address, role, project, space: t.labels["herdr.space"], sid: t.labels["claude.sid"], cwd: t.cwd, created: t.created_ms ?? 0, status: statusOf(t), file };
     });
   // Two terminals may claim the root for a moment while it is restarted; the newest one is it
   const root = sessions.filter((s) => s.role === "root").sort((a, b) => b.created - a.created)[0] ?? null;
