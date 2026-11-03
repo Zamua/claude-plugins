@@ -3,15 +3,15 @@
 // whose PRs are all merged folded into Done, and stacks bracketed by their base branches or an
 // entry's `stack_on`. PR Reviews: the reviews project's PRs the same way, a section per review
 // session, marked by the person's own review. Asks: every open ask, by project, due soonest first;
-// a row opens a dialog whose options send `[decision] <short id> <project>/<ask id>: <option>` to
-// the root. Each ask keeps the short id, A1 and up, it was first given, in <root project>/ask-ids.json.
+// a row opens a dialog that numbers its options, so the person can name one in chat ("A25 option 2").
+// Each ask keeps the short id, A1 and up, it was first given, in <root project>/ask-ids.json.
 // props: { folder } (the projects folder), { reviews } (the project whose sessions review other
 // people's PRs, default "reviews") and { block }, the layout block that shows it, left alone while
 // hidden.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, v_virtual_list, Scrollbar, InputState, Input } from "gpui-base";
-import { exec, hc, theme, props, run, layout, watchFolder, openOverlay, closeOverlay, notify, settings, terminals, focused, shared, setShared, readTextFile, writeTextFile } from "herdr";
+import { v_flex, h_flex, v_virtual_list, Scrollbar } from "gpui-base";
+import { exec, theme, props, run, layout, watchFolder, openOverlay, closeOverlay, settings, terminals, shared, setShared, readTextFile, writeTextFile } from "herdr";
 import { folderOf, readFiles } from "./files.js";
 
 const REFRESH_MS = 60000;
@@ -19,12 +19,6 @@ const FIELDS = "title url state isDraft reviewDecision mergeable baseRefName hea
   "latestOpinionatedReviews(first:30){nodes{state author{login}}} latestReviews(first:30){nodes{state author{login}}} " +
   "commits(last:1){nodes{commit{statusCheckRollup{state}}}} reviewThreads(first:100){nodes{isResolved}}";
 const TABS = [["prs", "PRs"], ["reviews", "PR Reviews"], ["asks", "Asks"]];
-// Decisions waiting for the root to be free, and the asks already answered from here, kept in
-// shared state so the pane and its dialog see the same
-const QUEUE = "session-prs.queue";
-const SENT = "session-prs.sent";
-// When a copy began typing a decision, so no other copy types at the same time
-const SENDING = "session-prs.sending";
 // The PR tabs' filters by tab, then by dropdown: { prs: { author: [...], status: [...], stream: [...] } }
 const FILTERS = "session-prs.filters";
 // Which filter dropdown is open, and when it last closed: a press on its own button closes it, and
@@ -104,24 +98,6 @@ function rootTerminal() {
     .sort((a, b) => (b.created_ms ?? 0) - (a.created_ms ?? 0))[0] ?? null;
 }
 
-// hc send pastes once nobody has typed for ~3 s, onto whatever the prompt box holds by then, so a
-// box seen empty stays empty only while nobody can type into it. Keys reach only the focused
-// terminal: the root is free while it waits for input and is not focused.
-function rootFree(t) {
-  if (!t || t.status === "working" || t.status === "blocked") return false;
-  const f = focused();
-  return !f || ![f.agent, f.terminal, f.shown].includes(t.address);
-}
-
-async function boxEmpty(t) {
-  const r = await hc(["read", t.address, "--json"]);
-  const lines = JSON.parse(r.stdout || "{}").text?.split("\n") ?? [];
-  const rules = lines.flatMap((l, i) => (l.startsWith("─".repeat(20)) ? [i] : []));
-  if (rules.length < 2) return false;
-  const typed = lines.slice(rules.at(-2) + 1, rules.at(-1)).map((l) => l.split("│")[0].replace(/\u00a0/g, " ").replace(/^❯/, "").trim());
-  return typed.every((l) => l === "");
-}
-
 const rootFile = (folder, name) => `${folder}/${rootTerminal()?.labels?.["tree.project"] ?? "root"}/${name}`;
 
 // Gives every open ask not seen before the next short id, soonest due first, and returns the whole
@@ -149,19 +125,6 @@ async function askIds(folder, asks) {
     }
   }
   return {};
-}
-
-async function logDecision(folder, d, outcome) {
-  const path = rootFile(folder, "decisions.jsonl");
-  const line = `${JSON.stringify({ at: new Date().toISOString(), short: d.short, project: d.project, ask: d.id, option: d.option, outcome })}\n`;
-  for (let tries = 0; tries < 3; tries++) {
-    const old = await readTextFile(path);
-    try {
-      return await writeTextFile(path, (old ?? "") + line, old);
-    } catch {
-      // Another write landed between the read and this one; read again
-    }
-  }
 }
 
 const stackedOn = (on) => (typeof on === "number" ? on : Number(/#(\d+)$/.exec(String(on ?? ""))?.[1]) || null);
@@ -245,61 +208,11 @@ export default class SessionPrs extends View {
     cx.timer.every(REFRESH_MS, (cx) => cx.spawn(async (cx) => {
       await this.refresh(cx);
     }));
-    cx.timer.every(3000, (cx) => cx.spawn(async () => {
-      await this.drain();
-    }));
-  }
-
-  // Queued decisions go out one at a time, oldest first, once the root has been free with an empty
-  // prompt box on two checks a drain apart. A decision leaves the queue before it is typed, so a
-  // failed or doubled send never types it twice.
-  async drain() {
-    const t = rootTerminal();
-    if (!(shared(QUEUE) ?? []).length || !rootFree(t)) return void (this.calm = null);
-    const since = shared(SENDING);
-    if (since && Date.now() - since < 60000) return;
-    setShared(SENDING, Date.now());
-    try {
-      const calm = (await boxEmpty(t)) && rootFree(terminals().find((x) => x.address === t.address));
-      const was = this.calm;
-      this.calm = calm ? (was ?? Date.now()) : null;
-      if (!calm || !was || Date.now() - was < 2500) return;
-      const d = (shared(QUEUE) ?? [])[0];
-      if (!d) return;
-      setShared(QUEUE, (shared(QUEUE) ?? []).filter((q) => q.key !== d.key));
-      this.calm = null;
-      const r = await hc(["send", t.address, d.line]);
-      if (r.code === 0) {
-        await logDecision(this.folder, d, "sent");
-        notify({ title: "Decision sent to root", body: d.line, level: "success", timeout: 4000 });
-      } else {
-        const { [d.key]: _, ...rest } = shared(SENT) ?? {};
-        setShared(SENT, rest);
-        await logDecision(this.folder, d, "failed");
-        notify({ title: "Decision not sent", body: `${r.stderr.trim().split("\n")[0] || `hc exited ${r.code}`}. Pick it again.`, level: "error", timeout: 8000 });
-      }
-    } finally {
-      setShared(SENDING, null);
-    }
   }
 
   initAsk(cx) {
     this.handle = cx.focus_handle();
     this.handle.focus();
-    this.other = InputState.new({ placeholder: "Your answer" });
-    this.other.on("submit", (_e, cx) => this.decide(this.other.value(), cx));
-  }
-
-  decide(option, cx) {
-    const a = props().ask;
-    const text = String(option ?? "").trim();
-    if (!text) return;
-    const d = { key: a.key, short: a.short, project: a.project, id: a.id ?? a.key, option: text, line: `[decision] ${a.short ? `${a.short} ` : ""}${askRef(a)}: ${text}` };
-    // The pane's drain types it; a task here would end with the dialog
-    setShared(QUEUE, [...(shared(QUEUE) ?? []).filter((q) => q.key !== d.key), d]);
-    setShared(SENT, { ...(shared(SENT) ?? {}), [d.key]: Date.now() });
-    if (!rootFree(rootTerminal())) notify({ title: "Decision queued", body: "It goes to root once root is idle and you are out of its pane.", level: "info", timeout: 5000 });
-    closeOverlay(props().overlay);
   }
 
   askDialog(t) {
@@ -307,7 +220,7 @@ export default class SessionPrs extends View {
     const [due] = dueLabel(a.due);
     const rec = String(a.recommend ?? a.recommendation ?? "").trim();
     const options = (Array.isArray(a.options) ? a.options : []).map(optionText);
-    const nth = Number(/^option\s*(\d+)$/i.exec(rec)?.[1]);
+    const nth = Number(/^option\s*(\d+)\b/i.exec(rec)?.[1]);
     const isRec = (o, k) => (nth ? k === nth - 1 : rec && (o === rec || rec.startsWith(o) || o.startsWith(rec)));
     const links = [...new Set(`${a.ask ?? ""} ${a.detail ?? ""} ${a.url ?? ""} ${(a.links ?? []).join(" ")}`.match(URL) ?? [])];
     const button = (id, label, primary, action) => h_flex().id(id).h(30).px(12).items_center().rounded(7).cursor_pointer()
@@ -330,31 +243,21 @@ export default class SessionPrs extends View {
       .when(links.length > 0, (el) => el.child(v_flex().gap(2).children(links.map((u, k) => div().id(`ask-link-${k}`).truncate().text_size(12)
         .text_color(t.accent).cursor_pointer().hover((el) => el.underline()).on_click(() => exec("open", [u])).child(u)))))
       .child(v_flex().gap(6)
-        .children(options.map((o, k) => h_flex().id(`ask-opt-${k}`).min_h(32).px(12).py(6).gap(8).items_center().rounded(7).cursor_pointer()
-          .border_1().border_color(isRec(o, k) ? t.accent : t.input).bg(t.raised).hover((el) => el.bg(t.hover))
-          .on_click((_e, cx) => this.decide(o, cx))
+        .children(options.map((o, k) => h_flex().id(`ask-opt-${k}`).min_h(32).px(12).py(6).gap(10).items_start().rounded(7)
+          .border_1().border_color(isRec(o, k) ? t.accent : t.input).bg(t.raised)
+          .child(div().w(18).flex_none().font_semibold().text_color(isRec(o, k) ? t.accent : t.dim).child(`${k + 1}.`))
           .child(div().flex_1().min_w(0).child(o))
           .when(isRec(o, k), (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child("Recommended")))))
-        .when(Boolean(rec) && !options.some(isRec), (el) => el.child(div().text_size(12).text_color(t.muted).child(`Recommendation: ${rec}`)))
-        .child(this.showOther
-          ? h_flex().gap(8).items_center()
-            .child(Input.new(this.other).flex_1().h(32).px(10).rounded(7).border_1().border_color(t.accent).bg(t.background).text_size(12.5).text_color(t.foreground))
-            .child(button("ask-other-send", "Send", true, (_e, cx) => this.decide(this.other.value(), cx)))
-          : h_flex().id("ask-other").min_h(32).px(12).items_center().rounded(7).cursor_pointer().border_1().border_color(t.input)
-            .text_color(t.muted).hover((el) => el.bg(t.hover))
-            .on_click((_e, cx) => {
-              this.showOther = true;
-              this.other.focus();
-              cx.notify();
-            })
-            .child("Other…")))
+        .when(Boolean(rec) && !options.includes(rec) && !/^option\s*\d+\.?$/i.test(rec), (el) => el.child(div().text_size(12).text_color(t.muted).child(`Recommendation: ${rec}`)))
+        .when(options.length > 0, (el) => el.child(div().text_size(11.5).text_color(t.dim)
+          .child(`Answer in chat${a.short ? `, e.g. "${a.short} option 1"` : ""}.`))))
       .child(h_flex().gap(8).pt(4)
         .child(button("ask-open", "Open session", false, () => {
           closeOverlay(props().overlay);
           this.focusSession(a.project, a.session);
         }))
         .child(div().flex_1())
-        .child(button("ask-cancel", "Cancel", false, () => closeOverlay(props().overlay))));
+        .child(button("ask-close", "Close", false, () => closeOverlay(props().overlay))));
   }
 
   hidden() {
@@ -702,20 +605,18 @@ export default class SessionPrs extends View {
 
   askList(t, groups) {
     if (!groups.length) return div().px(12).py(8).text_color(t.dim).child("Nothing waits on you.");
-    const sent = shared(SENT) ?? {};
     const rows = groups.flatMap((g, i) => [
       h_flex().h(ROW).px(12).mt(i ? 10 : 2).items_center().border_b(1).border_color(t.border)
         .child(div().font_bold().text_color(t.foreground).child(g.title)),
       ...g.asks.map((ask) => {
         const a = { ...ask, short: this.ids[askRef(ask)] };
         const [due, tone] = dueLabel(a.due);
-        const isSent = Boolean(sent[a.key]);
         return h_flex().id(`ask-${a.key}`).h(ROW).px(12).gap(8).items_center().whitespace_nowrap().rounded(5).cursor_pointer()
           .hover((el) => el.bg(t.hover))
           .on_click(() => openOverlay({ mod: "session-prs", kind: "dialog", width: 640, props: { mode: "ask", ask: a, folder: props()?.folder } }))
           .child(div().w(36).flex_none().text_color(t.dim).child(a.short ?? ""))
-          .child(div().w(70).flex_none().text_color(isSent ? t.dim : tone === "late" ? t.blocked : tone === "soon" ? t.ansi3 : t.dim).child(isSent ? "sent" : due))
-          .child(div().flex_1().min_w(0).truncate().text_color(isSent ? t.dim : t.foreground).child(a.ask ?? a.id ?? ""))
+          .child(div().w(70).flex_none().text_color(tone === "late" ? t.blocked : tone === "soon" ? t.ansi3 : t.dim).child(due))
+          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(a.ask ?? a.id ?? ""))
           .child(div().id(`ask-s-${a.key}`).w(96).flex_none().truncate().text_color(t.dim).cursor_pointer()
             .hover((el) => el.text_color(t.foreground))
             .on_click((_e, cx) => {

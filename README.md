@@ -66,10 +66,8 @@ symlinked folder. Run it again after a pull.
   into Done, closed PRs drop off, and headers stay pinned while it scrolls. Reviews:
   the reviews project's PRs the same way, a section per review session. Asks: every
   open ask by project, due soonest first, each with a short id (A1 and up) it keeps
-  for good in the root's `ask-ids.json`; a row opens a dialog whose options type
-  `[decision] <short id> <project>/<ask id>: <option>` into the root once it is idle,
-  not focused, and its prompt has stayed empty for a few seconds, queued until then
-  and logged to the root's `decisions.jsonl`.
+  for good in the root's `ask-ids.json`; a row opens a dialog that numbers the ask's
+  options, so you can name one in chat, such as "A25 option 2".
 - **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the
   session tree as its sidebar and the PRs pane beside the terminals, toggled with
   Cmd+Shift+R once `keys.json` binds it.
