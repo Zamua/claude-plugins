@@ -39,6 +39,8 @@ export async function readFiles(folder) {
   return files;
 }
 
+// tree-start takes any role; everything but the root and a worker leads its project
+const isLead = (role) => role !== "root" && role !== "worker";
 const statusOf = (t) => (t.status === "error" ? "blocked" : RANK[t.status] ? t.status : "idle");
 const top = (list) => list.reduce((m, s) => (RANK[s.status] > RANK[m] ? s.status : m), "idle");
 
@@ -51,7 +53,8 @@ export function model(files) {
       const role = t.labels["tree.role"];
       // A terminal started by hand has no name, so its session goes by its tab, else its project
       const name = t.name || tabs.get(t.labels["herdr.tab"]) || (role === "worker" ? t.address : project);
-      const file = files.get(`${project}/${name}`) ?? {};
+      // A coordinator's state file may be named for its project rather than its terminal
+      const file = files.get(`${project}/${name}`) ?? (isLead(role) ? files.get(`${project}/${project}`) : null) ?? {};
       const asks = (file.asks ?? []).filter((a) => a?.status === "open");
       const status = statusOf(t);
       return { name, address: t.address, role, project, space: t.labels["herdr.space"], sid: t.labels["claude.sid"], cwd: t.cwd, created: t.created_ms ?? 0, status, file, asks, needs: status === "blocked" || asks.length > 0 };
@@ -62,8 +65,8 @@ export function model(files) {
   names.delete(root?.project);
   const projects = [...names]
     .map((name) => {
-      const lead = sessions.find((s) => s.role === "project" && s.project === name) ?? null;
-      const info = files.get(`${name}/${lead?.name ?? name}`) ?? {};
+      const lead = sessions.filter((s) => isLead(s.role) && s.project === name).sort((a, b) => b.created - a.created)[0] ?? null;
+      const info = (lead?.file.title !== undefined ? lead.file : files.get(`${name}/${name}`)) ?? {};
       const workers = sessions.filter((s) => s.role === "worker" && s.project === name);
       return { name, title: info.title || name, order: info.order ?? Infinity, closed: info.closed, lead, workers, status: top([lead, ...workers].filter(Boolean)) };
     })
