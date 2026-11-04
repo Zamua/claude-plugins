@@ -4,7 +4,7 @@
 // Graph file: <projects folder>/<project>/graph.json, or the path in the coordinator's `graph`
 // field, as { nodes: [{ id, title (a word or two), kind (one word), summary (five to seven words),
 // parent, blockedBy: [ids], status ("done"), owner (a session name), asks: [ask ids], note, link,
-// pr }] }. A node without a parent sits directly under its
+// links: [{ label, url }] (a URL or a file path), pr }] }. A node without a parent sits directly under its
 // project. A blocker id is a node of the same file, `<project>/<id>` for another project's, or a
 // Linear id or owner/repo#n, which are the same node everywhere. A Linear node takes its title,
 // state, sub-issues and `blocks` relations from Linear, and its pull request from the issue's

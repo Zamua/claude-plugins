@@ -7,13 +7,14 @@
 // or ready: nothing blocks it and nobody owns it.
 //
 // The level buttons expand everything above that depth (0: projects only); a card's chevron opens
-// or closes that one node, and its body opens its link. Commands work-graph.level0 to level3 and
-// work-graph.refresh do the same from a key or a script. props or ~/.config/herdr-app/work-graph.json
+// or closes that one node. Resting the pointer on a card shows its details and a labelled link for
+// each place it can be opened; a file opens in this mod's own read-only viewer, split beside it.
+// Commands work-graph.level0 to level3 and work-graph.refresh do the same from a key or a script. props or ~/.config/herdr-app/work-graph.json
 // give { folder }, the projects folder of state files.
 
 import { View, div, svg, PathBuilder } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
-import { exec, theme, props, terminals, spaces, watchFolder, readTextFile, home, nextCommand } from "herdr";
+import { v_flex, h_flex, HoverCard, TextView, Editor, EditorState } from "gpui-base";
+import { exec, run, theme, props, terminals, spaces, watchFolder, readTextFile, home, nextCommand, settings } from "herdr";
 import { expand, readFiles, projectList, readGraph, linearIds, fetchLinear, prRefs, fetchPrs, openAsks, liveSessions, rootProject, build, visible, STATES } from "./graph.js";
 
 const REFRESH_MS = 60000;
@@ -54,9 +55,65 @@ function ago(ms) {
   return s < 60 ? "updated just now" : s < 3600 ? `updated ${Math.round(s / 60)}m ago` : `updated ${Math.round(s / 3600)}h ago`;
 }
 
-const openTarget = (target) => {
-  if (target) exec("open", [/^https?:/.test(target) ? target : expand(target)]);
-};
+const LINK = (name) => `mods/work-graph/link-${name}.svg`;
+const isUrl = (s) => /^https?:\/\//.test(s ?? "");
+const URLS = /https?:\/\/[^\s)>"\]]+/g;
+const base = (path) => String(path).replace(/\/+$/, "").split("/").pop();
+
+// A link's icon and a label that names its target, from the URL or path alone
+function classify(target, label) {
+  if (!isUrl(target)) return { icon: "file", label: label ?? `File ${base(target)}`, file: expand(target) };
+  let u;
+  try {
+    u = new URL(target);
+  } catch {
+    return { icon: "web", label: label ?? target, url: target };
+  }
+  const tail = base(u.pathname) || u.hostname;
+  const pr = /\/pull\/(\d+)/.exec(u.pathname);
+  if (u.hostname.endsWith("github.com") && pr) return { icon: "pr", label: label ?? `PR #${pr[1]}`, url: target };
+  if (u.hostname.endsWith("linear.app")) return { icon: "issue", label: label ?? `Linear ${/[A-Z][A-Z0-9]*-\d+/i.exec(u.pathname)?.[0]?.toUpperCase() ?? tail}`, url: target };
+  if (u.hostname.endsWith("slack.com")) return { icon: "chat", label: label ?? "Slack thread", url: target };
+  return { icon: /report|run|test/i.test(label ?? "") ? "report" : "web", label: label ?? `${u.hostname.split(".")[0]} ${tail}`, url: target };
+}
+
+// Every place a node can be opened: its issue, its PR and the PRs next to it in a stack, the
+// graph file's own links and any URL in its note, and its owner session's pane
+function linksOf(n, model, sessions) {
+  const out = [];
+  const seen = new Set();
+  const add = (l) => {
+    const key = l.url ?? l.file ?? l.terminal;
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      out.push(l);
+    }
+  };
+  if (n.issue?.url) add({ icon: "issue", label: `Linear ${n.id}`, url: n.issue.url });
+  if (n.pr) {
+    const number = n.pr.split("#")[1];
+    add({ icon: "pr", label: `PR #${number}${n.live?.draft ? ", draft" : ""}`, url: n.live?.url ?? `https://github.com/${n.pr.replace("#", "/pull/")}` });
+    const repo = n.pr.split("#")[0];
+    const others = [...model.nodes.values()].filter((m) => m !== n && m.live && m.pr?.split("#")[0] === repo);
+    const below = n.live?.base ? others.find((m) => m.live.head === n.live.base) : null;
+    const above = n.live?.head ? others.find((m) => m.live.base === n.live.head) : null;
+    if (below) add({ icon: "stack", label: `Stacked on PR #${below.pr.split("#")[1]}`, url: below.live.url });
+    if (above) add({ icon: "stack", label: `Next in stack PR #${above.pr.split("#")[1]}`, url: above.live.url });
+  }
+  for (const l of Array.isArray(n.raw.links) ? n.raw.links : []) if (l?.url) add(classify(l.url, l.label));
+  if (n.raw.link) add(classify(n.raw.link));
+  for (const u of String(n.note ?? "").match(URLS) ?? []) add(classify(u));
+  const owner = n.kind === "project" ? n.info.lead : n.owner;
+  const live = owner ? sessions.byName.get(owner) : null;
+  if (live) add({ icon: "session", label: `Session ${owner}`, terminal: live.address });
+  return out;
+}
+
+function follow(link) {
+  if (link.url) exec("open", [link.url]);
+  else if (link.terminal) run("pane.focus", { terminal: link.terminal });
+  else if (link.file) run("pane.split", { direction: "right", mod: "work-graph", props: { mode: "file", path: link.file } });
+}
 
 // Lanes top to bottom; inside an expanded node, its own cards in rows by column, then each
 // expanded child as a band of its own, so frames never overlap. Unscaled pixels.
@@ -127,6 +184,7 @@ function layout(model, vis) {
 
 export default class WorkGraph extends View {
   init(_props, cx) {
+    if (props()?.mode === "file") return this.initFile(cx);
     this.files = new Map();
     this.graphs = new Map();
     this.projects = [];
@@ -171,6 +229,43 @@ export default class WorkGraph extends View {
       }
     });
     cx.timer.every(REFRESH_MS, (cx) => cx.spawn(async (cx) => this.refresh(cx)));
+  }
+
+  // A file opened from a link, read only: Markdown rendered, anything else in a read-only editor
+  initFile(cx) {
+    this.viewer = { path: props().path, text: null, error: null, code: null };
+    cx.spawn(async (cx) => {
+      try {
+        const text = await readTextFile(this.viewer.path);
+        if (text == null) this.viewer.error = "This file is no longer there.";
+        else if (text.includes("\0")) this.viewer.error = "Binary file, no preview.";
+        else {
+          this.viewer.text = text.length > 400000 ? `${text.slice(0, 400000)}\n… (cut at 400,000 characters)` : text;
+          if (!/\.(md|markdown)$/i.test(this.viewer.path)) {
+            const ext = this.viewer.path.includes(".") ? this.viewer.path.split(".").pop() : "txt";
+            this.viewer.code = EditorState.new({ language: ext, readonly: true, value: this.viewer.text, font_family: settings().font_family, font_size: 12 });
+          }
+        }
+      } catch (e) {
+        this.viewer.error = `Could not read it: ${e?.message ?? e}`;
+      }
+      cx.notify();
+    });
+  }
+
+  fileView(t) {
+    const v = this.viewer;
+    const body = v.error ? div().p(PAD).text_color(t.blocked).child(v.error)
+      : v.code ? Editor.new(v.code).flex_1().min_h(0)
+      : v.text != null ? div().id("wg-file").flex_1().min_h(0).overflow_y_scrollbar().px(PAD).py(10)
+        .child(TextView.markdown("wg-file-md", v.text).selectable(true).text_size(13).text_color(t.foreground))
+      : div().p(PAD).text_color(t.dim).child("Reading the file.");
+    return v_flex().id("work-graph-file").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground)
+      .child(h_flex().h(30).px(PAD).gap(8).items_center().border_b(1).border_color(t.border)
+        .child(svg(LINK("file")).size(12).text_color(t.muted))
+        .child(div().flex_none().text_size(12.5).font_semibold().child(base(v.path)))
+        .child(div().min_w(0).truncate().text_size(11).text_color(t.dim).child(v.path.replace(home(), "~"))))
+      .child(body);
   }
 
   asked() {
@@ -274,28 +369,59 @@ export default class WorkGraph extends View {
         .child(div().text_size(size * 0.95).text_color(s === "done" || s === "idle" ? t.dim : t.muted).child(String(counts[s])))));
   }
 
-  tip(n) {
-    const status = {
-      needs: () => `Needs you: ${n.waiting.map((a) => a.id).join(", ")}`,
-      flight: () => `Working${n.owner ? `: ${n.owner}` : ""}`,
-      idle: () => `Owned, ${SESSION[n.session?.status] ?? "idle"}${n.owner ? `: ${n.owner}` : ""}`,
-      blocked: () => `Blocked by ${n.blockers.map((b) => b.id).join(", ")}`,
-      ready: () => "Ready to start",
-      done: () => (n.issue?.stateName === "Canceled" ? "Canceled" : n.live?.state === "MERGED" ? "Merged" : "Done"),
-    };
-    const lines = [`${n.title}${n.tag ? ` · ${n.tag}` : " · no kind set"}`];
-    if (n.fullTitle && n.fullTitle !== n.title) lines.push(n.fullTitle);
-    if (n.kind !== "project") lines.push([n.id, n.pr && n.pr !== n.id ? n.pr : null].filter(Boolean).join(" · "));
-    lines.push(n.children.length ? countsText(n.counts) : status[n.state]());
-    if (n.owner && !["flight", "idle"].includes(n.state)) lines.push(`Owner: ${n.owner}${n.session ? `, ${SESSION[n.session.status] ?? "idle"}` : ", no live session"}`);
-    if (n.blockers.length && n.state !== "blocked") lines.push(`Waits on ${n.blockers.map((b) => b.id).join(", ")}`);
-    if (n.issue?.stateName) lines.push(`Linear: ${n.issue.stateName}`);
-    if (n.live) lines.push(`${n.pr}: ${n.live.state === "OPEN" && n.live.draft ? "draft" : n.live.state.toLowerCase()}`);
-    if (n.kind === "project" && n.info.next) lines.push(`Next: ${String(n.info.next).slice(0, 240)}`);
-    if (n.note) lines.push(String(n.note).slice(0, 300));
-    if (n.issue && n.live) lines.push("Click opens the issue, Cmd-click the PR");
-    if (n.error) lines.push(n.error);
-    return lines.join("\n");
+  statusLine(n) {
+    if (n.children.length) return null;
+    return {
+      needs: `Needs you: ${n.waiting.map((a) => a.id).join(", ")}`,
+      flight: "Working",
+      idle: `Owned, ${SESSION[n.session?.status] ?? "idle"}`,
+      blocked: "Blocked",
+      ready: "Ready to start",
+      done: n.issue?.stateName === "Canceled" ? "Canceled" : n.live?.state === "MERGED" ? "Merged" : "Done",
+    }[n.state];
+  }
+
+  // What a card holds that it doesn't show: the full title, owner, status, blockers, state in
+  // Linear and GitHub, the note, and a labelled link for every place it can be opened
+  popup(t, n) {
+    const links = linksOf(n, this.model, this.sessions);
+    const owner = n.kind === "project" ? n.info.lead : n.owner;
+    const ownerState = owner ? (n.kind === "project" ? this.sessions.byName.get(owner) : n.session) : null;
+    const row = (label, value, tone) => h_flex().gap(8).items_start().text_size(12)
+      .child(div().flex_none().w(64).text_color(t.dim).child(label))
+      .child(div().flex_1().min_w(0).whitespace_normal().text_color(tone ?? t.foreground).child(value));
+    return v_flex().w(340).p(12).gap(8).rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_lg().text_color(t.foreground)
+      .child(h_flex().gap(8).items_center()
+        .child(this.icon(t, n.state, 14))
+        .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().child(n.title))
+        .child(div().flex_none().px(6).h(17).flex().items_center().rounded(4).border_1().border_color(t.border).text_size(10.5)
+          .text_color(n.tag ? t.muted : t.dim).child(n.tag ?? "no kind")))
+      .when(Boolean(n.fullTitle && n.fullTitle !== n.title), (el) => el.child(div().text_size(12.5).text_color(t.muted).whitespace_normal().child(n.fullTitle)))
+      .child(v_flex().gap(3)
+        .when(n.kind !== "project", (el) => el.child(row("Id", [n.id, n.pr && n.pr !== n.id ? n.pr : null].filter(Boolean).join(" · "))))
+        .when(Boolean(this.statusLine(n)), (el) => el.child(row("Status", this.statusLine(n), color(t, n.state))))
+        .when(n.children.length > 0, (el) => el.child(h_flex().gap(8).items_center().text_size(12)
+          .child(div().flex_none().w(64).text_color(t.dim).child("Inside")).child(this.counts(t, n.counts, 12, 10))))
+        .when(Boolean(owner), (el) => el.child(row("Owner", `${owner}${ownerState ? `, ${SESSION[ownerState.status] ?? "idle"}` : ", no live session"}`)))
+        .when(n.blockers.length > 0, (el) => el.child(row("Waits on", n.blockers.map((b) => b.title === b.id ? b.id : `${b.title} (${b.id})`).join(", "), t.muted)))
+        .when(Boolean(n.issue?.stateName), (el) => el.child(row("Linear", n.issue.stateName)))
+        .when(Boolean(n.live), (el) => el.child(row("PR", n.live.state === "OPEN" && n.live.draft ? "draft" : n.live.state.toLowerCase())))
+        .when(n.kind === "project" && Boolean(n.info.next), (el) => el.child(row("Next", String(n.info.next).slice(0, 220), t.muted))))
+      .when(Boolean(n.note), (el) => el.child(div().text_size(11.5).text_color(t.dim).whitespace_normal().child(String(n.note).replace(URLS, "").slice(0, 280))))
+      .when(Boolean(n.error), (el) => el.child(div().text_size(11.5).text_color(t.blocked).whitespace_normal().child(n.error)))
+      .child(div().h(1).bg(t.border))
+      .child(links.length
+        ? v_flex().gap(1).children(links.map((l, i) => h_flex().id(`wg-link-${n.key}-${i}`).h(24).px(6).gap(8).items_center().rounded(5)
+          .cursor_pointer().hover((el) => el.bg(t.hover)).on_click(() => follow(l))
+          .child(svg(LINK(l.icon)).flex_none().size(13).text_color(t.muted))
+          .child(div().min_w(0).truncate().text_size(12.5).text_color(t.accent).child(l.label))))
+        : div().text_size(12).text_color(t.dim).child("No links. Add some under links in the graph file."));
+  }
+
+  // A trigger that opens the node's popup when the pointer rests on it, and keeps it open while
+  // the pointer moves into it
+  hover(id, n, trigger) {
+    return HoverCard.new(id).open_delay(350).close_delay(250).anchor("top_left").trigger(trigger).content(this.popup(theme(), n));
   }
 
   chevron(t, n, u) {
@@ -314,14 +440,9 @@ export default class WorkGraph extends View {
     const group = n.children.length > 0;
     const edge = { flight: t.accent, needs: t.working, ready: t.ansi2 }[n.state] ?? t.border;
     const words = String(n.summary ?? "").split(/\s+/).filter(Boolean);
-    return v_flex().id(`wg-${n.key}`).absolute().left(x).top(y).w(u(CARD_W)).h(u(CARD_H)).px(u(10)).py(u(7)).gap(u(4)).justify_center().rounded(u(8))
+    const face = v_flex().id(`wg-${n.key}`).relative().size_full().px(u(10)).py(u(7)).gap(u(4)).justify_center().rounded(u(8))
       .bg(group ? t.raised : t.surface).border_1().border_color(edge).when(n.state === "done", (el) => el.opacity(0.55))
-      .cursor_pointer().hover((el) => el.bg(t.hover)).tooltip(this.tip(n))
-      .on_click((e, cx) => {
-        if (e.modifiers?.platform && n.live?.url) openTarget(n.live.url);
-        else if (n.link) openTarget(n.link);
-        else if (group) this.toggle(cx, n);
-      })
+      .hover((el) => el.bg(t.hover))
       .when(n.state === "blocked", (el) => el.child(div().absolute().left(0).top(u(10)).w(u(3)).h(u(CARD_H - 20)).rounded_full().bg(t.blocked)))
       .child(h_flex().w_full().h(u(16)).gap(u(6)).items_center().whitespace_nowrap()
         .when(group, (el) => el.child(this.chevron(t, n, u)))
@@ -334,6 +455,7 @@ export default class WorkGraph extends View {
       .when(words.length > 0, (el) => el.child(h_flex().w_full().h(u(16)).flex_wrap().gap_x(u(4)).overflow_hidden()
         .text_size(u(11.5)).text_color(n.state === "done" ? t.dim : t.muted).children(words.map((w) => div().flex_none().h(u(16)).child(w)))))
       .when(group, (el) => el.child(this.counts(t, n.counts, u(10), u(8))));
+    return div().absolute().left(x).top(y).w(u(CARD_W)).h(u(CARD_H)).child(this.hover(`wg-hc-${n.key}`, n, face));
   }
 
   // A frame around an expanded node's children, its header the handle that closes it. Frames
@@ -341,12 +463,12 @@ export default class WorkGraph extends View {
   frame(t, n, box, u) {
     return [
       div().absolute().left(u(box.x)).top(u(box.y)).w(u(box.w)).h(u(box.h)).rounded(u(10)).border_1().border_color(t.border),
-      h_flex().id(`wg-frame-${n.key}`).absolute().left(u(box.x + 6)).top(u(box.y + 4)).max_w(u(box.w - 12)).h(u(GROUP_HEAD - 6)).gap(u(6)).px(u(4))
-        .items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas).cursor_pointer().hover((el) => el.bg(t.hover)).tooltip(this.tip(n))
-        .on_click((_e, cx) => this.toggle(cx, n))
-        .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
-        .child(div().flex_none().text_size(u(11.5)).font_semibold().text_color(t.foreground).child(n.title))
-        .child(this.counts(t, n.counts, u(10), u(7))),
+      div().absolute().left(u(box.x + 6)).top(u(box.y + 4)).max_w(u(box.w - 12)).h(u(GROUP_HEAD - 6)).child(this.hover(`wg-hf-${n.key}`, n,
+        h_flex().id(`wg-frame-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
+          .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n))
+          .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
+          .child(div().flex_none().text_size(u(11.5)).font_semibold().text_color(t.foreground).child(n.title))
+          .child(this.counts(t, n.counts, u(10), u(7))))),
     ];
   }
 
@@ -407,12 +529,12 @@ export default class WorkGraph extends View {
     const lanes = lay.lanes.map((l) => {
       const n = model.nodes.get(l.key);
       return div().absolute().left(0).top(u(l.y)).w(u(lay.width)).h(u(l.h)).border_t(1).border_color(t.border)
-        .when(l.open, (el) => el.child(h_flex().id(`wg-lane-${n.key}`).absolute().left(u(PAD - 4)).top(u(5)).h(u(LANE_HEAD - 10)).gap(u(6)).px(u(4))
-          .items_center().whitespace_nowrap().rounded(u(4)).cursor_pointer().hover((el) => el.bg(t.hover)).tooltip(this.tip(n))
-          .on_click((_e, cx) => this.toggle(cx, n))
-          .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
-          .child(div().flex_none().text_size(u(12.5)).font_semibold().text_color(t.foreground).child(n.title))
-          .child(this.counts(t, n.counts, u(11), u(8)))));
+        .when(l.open, (el) => el.child(div().absolute().left(u(PAD - 4)).top(u(5)).h(u(LANE_HEAD - 10)).child(this.hover(`wg-hl-${n.key}`, n,
+          h_flex().id(`wg-lane-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4))
+            .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n))
+            .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
+            .child(div().flex_none().text_size(u(12.5)).font_semibold().text_color(t.foreground).child(n.title))
+            .child(this.counts(t, n.counts, u(11), u(8)))))));
     });
     const frames = [...lay.boxes].flatMap(([key, box]) => this.frame(t, model.nodes.get(key), box, u));
     return div().relative().flex_none().w(u(lay.width)).h(u(lay.height))
@@ -454,19 +576,21 @@ export default class WorkGraph extends View {
         .child(this.button(t, "wg-refresh", "refresh", false, (_e, cx) => cx.spawn(async (cx) => this.refresh(cx)))))
       .child(h_flex().gap(8).items_center().flex_wrap().text_size(12)
         .child(div().flex_none().text_color(ready.length ? t.ansi2 : t.dim).font_semibold().child(ready.length ? "Can start now:" : "Nothing can start now."))
-        .children(ready.slice(0, 8).map((n) => div().id(`wg-ready-${n.key}`).flex_none().px(7).h(20).flex().items_center().rounded(5)
-          .border_1().border_color(t.ansi2).text_color(t.foreground).cursor_pointer().hover((el) => el.bg(t.hover))
-          .tooltip(this.tip(n)).on_click(() => openTarget(n.link)).child(n.title)))
+        .children(ready.slice(0, 8).map((n) => this.hover(`wg-hr-${n.key}`, n, div().id(`wg-ready-${n.key}`).flex_none().px(7).h(20).flex().items_center()
+          .rounded(5).border_1().border_color(t.ansi2).text_color(t.foreground).hover((el) => el.bg(t.hover)).child(n.title))))
         .when(ready.length > 8, (el) => el.child(div().text_color(t.dim).child(`+${ready.length - 8} more`))));
   }
 
   render() {
     const t = theme();
+    if (this.viewer) return this.fileView(t);
     const root = v_flex().id("work-graph").size_full().min_h(0).overflow_hidden().bg(t.canvas).text_color(t.foreground);
     if (!this.loaded) return root.child(div().p(PAD).text_color(t.dim).child("Reading the projects."));
     if (!this.projects.length) return root.child(div().p(PAD).text_color(t.dim).child(`No open projects in ${this.folder}.`));
     const sessions = liveSessions(terminals(), spaces());
     const model = build({ projects: this.projects, graphs: this.graphs, issues: this.issues, prs: this.prs, asks: openAsks(this.files), sessions });
+    this.model = model;
+    this.sessions = sessions;
     const vis = visible(model, (n) => this.isOpen(n));
     const lay = layout(model, vis);
     const z = this.zoom !== "fit" ? Number(this.zoom) || 1 : this.viewW ? Math.max(MIN_FIT, Math.min(1, this.viewW / lay.width)) : 1;

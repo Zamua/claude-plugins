@@ -91,8 +91,11 @@ symlinked folder. Run it again after a pull.
   file is one card from its state file. The graph file is
   `<projects>/<project>/graph.json`, or the coordinator's `graph` field, as
   `{"nodes": [{id, title, kind, summary, parent, blockedBy, status, owner, asks, note, link, pr}]}`,
-  where a card shows only `title` (a word or two), `kind` (one word) and `summary` (five to
-  seven words); the status is its icon and colour, and the rest is in the tooltip.
+  plus `links: [{label, url}]`, where a card shows only `title` (a word or two), `kind` (one
+  word) and `summary` (five to seven words), and its status as an icon and colour. Resting the
+  pointer on a card opens a popup with the rest and a labelled link to its issue, PR, stack
+  neighbours, extra links and owner session's pane; a file opens in the mod's own read-only
+  viewer, never an editor.
   Open it with `herdr-app do tab.new --mod work-graph`, with the projects folder in
   `~/.config/herdr-app/work-graph.json` as `{"folder": "~/projects"}`.
 - **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the
