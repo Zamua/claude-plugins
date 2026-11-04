@@ -38,6 +38,8 @@ const ZOOMS = [0.6, 0.75, 0.9, 1, 1.15];
 const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 2;
 const ZOOM_RATE = 0.004;
+// How much of the graph stays in the pane however a zoom leaves it
+const LOOSE = 48;
 const LEVELS = [0, 1, 2, 3];
 const SPINNER = "mods/work-graph/spinner.svg";
 const ANIM_MS = 300;
@@ -375,8 +377,14 @@ export default class WorkGraph extends View {
     cx.notify();
   }
 
+  // Back inside the graph's bounds, wherever a zoom left it
+  home() {
+    this.loose = false;
+  }
+
   // A level resets every node opened or closed by hand
   setLevel(cx, level) {
+    this.home();
     this.animate(cx, null);
     this.level = level;
     this.open = new Map();
@@ -451,7 +459,7 @@ export default class WorkGraph extends View {
   bar(t, axis, size, max) {
     const view = axis === "y" ? this.viewH : this.viewW;
     const thumb = Math.max(24, (view * view) / size);
-    const at = ((axis === "y" ? this.scrollY : this.scrollX) / max) * (view - thumb);
+    const at = Math.max(0, Math.min(1, (axis === "y" ? this.scrollY : this.scrollX) / max)) * (view - thumb);
     const grab = (e, cx) => {
       this.drag = { axis, from: axis === "y" ? e.position.y : e.position.x, start: axis === "y" ? this.scrollY : this.scrollX, per: size / view };
       cx.notify();
@@ -465,6 +473,7 @@ export default class WorkGraph extends View {
   }
 
   setZoom(cx, z) {
+    if (z === "fit") this.home();
     this.zoom = z;
     localStorage.setItem("zoom", String(z));
     cx.notify();
@@ -882,6 +891,7 @@ export default class WorkGraph extends View {
       this.fitZ = Math.max(MIN_FIT, Math.min(1, this.viewW / lay.width));
     }
     const z = this.zoom !== "fit" ? Number(this.zoom) || 1 : this.fitZ ?? 1;
+    this.z = z;
     const u = (x) => Math.round(x * z * 10) / 10;
     const width = u(lay.width);
     const height = u(lay.height);
@@ -896,8 +906,15 @@ export default class WorkGraph extends View {
     if (!this.anim) this.last = rects;
     const maxX = Math.max(0, width - this.viewW);
     const maxY = Math.max(0, height - this.viewH);
-    this.scrollX = Math.max(0, Math.min(maxX, this.scrollX));
-    this.scrollY = Math.max(0, Math.min(maxY, this.scrollY));
+    // Zooming around the pointer can leave the graph off the pane's edges, as long as some of it
+    // still shows; otherwise it fills the pane from its top-left corner
+    if (this.loose) {
+      this.scrollX = Math.max(-(this.viewW - LOOSE), Math.min(width - LOOSE, this.scrollX));
+      this.scrollY = Math.max(-(this.viewH - LOOSE), Math.min(height - LOOSE, this.scrollY));
+    } else {
+      this.scrollX = Math.max(0, Math.min(maxX, this.scrollX));
+      this.scrollY = Math.max(0, Math.min(maxY, this.scrollY));
+    }
     return root
       .on_mouse_move((e, cx) => {
         const d = this.drag;
@@ -924,18 +941,26 @@ export default class WorkGraph extends View {
         })
         .on_scroll_wheel((e, cx) => {
           if (e.modifiers?.platform) {
+            // Several wheel events can land before the next render, so each starts from the zoom
+            // the last one left, not the one this render drew
+            const z1 = this.z;
             // Scrolling up zooms in, as in a browser
-            const z2 = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z * Math.exp(e.delta.y * ZOOM_RATE)));
-            if (z2 === z) return;
+            const z2 = Math.round(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z1 * Math.exp(e.delta.y * ZOOM_RATE))) * 1000) / 1000;
+            if (z2 === z1) return;
             // The point under the pointer stays under it
             const at = e.local_position ?? { x: e.position.x - (e.bounds?.x ?? 0), y: e.position.y - (e.bounds?.y ?? 0) };
-            this.scrollX = Math.max(0, ((this.scrollX + at.x) / z) * z2 - at.x);
-            this.scrollY = Math.max(0, ((this.scrollY + at.y) / z) * z2 - at.y);
-            this.setZoom(cx, Math.round(z2 * 1000) / 1000);
+            this.scrollX = ((this.scrollX + at.x) / z1) * z2 - at.x;
+            this.scrollY = ((this.scrollY + at.y) / z1) * z2 - at.y;
+            this.loose = true;
+            this.z = z2;
+            this.setZoom(cx, z2);
             return;
           }
-          this.scrollX = Math.max(0, Math.min(maxX, this.scrollX - e.delta.x));
-          this.scrollY = Math.max(0, Math.min(maxY, this.scrollY - e.delta.y));
+          // Panning moves within the graph, or back toward it from where a zoom left it, never away
+          const pan = (v, d, max) => Math.max(Math.min(0, v), Math.min(Math.max(max, v), v - d));
+          this.scrollX = pan(this.scrollX, e.delta.x, maxX);
+          this.scrollY = pan(this.scrollY, e.delta.y, maxY);
+          if (this.scrollX >= 0 && this.scrollX <= maxX && this.scrollY >= 0 && this.scrollY <= maxY) this.loose = false;
           cx.notify();
         })
         .child(this.canvas(t, model, vis, lay, u, rects).id("wg-canvas").absolute().left(-this.scrollX).top(-this.scrollY)
