@@ -104,8 +104,9 @@ symlinked folder. Run it again after a pull.
   blocker in another project, which draws nothing, work started or done before its blockers,
   or a blocker that holds or sits inside the card; a collapsed card shows it for anything inside.
   Resting on a header's line lists every status inside, and the legend button explains the colours.
-  A node's `owner` is a session name, the person's own name, or `team:<name>`, and `status` may be
-  `parked` for deliberately deferred work, drawn with grey text. The top bar splits unblocked
+  A node's `owner` is a session name, the person's own name, or `team:<name>`, and `status` is one of
+  `todo`, `in-progress`, `parked` (deliberately deferred, drawn with grey text) or `done`; any other
+  word gets a warning. Needs you and blocked come from asks and blockers, never from `status`. The top bar splits unblocked
   work into what a session can start now, what needs you, and what waits on another team, an owner
   `team:<name>` or a Linear issue of another team; `me` and `team` in the config name you and your team. Its i icon opens a popup with the rest and a labelled link to its issue, PR, stack
   neighbours, extra links and owner session's pane; a file opens in the mod's own read-only

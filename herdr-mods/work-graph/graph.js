@@ -3,7 +3,8 @@
 //
 // Graph file: <projects folder>/<project>/graph.json, or the path in the coordinator's `graph`
 // field, as { nodes: [{ id, title (a word or two), kind (one word), summary (five to seven words),
-// parent, blockedBy: [ids], status ("done", or "parked" for work deliberately deferred), owner (a
+// parent, blockedBy: [ids], status (one of FILE_STATUS: "parked" is work deliberately deferred, and
+// any other word is reported on the node rather than read as one of these), owner (a
 // session name, the person's own name, or "team:<name>"), asks: [ask ids], note, link,
 // links: [{ label, url }] (a URL or a file path), pr }] }. A node without a parent sits directly under its
 // project. A blocker id is a node of the same file, or a Linear id or owner/repo#n, which are the
@@ -245,6 +246,9 @@ export function startGroups(model, { me, team } = {}) {
 export const rootProject = (terminals) => terminals.filter((t) => t.state === "live" && t.labels?.["tree.role"] === "root")
   .sort((a, b) => (b.created_ms ?? 0) - (a.created_ms ?? 0))[0]?.labels?.["tree.project"] ?? "root";
 
+// The words a graph file's status may use; needs you and blocked come from asks and blockers
+export const FILE_STATUS = ["todo", "in-progress", "parked", "done"];
+
 // Most urgent first: a group shows the first one anything inside it has
 export const STATES = ["needs", "flight", "waiting", "ready", "idle", "blocked", "parked", "done"];
 
@@ -388,7 +392,7 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
   for (const n of nodes.values()) {
     if (n.children.length) continue;
     // A live owner that isn't working holds the node without moving it
-    const working = n.session?.status === "working";
+    const working = n.session?.status === "working" || n.raw?.status === "in-progress";
     n.state = n.done ? "done" : n.parked ? "parked" : n.waiting.length ? "needs" : working ? "flight" : n.session?.status === "waiting" ? "waiting"
       : n.blockers.length ? "blocked" : n.session ? "idle" : "ready";
   }
@@ -404,14 +408,18 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
     n.state = n.done ? "done" : STATES.find((s) => counts[s] > 0) ?? "done";
   }
 
-  // blockedBy means "can't start until it is done", so work in flight, waiting or done first, or a
-  // node waiting on its own parent or child, is a mistake in the graph file to show, not to hide.
+  // blockedBy means "can't start until it is done", so work in progress, waiting or done first, or
+  // a node waiting on its own parent or child, is a mistake in the graph file to show, not to hide.
   // An open ask on blocked work is fine: a question can be answered ahead of the work.
   const names = (list) => list.map((b) => b.title).join(", ");
   for (const n of nodes.values()) {
+    const s = n.raw?.status;
+    if (s != null && !FILE_STATUS.includes(s)) n.problems.push(`Status "${s}" isn't a word the graph reads: use ${FILE_STATUS.join(", ")}`);
+  }
+  for (const n of nodes.values()) {
     if (n.kind === "project" || n.parked || !n.blockers.length) continue;
-    const own = n.children.length ? null : n.session?.status;
-    const started = n.done ? "Done" : own === "working" ? "In flight" : own === "waiting" ? "Waiting" : null;
+    const own = n.children.length ? null : n.raw?.status === "in-progress" ? "working" : n.session?.status;
+    const started = n.done ? "Done" : own === "working" ? "In progress" : own === "waiting" ? "Waiting" : null;
     if (started) n.problems.push(`${started} while ${names(n.blockers)} ${n.blockers.length > 1 ? "aren't" : "isn't"} done`);
   }
   for (const e of base.values()) {

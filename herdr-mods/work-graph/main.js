@@ -2,8 +2,8 @@
 // nodes nested by parent (see graph.js). A collapsed node is one card that rolls up the status of
 // everything in it; an expanded one is a frame around its children. Arrows run from each blocker
 // to what it blocks, combined between collapsed cards into one thicker arrow, in columns by
-// dependency depth among what shows. A leaf is done, needs you (an open ask names it), in flight
-// (its owner session is working), waiting (its owner is between turns with a background job or a
+// dependency depth among what shows. A leaf is done, needs you (an open ask names it), in progress
+// (its graph file says so, or its owner session is working), waiting (its owner is between turns with a background job or a
 // wake set), blocked (a blocker isn't done), owned but idle (its owner is live with nothing
 // pending), or ready: nothing blocks it and nobody owns it. A card shows its status as one bar on
 // its left in one of four colours, needs you, in progress, blocked and done, and the rest show
@@ -80,13 +80,13 @@ function trace(st, pts, tip, radius, head) {
   st.heads.add_polygon([[lx, ly - head], [tip, ly], [lx, ly + head]], true);
 }
 
-const WORD = { needs: ["needs you", "need you"], ready: ["ready"], flight: ["in flight"], waiting: ["waiting on a job"], idle: ["owned, idle"], blocked: ["blocked"], parked: ["parked"], done: ["done"] };
+const WORD = { needs: ["needs you", "need you"], ready: ["ready"], flight: ["in progress"], waiting: ["waiting on a job"], idle: ["owned, idle"], blocked: ["blocked"], parked: ["parked"], done: ["done"] };
 const word = (s, k) => (k === 1 ? WORD[s][0] : WORD[s][1] ?? WORD[s][0]);
 const SESSION = { working: "working", blocked: "waiting on a dialog", waiting: "waiting on a background job or a wake" };
 // The legend's colours: each status that asks something of someone has one, the rest none
 const LEGEND = [
   ["needs", "Needs you", "An open ask names it, so it waits on your answer."],
-  ["flight", "In progress", "Its owner session is working, or between turns with a background job or a wake set."],
+  ["flight", "In progress", "Its graph file says in-progress, or its owner session is working or between turns with a background job or a wake set."],
   ["blocked", "Blocked", "A blocker isn't done yet."],
   ["done", "Done", "Finished, merged or closed."],
   [null, "No colour", "Ready: nothing blocks it and nobody owns it. Owned, idle: its owner session is live with nothing pending. Parked: deferred on purpose, its text grey, and left out of the groups above and the warnings."],
@@ -97,7 +97,7 @@ const GROUPS = {
   you: ({ me }) => ["Needs you", `Unblocked, with an open ask or owned by you${me ? ` (owner "${me}")` : ""}.`, "Nothing needs you."],
   teams: ({ team }) => ["Waiting on another team", `Unblocked, but another team takes it next: owner "team:<name>"${team ? `, or a Linear issue outside ${team}` : ""}. The chip names the team.`, "Nothing waits on another team."],
 };
-const WARN_MEANING = "Its graph file contradicts itself: work in flight, waiting or done before its blockers are, a blocker in another lane, or a blocker that holds or sits inside it. Its i popup names each.";
+const WARN_MEANING = "Its graph file contradicts itself or uses an unknown status word: work in progress, waiting or done before its blockers are, a blocker in another lane, a blocker that holds or sits inside it, or a status other than todo, in-progress, parked or done. Its i popup names each.";
 const tone = (t, state) => ({ needs: t.working, flight: t.accent, waiting: t.accent, blocked: t.blocked, done: t.ansi2 })[state] ?? null;
 const countsText = (counts) => STATES.filter((s) => counts[s]).map((s) => `${counts[s]} ${word(s, counts[s])}`).join(", ");
 const tally = (counts, total) => [`${counts.done} of ${total} done`, counts.needs ? `${counts.needs} ${word("needs", counts.needs)}` : null].filter(Boolean).join(" · ");
@@ -583,7 +583,7 @@ export default class WorkGraph extends View {
     if (n.children.length) return null;
     return {
       needs: `Needs you: ${n.waiting.map((a) => a.id).join(", ")}`,
-      flight: "Working",
+      flight: n.session?.status === "working" ? "Working" : "In progress",
       parked: "Parked",
       waiting: `Owned, ${SESSION.waiting}`,
       idle: `Owned, ${SESSION[n.session?.status] ?? "idle"}`,
