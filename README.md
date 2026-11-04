@@ -93,7 +93,8 @@ symlinked folder. Run it again after a pull.
   around the pointer, everything scaling together; opening or closing animates,
   a card growing into its frame as its children come out of it, the opened node held in place. Linear issues
   (through the `linear` CLI) bring their state, sub-issues, `blocks` relations and PR
-  links, and GitHub brings PR state and stacks by base branch; a project with no graph
+  links, and GitHub brings PR state and stacks by base branch: a stacked PR merges after the one
+  below it, a dashed arrow that orders the stack and blocks nothing, and an open PR counts as in progress; a project with no graph
   file is one card from its state file. The graph file is
   `<projects>/<project>/graph.json`, or the coordinator's `graph` field, as
   `{"nodes": [{id, title, kind, summary, parent, blockedBy, status, owner, asks, note, link, pr}]}`,

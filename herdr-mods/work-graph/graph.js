@@ -12,8 +12,8 @@
 // `<project>/<id>`, is drawn nowhere and reported on the node that names it. A Linear node takes its title,
 // state, sub-issues and `blocks` relations from Linear, and its pull request from the issue's
 // GitHub link unless `pr` names one; a listed issue's sub-issues join under it unless a file
-// lists them. A pull request whose base branch is another node's head branch is blocked by it.
-// A node's blockers also block everything inside it.
+// lists them. A pull request whose base branch is another node's head branch merges after it: that
+// edge orders the stack and blocks nothing. A node's blockers also block everything inside it.
 
 import { exec, home, readTextFile } from "herdr";
 import { readdir } from "fs/promises";
@@ -334,8 +334,11 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
   }
 
   const base = new Map();
-  const edge = (from, to) => {
-    if (from && to && from !== to && nodes.get(from).project === nodes.get(to).project) base.set(`${from}>${to}`, { from, to });
+  // "block": can't start until `from` is done; "stack": merges after `from`, which blocks nothing
+  const edge = (from, to, kind = "block") => {
+    if (!from || !to || from === to || nodes.get(from).project !== nodes.get(to).project) return;
+    const k = `${from}>${to}`;
+    base.set(k, { from, to, kind: base.get(k)?.kind === "block" ? "block" : kind });
   };
   for (const n of nodes.values()) n.problems = [];
   for (const n of nodes.values()) {
@@ -351,11 +354,11 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
     if (n.live?.base) {
       const repo = n.pr.split("#")[0];
       const below = [...nodes.values()].find((m) => m !== n && m.live?.head === n.live.base && m.pr.split("#")[0] === repo);
-      if (below) edge(below.key, n.key);
+      if (below) edge(below.key, n.key, "stack");
     }
   }
   const preds = new Map([...nodes.keys()].map((k) => [k, []]));
-  for (const e of base.values()) preds.get(e.to).push(e.from);
+  for (const e of base.values()) if (e.kind === "block") preds.get(e.to).push(e.from);
 
   const leavesOf = (key) => {
     const n = nodes.get(key);
@@ -392,7 +395,7 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
   for (const n of nodes.values()) {
     if (n.children.length) continue;
     // A live owner that isn't working holds the node without moving it
-    const working = n.session?.status === "working" || n.raw?.status === "in-progress";
+    const working = n.session?.status === "working" || n.raw?.status === "in-progress" || n.live?.state === "OPEN";
     n.state = n.done ? "done" : n.parked ? "parked" : n.waiting.length ? "needs" : working ? "flight" : n.session?.status === "waiting" ? "waiting"
       : n.blockers.length ? "blocked" : n.session ? "idle" : "ready";
   }
@@ -418,11 +421,12 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
   }
   for (const n of nodes.values()) {
     if (n.kind === "project" || n.parked || !n.blockers.length) continue;
-    const own = n.children.length ? null : n.raw?.status === "in-progress" ? "working" : n.session?.status;
+    const own = n.children.length ? null : n.raw?.status === "in-progress" || n.live?.state === "OPEN" ? "working" : n.session?.status;
     const started = n.done ? "Done" : own === "working" ? "In progress" : own === "waiting" ? "Waiting" : null;
     if (started) n.problems.push(`${started} while ${names(n.blockers)} ${n.blockers.length > 1 ? "aren't" : "isn't"} done`);
   }
   for (const e of base.values()) {
+    if (e.kind !== "block") continue;
     const to = nodes.get(e.to);
     const from = nodes.get(e.from);
     if (to.ancestors.includes(e.from)) to.problems.push(`Blocked by ${from.title}, which holds it`);
@@ -464,9 +468,16 @@ export function visible(model, isOpen) {
     const k = `${from}>${to}`;
     agg.set(k, { key: k, from, to, list: [...(agg.get(k)?.list ?? []), e] });
   }
-  const next = new Map();
-  for (const e of agg.values()) next.set(e.from, [...(next.get(e.from) ?? []), e.to]);
-  const reaches = (from, to) => {
+  // A blocker arrow is implied only by a chain of blocker arrows, since a merge-order arrow blocks
+  // nothing; a merge-order arrow is implied by any chain
+  const blocks = (e) => e.list.some((b) => b.kind === "block");
+  const nextAll = new Map();
+  const nextBlock = new Map();
+  for (const e of agg.values()) {
+    nextAll.set(e.from, [...(nextAll.get(e.from) ?? []), e.to]);
+    if (blocks(e)) nextBlock.set(e.from, [...(nextBlock.get(e.from) ?? []), e.to]);
+  }
+  const reaches = (from, to, next) => {
     const seen = new Set();
     const stack = (next.get(from) ?? []).filter((id) => id !== to);
     while (stack.length) {
@@ -490,7 +501,7 @@ export function visible(model, isOpen) {
     if (over) over.list = [...over.list, ...e.list];
     else kept.push({ ...e });
   }
-  const edges = kept.filter((e) => !reaches(e.from, e.to));
+  const edges = kept.filter((e) => !reaches(e.from, e.to, blocks(e) ? nextBlock : nextAll)).map((e) => ({ ...e, stack: !blocks(e) }));
 
   // Columns: the longest chain of shown blockers before a card; an edge into a frame comes
   // before everything in it, and one out of a frame after everything in it

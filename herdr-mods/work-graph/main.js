@@ -576,6 +576,7 @@ export default class WorkGraph extends View {
       .child(row(h_flex().h(14).justify_center().child(svg(WARN).size(12).text_color(t.dim)), "Check the graph file", WARN_MEANING))
       .child(row(h_flex().h(14).justify_center().child(svg(INFO).size(12).text_color(t.dim)), "i", "A card's details and links."))
       .child(row(h_flex().h(14).justify_center().child(div().text_size(13).text_color(t.muted).child("→")), "Arrow", "From a blocker to what it blocks, inside one lane; thicker when it stands for several."))
+      .child(row(h_flex().h(14).items_center().child(div().w(22).h(0).border_t(1).border_dashed().border_color(t.dim)), "Merges after", "A stacked pull request merges after the one below it. The dashed arrow orders the stack and blocks nothing."))
       .child(row(div().flex_none().w(22).h(14).rounded(4).border_1().border_color(t.border).bg(t.surface).opacity(DIM), "Faded", "Off the path of the card under the pointer."));
   }
 
@@ -810,14 +811,15 @@ export default class WorkGraph extends View {
     return list;
   }
 
-  // Paths by look: thicker when one arrow stands for several dependencies, and in the accent colour
-  // while the pointer is on the arrow. The hovered card's path is drawn again, plainly, on its own layer, so it can fade in
+  // Paths by look: thicker when one arrow stands for several dependencies, dashed and quieter when it
+  // only orders a stack of pull requests, and in the accent colour while the pointer is on the arrow. The hovered card's path is drawn again, plainly, on its own layer, so it can fade in
   // over the rest as they fade out; the last path stays on it while it fades away.
   edges(t, model, vis, lay, u) {
-    const looks = (map) => (look, width, tone) => {
-      if (!map.has(look)) map.set(look, { tone, line: PathBuilder.stroke(width), heads: PathBuilder.fill() });
+    const looks = (map) => (look, width, tone, dash) => {
+      if (!map.has(look)) map.set(look, { tone, line: dash ? PathBuilder.stroke(width).dash_array(dash) : PathBuilder.stroke(width), heads: PathBuilder.fill() });
       return map.get(look);
     };
+    const dash = [u(4), u(3)];
     const all = new Map();
     const lit = new Map();
     const style = looks(all);
@@ -827,8 +829,8 @@ export default class WorkGraph extends View {
     for (const r of this.routes(model, vis, lay)) {
       const e = r.e;
       const merged = e.list.length > 1;
-      const plain = (pick) => pick(`plain${merged}`, 1.5 + (merged ? 1 : 0), t.muted);
-      const st = this.hoverEdge?.key === e.key ? style(`hot${merged}`, 1.75 + (merged ? 1 : 0), t.accent)
+      const plain = (pick) => (e.stack ? pick("stack", 1, t.dim, dash) : pick(`plain${merged}`, 1.5 + (merged ? 1 : 0), t.muted));
+      const st = this.hoverEdge?.key === e.key ? style(`hot${merged}${e.stack}`, e.stack ? 1.25 : 1.75 + (merged ? 1 : 0), t.accent, e.stack ? dash : null)
         : plain(style);
       const pts = r.pts.map(([x, y]) => [u(x), u(y)]);
       trace(st, pts, u(r.tip), u(6), u(4));
@@ -845,7 +847,7 @@ export default class WorkGraph extends View {
           const dot = `${i}-${k}`;
           hits.push(div().id(`wg-hit-${e.key}-${dot}`).absolute().left(x - 6).top(y - 6).size(12)
             .on_hover((on, cx) => {
-              if (on) this.hoverEdge = { key: e.key, dot, x, y, list: e.list };
+              if (on) this.hoverEdge = { key: e.key, dot, x, y, list: e.list, stack: e.stack };
               else if (this.hoverEdge?.key === e.key && this.hoverEdge.dot === dot) this.hoverEdge = null;
               cx.notify();
             }));
@@ -864,7 +866,7 @@ export default class WorkGraph extends View {
     const h = this.hoverEdge;
     if (!h || this.anim || this.still) return null;
     const name = (k) => model.nodes.get(k)?.title ?? k;
-    const lines = [...new Set(h.list.map((e) => `${name(e.from)} blocks ${name(e.to)}`))];
+    const lines = [...new Set(h.list.map((e) => (e.kind === "stack" ? `${name(e.to)} merges after ${name(e.from)}` : `${name(e.from)} blocks ${name(e.to)}`)))];
     return v_flex().absolute().left(h.x + 12).top(h.y + 10).max_w(320).px(9).py(6).gap(2).rounded(7)
       .border_1().border_color(t.border).bg(t.popover).shadow_lg()
       .children(lines.slice(0, 12).map((l) => div().text_size(12).text_color(t.foreground).whitespace_nowrap().child(l)))
