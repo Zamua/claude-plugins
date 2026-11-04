@@ -93,9 +93,9 @@ const LEGEND = [
 ];
 // The top bar's groups of unblocked work, named for who takes it next
 const GROUPS = {
-  start: () => ["Can start now", "Unblocked and unstarted, so a session can pick it up: nobody owns it, or its owner session isn't live."],
-  you: ({ me }) => ["Needs you", `Unblocked, with an open ask or owned by you${me ? ` (owner "${me}")` : ""}.`],
-  teams: ({ team }) => ["Waiting on another team", `Unblocked, but another team takes it next: owner "team:<name>"${team ? `, or a Linear issue outside ${team}` : ""}. The chip names the team.`],
+  start: () => ["Can start now", "Unblocked and unstarted, so a session can pick it up: nobody owns it, or its owner session isn't live.", "Nothing can start now."],
+  you: ({ me }) => ["Needs you", `Unblocked, with an open ask or owned by you${me ? ` (owner "${me}")` : ""}.`, "Nothing needs you."],
+  teams: ({ team }) => ["Waiting on another team", `Unblocked, but another team takes it next: owner "team:<name>"${team ? `, or a Linear issue outside ${team}` : ""}. The chip names the team.`, "Nothing waits on another team."],
 };
 const WARN_MEANING = "Its graph file contradicts itself: work in flight, waiting or done before its blockers are, a blocker in another lane, or a blocker that holds or sits inside it. Its i popup names each.";
 const tone = (t, state) => ({ needs: t.working, flight: t.accent, waiting: t.accent, blocked: t.blocked, done: t.ansi2 })[state] ?? null;
@@ -954,10 +954,10 @@ export default class WorkGraph extends View {
   // One group of chips in the top bar, its label explaining who it waits on; only the one that
   // needs the person has a colour
   group(t, key, list, accent, always) {
-    const [label, text] = GROUPS[key](this.who ?? {});
+    const [label, text, none] = GROUPS[key](this.who ?? {});
     if (!list.length && !always) return [];
     const head = this.explainer(`wg-g-${key}`, div().id(`wg-g-${key}-t`).flex_none().text_color(list.length ? accent ?? t.muted : t.dim).font_semibold()
-      .child(list.length ? `${label}:` : `Nothing in ${label.toLowerCase()}.`), this.note(t, div(), label, `${list.length} ${list.length === 1 ? "card" : "cards"}`, text));
+      .child(list.length ? `${label}:` : none), this.note(t, div(), label, `${list.length} ${list.length === 1 ? "card" : "cards"}`, text));
     return [head, ...list.slice(0, 6).map(({ n, team }) => this.hover(`wg-gc-${n.key}`, n, div().id(`wg-gc-${n.key}-t`).flex_none().px(7).h(20).flex().items_center()
       .rounded(5).border_1().border_color(accent ?? t.border).text_color(t.foreground).hover((el) => el.bg(t.hover)).child(team ? `${n.title} · ${team}` : n.title))),
       ...(list.length > 6 ? [div().flex_none().text_color(t.dim).child(`+${list.length - 6} more`)] : [])];
