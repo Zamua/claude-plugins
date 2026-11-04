@@ -511,6 +511,11 @@ export default class WorkGraph extends View {
     const face = v_flex().id(`wg-${n.key}`).relative().size_full().px(u(10)).py(u(7)).gap(u(4)).justify_center().rounded(u(8))
       .bg(group ? t.raised : t.surface).border_1().border_color(edge).when(n.state === "done", (el) => el.opacity(0.55))
       .hover((el) => el.bg(t.hover))
+      .on_hover((on, cx) => {
+        if (on) this.hoverCard = n.key;
+        else if (this.hoverCard === n.key) this.hoverCard = null;
+        cx.notify();
+      })
       .when(n.state === "blocked", (el) => el.child(div().absolute().left(0).top(u(10)).w(u(3)).h(u(CARD_H - 20)).rounded_full().bg(t.blocked)))
       .child(h_flex().w_full().h(u(16)).gap(u(6)).items_center().whitespace_nowrap()
         .when(group, (el) => el.child(this.chevron(t, n, u)))
@@ -528,29 +533,47 @@ export default class WorkGraph extends View {
 
   // A frame around an expanded node's children, its header the handle that closes it. Frames
   // draw over the arrows, so the header hides an arrow passing under it.
-  frame(t, n, r, u) {
-    return [
-      moves(div().id(`wg-box-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o)).rounded(u(10)).border_1().border_color(t.border),
-      moves(div().id(`wg-fh-${n.key}`).absolute().left(r.x + u(6)).top(r.y + u(4)).w(Math.max(0, r.w - u(12))).h(u(GROUP_HEAD - 6)).opacity(r.o)).overflow_hidden().child(this.hover(`wg-hf-${n.key}`, n,
-        h_flex().id(`wg-frame-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
-          .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n))
-          .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
-          .child(div().flex_none().text_size(u(11.5)).font_semibold().text_color(t.foreground).child(n.title))
-          .child(this.counts(t, n.counts, u(10), u(7))))),
-    ];
+  frameBox(t, n, r, u) {
+    return moves(div().id(`wg-box-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o)).rounded(u(10)).border_1().border_color(t.border);
   }
 
-  // One stroke and one fill per tone: arrows from a finished blocker are quieter. Ends spread
-  // along a side so arrows meeting one card stay apart; a combined arrow carries its count.
-  edges(t, model, vis, lay, u) {
+  frameHead(t, n, r, u) {
+    return moves(div().id(`wg-fh-${n.key}`).absolute().left(r.x + u(6)).top(r.y + u(4)).w(Math.max(0, r.w - u(12))).h(u(GROUP_HEAD - 6)).opacity(r.o)).overflow_hidden().child(this.hover(`wg-hf-${n.key}`, n,
+      h_flex().id(`wg-frame-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
+        .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n))
+        .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
+        .child(div().flex_none().text_size(u(11.5)).font_semibold().text_color(t.foreground).child(n.title))
+        .child(this.counts(t, n.counts, u(10), u(7)))));
+  }
+
+  // Arrows run in the gaps: out of a card's right side into the gutter after its column, along a
+  // free strip between rows or lanes when the target is further right, down the gutter before
+  // the target's column, and in. Unscaled pixels, worked out once per layout.
+  routes(model, vis, lay) {
+    const sig = `${lay.width}|${lay.height}|${vis.cards.join()}|${vis.edges.map((e) => e.key).join()}`;
+    if (this.routed?.sig === sig) return this.routed.list;
     const rect = (key) => {
       const p = lay.pos.get(key);
       if (p) return { x: p.x, y: p.y, w: CARD_W, h: CARD_H };
       const b = lay.boxes.get(key);
-      if (b) return b;
+      // An arrow into or out of a frame meets its header, so it can't be mistaken for one into
+      // the card beside the frame's middle
+      if (b) return { x: b.x, y: b.y, w: b.w, h: GROUP_HEAD };
       const lane = lay.lanes.find((l) => l.key === key);
-      return { x: lay.left, y: lane.y, w: lay.width - lay.left, h: lane.h };
+      return { x: lay.left, y: lane.y, w: lay.width - lay.left, h: LANE_HEAD };
     };
+    const pitch = CARD_W + GAP_X;
+    const gutter = (k) => lay.left + k * pitch + CARD_W + GAP_X / 2;
+    const after = (x) => gutter(Math.max(0, Math.ceil((x + 2 - lay.left - CARD_W - GAP_X / 2) / pitch)));
+    const before = (x) => gutter(Math.floor((x - 2 - lay.left - CARD_W - GAP_X / 2) / pitch));
+    const boxes = vis.cards.map((k) => rect(k));
+    const strips = [...new Set([
+      ...boxes.flatMap((r) => [r.y - GAP_Y / 2, r.y + r.h + GAP_Y / 2]),
+      ...lay.lanes.map((l) => l.y + LANE_HEAD / 2),
+    ].map((y) => Math.round(y)))];
+    const clear = (y, xa, xb) => !boxes.some((r) => y > r.y - 3 && y < r.y + r.h + 3 && r.x < xb && r.x + r.w > xa);
+    const strip = (xa, xb, y1, y2) => strips.filter((y) => clear(y, xa, xb))
+      .reduce((best, y) => (best === null || Math.abs(y - y1) + Math.abs(y - y2) < Math.abs(best - y1) + Math.abs(best - y2) ? y : best), null) ?? (y1 + y2) / 2;
     const outs = new Map();
     const ins = new Map();
     for (const e of vis.edges) {
@@ -560,66 +583,167 @@ export default class WorkGraph extends View {
     for (const l of outs.values()) l.sort((a, b) => rect(a.to).y - rect(b.to).y);
     for (const l of ins.values()) l.sort((a, b) => rect(a.from).y - rect(b.from).y);
     const spread = (list, e, h) => {
-      const step = Math.min(8, Math.max(0, h - 24) / Math.max(1, list.length - 1));
+      const step = Math.min(6, Math.max(0, h - 20) / Math.max(1, list.length - 1));
       return (list.indexOf(e) - (list.length - 1) / 2) * step;
     };
-    const layers = [];
-    const labels = [];
-    for (const quiet of [true, false]) {
-      const set = vis.edges.filter((e) => model.nodes.get(e.from).done === quiet);
-      if (!set.length) continue;
-      const line = PathBuilder.stroke(quiet ? 1 : 1.5);
-      const heads = PathBuilder.fill();
-      for (const e of set) {
-        const a = rect(e.from);
-        const b = rect(e.to);
-        const x1 = u(a.x + a.w);
-        const y1 = u(a.y + a.h / 2 + spread(outs.get(e.from), e, a.h));
-        const x2 = u(b.x) - u(6);
-        const y2 = u(b.y + b.h / 2 + spread(ins.get(e.to), e, b.h));
-        const dx = Math.max(u(24), Math.abs(x2 - x1) / 2);
-        line.move_to(x1, y1).cubic_bezier_to(x2, y2, x1 + dx, y1, x2 - dx, y2);
-        heads.add_polygon([[x2, y2 - u(4)], [u(b.x), y2], [x2, y2 + u(4)]], true);
-        if (e.count > 1) {
-          labels.push(div().absolute().left((x1 + x2) / 2 - u(9)).top((y1 + y2) / 2 - u(8)).h(u(16)).min_w(u(18)).px(u(4)).rounded_full()
-            .flex().items_center().justify_center().bg(t.raised).border_1().border_color(t.border)
-            .text_size(u(10)).text_color(t.muted).child(String(e.count)));
-        }
+    const list = vis.edges.map((e) => {
+      const a = rect(e.from);
+      const b = rect(e.to);
+      const x1 = a.x + a.w;
+      const y1 = a.y + a.h / 2 + spread(outs.get(e.from), e, a.h);
+      const x2 = b.x - 6;
+      const y2 = b.y + b.h / 2 + spread(ins.get(e.to), e, b.h);
+      const gs = after(x1);
+      const gt = before(b.x);
+      if (gt <= gs + 1 || gs >= x2) {
+        const g = gs < x2 - 4 ? gs : (x1 + x2) / 2;
+        return { e, tip: b.x, legs: [{ kind: "x", at: y1, from: x1, to: g }, { kind: "y", at: g, from: y1, to: y2 }, { kind: "x", at: y2, from: g, to: x2 }] };
       }
-      const tone = quiet ? t.border : t.muted;
-      layers.push(window.paint_path(line.build(), tone).absolute().top(0).left(0).size_full());
-      layers.push(window.paint_path(heads.build(), tone).absolute().top(0).left(0).size_full());
+      const yc = strip(gs, gt, y1, y2);
+      return { e, tip: b.x, legs: [
+        { kind: "x", at: y1, from: x1, to: gs }, { kind: "y", at: gs, from: y1, to: yc }, { kind: "x", at: yc, from: gs, to: gt },
+        { kind: "y", at: gt, from: yc, to: y2 }, { kind: "x", at: y2, from: gt, to: x2 },
+      ] };
+    });
+    // Arrows sharing a gutter or a strip run side by side, a few pixels apart, ordered so they
+    // cross as little as possible
+    const lanesOf = (kind, room) => {
+      const groups = new Map();
+      for (const r of list) r.legs.forEach((leg, i) => {
+        if (leg.kind !== kind || i === 0 || i === r.legs.length - 1) return;
+        const k = Math.round(leg.at);
+        groups.set(k, [...(groups.get(k) ?? []), { r, i }]);
+      });
+      for (const g of groups.values()) {
+        g.sort((p, q) => Math.min(p.r.legs[p.i].from, p.r.legs[p.i].to) - Math.min(q.r.legs[q.i].from, q.r.legs[q.i].to));
+        const step = Math.min(3, room / Math.max(1, g.length));
+        g.forEach(({ r, i }, k) => (r.legs[i].off = (k - (g.length - 1) / 2) * step));
+      }
+    };
+    lanesOf("y", GAP_X / 2 - 8);
+    lanesOf("x", GAP_Y / 2 - 2);
+    for (const r of list) {
+      const pts = [];
+      r.legs.forEach((leg, i) => {
+        const at = leg.at + (leg.off ?? 0);
+        const next = r.legs[i + 1];
+        if (i === 0) pts.push(leg.kind === "x" ? [leg.from, at] : [at, leg.from]);
+        const end = next ? next.at + (next.off ?? 0) : leg.to;
+        pts.push(leg.kind === "x" ? [end, at] : [at, end]);
+      });
+      r.pts = pts.filter((pt, i) => i === 0 || Math.hypot(pt[0] - pts[i - 1][0], pt[1] - pts[i - 1][1]) > 0.5);
+      r.cross = model.nodes.get(r.e.from).project !== model.nodes.get(r.e.to).project;
     }
-    return [...layers, ...labels];
+    this.routed = { sig, list };
+    return list;
   }
 
+  // Paths by look: quieter from a finished blocker, thicker when one arrow stands for several
+  // dependencies, faint across projects until either end is under the pointer, and in the accent
+  // colour while the pointer is on the arrow
+  edges(t, model, vis, lay, u) {
+    const styles = new Map();
+    const style = (look, width, tone) => {
+      if (!styles.has(look)) styles.set(look, { tone, line: PathBuilder.stroke(width), heads: PathBuilder.fill() });
+      return styles.get(look);
+    };
+    const near = (k) => this.hoverCard === k;
+    const hits = [];
+    const R = 6;
+    for (const r of this.routes(model, vis, lay)) {
+      const e = r.e;
+      const hot = this.hoverEdge?.key === e.key || (r.cross && (near(e.from) || near(e.to)));
+      const quiet = model.nodes.get(e.from).done;
+      const merged = e.list.length > 1;
+      const st = hot ? style(`hot${merged}`, 1.75 + (merged ? 1 : 0), t.accent)
+        : r.cross ? style(`cross${merged}`, merged ? 1.5 : 1, t.border)
+        : style(`${quiet}${merged}`, (quiet ? 1 : 1.5) + (merged ? 1 : 0), quiet ? t.border : t.muted);
+      const pts = r.pts.map(([x, y]) => [u(x), u(y)]);
+      st.line.move_to(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const [px, py] = pts[i - 1];
+        const [cx0, cy0] = pts[i];
+        const [nx, ny] = pts[i + 1];
+        const din = Math.hypot(cx0 - px, cy0 - py);
+        const dout = Math.hypot(nx - cx0, ny - cy0);
+        const rr = Math.min(u(R), din / 2, dout / 2);
+        st.line.line_to(cx0 - ((cx0 - px) / din) * rr, cy0 - ((cy0 - py) / din) * rr)
+          .curve_to(cx0 + ((nx - cx0) / dout) * rr, cy0 + ((ny - cy0) / dout) * rr, cx0, cy0);
+      }
+      const [lx, ly] = pts[pts.length - 1];
+      st.line.line_to(lx, ly);
+      st.heads.add_polygon([[lx, ly - u(4)], [u(r.tip), ly], [lx, ly + u(4)]], true);
+      if (this.anim) continue;
+      // Paths take no pointer, so small clear targets sit along the route
+      for (let i = 1; i < pts.length; i++) {
+        const [ax, ay] = pts[i - 1];
+        const [bx, by] = pts[i];
+        const steps = Math.max(1, Math.round(Math.hypot(bx - ax, by - ay) / 14));
+        for (let k = 0; k < steps; k++) {
+          const x = ax + ((bx - ax) * (k + 0.5)) / steps;
+          const y = ay + ((by - ay) * (k + 0.5)) / steps;
+          const dot = `${i}-${k}`;
+          hits.push(div().id(`wg-hit-${e.key}-${dot}`).absolute().left(x - 6).top(y - 6).size(12)
+            .on_hover((on, cx) => {
+              if (on) this.hoverEdge = { key: e.key, dot, x, y, list: e.list };
+              else if (this.hoverEdge?.key === e.key && this.hoverEdge.dot === dot) this.hoverEdge = null;
+              cx.notify();
+            }));
+        }
+      }
+    }
+    const layers = [...styles.values()].flatMap((st) => [
+      window.paint_path(st.line.build(), st.tone).absolute().top(0).left(0).size_full(),
+      window.paint_path(st.heads.build(), st.tone).absolute().top(0).left(0).size_full(),
+    ]);
+    return [...layers, ...hits];
+  }
+
+  // The dependencies one arrow stands for, one line each, beside the pointer
+  edgeNote(t, model) {
+    const h = this.hoverEdge;
+    if (!h || this.anim) return null;
+    const name = (k) => model.nodes.get(k)?.title ?? k;
+    const lines = [...new Set(h.list.map((e) => `${name(e.from)} blocks ${name(e.to)}`))];
+    return v_flex().absolute().left(h.x + 12).top(h.y + 10).max_w(320).px(9).py(6).gap(2).rounded(7)
+      .border_1().border_color(t.border).bg(t.popover).shadow_lg()
+      .children(lines.slice(0, 12).map((l) => div().text_size(12).text_color(t.foreground).whitespace_nowrap().child(l)))
+      .when(lines.length > 12, (el) => el.child(div().text_size(11.5).text_color(t.dim).child(`and ${lines.length - 12} more`)));
+  }
+
+  // One order everywhere: lane bands, frame outlines, every arrow on one layer, then headers and
+  // cards on top
   canvas(t, model, vis, lay, u, rects) {
-    const lanes = lay.lanes.map((l) => {
+    const bands = lay.lanes.map((l) => {
+      const r = this.place(`l:${l.key}`, rects.get(`l:${l.key}`));
+      return moves(div().id(`wg-band-${l.key}`).absolute().left(0).top(r.y).w(r.w).h(r.h)).border_t(1).border_color(t.border);
+    });
+    const laneHeads = lay.lanes.filter((l) => l.open).map((l) => {
       const n = model.nodes.get(l.key);
       const r = this.place(`l:${l.key}`, rects.get(`l:${l.key}`));
-      return moves(div().id(`wg-band-${n.key}`).absolute().left(0).top(r.y).w(r.w).h(r.h)).border_t(1).border_color(t.border)
-        .when(l.open, (el) => el.child(div().absolute().left(u(PAD - 4)).top(u(5)).h(u(LANE_HEAD - 10)).child(this.hover(`wg-hl-${n.key}`, n,
-          h_flex().id(`wg-lane-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4))
-            .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n))
-            .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
-            .child(div().flex_none().text_size(u(12.5)).font_semibold().text_color(t.foreground).child(n.title))
-            .child(this.counts(t, n.counts, u(11), u(8)))))));
+      return moves(div().id(`wg-lh-${l.key}`).absolute().left(u(PAD - 4)).top(r.y + u(5)).h(u(LANE_HEAD - 10))).child(this.hover(`wg-hl-${n.key}`, n,
+        h_flex().id(`wg-lane-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
+          .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n))
+          .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
+          .child(div().flex_none().text_size(u(12.5)).font_semibold().text_color(t.foreground).child(n.title))
+          .child(this.counts(t, n.counts, u(11), u(8)))));
     });
-    const frames = [...lay.boxes.keys()].flatMap((key) => this.frame(t, model.nodes.get(key), this.place(`f:${key}`, rects.get(`f:${key}`)), u));
+    const frames = [...lay.boxes.keys()].map((key) => [model.nodes.get(key), this.place(`f:${key}`, rects.get(`f:${key}`))]);
     const cards = vis.cards.map((k) => this.card(t, model.nodes.get(k), this.place(`c:${k}`, rects.get(`c:${k}`)), u));
     const a = this.anim?.built ? this.anim : null;
-    const ghosts = (a?.ghosts ?? []).map((g) => {
-      const r = a.phase > 0 ? { ...g.to, o: 0 } : { ...g.from, o: 1 };
-      const n = model.nodes.get(g.key);
-      return g.kind === "frame" ? this.frame(t, n, r, u) : [this.card(t, n, r, u)];
-    }).flat();
+    const ghosts = (a?.ghosts ?? []).map((g) => [g, model.nodes.get(g.key), a.phase > 0 ? { ...g.to, o: 0 } : { ...g.from, o: 1 }]);
+    const note = this.edgeNote(t, model);
     return div().relative().flex_none().w(u(lay.width)).h(u(lay.height))
-      .children(lanes)
+      .children(bands)
+      .children(frames.map(([n, r]) => this.frameBox(t, n, r, u)))
+      .children(ghosts.filter(([g]) => g.kind === "frame").map(([, n, r]) => this.frameBox(t, n, r, u)))
       .child(div().id("wg-arrows").absolute().top(0).left(0).size_full().opacity(this.anim ? 0 : 1).transition("opacity", { duration: 180, easing: "ease-in-out" })
         .children(this.edges(t, model, vis, lay, u)))
-      .children(frames)
-      .children(ghosts)
-      .children(cards);
+      .children(laneHeads)
+      .children(frames.map(([n, r]) => this.frameHead(t, n, r, u)))
+      .children(ghosts.map(([g, n, r]) => (g.kind === "frame" ? this.frameHead(t, n, r, u) : this.card(t, n, r, u))))
+      .children(cards)
+      .when(Boolean(note), (el) => el.child(note));
   }
 
   button(t, id, label, active, onClick) {

@@ -355,7 +355,8 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
 
 // What a given expansion shows: cards (collapsed nodes and leaves), frames (expanded nodes, a
 // project's being its lane), and one edge between two shown nodes for every base edge between
-// what they hold, with a count. An edge another path already implies is not drawn.
+// what they hold, with the base edges it stands for. An edge another path already implies is
+// not drawn.
 export function visible(model, isOpen) {
   const { nodes } = model;
   const opened = (n) => n.children.length > 0 && isOpen(n);
@@ -380,7 +381,7 @@ export function visible(model, isOpen) {
     const to = repOf(e.to);
     if (within(from, to)) continue;
     const k = `${from}>${to}`;
-    agg.set(k, { from, to, count: (agg.get(k)?.count ?? 0) + 1 });
+    agg.set(k, { key: k, from, to, list: [...(agg.get(k)?.list ?? []), e] });
   }
   const next = new Map();
   for (const e of agg.values()) next.set(e.from, [...(next.get(e.from) ?? []), e.to]);
@@ -396,7 +397,19 @@ export function visible(model, isOpen) {
     }
     return false;
   };
-  const edges = [...agg.values()].filter((e) => !reaches(e.from, e.to));
+  // An edge into a node a frame contains is already said by an edge into the frame from the same
+  // place (a blocker of a step blocks all of it), and likewise out of one; the general edge
+  // stays and takes the other's base edges
+  const self = (k) => [k, ...nodes.get(k).ancestors];
+  const general = [...agg.values()].sort((x, y) => nodes.get(x.from).ancestors.length + nodes.get(x.to).ancestors.length
+    - nodes.get(y.from).ancestors.length - nodes.get(y.to).ancestors.length);
+  const kept = [];
+  for (const e of general) {
+    const over = kept.find((k) => k !== e && self(e.from).includes(k.from) && self(e.to).includes(k.to));
+    if (over) over.list = [...over.list, ...e.list];
+    else kept.push({ ...e });
+  }
+  const edges = kept.filter((e) => !reaches(e.from, e.to));
 
   // Columns: the longest chain of shown blockers before a card; an edge into a frame comes
   // before everything in it, and one out of a frame after everything in it
