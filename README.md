@@ -76,6 +76,16 @@ symlinked folder. Run it again after a pull.
   gets a read-only tab named by its `title`: the count by status, every gap up top,
   then each section with its items' status, owner, note or what they wait on, and
   per-environment values; a row opens the item's detail and links.
+- **[work-graph](herdr-mods/work-graph/)**: a read-only DAG of tracked work for a
+  pane or tab of its own: a card per node with id, title, owner session and status,
+  and an arrow from each blocker to what it blocks, in columns by dependency depth
+  and lanes. A node is done, needs you (an open ask names it), in flight (its owner
+  session is live), blocked, or ready to start now, and the header lists what can
+  start now. A JSON graph file lists the nodes; Linear issues (through the `linear`
+  CLI) bring their state, `blocks` relations, sub-issues and PR links, and GitHub
+  brings PR state and stacks by base branch. Open it with
+  `herdr-app do tab.new --mod work-graph --props '{"file": "<graph.json>"}'`, or list
+  graphs in `~/.config/herdr-app/work-graph.json` as `{"graphs": [path], "folder": <projects folder>}`.
 - **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the
   session tree as its sidebar and the PRs pane beside the terminals, toggled with
   Cmd+Shift+R once `keys.json` binds it.
