@@ -312,7 +312,7 @@ deferred gets named in the PR or the commit summary, never silently left.
 
 ## Repo audit
 
-1. Read the repo's own docs first (CLAUDE.md, README, architecture notes). Judge
+1. Read the repo's own docs first (AGENTS.md or CLAUDE.md, README, architecture notes). Judge
    against the thirteen and against the design the repo says it follows. Drift from
    its own stated design is a finding.
 2. Skip generated and vendored code, build output, lockfiles and fixtures.
