@@ -185,13 +185,37 @@ export function openAsks(files) {
 }
 
 // Live sessions by name (a terminal's own name, else its tab's), and the projects with any
-export function liveSessions(terminals, spaces) {
+// Agent processes that each publish a record, <pid>.json with a status word
+export async function readRecords(folder) {
+  const out = new Map();
+  let names = [];
+  try {
+    names = await readdir(folder);
+  } catch {
+    return out;
+  }
+  for (const name of names.filter((n) => /^\d+\.json$/.test(n))) {
+    try {
+      const r = JSON.parse((await readTextFile(`${folder}/${name}`)) ?? "null");
+      if (r?.pid && r.status) out.set(Number(r.pid), r.status);
+    } catch {
+      // A record mid-write is read again on its next change
+    }
+  }
+  return out;
+}
+
+// An agent between turns whose record says "shell" has a background job running or a wake set,
+// so it is waiting on itself rather than idle
+export function liveSessions(terminals, spaces, records = new Map()) {
   const tabs = new Map(spaces.flatMap((sp) => sp.tabs.filter((tab) => tab.named).map((tab) => [tab.id, tab.name])));
   const byName = new Map();
   const projects = new Map();
   for (const t of terminals) {
     if (t.state !== "live") continue;
-    const s = { address: t.address, status: t.status === "error" ? "blocked" : t.status };
+    const between = !["working", "blocked", "error"].includes(t.status);
+    const pending = between && records.get(t.foreground?.pid ?? t.pid) === "shell";
+    const s = { address: t.address, status: t.status === "error" ? "blocked" : pending ? "waiting" : t.status };
     const name = t.name || tabs.get(t.labels?.["herdr.tab"]);
     if (name) byName.set(name, s);
     const p = t.labels?.["tree.project"];
@@ -205,7 +229,7 @@ export const rootProject = (terminals) => terminals.filter((t) => t.state === "l
 
 // The order statuses are counted in, most pressing first: "ready" sits high because work that
 // can start now is the opening to take
-export const STATES = ["needs", "ready", "flight", "idle", "blocked", "done"];
+export const STATES = ["needs", "ready", "flight", "waiting", "idle", "blocked", "done"];
 
 const shortName = (s, words) => {
   const w = String(s ?? "").replace(/\s*\([^)]*\)\s*/g, " ").trim().split(/\s+/).filter(Boolean);
@@ -332,14 +356,16 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
   for (const n of nodes.values()) {
     n.done = doneOf(n.key);
     n.blockers = [...new Set([n.key, ...n.ancestors].flatMap((k) => preds.get(k)))].filter((k) => !doneOf(k)).map((k) => nodes.get(k));
-    n.session = n.kind === "project" ? sessions.projects.get(n.project)?.find((s) => s.status === "working") ?? sessions.projects.get(n.project)?.[0] ?? null
+    const own = sessions.projects.get(n.project) ?? [];
+    n.session = n.kind === "project" ? own.find((s) => s.status === "working") ?? own.find((s) => s.status === "waiting") ?? own[0] ?? null
       : n.owner ? sessions.byName.get(n.owner) ?? null : null;
   }
   for (const n of nodes.values()) {
     if (n.children.length) continue;
     // A live owner that isn't working holds the node without moving it
     const working = n.session?.status === "working";
-    n.state = n.done ? "done" : n.waiting.length ? "needs" : working ? "flight" : n.blockers.length ? "blocked" : n.session ? "idle" : "ready";
+    n.state = n.done ? "done" : n.waiting.length ? "needs" : working ? "flight" : n.session?.status === "waiting" ? "waiting"
+      : n.blockers.length ? "blocked" : n.session ? "idle" : "ready";
   }
   // A group rolls up its leaves; its own open asks count as one more that needs you
   for (const n of nodes.values()) {
@@ -433,4 +459,48 @@ export function visible(model, isOpen) {
   };
   cards.forEach(colOf);
   return { cards, frames, edges, col, cardPreds };
+}
+
+// Everything one node waits on and everything that waits on it, followed through containment: a
+// blocker of a step blocks all of it, and waiting on a step is waiting on all of it. Gives the
+// nodes on that path with every node that holds one, and the base edges it runs along.
+export function pathOf(model, key) {
+  const { nodes } = model;
+  if (!nodes.has(key)) return null;
+  const into = new Map();
+  const out = new Map();
+  for (const e of model.base) {
+    into.set(e.to, [...(into.get(e.to) ?? []), e]);
+    out.set(e.from, [...(out.get(e.from) ?? []), e]);
+  }
+  const inside = (k) => [k, ...nodes.get(k).children.flatMap(inside)];
+  const start = inside(key);
+  const on = new Set(start);
+  const edges = new Set();
+  const walk = (index, end) => {
+    const seen = new Set(start);
+    const asked = new Set();
+    const stack = [...start];
+    while (stack.length) {
+      const k = stack.pop();
+      for (const a of [k, ...nodes.get(k).ancestors]) {
+        if (asked.has(a)) continue;
+        asked.add(a);
+        for (const e of index.get(a) ?? []) {
+          edges.add(`${e.from}>${e.to}`);
+          for (const m of inside(e[end])) {
+            if (seen.has(m)) continue;
+            seen.add(m);
+            on.add(m);
+            stack.push(m);
+          }
+        }
+      }
+    }
+  };
+  walk(into, "from");
+  walk(out, "to");
+  const lit = new Set();
+  for (const k of on) for (const a of [k, ...nodes.get(k).ancestors]) lit.add(a);
+  return { lit, edges };
 }

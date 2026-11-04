@@ -1,21 +1,25 @@
 // All tracked work as a DAG that zooms: a lane per open project, and inside it the project's
 // nodes nested by parent (see graph.js). A collapsed node is one card that rolls up the status of
 // everything in it; an expanded one is a frame around its children. Arrows run from each blocker
-// to what it blocks, combined between collapsed cards with a count, in columns by dependency depth
-// among what shows. A leaf is done, needs you (an open ask names it), in flight (its owner session
-// is working), blocked (a blocker isn't done), owned but idle (its owner is live and not working),
-// or ready: nothing blocks it and nobody owns it.
+// to what it blocks, combined between collapsed cards into one thicker arrow, in columns by
+// dependency depth among what shows. A leaf is done, needs you (an open ask names it), in flight
+// (its owner session is working), waiting (its owner is between turns with a background job or a
+// wake set), blocked (a blocker isn't done), owned but idle (its owner is live with nothing
+// pending), or ready: nothing blocks it and nobody owns it.
 //
-// The level buttons expand everything above that depth (0: projects only); a card's chevron opens
-// or closes that one node. Resting the pointer on a card shows its details and a labelled link for
-// each place it can be opened; a file opens in this mod's own read-only viewer, split beside it.
+// The level buttons expand everything above that depth (0: projects only); clicking a card that
+// has children opens it, and clicking a frame's header closes it. Resting the pointer on a card
+// fades everything not on its path: what it waits on and what waits on it, across projects too.
+// Its i icon shows its details and a labelled link for each place it can be opened; a file opens
+// in this mod's own read-only viewer, split beside it. Cmd with scroll zooms around the pointer.
 // Commands work-graph.level0 to level3 and work-graph.refresh do the same from a key or a script. props or ~/.config/herdr-app/work-graph.json
-// give { folder }, the projects folder of state files.
+// give { folder }, the projects folder of state files, and { records }, the folder where each agent
+// process keeps <pid>.json with its status (~/.claude/sessions unless set).
 
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, HoverCard, TextView, Editor, EditorState } from "gpui-base";
 import { exec, run, theme, props, terminals, spaces, watchFolder, readTextFile, home, nextCommand, settings } from "herdr";
-import { expand, readFiles, projectList, readGraph, linearIds, fetchLinear, prRefs, fetchPrs, openAsks, liveSessions, rootProject, build, visible, STATES } from "./graph.js";
+import { expand, readFiles, projectList, readGraph, linearIds, fetchLinear, prRefs, fetchPrs, openAsks, liveSessions, readRecords, rootProject, build, visible, pathOf, STATES } from "./graph.js";
 
 const REFRESH_MS = 60000;
 // Sizes at 100%; the graph scales them all
@@ -30,6 +34,10 @@ const PAD = 16;
 // Below this the cards' text stops being readable, so a wider graph scrolls instead
 const MIN_FIT = 0.6;
 const ZOOMS = [0.6, 0.75, 0.9, 1, 1.15];
+// Cmd and scroll zoom between these, by this much per pixel scrolled
+const ZOOM_MIN = 0.4;
+const ZOOM_MAX = 2;
+const ZOOM_RATE = 0.004;
 const LEVELS = [0, 1, 2, 3];
 const SPINNER = "mods/work-graph/spinner.svg";
 const ANIM_MS = 300;
@@ -37,12 +45,35 @@ const EASE = { duration: ANIM_MS, easing: "ease-in-out" };
 // Each element moves natively from where it last drew to where it draws now
 const moves = (el) => el.transition("left", EASE).transition("top", EASE).transition("width", EASE).transition("height", EASE).transition("opacity", EASE);
 const LOCK = "mods/work-graph/lock.svg";
+const CLOCK = "mods/work-graph/clock.svg";
 const CHEVRON = (open) => `mods/work-graph/chevron-${open ? "down" : "right"}.svg`;
+const INFO = "mods/work-graph/info.svg";
+// What isn't on the hovered node's path fades to this, quickly
+const DIM = 0.3;
+const FADE = { duration: 150, easing: "ease-in-out" };
 
-const WORD = { needs: ["needs you", "need you"], ready: ["ready"], flight: ["in flight"], idle: ["owned, idle"], blocked: ["blocked"], done: ["done"] };
+// A path with a rounded corner at each bend and an arrowhead at its end
+function trace(st, pts, tip, radius, head) {
+  st.line.move_to(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1];
+    const [cx0, cy0] = pts[i];
+    const [nx, ny] = pts[i + 1];
+    const din = Math.hypot(cx0 - px, cy0 - py);
+    const dout = Math.hypot(nx - cx0, ny - cy0);
+    const rr = Math.min(radius, din / 2, dout / 2);
+    st.line.line_to(cx0 - ((cx0 - px) / din) * rr, cy0 - ((cy0 - py) / din) * rr)
+      .curve_to(cx0 + ((nx - cx0) / dout) * rr, cy0 + ((ny - cy0) / dout) * rr, cx0, cy0);
+  }
+  const [lx, ly] = pts[pts.length - 1];
+  st.line.line_to(lx, ly);
+  st.heads.add_polygon([[lx, ly - head], [tip, ly], [lx, ly + head]], true);
+}
+
+const WORD = { needs: ["needs you", "need you"], ready: ["ready"], flight: ["in flight"], waiting: ["waiting"], idle: ["owned, idle"], blocked: ["blocked"], done: ["done"] };
 const word = (s, k) => (k === 1 ? WORD[s][0] : WORD[s][1] ?? WORD[s][0]);
-const SESSION = { working: "working", blocked: "waiting on a dialog" };
-const color = (t, state) => ({ needs: t.working, ready: t.ansi2, flight: t.accent, idle: t.dim, blocked: t.blocked, done: t.done })[state];
+const SESSION = { working: "working", blocked: "waiting on a dialog", waiting: "waiting on a background job or a wake" };
+const color = (t, state) => ({ needs: t.working, ready: t.ansi2, flight: t.accent, waiting: t.accent, idle: t.dim, blocked: t.blocked, done: t.done })[state];
 const countsText = (counts) => STATES.filter((s) => counts[s]).map((s) => `${counts[s]} ${word(s, counts[s])}`).join(", ");
 
 async function readConfig() {
@@ -205,6 +236,7 @@ export default class WorkGraph extends View {
     this.error = null;
     this.busy = false;
     this.loaded = false;
+    this.records = new Map();
     // State files, then each project's graph file; a change under the projects folder or a graph
     // kept elsewhere reloads both
     cx.spawn(async (cx) => {
@@ -221,6 +253,23 @@ export default class WorkGraph extends View {
         const before = this.asked();
         await this.load(cx);
         if (this.asked() !== before) await this.refresh(cx);
+      }
+    });
+    // Agent records change on every turn, so only a change of some agent's status redraws
+    cx.spawn(async (cx) => {
+      const folder = expand(props()?.records ?? (await readConfig()).records ?? "~/.claude/sessions");
+      for (;;) {
+        const records = await readRecords(folder);
+        const sig = (m) => [...m].sort((a, b) => a[0] - b[0]).join();
+        if (sig(records) !== sig(this.records)) {
+          this.records = records;
+          cx.notify();
+        }
+        try {
+          await watchFolder(folder);
+        } catch {
+          await new Promise((r) => cx.timer.after(30000, () => r()));
+        }
       }
     });
     cx.spawn(async (cx) => {
@@ -317,6 +366,9 @@ export default class WorkGraph extends View {
   }
 
   toggle(cx, n) {
+    // The card under the pointer becomes a frame, which never reports the pointer leaving it
+    this.hoverCard = null;
+    this.hoverPop = null;
     this.animate(cx, n.key);
     this.open.set(n.key, !this.isOpen(n));
     localStorage.setItem("open", JSON.stringify(Object.fromEntries(this.open)));
@@ -426,6 +478,7 @@ export default class WorkGraph extends View {
     if (state === "flight") return box.child(svg(SPINNER).size(size * 0.8).text_color(c).spin(900));
     if (state === "needs") return box.child(div().text_size(size * 1.05).font_bold().text_color(c).child("!"));
     if (state === "blocked") return box.child(svg(LOCK).size(size * 0.85).text_color(c));
+    if (state === "waiting") return box.child(svg(CLOCK).size(size * 0.85).text_color(c));
     if (state === "done") return box.child(div().text_size(size * 0.9).text_color(c).child("✓"));
     return box.child(div().size(size * 0.55).rounded_full().border_1().border_color(c));
   }
@@ -442,6 +495,7 @@ export default class WorkGraph extends View {
     return {
       needs: `Needs you: ${n.waiting.map((a) => a.id).join(", ")}`,
       flight: "Working",
+      waiting: `Owned, ${SESSION.waiting}`,
       idle: `Owned, ${SESSION[n.session?.status] ?? "idle"}`,
       blocked: "Blocked",
       ready: "Ready to start",
@@ -458,7 +512,12 @@ export default class WorkGraph extends View {
     const row = (label, value, tone) => h_flex().gap(8).items_start().text_size(12)
       .child(div().flex_none().w(64).text_color(t.dim).child(label))
       .child(div().flex_1().min_w(0).whitespace_normal().text_color(tone ?? t.foreground).child(value));
-    return v_flex().w(340).p(12).gap(8).rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_lg().text_color(t.foreground)
+    return v_flex().id(`wg-pop-${n.key}`).w(340).p(12).gap(8).rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_lg().text_color(t.foreground)
+      .on_hover((on, cx) => {
+        if (on) this.hoverPop = n.key;
+        else if (this.hoverPop === n.key) this.hoverPop = null;
+        cx.notify();
+      })
       .child(h_flex().gap(8).items_center()
         .child(this.icon(t, n.state, 14))
         .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().child(n.title))
@@ -492,13 +551,29 @@ export default class WorkGraph extends View {
     return HoverCard.new(id).open_delay(350).close_delay(250).anchor("top_left").trigger(trigger).content(this.popup(theme(), n));
   }
 
+  // The node's details and links open from this icon alone, so a click anywhere else on the card
+  // is free to open or close it
+  info(t, n, u, id) {
+    return this.hover(id, n, div().id(`${id}-i`).flex_none().size(u(16)).flex().items_center().justify_center().rounded_full()
+      .text_color(t.dim).hover((el) => el.bg(t.hover).text_color(t.foreground))
+      .on_click((_e, cx) => cx.stop_propagation())
+      .child(svg(INFO).size(u(12))));
+  }
+
+  pointAt(key) {
+    return (on, cx) => {
+      if (on) this.hoverCard = key;
+      else if (this.hoverCard === key) this.hoverCard = null;
+      cx.notify();
+    };
+  }
+
+  dims(key) {
+    return this.path != null && !this.path.lit.has(key);
+  }
+
   chevron(t, n, u) {
-    return div().id(`wg-chev-${n.key}`).flex_none().size(u(14)).flex().items_center().justify_center().rounded(u(3))
-      .text_color(t.muted).hover((el) => el.bg(t.hover).text_color(t.foreground))
-      .on_click((_e, cx) => {
-        cx.stop_propagation();
-        this.toggle(cx, n);
-      })
+    return div().flex_none().size(u(14)).flex().items_center().justify_center().text_color(t.muted)
       .child(svg(CHEVRON(this.isOpen(n))).size(u(10)));
   }
 
@@ -509,13 +584,11 @@ export default class WorkGraph extends View {
     const edge = { flight: t.accent, needs: t.working, ready: t.ansi2 }[n.state] ?? t.border;
     const words = String(n.summary ?? "").split(/\s+/).filter(Boolean);
     const face = v_flex().id(`wg-${n.key}`).relative().size_full().px(u(10)).py(u(7)).gap(u(4)).justify_center().rounded(u(8))
-      .bg(group ? t.raised : t.surface).border_1().border_color(edge).when(n.state === "done", (el) => el.opacity(0.55))
+      .bg(group ? t.raised : t.surface).border_1().border_color(edge)
+      .opacity((n.state === "done" ? 0.55 : 1) * (this.dims(n.key) ? DIM : 1)).transition("opacity", FADE)
       .hover((el) => el.bg(t.hover))
-      .on_hover((on, cx) => {
-        if (on) this.hoverCard = n.key;
-        else if (this.hoverCard === n.key) this.hoverCard = null;
-        cx.notify();
-      })
+      .when(group, (el) => el.cursor_pointer().on_click((_e, cx) => this.toggle(cx, n)))
+      .on_hover(this.pointAt(n.key))
       .when(n.state === "blocked", (el) => el.child(div().absolute().left(0).top(u(10)).w(u(3)).h(u(CARD_H - 20)).rounded_full().bg(t.blocked)))
       .child(h_flex().w_full().h(u(16)).gap(u(6)).items_center().whitespace_nowrap()
         .when(group, (el) => el.child(this.chevron(t, n, u)))
@@ -527,23 +600,27 @@ export default class WorkGraph extends View {
           : div().flex_none().text_size(u(11)).text_color(t.dim).opacity(0.6).child("?")))
       .when(words.length > 0, (el) => el.child(h_flex().w_full().h(u(16)).flex_wrap().gap_x(u(4)).overflow_hidden()
         .text_size(u(11.5)).text_color(n.state === "done" ? t.dim : t.muted).children(words.map((w) => div().flex_none().h(u(16)).child(w)))))
-      .when(group, (el) => el.child(this.counts(t, n.counts, u(10), u(8))));
-    return moves(div().id(`wg-pos-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o)).child(this.hover(`wg-hc-${n.key}`, n, face));
+      .when(group, (el) => el.child(this.counts(t, n.counts, u(10), u(8))))
+      .child(div().absolute().right(u(5)).bottom(u(4)).child(this.info(t, n, u, `wg-hc-${n.key}`)));
+    return moves(div().id(`wg-pos-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o)).child(face);
   }
 
   // A frame around an expanded node's children, its header the handle that closes it. Frames
   // draw over the arrows, so the header hides an arrow passing under it.
   frameBox(t, n, r, u) {
-    return moves(div().id(`wg-box-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o)).rounded(u(10)).border_1().border_color(t.border);
+    return moves(div().id(`wg-box-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o))
+      .child(div().id(`wg-line-${n.key}`).size_full().rounded(u(10)).border_1().border_color(t.border).opacity(this.dims(n.key) ? DIM : 1).transition("opacity", FADE));
   }
 
   frameHead(t, n, r, u) {
-    return moves(div().id(`wg-fh-${n.key}`).absolute().left(r.x + u(6)).top(r.y + u(4)).w(Math.max(0, r.w - u(12))).h(u(GROUP_HEAD - 6)).opacity(r.o)).overflow_hidden().child(this.hover(`wg-hf-${n.key}`, n,
-      h_flex().id(`wg-frame-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
-        .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n))
+    return moves(div().id(`wg-fh-${n.key}`).absolute().left(r.x + u(6)).top(r.y + u(4)).w(Math.max(0, r.w - u(12))).h(u(GROUP_HEAD - 6)).opacity(r.o)).overflow_hidden()
+      .child(h_flex().id(`wg-frame-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
+        .opacity(this.dims(n.key) ? DIM : 1).transition("opacity", FADE)
+        .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n)).on_hover(this.pointAt(n.key))
         .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
         .child(div().flex_none().text_size(u(11.5)).font_semibold().text_color(t.foreground).child(n.title))
-        .child(this.counts(t, n.counts, u(10), u(7)))));
+        .child(this.counts(t, n.counts, u(10), u(7)))
+        .child(this.info(t, n, u, `wg-hf-${n.key}`)));
   }
 
   // Arrows run in the gaps: out of a card's right side into the gutter after its column, along a
@@ -566,9 +643,10 @@ export default class WorkGraph extends View {
     const gutter = (k) => lay.left + k * pitch + CARD_W + GAP_X / 2;
     const after = (x) => gutter(Math.max(0, Math.ceil((x + 2 - lay.left - CARD_W - GAP_X / 2) / pitch)));
     const before = (x) => gutter(Math.floor((x - 2 - lay.left - CARD_W - GAP_X / 2) / pitch));
-    const boxes = vis.cards.map((k) => rect(k));
+    // A strip runs clear of every card and every frame's header, since arrows draw over them
+    const boxes = [...vis.cards.map((k) => rect(k)), ...[...lay.boxes.values()].map((b) => ({ x: b.x, y: b.y, w: b.w, h: GROUP_HEAD }))];
     const strips = [...new Set([
-      ...boxes.flatMap((r) => [r.y - GAP_Y / 2, r.y + r.h + GAP_Y / 2]),
+      ...vis.cards.map((k) => rect(k)).flatMap((r) => [r.y - GAP_Y / 2, r.y + r.h + GAP_Y / 2]),
       ...lay.lanes.map((l) => l.y + LANE_HEAD / 2),
     ].map((y) => Math.round(y)))];
     const clear = (y, xa, xb) => !boxes.some((r) => y > r.y - 3 && y < r.y + r.h + 3 && r.x < xb && r.x + r.w > xa);
@@ -639,40 +717,31 @@ export default class WorkGraph extends View {
   }
 
   // Paths by look: quieter from a finished blocker, thicker when one arrow stands for several
-  // dependencies, faint across projects until either end is under the pointer, and in the accent
-  // colour while the pointer is on the arrow
+  // dependencies, faint across projects, and in the accent colour while the pointer is on the
+  // arrow. The hovered card's path is drawn again, plainly, on its own layer, so it can fade in
+  // over the rest as they fade out; the last path stays on it while it fades away.
   edges(t, model, vis, lay, u) {
-    const styles = new Map();
-    const style = (look, width, tone) => {
-      if (!styles.has(look)) styles.set(look, { tone, line: PathBuilder.stroke(width), heads: PathBuilder.fill() });
-      return styles.get(look);
+    const looks = (map) => (look, width, tone) => {
+      if (!map.has(look)) map.set(look, { tone, line: PathBuilder.stroke(width), heads: PathBuilder.fill() });
+      return map.get(look);
     };
-    const near = (k) => this.hoverCard === k;
+    const all = new Map();
+    const lit = new Map();
+    const style = looks(all);
+    const litStyle = looks(lit);
+    const path = this.path ?? this.fading;
     const hits = [];
-    const R = 6;
     for (const r of this.routes(model, vis, lay)) {
       const e = r.e;
-      const hot = this.hoverEdge?.key === e.key || (r.cross && (near(e.from) || near(e.to)));
       const quiet = model.nodes.get(e.from).done;
       const merged = e.list.length > 1;
-      const st = hot ? style(`hot${merged}`, 1.75 + (merged ? 1 : 0), t.accent)
+      const plain = (pick) => pick(`${quiet}${merged}`, (quiet ? 1 : 1.5) + (merged ? 1 : 0), quiet ? t.border : t.muted);
+      const st = this.hoverEdge?.key === e.key ? style(`hot${merged}`, 1.75 + (merged ? 1 : 0), t.accent)
         : r.cross ? style(`cross${merged}`, merged ? 1.5 : 1, t.border)
-        : style(`${quiet}${merged}`, (quiet ? 1 : 1.5) + (merged ? 1 : 0), quiet ? t.border : t.muted);
+        : plain(style);
       const pts = r.pts.map(([x, y]) => [u(x), u(y)]);
-      st.line.move_to(pts[0][0], pts[0][1]);
-      for (let i = 1; i < pts.length - 1; i++) {
-        const [px, py] = pts[i - 1];
-        const [cx0, cy0] = pts[i];
-        const [nx, ny] = pts[i + 1];
-        const din = Math.hypot(cx0 - px, cy0 - py);
-        const dout = Math.hypot(nx - cx0, ny - cy0);
-        const rr = Math.min(u(R), din / 2, dout / 2);
-        st.line.line_to(cx0 - ((cx0 - px) / din) * rr, cy0 - ((cy0 - py) / din) * rr)
-          .curve_to(cx0 + ((nx - cx0) / dout) * rr, cy0 + ((ny - cy0) / dout) * rr, cx0, cy0);
-      }
-      const [lx, ly] = pts[pts.length - 1];
-      st.line.line_to(lx, ly);
-      st.heads.add_polygon([[lx, ly - u(4)], [u(r.tip), ly], [lx, ly + u(4)]], true);
+      trace(st, pts, u(r.tip), u(6), u(4));
+      if (path && e.list.some((b) => path.edges.has(`${b.from}>${b.to}`))) trace(plain(litStyle), pts, u(r.tip), u(6), u(4));
       if (this.anim) continue;
       // Paths take no pointer, so small clear targets sit along the route
       for (let i = 1; i < pts.length; i++) {
@@ -692,11 +761,11 @@ export default class WorkGraph extends View {
         }
       }
     }
-    const layers = [...styles.values()].flatMap((st) => [
+    const paint = (map) => [...map.values()].flatMap((st) => [
       window.paint_path(st.line.build(), st.tone).absolute().top(0).left(0).size_full(),
       window.paint_path(st.heads.build(), st.tone).absolute().top(0).left(0).size_full(),
     ]);
-    return [...layers, ...hits];
+    return { all: paint(all), lit: paint(lit), hits };
   }
 
   // The dependencies one arrow stands for, one line each, beside the pointer
@@ -711,8 +780,9 @@ export default class WorkGraph extends View {
       .when(lines.length > 12, (el) => el.child(div().text_size(11.5).text_color(t.dim).child(`and ${lines.length - 12} more`)));
   }
 
-  // One order everywhere: lane bands, frame outlines, every arrow on one layer, then headers and
-  // cards on top
+  // One order everywhere: lane bands, frame outlines, headers and cards, then every arrow on one
+  // layer above them all, so none is ever partly hidden. The arrows' hover targets sit under the
+  // cards, which keep the pointer where the two meet.
   canvas(t, model, vis, lay, u, rects) {
     const bands = lay.lanes.map((l) => {
       const r = this.place(`l:${l.key}`, rects.get(`l:${l.key}`));
@@ -721,28 +791,34 @@ export default class WorkGraph extends View {
     const laneHeads = lay.lanes.filter((l) => l.open).map((l) => {
       const n = model.nodes.get(l.key);
       const r = this.place(`l:${l.key}`, rects.get(`l:${l.key}`));
-      return moves(div().id(`wg-lh-${l.key}`).absolute().left(u(PAD - 4)).top(r.y + u(5)).h(u(LANE_HEAD - 10))).child(this.hover(`wg-hl-${n.key}`, n,
-        h_flex().id(`wg-lane-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
-          .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n))
+      return moves(div().id(`wg-lh-${l.key}`).absolute().left(u(PAD - 4)).top(r.y + u(5)).h(u(LANE_HEAD - 10)))
+        .child(h_flex().id(`wg-lane-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
+          .opacity(this.dims(n.key) ? DIM : 1).transition("opacity", FADE)
+          .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n)).on_hover(this.pointAt(n.key))
           .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
           .child(div().flex_none().text_size(u(12.5)).font_semibold().text_color(t.foreground).child(n.title))
-          .child(this.counts(t, n.counts, u(11), u(8)))));
+          .child(this.counts(t, n.counts, u(11), u(8)))
+          .child(this.info(t, n, u, `wg-hl-${n.key}`)));
     });
     const frames = [...lay.boxes.keys()].map((key) => [model.nodes.get(key), this.place(`f:${key}`, rects.get(`f:${key}`))]);
     const cards = vis.cards.map((k) => this.card(t, model.nodes.get(k), this.place(`c:${k}`, rects.get(`c:${k}`)), u));
     const a = this.anim?.built ? this.anim : null;
     const ghosts = (a?.ghosts ?? []).map((g) => [g, model.nodes.get(g.key), a.phase > 0 ? { ...g.to, o: 0 } : { ...g.from, o: 1 }]);
     const note = this.edgeNote(t, model);
+    const arrows = this.edges(t, model, vis, lay, u);
+    const layer = (id, o, children) => div().id(id).absolute().top(0).left(0).size_full().opacity(o).transition("opacity", FADE).children(children);
     return div().relative().flex_none().w(u(lay.width)).h(u(lay.height))
       .children(bands)
       .children(frames.map(([n, r]) => this.frameBox(t, n, r, u)))
       .children(ghosts.filter(([g]) => g.kind === "frame").map(([, n, r]) => this.frameBox(t, n, r, u)))
-      .child(div().id("wg-arrows").absolute().top(0).left(0).size_full().opacity(this.anim ? 0 : 1).transition("opacity", { duration: 180, easing: "ease-in-out" })
-        .children(this.edges(t, model, vis, lay, u)))
+      .child(div().absolute().top(0).left(0).size_full().children(arrows.hits))
       .children(laneHeads)
       .children(frames.map(([n, r]) => this.frameHead(t, n, r, u)))
       .children(ghosts.map(([g, n, r]) => (g.kind === "frame" ? this.frameHead(t, n, r, u) : this.card(t, n, r, u))))
       .children(cards)
+      .child(div().id("wg-arrows").absolute().top(0).left(0).size_full().opacity(this.anim ? 0 : 1).transition("opacity", { duration: 180, easing: "ease-in-out" })
+        .child(layer("wg-arrows-all", this.path ? DIM : 1, arrows.all))
+        .child(layer("wg-arrows-path", this.path ? 1 : 0, arrows.lit)))
       .when(Boolean(note), (el) => el.child(note));
   }
 
@@ -757,8 +833,8 @@ export default class WorkGraph extends View {
     const counts = Object.fromEntries(STATES.map((s) => [s, leaves.filter((n) => n.state === s).length]));
     const ready = leaves.filter((n) => n.state === "ready");
     const step = (dir) => (_e, cx) => {
-      const i = ZOOMS.findIndex((x) => x >= z - 0.001);
-      this.setZoom(cx, ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, (i < 0 ? ZOOMS.length - 1 : i) + dir))]);
+      const next = dir > 0 ? ZOOMS.find((x) => x > z + 0.001) : [...ZOOMS].reverse().find((x) => x < z - 0.001);
+      this.setZoom(cx, next ?? z);
     };
     const handTouched = this.open.size > 0;
     return v_flex().px(PAD).pt(10).pb(8).gap(6).border_b(1).border_color(t.border)
@@ -789,10 +865,13 @@ export default class WorkGraph extends View {
     const root = v_flex().id("work-graph").size_full().min_h(0).overflow_hidden().bg(t.canvas).text_color(t.foreground);
     if (!this.loaded) return root.child(div().p(PAD).text_color(t.dim).child("Reading the projects."));
     if (!this.projects.length) return root.child(div().p(PAD).text_color(t.dim).child(`No open projects in ${this.folder}.`));
-    const sessions = liveSessions(terminals(), spaces());
+    const sessions = liveSessions(terminals(), spaces(), this.records);
     const model = build({ projects: this.projects, graphs: this.graphs, issues: this.issues, prs: this.prs, asks: openAsks(this.files), sessions });
     this.model = model;
     this.sessions = sessions;
+    const pointed = this.anim ? null : this.hoverCard ?? this.hoverPop;
+    this.path = pointed ? pathOf(model, pointed) : null;
+    if (this.path) this.fading = this.path;
     const vis = visible(model, (n) => this.isOpen(n));
     const lay = layout(model, vis);
     // Fit is worked out again only for a new level or a new pane size, so opening one node
@@ -844,6 +923,17 @@ export default class WorkGraph extends View {
           cx.notify();
         })
         .on_scroll_wheel((e, cx) => {
+          if (e.modifiers?.platform) {
+            // Scrolling up zooms in, as in a browser
+            const z2 = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z * Math.exp(e.delta.y * ZOOM_RATE)));
+            if (z2 === z) return;
+            // The point under the pointer stays under it
+            const at = e.local_position ?? { x: e.position.x - (e.bounds?.x ?? 0), y: e.position.y - (e.bounds?.y ?? 0) };
+            this.scrollX = Math.max(0, ((this.scrollX + at.x) / z) * z2 - at.x);
+            this.scrollY = Math.max(0, ((this.scrollY + at.y) / z) * z2 - at.y);
+            this.setZoom(cx, Math.round(z2 * 1000) / 1000);
+            return;
+          }
           this.scrollX = Math.max(0, Math.min(maxX, this.scrollX - e.delta.x));
           this.scrollY = Math.max(0, Math.min(maxY, this.scrollY - e.delta.y));
           cx.notify();
