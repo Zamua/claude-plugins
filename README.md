@@ -85,7 +85,8 @@ symlinked folder. Run it again after a pull.
   in columns by dependency depth. A leaf is done, needs you (an open ask names it), in
   flight (its owner session is working), blocked, owned but idle, or ready to start now, and the header
   lists what can start now. Level buttons, or `work-graph.level0` to `level3`, expand
-  everything to a depth, and a card's chevron opens or closes one node. Linear issues
+  everything to a depth, and a card's chevron opens or closes one node; the change animates,
+  a card growing into its frame as its children come out of it, the opened node held in place. Linear issues
   (through the `linear` CLI) bring their state, sub-issues, `blocks` relations and PR
   links, and GitHub brings PR state and stacks by base branch; a project with no graph
   file is one card from its state file. The graph file is

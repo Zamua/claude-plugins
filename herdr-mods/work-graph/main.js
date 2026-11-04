@@ -32,6 +32,10 @@ const MIN_FIT = 0.6;
 const ZOOMS = [0.6, 0.75, 0.9, 1, 1.15];
 const LEVELS = [0, 1, 2, 3];
 const SPINNER = "mods/work-graph/spinner.svg";
+const ANIM_MS = 300;
+const EASE = { duration: ANIM_MS, easing: "ease-in-out" };
+// Each element moves natively from where it last drew to where it draws now
+const moves = (el) => el.transition("left", EASE).transition("top", EASE).transition("width", EASE).transition("height", EASE).transition("opacity", EASE);
 const LOCK = "mods/work-graph/lock.svg";
 const CHEVRON = (open) => `mods/work-graph/chevron-${open ? "down" : "right"}.svg`;
 
@@ -144,12 +148,8 @@ function layout(model, vis) {
       for (const k of direct) cols.set(vis.col.get(k), [...(cols.get(vis.col.get(k)) ?? []), k]);
       let rows = 0;
       for (const [c, list] of [...cols].sort(([a], [b]) => a - b)) {
-        const mean = (k) => {
-          const ys = [...vis.cardPreds.get(k)].map((p) => pos.get(p)?.y).filter((v) => v !== undefined);
-          return ys.length ? ys.reduce((s, v) => s + v, 0) / ys.length : Infinity;
-        };
-        list.map((k) => [k, mean(k)]).sort((a, b) => a[1] - b[1] || order.get(a[0]) - order.get(b[0]))
-          .forEach(([k], i) => pos.set(k, { x: colX(c), y: y + i * (CARD_H + GAP_Y) }));
+        // File order, not order by blocker, so opening one node moves the others as little as possible
+        list.sort((a, b) => order.get(a) - order.get(b)).forEach((k, i) => pos.set(k, { x: colX(c), y: y + i * (CARD_H + GAP_Y) }));
         rows = Math.max(rows, list.length);
       }
       y += rows * (CARD_H + GAP_Y);
@@ -196,8 +196,12 @@ export default class WorkGraph extends View {
     this.level = Number(localStorage.getItem("level") ?? 1);
     this.open = new Map(Object.entries(JSON.parse(localStorage.getItem("open") ?? "{}")));
     this.viewW = 0;
+    this.viewH = 0;
     this.scrollX = 0;
-    this.panning = false;
+    this.scrollY = 0;
+    this.drag = null;
+    this.anim = null;
+    this.last = null;
     this.error = null;
     this.busy = false;
     this.loaded = false;
@@ -313,6 +317,7 @@ export default class WorkGraph extends View {
   }
 
   toggle(cx, n) {
+    this.animate(cx, n.key);
     this.open.set(n.key, !this.isOpen(n));
     localStorage.setItem("open", JSON.stringify(Object.fromEntries(this.open)));
     cx.notify();
@@ -320,6 +325,7 @@ export default class WorkGraph extends View {
 
   // A level resets every node opened or closed by hand
   setLevel(cx, level) {
+    this.animate(cx, null);
     this.level = level;
     this.open = new Map();
     localStorage.setItem("level", String(level));
@@ -327,21 +333,83 @@ export default class WorkGraph extends View {
     cx.notify();
   }
 
-  panTo(x, width, maxX) {
-    const thumb = (this.viewW * this.viewW) / width;
-    return Math.max(0, Math.min(maxX, ((x - thumb / 2) / this.viewW) * width));
+  // A change of what shows plays in three frames: the next render keeps everything where it
+  // was, with new nodes waiting faded inside the card they come out of and leaving ones still in
+  // place; 40 ms later every element is given its new place and moves there natively; once that
+  // is over, the leaving ones are dropped and the arrows come back
+  animate(cx, anchor) {
+    const token = (this.anim?.token ?? 0) + 1;
+    this.anim = { token, anchor, phase: 0, built: false, enter: new Map(), ghosts: [], dx: 0, dy: 0 };
+    cx.timer.after(40, (cx) => {
+      if (this.anim?.token !== token) return;
+      this.anim.phase = 1;
+      this.scrollX += this.anim.dx;
+      this.scrollY += this.anim.dy;
+      cx.notify();
+    });
+    cx.timer.after(40 + ANIM_MS + 40, (cx) => {
+      if (this.anim?.token !== token) return;
+      this.anim = null;
+      cx.notify();
+    });
   }
 
-  panBar(t, width, maxX) {
-    const thumb = Math.max(24, (this.viewW * this.viewW) / width);
-    const at = (this.scrollX / maxX) * (this.viewW - thumb);
-    return div().id("wg-pan-bar").relative().flex_none().w_full().h(12).border_t(1).border_color(t.border).cursor_pointer()
-      .on_mouse_down("left", (e, cx) => {
-        this.panning = true;
-        this.scrollX = this.panTo(e.local_position?.x ?? 0, width, maxX);
-        cx.notify();
-      })
-      .child(div().absolute().top(3).left(at).w(thumb).h(6).rounded_full().bg(this.panning ? t.muted : t.border).hover((el) => el.bg(t.muted)));
+  // Where each new element comes from and where each leaving one goes: into or out of the card
+  // nearest above it on the other side of the change, or between a node's card and its frame
+  buildAnim(model, rects) {
+    const a = this.anim;
+    a.built = true;
+    const old = this.last ?? new Map();
+    const up = (key) => [key, ...(model.nodes.get(key)?.ancestors ?? [])];
+    for (const [id, r] of rects) {
+      if (old.has(id) || r.kind === "lane") continue;
+      const own = old.get(`f:${r.key}`);
+      if (r.kind === "card" && own) {
+        a.enter.set(id, { ...own, fade: false });
+        continue;
+      }
+      const card = up(r.key).map((k) => old.get(`c:${k}`)).find(Boolean);
+      if (card) a.enter.set(id, { ...card, fade: !(r.kind === "frame" && card === old.get(`c:${r.key}`)) });
+    }
+    for (const [id, r] of old) {
+      if (rects.has(id) || r.kind === "lane" || !model.nodes.has(r.key)) continue;
+      const own = r.kind === "frame" ? rects.get(`c:${r.key}`) : null;
+      const to = own ?? up(r.key).map((k) => rects.get(`c:${k}`)).find(Boolean);
+      if (to) a.ghosts.push({ id, key: r.key, kind: r.kind, from: r, to });
+    }
+    if (a.anchor) {
+      const before = old.get(`c:${a.anchor}`) ?? old.get(`f:${a.anchor}`) ?? old.get(`l:${a.anchor}`);
+      const after = rects.get(`f:${a.anchor}`) ?? rects.get(`c:${a.anchor}`) ?? rects.get(`l:${a.anchor}`);
+      if (before && after) {
+        a.dx = after.x - before.x;
+        a.dy = after.y - before.y;
+      }
+    }
+  }
+
+  place(id, target) {
+    const a = this.anim;
+    if (!a?.built || a.phase > 0) return { ...target, o: 1 };
+    const old = this.last?.get(id);
+    if (old) return { ...old, o: 1 };
+    const from = a.enter.get(id);
+    return from ? { ...from, o: from.fade ? 0 : 1 } : { ...target, o: 1 };
+  }
+
+  bar(t, axis, size, max) {
+    const view = axis === "y" ? this.viewH : this.viewW;
+    const thumb = Math.max(24, (view * view) / size);
+    const at = ((axis === "y" ? this.scrollY : this.scrollX) / max) * (view - thumb);
+    const grab = (e, cx) => {
+      this.drag = { axis, from: axis === "y" ? e.position.y : e.position.x, start: axis === "y" ? this.scrollY : this.scrollX, per: size / view };
+      cx.notify();
+    };
+    const tone = this.drag?.axis === axis ? t.muted : t.border;
+    return axis === "y"
+      ? div().id("wg-vbar").absolute().top(0).right(0).w(12).h_full().on_mouse_down("left", grab)
+        .child(div().absolute().right(3).top(at).w(6).h(thumb).rounded_full().bg(tone).hover((el) => el.bg(t.muted)))
+      : div().id("wg-hbar").relative().flex_none().w_full().h(12).border_t(1).border_color(t.border).on_mouse_down("left", grab)
+        .child(div().absolute().top(3).left(at).w(thumb).h(6).rounded_full().bg(tone).hover((el) => el.bg(t.muted)));
   }
 
   setZoom(cx, z) {
@@ -436,7 +504,7 @@ export default class WorkGraph extends View {
 
   // A title of a word or two and its kind, then a short summary on one line: words that don't fit
   // wrap onto a hidden line, so none is cut. The status is the icon and the card's colour.
-  card(t, n, x, y, u) {
+  card(t, n, r, u) {
     const group = n.children.length > 0;
     const edge = { flight: t.accent, needs: t.working, ready: t.ansi2 }[n.state] ?? t.border;
     const words = String(n.summary ?? "").split(/\s+/).filter(Boolean);
@@ -455,15 +523,15 @@ export default class WorkGraph extends View {
       .when(words.length > 0, (el) => el.child(h_flex().w_full().h(u(16)).flex_wrap().gap_x(u(4)).overflow_hidden()
         .text_size(u(11.5)).text_color(n.state === "done" ? t.dim : t.muted).children(words.map((w) => div().flex_none().h(u(16)).child(w)))))
       .when(group, (el) => el.child(this.counts(t, n.counts, u(10), u(8))));
-    return div().absolute().left(x).top(y).w(u(CARD_W)).h(u(CARD_H)).child(this.hover(`wg-hc-${n.key}`, n, face));
+    return moves(div().id(`wg-pos-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o)).child(this.hover(`wg-hc-${n.key}`, n, face));
   }
 
   // A frame around an expanded node's children, its header the handle that closes it. Frames
   // draw over the arrows, so the header hides an arrow passing under it.
-  frame(t, n, box, u) {
+  frame(t, n, r, u) {
     return [
-      div().absolute().left(u(box.x)).top(u(box.y)).w(u(box.w)).h(u(box.h)).rounded(u(10)).border_1().border_color(t.border),
-      div().absolute().left(u(box.x + 6)).top(u(box.y + 4)).max_w(u(box.w - 12)).h(u(GROUP_HEAD - 6)).child(this.hover(`wg-hf-${n.key}`, n,
+      moves(div().id(`wg-box-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o)).rounded(u(10)).border_1().border_color(t.border),
+      moves(div().id(`wg-fh-${n.key}`).absolute().left(r.x + u(6)).top(r.y + u(4)).w(Math.max(0, r.w - u(12))).h(u(GROUP_HEAD - 6)).opacity(r.o)).overflow_hidden().child(this.hover(`wg-hf-${n.key}`, n,
         h_flex().id(`wg-frame-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
           .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n))
           .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
@@ -525,10 +593,11 @@ export default class WorkGraph extends View {
     return [...layers, ...labels];
   }
 
-  canvas(t, model, vis, lay, u) {
+  canvas(t, model, vis, lay, u, rects) {
     const lanes = lay.lanes.map((l) => {
       const n = model.nodes.get(l.key);
-      return div().absolute().left(0).top(u(l.y)).w(u(lay.width)).h(u(l.h)).border_t(1).border_color(t.border)
+      const r = this.place(`l:${l.key}`, rects.get(`l:${l.key}`));
+      return moves(div().id(`wg-band-${n.key}`).absolute().left(0).top(r.y).w(r.w).h(r.h)).border_t(1).border_color(t.border)
         .when(l.open, (el) => el.child(div().absolute().left(u(PAD - 4)).top(u(5)).h(u(LANE_HEAD - 10)).child(this.hover(`wg-hl-${n.key}`, n,
           h_flex().id(`wg-lane-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4))
             .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n))
@@ -536,12 +605,21 @@ export default class WorkGraph extends View {
             .child(div().flex_none().text_size(u(12.5)).font_semibold().text_color(t.foreground).child(n.title))
             .child(this.counts(t, n.counts, u(11), u(8)))))));
     });
-    const frames = [...lay.boxes].flatMap(([key, box]) => this.frame(t, model.nodes.get(key), box, u));
+    const frames = [...lay.boxes.keys()].flatMap((key) => this.frame(t, model.nodes.get(key), this.place(`f:${key}`, rects.get(`f:${key}`)), u));
+    const cards = vis.cards.map((k) => this.card(t, model.nodes.get(k), this.place(`c:${k}`, rects.get(`c:${k}`)), u));
+    const a = this.anim?.built ? this.anim : null;
+    const ghosts = (a?.ghosts ?? []).map((g) => {
+      const r = a.phase > 0 ? { ...g.to, o: 0 } : { ...g.from, o: 1 };
+      const n = model.nodes.get(g.key);
+      return g.kind === "frame" ? this.frame(t, n, r, u) : [this.card(t, n, r, u)];
+    }).flat();
     return div().relative().flex_none().w(u(lay.width)).h(u(lay.height))
       .children(lanes)
-      .children(this.edges(t, model, vis, lay, u))
+      .child(div().id("wg-arrows").absolute().top(0).left(0).size_full().opacity(this.anim ? 0 : 1).transition("opacity", { duration: 180, easing: "ease-in-out" })
+        .children(this.edges(t, model, vis, lay, u)))
       .children(frames)
-      .children(vis.cards.map((k) => this.card(t, model.nodes.get(k), u(lay.pos.get(k).x), u(lay.pos.get(k).y), u)));
+      .children(ghosts)
+      .children(cards);
   }
 
   button(t, id, label, active, onClick) {
@@ -593,36 +671,62 @@ export default class WorkGraph extends View {
     this.sessions = sessions;
     const vis = visible(model, (n) => this.isOpen(n));
     const lay = layout(model, vis);
-    const z = this.zoom !== "fit" ? Number(this.zoom) || 1 : this.viewW ? Math.max(MIN_FIT, Math.min(1, this.viewW / lay.width)) : 1;
+    // Fit is worked out again only for a new level or a new pane size, so opening one node
+    // doesn't rescale everything
+    const fitKey = `${this.level}|${Math.round(this.viewW)}`;
+    if (this.zoom === "fit" && this.viewW && this.fitKey !== fitKey) {
+      this.fitKey = fitKey;
+      this.fitZ = Math.max(MIN_FIT, Math.min(1, this.viewW / lay.width));
+    }
+    const z = this.zoom !== "fit" ? Number(this.zoom) || 1 : this.fitZ ?? 1;
     const u = (x) => Math.round(x * z * 10) / 10;
     const width = u(lay.width);
+    const height = u(lay.height);
+    const rects = new Map();
+    for (const k of vis.cards) {
+      const p = lay.pos.get(k);
+      rects.set(`c:${k}`, { key: k, kind: "card", x: u(p.x), y: u(p.y), w: u(CARD_W), h: u(CARD_H) });
+    }
+    for (const [k, b] of lay.boxes) rects.set(`f:${k}`, { key: k, kind: "frame", x: u(b.x), y: u(b.y), w: u(b.w), h: u(b.h) });
+    for (const l of lay.lanes) rects.set(`l:${l.key}`, { key: l.key, kind: "lane", x: 0, y: u(l.y), w: width, h: u(l.h) });
+    if (this.anim && !this.anim.built) this.buildAnim(model, rects);
+    if (!this.anim) this.last = rects;
     const maxX = Math.max(0, width - this.viewW);
-    this.scrollX = Math.min(this.scrollX, maxX);
+    const maxY = Math.max(0, height - this.viewH);
+    this.scrollX = Math.max(0, Math.min(maxX, this.scrollX));
+    this.scrollY = Math.max(0, Math.min(maxY, this.scrollY));
     return root
       .on_mouse_move((e, cx) => {
-        if (!this.panning) return;
-        this.scrollX = this.panTo(e.local_position.x, width, maxX);
+        const d = this.drag;
+        if (!d) return;
+        const v = d.start + ((d.axis === "y" ? e.position.y : e.position.x) - d.from) * d.per;
+        if (d.axis === "y") this.scrollY = Math.max(0, Math.min(maxY, v));
+        else this.scrollX = Math.max(0, Math.min(maxX, v));
         cx.notify();
       })
-      .on_mouse_up("left", () => (this.panning = false))
+      .on_mouse_up("left", (_e, cx) => {
+        if (!this.drag) return;
+        this.drag = null;
+        cx.notify();
+      })
       .child(this.summary(t, model, z))
-      // A native scroller on both axes, or one nested in another, never moves down here, so the
-      // view scrolls natively down and pans across by hand: a sideways swipe or shift-wheel moves
-      // it, and so does the bar below
-      .child(div().id("wg-scroll").flex_1().min_h(0).overflow_y_scrollbar()
+      // Scrolled by hand on both axes: a native scroller on both axes never moves down here, and
+      // a change of what shows has to move the view with it to keep the opened node in place
+      .child(div().id("wg-view").relative().flex_1().min_h(0).overflow_hidden()
         .on_size_change((size, cx) => {
-          if (Math.abs(size.width - this.viewW) < 1) return;
+          if (Math.abs(size.width - this.viewW) < 1 && Math.abs(size.height - this.viewH) < 1) return;
           this.viewW = size.width;
+          this.viewH = size.height;
           cx.notify();
         })
-        .child(div().id("wg-pan").relative().w_full().flex_none().h(u(lay.height)).overflow_hidden()
-          .on_scroll_wheel((e, cx) => {
-            if (Math.abs(e.delta.x) <= Math.abs(e.delta.y) || maxX <= 0) return;
-            cx.stop_propagation();
-            this.scrollX = Math.max(0, Math.min(maxX, this.scrollX - e.delta.x));
-            cx.notify();
-          })
-          .child(this.canvas(t, model, vis, lay, u).absolute().top(0).left(-this.scrollX))))
-      .when(maxX > 0, (el) => el.child(this.panBar(t, width, maxX)));
+        .on_scroll_wheel((e, cx) => {
+          this.scrollX = Math.max(0, Math.min(maxX, this.scrollX - e.delta.x));
+          this.scrollY = Math.max(0, Math.min(maxY, this.scrollY - e.delta.y));
+          cx.notify();
+        })
+        .child(this.canvas(t, model, vis, lay, u, rects).id("wg-canvas").absolute().left(-this.scrollX).top(-this.scrollY)
+          .when(Boolean(this.anim), (el) => el.transition("left", EASE).transition("top", EASE)))
+        .when(maxY > 0, (el) => el.child(this.bar(t, "y", height, maxY))))
+      .when(maxX > 0, (el) => el.child(this.bar(t, "x", width, maxX)));
   }
 }
