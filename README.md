@@ -79,15 +79,16 @@ symlinked folder. Run it again after a pull.
 - **[work-graph](herdr-mods/work-graph/)**: a read-only DAG of all tracked work that
   zooms, for a pane or tab of its own. Each open project is a lane, and inside it the
   nodes of the project's `graph.json` nest by `parent`: steps, then issues, then PRs and
-  small tasks. A collapsed node is one card that rolls up what it holds ("1 needs you,
-  3 in flight, 2 blocked"); an expanded one is a frame around its children. Arrows run
+  small tasks. A collapsed node is one card that takes the most urgent status inside it; an
+  expanded one is a frame around its children, its header one line such as "3 of 9 done · 1 needs you". Arrows run
   from each blocker to what it blocks, combined into one thicker arrow between collapsed cards,
   in columns by dependency depth. A leaf is done, needs you (an open ask names it), in
   flight (its owner session is working), waiting (its owner has a background job or a wake
-  pending), blocked, owned but idle, or ready to start now, and the header
-  lists what can start now. Level buttons, or `work-graph.level0` to `level3`, expand
+  pending), blocked, owned but idle, or ready to start now. A card shows its status as one bar on its
+  left in one of four colours, needs you, in progress, blocked and done, and nothing for the rest. It opens at
+  level 1, each lane's top-level cards. Level buttons, or `work-graph.level0` to `level3`, expand
   everything to a depth, clicking a card opens or closes one node, and Cmd with scroll zooms
-  around the pointer; the change animates,
+  around the pointer, everything scaling together; opening or closing animates,
   a card growing into its frame as its children come out of it, the opened node held in place. Linear issues
   (through the `linear` CLI) bring their state, sub-issues, `blocks` relations and PR
   links, and GitHub brings PR state and stacks by base branch; a project with no graph
@@ -95,14 +96,14 @@ symlinked folder. Run it again after a pull.
   `<projects>/<project>/graph.json`, or the coordinator's `graph` field, as
   `{"nodes": [{id, title, kind, summary, parent, blockedBy, status, owner, asks, note, link, pr}]}`,
   plus `links: [{label, url}]`, where a card shows only `title` (a word or two), `kind` (one
-  word) and `summary` (five to seven words), and its status as an icon and colour. Resting the
+  word) and `summary` (five to seven words), and its status bar. Resting the
   pointer on a card fades everything not on its path, what it waits on and what waits on
   it. Each lane is its own DAG. A warning marks a card whose file contradicts itself: a
   blocker in another project, which draws nothing, work started or done before its blockers,
   or a blocker that holds or sits inside the card; a collapsed card shows it for anything inside.
-  Resting on a header's count says what its icon and colour mean, and the legend button lists them all.
+  Resting on a header's line lists every status inside, and the legend button explains the colours.
   A node's `owner` is a session name, the person's own name, or `team:<name>`, and `status` may be
-  `parked` for deliberately deferred work, drawn grey with a pause icon. The top bar splits unblocked
+  `parked` for deliberately deferred work, drawn with grey text. The top bar splits unblocked
   work into what a session can start now, what needs you, and what waits on another team, an owner
   `team:<name>` or a Linear issue of another team; `me` and `team` in the config name you and your team. Its i icon opens a popup with the rest and a labelled link to its issue, PR, stack
   neighbours, extra links and owner session's pane; a file opens in the mod's own read-only

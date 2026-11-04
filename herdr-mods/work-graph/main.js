@@ -5,9 +5,12 @@
 // dependency depth among what shows. A leaf is done, needs you (an open ask names it), in flight
 // (its owner session is working), waiting (its owner is between turns with a background job or a
 // wake set), blocked (a blocker isn't done), owned but idle (its owner is live with nothing
-// pending), or ready: nothing blocks it and nobody owns it.
+// pending), or ready: nothing blocks it and nobody owns it. A card shows its status as one bar on
+// its left in one of four colours, needs you, in progress, blocked and done, and the rest show
+// none; a collapsed card takes the most urgent status inside it.
 //
-// The level buttons expand everything above that depth (0: projects only); clicking a card that
+// The view opens at level 1, each lane's top-level cards. The level buttons expand everything
+// above that depth (0: projects only); clicking a card that
 // has children opens it, and clicking a frame's header closes it. Resting the pointer on a card
 // fades everything not on its path: what it waits on and what waits on it, inside its lane.
 // A warning marks a card whose graph file contradicts itself: a blocker in another lane, work
@@ -46,19 +49,17 @@ const ZOOM_RATE = 0.004;
 // How much of the graph stays in the pane however a zoom leaves it
 const LOOSE = 48;
 const LEVELS = [0, 1, 2, 3];
-const SPINNER = "mods/work-graph/spinner.svg";
 const ANIM_MS = 300;
 const EASE = { duration: ANIM_MS, easing: "ease-in-out" };
-// Each element moves natively from where it last drew to where it draws now
-const moves = (el) => el.transition("left", EASE).transition("top", EASE).transition("width", EASE).transition("height", EASE).transition("opacity", EASE);
-const LOCK = "mods/work-graph/lock.svg";
-const CLOCK = "mods/work-graph/clock.svg";
-const PAUSE = "mods/work-graph/pause.svg";
+// A zoom holds the cards still this long after its last wheel event
+const STILL_MS = 200;
 const WARN = "mods/work-graph/warn.svg";
 const CHEVRON = (open) => `mods/work-graph/chevron-${open ? "down" : "right"}.svg`;
 const INFO = "mods/work-graph/info.svg";
 // What isn't on the hovered node's path fades to this, quickly
 const DIM = 0.3;
+// How much a card's i icon shows until the pointer is on the card
+const FAINT = 0.35;
 const FADE = { duration: 150, easing: "ease-in-out" };
 
 // A path with a rounded corner at each bend and an arrowhead at its end
@@ -79,20 +80,17 @@ function trace(st, pts, tip, radius, head) {
   st.heads.add_polygon([[lx, ly - head], [tip, ly], [lx, ly + head]], true);
 }
 
-const WORD = { needs: ["needs you", "need you"], ready: ["ready"], flight: ["in flight"], waiting: ["waiting"], idle: ["owned, idle"], blocked: ["blocked"], parked: ["parked"], done: ["done"] };
+const WORD = { needs: ["needs you", "need you"], ready: ["ready"], flight: ["in flight"], waiting: ["waiting on a job"], idle: ["owned, idle"], blocked: ["blocked"], parked: ["parked"], done: ["done"] };
 const word = (s, k) => (k === 1 ? WORD[s][0] : WORD[s][1] ?? WORD[s][0]);
 const SESSION = { working: "working", blocked: "waiting on a dialog", waiting: "waiting on a background job or a wake" };
-// What each status means and how a card shows it, for the legend and the header counts
-const MEANING = {
-  needs: ["Needs you", "An open ask names it, so it waits on your answer.", "Yellow border"],
-  ready: ["Ready", "Nothing blocks it and nobody owns it, so it can start now.", "Green border"],
-  flight: ["In flight", "Its owner session is working on it now.", "Blue border"],
-  waiting: ["Waiting", "Its owner is between turns with a background job or a wake set.", "Grey border"],
-  idle: ["Owned, idle", "Its owner session is live with nothing pending.", "Grey border"],
-  blocked: ["Blocked", "A blocker isn't done yet.", "Red bar on its left"],
-  parked: ["Parked", "Deliberately deferred until someone picks it back up, so it's left out of the groups above and the blocker warnings.", "Grey text and border"],
-  done: ["Done", "Finished, merged or closed.", "Green border"],
-};
+// The legend's colours: each status that asks something of someone has one, the rest none
+const LEGEND = [
+  ["needs", "Needs you", "An open ask names it, so it waits on your answer."],
+  ["flight", "In progress", "Its owner session is working, or between turns with a background job or a wake set."],
+  ["blocked", "Blocked", "A blocker isn't done yet."],
+  ["done", "Done", "Finished, merged or closed."],
+  [null, "No colour", "Ready: nothing blocks it and nobody owns it. Owned, idle: its owner session is live with nothing pending. Parked: deferred on purpose, its text grey, and left out of the groups above and the warnings."],
+];
 // The top bar's groups of unblocked work, named for who takes it next
 const GROUPS = {
   start: () => ["Can start now", "Unblocked and unstarted, so a session can pick it up: nobody owns it, or its owner session isn't live."],
@@ -100,9 +98,9 @@ const GROUPS = {
   teams: ({ team }) => ["Waiting on another team", `Unblocked, but another team takes it next: owner "team:<name>"${team ? `, or a Linear issue outside ${team}` : ""}. The chip names the team.`],
 };
 const WARN_MEANING = "Its graph file contradicts itself: work in flight, waiting or done before its blockers are, a blocker in another lane, or a blocker that holds or sits inside it. Its i popup names each.";
-const edgeOf = (t, state) => ({ flight: t.accent, needs: t.working, ready: t.ansi2, done: t.ansi2 })[state] ?? t.border;
-const color = (t, state) => ({ needs: t.working, ready: t.ansi2, flight: t.accent, waiting: t.accent, idle: t.dim, blocked: t.blocked, parked: t.dim, done: t.done })[state];
+const tone = (t, state) => ({ needs: t.working, flight: t.accent, waiting: t.accent, blocked: t.blocked, done: t.ansi2 })[state] ?? null;
 const countsText = (counts) => STATES.filter((s) => counts[s]).map((s) => `${counts[s]} ${word(s, counts[s])}`).join(", ");
+const tally = (counts, total) => [`${counts.done} of ${total} done`, counts.needs ? `${counts.needs} ${word("needs", counts.needs)}` : null].filter(Boolean).join(" · ");
 
 async function readConfig() {
   try {
@@ -252,14 +250,15 @@ export default class WorkGraph extends View {
     this.notLinear = new Set();
     this.at = Number(localStorage.getItem("at") ?? 0) || 0;
     this.zoom = localStorage.getItem("zoom") ?? "fit";
-    this.level = Number(localStorage.getItem("level") ?? 1);
-    this.open = new Map(Object.entries(JSON.parse(localStorage.getItem("open") ?? "{}")));
+    this.level = 1;
+    this.open = new Map();
     this.viewW = 0;
     this.viewH = 0;
     this.scrollX = 0;
     this.scrollY = 0;
     this.drag = null;
     this.anim = null;
+    this.still = 0;
     this.last = null;
     this.error = null;
     this.busy = false;
@@ -401,7 +400,6 @@ export default class WorkGraph extends View {
     this.hoverPop = null;
     this.animate(cx, n.key);
     this.open.set(n.key, !this.isOpen(n));
-    localStorage.setItem("open", JSON.stringify(Object.fromEntries(this.open)));
     cx.notify();
   }
 
@@ -416,8 +414,6 @@ export default class WorkGraph extends View {
     this.animate(cx, null);
     this.level = level;
     this.open = new Map();
-    localStorage.setItem("level", String(level));
-    localStorage.setItem("open", "{}");
     cx.notify();
   }
 
@@ -500,6 +496,17 @@ export default class WorkGraph extends View {
         .child(div().absolute().top(3).left(at).w(thumb).h(6).rounded_full().bg(tone).hover((el) => el.bg(t.muted)));
   }
 
+  hold(cx) {
+    const token = (this.still ?? 0) + 1;
+    this.still = token;
+    this.hoverEdge = null;
+    cx.timer.after(STILL_MS, (cx) => {
+      if (this.still !== token) return;
+      this.still = 0;
+      cx.notify();
+    });
+  }
+
   setZoom(cx, z) {
     if (z === "fit") this.home();
     this.zoom = z;
@@ -507,42 +514,40 @@ export default class WorkGraph extends View {
     cx.notify();
   }
 
-  // One icon per status: a spinner works, ! needs you, a lock is blocked, a hollow dot is idle,
-  // a green ring can start, a check is done
-  icon(t, state, size) {
-    const box = h_flex().flex_none().w(size).h(size).items_center().justify_center();
-    const c = color(t, state);
-    if (state === "flight") return box.child(svg(SPINNER).size(size * 0.8).text_color(c).spin(900));
-    if (state === "needs") return box.child(div().text_size(size * 1.05).font_bold().text_color(c).child("!"));
-    if (state === "blocked") return box.child(svg(LOCK).size(size * 0.85).text_color(c));
-    if (state === "waiting") return box.child(svg(CLOCK).size(size * 0.85).text_color(c));
-    if (state === "parked") return box.child(svg(PAUSE).size(size * 0.85).text_color(c));
-    if (state === "done") return box.child(div().text_size(size * 0.9).text_color(c).child("✓"));
-    return box.child(div().size(size * 0.55).rounded_full().border_1().border_color(c));
+  // Each element moves natively from where it last drew to where it draws now, except during a
+  // zoom: then every frame draws everything at one new scale, so cards, text and arrows stay a
+  // scaled copy of the last frame instead of the cards sliding after arrows that jump
+  moves(el) {
+    if (this.still) return el;
+    return el.transition("left", EASE).transition("top", EASE).transition("width", EASE).transition("height", EASE).transition("opacity", EASE);
   }
 
-  // With `explain`, resting on a count says what its icon means and what it counts
-  counts(t, counts, size, gap, explain) {
-    return h_flex().flex_none().gap(gap).items_center().whitespace_nowrap()
-      .children(STATES.filter((s) => counts[s]).map((s) => {
-        const item = h_flex().flex_none().gap(size * 0.2).items_center()
-          .child(this.icon(t, s, size))
-          .child(div().text_size(size * 0.95).text_color(s === "done" || s === "idle" ? t.dim : t.muted).child(String(counts[s])));
-        return explain ? this.explainer(`${explain.id}-${s}`, item.id(`${explain.id}-${s}-t`), this.meaning(t, s, counts[s], explain.where)) : item;
-      }));
+  // A status's colour as a solid dot, or a hollow grey one for the statuses that have none
+  dot(t, state, size) {
+    const c = tone(t, state);
+    return div().flex_none().size(size).rounded_full().when(Boolean(c), (el) => el.bg(c)).when(!c, (el) => el.border_1().border_color(t.dim));
+  }
+
+  // "3 of 9 done · 1 needs you" in one muted line; resting on it lists every status inside
+  tallyLine(t, n, size, id) {
+    if (!n.counts) return div();
+    return this.explainer(id, div().id(`${id}-t`).flex_none().text_size(size).text_color(t.dim).child(tally(n.counts, n.total)), this.breakdown(t, n.counts, n.total));
+  }
+
+  breakdown(t, counts, total) {
+    return v_flex().w(220).p(10).gap(4).rounded(8).border_1().border_color(t.border).bg(t.popover).shadow_lg()
+      .child(div().text_size(12).text_color(t.dim).child(`${total} ${total === 1 ? "card" : "cards"} inside`))
+      .children(STATES.filter((s) => counts[s]).map((s) => h_flex().gap(7).items_center()
+        .child(this.dot(t, s, 8))
+        .child(div().text_size(12).text_color(t.foreground).child(`${counts[s]} ${word(s, counts[s])}`))));
   }
 
   explainer(id, trigger, content, anchor = "top_left") {
     return HoverCard.new(id).open_delay(250).close_delay(150).anchor(anchor).trigger(trigger).content(content);
   }
 
-  meaning(t, state, count, where) {
-    const [name, text, border] = MEANING[state];
-    return this.note(t, this.icon(t, state, 13), name, `${count} ${count === 1 ? "card" : "cards"} ${where}`, `${text} ${border}.`);
-  }
-
   warning(t, count, where) {
-    return this.note(t, svg(WARN).flex_none().size(13).text_color(t.working), "Check the graph file", `${count} ${count === 1 ? "card" : "cards"} ${where}`, WARN_MEANING);
+    return this.note(t, svg(WARN).flex_none().size(13).text_color(t.dim), "Check the graph file", `${count} ${count === 1 ? "card" : "cards"} ${where}`, WARN_MEANING);
   }
 
   note(t, mark, name, count, text) {
@@ -554,24 +559,24 @@ export default class WorkGraph extends View {
   }
 
   legend(t) {
-    const swatch = (state) => div().relative().flex_none().w(22).h(14).rounded(4).border_1().border_color(edgeOf(t, state)).bg(t.surface)
-      .when(state === "blocked", (el) => el.child(div().absolute().left(0).top(3).w(2).h(6).rounded_full().bg(t.blocked)));
-    const row = (sw, mark, name, text) => h_flex().gap(8).items_start()
+    const swatch = (state) => div().relative().flex_none().w(22).h(14).rounded(4).border_1().border_color(t.border).bg(t.surface)
+      .when(Boolean(tone(t, state)), (el) => el.child(div().absolute().left(0).top(2).w(2).h(8).rounded_full().bg(tone(t, state))));
+    const row = (sw, name, text) => h_flex().gap(8).items_start()
       .child(div().flex_none().w(22).pt(1).child(sw ?? div()))
-      .child(div().flex_none().w(16).h(16).flex().items_center().justify_center().child(mark ?? div()))
       .child(v_flex().flex_1().min_w(0)
         .child(div().text_size(12).font_semibold().text_color(t.foreground).child(name))
         .child(div().text_size(11.5).text_color(t.muted).whitespace_normal().child(text)));
-    return v_flex().w(400).p(12).gap(8).rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_lg()
+    return v_flex().w(380).p(12).gap(8).rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_lg()
       .child(div().text_size(13).font_semibold().text_color(t.foreground).child("Legend"))
-      .children(STATES.map((s) => row(swatch(s), this.icon(t, s, 13), MEANING[s][0], `${MEANING[s][1]} ${MEANING[s][2]}.`)))
-      .child(row(null, svg(WARN).size(13).text_color(t.working), "Check the graph file", WARN_MEANING))
+      .children(LEGEND.map(([s, name, text]) => row(swatch(s), name, text)))
+      .child(div().text_size(11.5).text_color(t.muted).whitespace_normal().child("A collapsed card takes the colour of the most urgent card inside it."))
       .child(div().h(1).bg(t.border))
-      .children(Object.values(GROUPS).map((g) => g(this.who ?? {})).map(([name, text]) => row(null, null, name, text)))
+      .children(Object.values(GROUPS).map((g) => g(this.who ?? {})).map(([name, text]) => row(null, name, text)))
       .child(div().h(1).bg(t.border))
-      .child(row(null, div().text_size(13).text_color(t.muted).child("→"), "Arrow", "From a blocker to what it blocks, inside one lane; thicker when it stands for several."))
-      .child(row(div().flex_none().w(22).h(14).rounded(4).border_1().border_color(t.border).bg(t.surface).opacity(DIM), null, "Faded", "Off the path of the card under the pointer."))
-      .child(row(null, svg(INFO).size(13).text_color(t.dim), "i", "A card's details and links."));
+      .child(row(h_flex().h(14).justify_center().child(svg(WARN).size(12).text_color(t.dim)), "Check the graph file", WARN_MEANING))
+      .child(row(h_flex().h(14).justify_center().child(svg(INFO).size(12).text_color(t.dim)), "i", "A card's details and links."))
+      .child(row(h_flex().h(14).justify_center().child(div().text_size(13).text_color(t.muted).child("→")), "Arrow", "From a blocker to what it blocks, inside one lane; thicker when it stands for several."))
+      .child(row(div().flex_none().w(22).h(14).rounded(4).border_1().border_color(t.border).bg(t.surface).opacity(DIM), "Faded", "Off the path of the card under the pointer."));
   }
 
   statusLine(n) {
@@ -604,16 +609,15 @@ export default class WorkGraph extends View {
         cx.notify();
       })
       .child(h_flex().gap(8).items_center()
-        .child(this.icon(t, n.state, 14))
+        .child(this.dot(t, n.state, 9))
         .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().child(n.title))
         .child(div().flex_none().px(6).h(17).flex().items_center().rounded(4).border_1().border_color(t.border).text_size(10.5)
           .text_color(n.tag ? t.muted : t.dim).child(n.tag ?? "no kind")))
       .when(Boolean(n.fullTitle && n.fullTitle !== n.title), (el) => el.child(div().text_size(12.5).text_color(t.muted).whitespace_normal().child(n.fullTitle)))
       .child(v_flex().gap(3)
         .when(n.kind !== "project", (el) => el.child(row("Id", [n.id, n.pr && n.pr !== n.id ? n.pr : null].filter(Boolean).join(" · "))))
-        .when(Boolean(this.statusLine(n)), (el) => el.child(row("Status", this.statusLine(n), color(t, n.state))))
-        .when(n.children.length > 0, (el) => el.child(h_flex().gap(8).items_center().text_size(12)
-          .child(div().flex_none().w(64).text_color(t.dim).child("Inside")).child(this.counts(t, n.counts, 12, 10))))
+        .when(Boolean(this.statusLine(n)), (el) => el.child(row("Status", this.statusLine(n))))
+        .when(n.children.length > 0, (el) => el.child(row("Inside", `${tally(n.counts, n.total)}. ${countsText(n.counts)}`)))
         .when(Boolean(owner), (el) => el.child(row("Owner", `${owner}${ownerState ? `, ${SESSION[ownerState.status] ?? "idle"}` : ", no live session"}`)))
         .when(n.blockers.length > 0, (el) => el.child(row("Waits on", n.blockers.map((b) => b.title === b.id ? b.id : `${b.title} (${b.id})`).join(", "), t.muted)))
         .when(Boolean(n.issue?.stateName), (el) => el.child(row("Linear", n.issue.stateName)))
@@ -622,7 +626,7 @@ export default class WorkGraph extends View {
       .when(Boolean(n.note), (el) => el.child(div().text_size(11.5).text_color(t.dim).whitespace_normal().child(String(n.note).replace(URLS, "").slice(0, 280))))
       .when(Boolean(n.error), (el) => el.child(div().text_size(11.5).text_color(t.blocked).whitespace_normal().child(n.error)))
       .when(n.flagged.length > 0, (el) => el.child(v_flex().gap(3).text_size(11.5).whitespace_normal()
-        .child(h_flex().gap(6).items_center().text_color(t.working).child(svg(WARN).flex_none().size(12)).child("Check the graph file"))
+        .child(h_flex().gap(6).items_center().text_color(t.foreground).child(svg(WARN).flex_none().size(12).text_color(t.dim)).child("Check the graph file"))
         .children(n.flagged.slice(0, 6).flatMap((k) => this.model.nodes.get(k).problems.map((p) =>
           div().text_color(t.foreground).child(k === n.key ? p : `${this.model.nodes.get(k).title}: ${p}`))))
         .when(n.flagged.length > 6, (el) => el.child(div().text_color(t.dim).child(`and ${n.flagged.length - 6} more inside`)))))
@@ -644,8 +648,9 @@ export default class WorkGraph extends View {
   // The node's details and links open from this icon alone, so a click anywhere else on the card
   // is free to open or close it
   info(t, n, u, id) {
+    const near = this.hoverCard === n.key || this.hoverPop === n.key;
     return this.hover(id, n, div().id(`${id}-i`).flex_none().size(u(16)).flex().items_center().justify_center().rounded_full()
-      .text_color(t.dim).hover((el) => el.bg(t.hover).text_color(t.foreground))
+      .text_color(t.dim).opacity(near ? 1 : FAINT).hover((el) => el.bg(t.hover).text_color(t.foreground))
       .on_click((_e, cx) => cx.stop_propagation())
       .child(svg(INFO).size(u(12))));
   }
@@ -668,52 +673,48 @@ export default class WorkGraph extends View {
   }
 
   // A title of a word or two and its kind, then a short summary on one line: words that don't fit
-  // wrap onto a hidden line, so none is cut. The status is the icon and the card's colour; a done
-  // card, or a collapsed one with everything in it done, has a green border and stays at full
-  // strength, since fading means only "off the hovered path"
+  // wrap onto a hidden line, so none is cut. The status is the one bar on its left, and fading
+  // means only "off the hovered path"
   card(t, n, r, u) {
     const group = n.children.length > 0;
-    const edge = edgeOf(t, n.state);
+    const bar = tone(t, n.state);
+    const quiet = n.state === "parked";
     const words = String(n.summary ?? "").split(/\s+/).filter(Boolean);
-    const face = v_flex().id(`wg-${n.key}`).relative().size_full().px(u(10)).py(u(7)).gap(u(4)).justify_center().rounded(u(8))
-      .bg(group ? t.raised : t.surface).border_1().border_color(edge)
+    const face = v_flex().id(`wg-${n.key}`).relative().size_full().pl(u(13)).pr(u(10)).py(u(7)).gap(u(4)).justify_center().rounded(u(8))
+      .bg(group ? t.raised : t.surface).border_1().border_color(t.border)
       .opacity(this.dims(n.key) ? DIM : 1).transition("opacity", FADE)
       .hover((el) => el.bg(t.hover))
       .when(group, (el) => el.cursor_pointer().on_click((_e, cx) => this.toggle(cx, n)))
       .on_hover(this.pointAt(n.key))
-      .when(n.state === "blocked", (el) => el.child(div().absolute().left(0).top(u(10)).w(u(3)).h(u(CARD_H - 20)).rounded_full().bg(t.blocked)))
+      .when(Boolean(bar), (el) => el.child(div().absolute().left(u(3)).top(u(9)).w(u(3)).h(u(CARD_H - 18)).rounded_full().bg(bar)))
       .child(h_flex().w_full().h(u(16)).gap(u(6)).items_center().whitespace_nowrap()
         .when(group, (el) => el.child(this.chevron(t, n, u)))
-        .child(this.icon(t, n.state, u(13)))
-        .child(div().min_w(0).truncate().text_size(u(13)).font_semibold().text_color(n.state === "parked" ? t.dim : t.foreground).child(n.title))
+        .child(div().min_w(0).truncate().text_size(u(13)).font_semibold().text_color(quiet ? t.dim : t.foreground).child(n.title))
         .child(div().flex_1().min_w(0))
-        .child(n.tag
-          ? div().flex_none().px(u(5)).h(u(15)).flex().items_center().rounded(u(4)).border_1().border_color(t.border).text_size(u(10)).text_color(t.muted).child(n.tag)
-          : div().flex_none().text_size(u(11)).text_color(t.dim).opacity(0.6).child("?")))
+        .when(Boolean(n.tag), (el) => el.child(div().flex_none().text_size(u(10.5)).text_color(t.dim).child(n.tag))))
       .when(words.length > 0, (el) => el.child(h_flex().w_full().h(u(16)).flex_wrap().gap_x(u(4)).overflow_hidden()
-        .text_size(u(11.5)).text_color(n.state === "parked" ? t.dim : t.muted).children(words.map((w) => div().flex_none().h(u(16)).child(w)))))
-      .when(group, (el) => el.child(this.counts(t, n.counts, u(10), u(8))))
-      .when(n.flagged.length > 0, (el) => el.child(div().absolute().right(u(23)).bottom(u(6)).child(svg(WARN).size(u(12)).text_color(t.working))))
+        .text_size(u(11.5)).text_color(quiet ? t.dim : t.muted).children(words.map((w) => div().flex_none().h(u(16)).child(w)))))
+      .when(n.flagged.length > 0, (el) => el.child(div().absolute().right(u(23)).bottom(u(6)).child(svg(WARN).size(u(11)).text_color(t.dim))))
       .child(div().absolute().right(u(5)).bottom(u(4)).child(this.info(t, n, u, `wg-hc-${n.key}`)));
-    return moves(div().id(`wg-pos-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o)).child(face);
+    return this.moves(div().id(`wg-pos-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o)).child(face);
   }
 
   // A frame around an expanded node's children, its header the handle that closes it. Frames
   // draw over the arrows, so the header hides an arrow passing under it.
   frameBox(t, n, r, u) {
-    return moves(div().id(`wg-box-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o))
+    return this.moves(div().id(`wg-box-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o))
       .child(div().id(`wg-line-${n.key}`).size_full().rounded(u(10)).border_1().border_color(t.border).opacity(this.dims(n.key) ? DIM : 1).transition("opacity", FADE));
   }
 
   frameHead(t, n, r, u) {
-    return moves(div().id(`wg-fh-${n.key}`).absolute().left(r.x + u(6)).top(r.y + u(4)).w(Math.max(0, r.w - u(12))).h(u(GROUP_HEAD - 6)).opacity(r.o)).overflow_hidden()
+    return this.moves(div().id(`wg-fh-${n.key}`).absolute().left(r.x + u(6)).top(r.y + u(4)).w(Math.max(0, r.w - u(12))).h(u(GROUP_HEAD - 6)).opacity(r.o)).overflow_hidden()
       .child(h_flex().id(`wg-frame-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
         .opacity(this.dims(n.key) ? DIM : 1).transition("opacity", FADE)
         .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n)).on_hover(this.pointAt(n.key))
         .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
         .child(div().flex_none().text_size(u(11.5)).font_semibold().text_color(t.foreground).child(n.title))
-        .child(this.counts(t, n.counts, u(10), u(7), { id: `wg-xf-${n.key}`, where: "inside" }))
-        .when(n.flagged.length > 0, (el) => el.child(this.explainer(`wg-xf-${n.key}-warn`, svg(WARN).id(`wg-xf-${n.key}-w`).flex_none().size(u(11)).text_color(t.working), this.warning(t, n.flagged.length, "inside"))))
+        .child(this.tallyLine(t, n, u(11), `wg-xf-${n.key}`))
+        .when(n.flagged.length > 0, (el) => el.child(this.explainer(`wg-xf-${n.key}-warn`, svg(WARN).id(`wg-xf-${n.key}-w`).flex_none().size(u(10)).text_color(t.dim), this.warning(t, n.flagged.length, "inside"))))
         .child(this.info(t, n, u, `wg-hf-${n.key}`)));
   }
 
@@ -832,7 +833,7 @@ export default class WorkGraph extends View {
       const pts = r.pts.map(([x, y]) => [u(x), u(y)]);
       trace(st, pts, u(r.tip), u(6), u(4));
       if (path && e.list.some((b) => path.edges.has(`${b.from}>${b.to}`))) trace(plain(litStyle), pts, u(r.tip), u(6), u(4));
-      if (this.anim) continue;
+      if (this.anim || this.still) continue;
       // Paths take no pointer, so small clear targets sit along the route
       for (let i = 1; i < pts.length; i++) {
         const [ax, ay] = pts[i - 1];
@@ -861,7 +862,7 @@ export default class WorkGraph extends View {
   // The dependencies one arrow stands for, one line each, beside the pointer
   edgeNote(t, model) {
     const h = this.hoverEdge;
-    if (!h || this.anim) return null;
+    if (!h || this.anim || this.still) return null;
     const name = (k) => model.nodes.get(k)?.title ?? k;
     const lines = [...new Set(h.list.map((e) => `${name(e.from)} blocks ${name(e.to)}`))];
     return v_flex().absolute().left(h.x + 12).top(h.y + 10).max_w(320).px(9).py(6).gap(2).rounded(7)
@@ -876,19 +877,19 @@ export default class WorkGraph extends View {
   canvas(t, model, vis, lay, u, rects) {
     const bands = lay.lanes.map((l) => {
       const r = this.place(`l:${l.key}`, rects.get(`l:${l.key}`));
-      return moves(div().id(`wg-band-${l.key}`).absolute().left(0).top(r.y).w(r.w).h(r.h)).border_t(1).border_color(t.border);
+      return this.moves(div().id(`wg-band-${l.key}`).absolute().left(0).top(r.y).w(r.w).h(r.h)).border_t(1).border_color(t.border);
     });
     const laneHeads = lay.lanes.filter((l) => l.open).map((l) => {
       const n = model.nodes.get(l.key);
       const r = this.place(`l:${l.key}`, rects.get(`l:${l.key}`));
-      return moves(div().id(`wg-lh-${l.key}`).absolute().left(u(PAD - 4)).top(r.y + u(5)).h(u(LANE_HEAD - 10)))
+      return this.moves(div().id(`wg-lh-${l.key}`).absolute().left(u(PAD - 4)).top(r.y + u(5)).h(u(LANE_HEAD - 10)))
         .child(h_flex().id(`wg-lane-${n.key}`).h_full().gap(u(6)).px(u(4)).items_center().whitespace_nowrap().rounded(u(4)).bg(t.canvas)
           .opacity(this.dims(n.key) ? DIM : 1).transition("opacity", FADE)
           .cursor_pointer().hover((el) => el.bg(t.hover)).on_click((_e, cx) => this.toggle(cx, n)).on_hover(this.pointAt(n.key))
           .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
           .child(div().flex_none().text_size(u(12.5)).font_semibold().text_color(t.foreground).child(n.title))
-          .child(this.counts(t, n.counts, u(11), u(8), { id: `wg-xl-${n.key}`, where: "inside" }))
-          .when(n.flagged.length > 0, (el) => el.child(this.explainer(`wg-xl-${n.key}-warn`, svg(WARN).id(`wg-xl-${n.key}-w`).flex_none().size(u(12)).text_color(t.working), this.warning(t, n.flagged.length, "inside"))))
+          .child(this.tallyLine(t, n, u(11.5), `wg-xl-${n.key}`))
+          .when(n.flagged.length > 0, (el) => el.child(this.explainer(`wg-xl-${n.key}-warn`, svg(WARN).id(`wg-xl-${n.key}-w`).flex_none().size(u(11)).text_color(t.dim), this.warning(t, n.flagged.length, "inside"))))
           .child(this.info(t, n, u, `wg-hl-${n.key}`)));
     });
     const frames = [...lay.boxes.keys()].map((key) => [model.nodes.get(key), this.place(`f:${key}`, rects.get(`f:${key}`))]);
@@ -921,7 +922,7 @@ export default class WorkGraph extends View {
 
   summary(t, model, z) {
     const leaves = model.leaves.filter((n) => n.kind !== "project");
-    const counts = Object.fromEntries(STATES.map((s) => [s, leaves.filter((n) => n.state === s).length]));
+    const all = { counts: Object.fromEntries(STATES.map((s) => [s, leaves.filter((n) => n.state === s).length])), total: leaves.length };
     const groups = startGroups(model, this.who ?? {});
     const step = (dir) => (_e, cx) => {
       const next = dir > 0 ? ZOOMS.find((x) => x > z + 0.001) : [...ZOOMS].reverse().find((x) => x < z - 0.001);
@@ -931,7 +932,7 @@ export default class WorkGraph extends View {
     return v_flex().px(PAD).pt(10).pb(8).gap(6).border_b(1).border_color(t.border)
       .child(h_flex().gap(14).items_center().whitespace_nowrap()
         .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Work graph"))
-        .child(this.counts(t, counts, 14, 12, { id: "wg-xa", where: "in every lane" }))
+        .child(this.tallyLine(t, all, 12.5, "wg-xa"))
         .child(div().flex_1())
         .child(div().min_w(0).truncate().text_size(11).text_color(this.error ? t.blocked : t.dim)
           .child(this.busy ? "updating" : this.error ?? ago(this.at)))
@@ -945,19 +946,20 @@ export default class WorkGraph extends View {
         .child(this.explainer("wg-legend", this.button(t, "wg-legend-btn", "legend", false, () => {}), this.legend(t), "top_right"))
         .child(this.button(t, "wg-refresh", "refresh", false, (_e, cx) => cx.spawn(async (cx) => this.refresh(cx)))))
       .child(h_flex().gap(8).items_center().flex_wrap().text_size(12)
-        .children(this.group(t, "start", groups.start, t.ansi2, true))
+        .children(this.group(t, "start", groups.start, null, true))
         .children(this.group(t, "you", groups.you, t.working))
-        .children(this.group(t, "teams", groups.teams, t.muted)));
+        .children(this.group(t, "teams", groups.teams, null)));
   }
 
-  // One group of chips in the top bar, its label explaining who it waits on
-  group(t, key, list, tone, always) {
+  // One group of chips in the top bar, its label explaining who it waits on; only the one that
+  // needs the person has a colour
+  group(t, key, list, accent, always) {
     const [label, text] = GROUPS[key](this.who ?? {});
     if (!list.length && !always) return [];
-    const head = this.explainer(`wg-g-${key}`, div().id(`wg-g-${key}-t`).flex_none().text_color(list.length ? tone : t.dim).font_semibold()
+    const head = this.explainer(`wg-g-${key}`, div().id(`wg-g-${key}-t`).flex_none().text_color(list.length ? accent ?? t.muted : t.dim).font_semibold()
       .child(list.length ? `${label}:` : `Nothing in ${label.toLowerCase()}.`), this.note(t, div(), label, `${list.length} ${list.length === 1 ? "card" : "cards"}`, text));
     return [head, ...list.slice(0, 6).map(({ n, team }) => this.hover(`wg-gc-${n.key}`, n, div().id(`wg-gc-${n.key}-t`).flex_none().px(7).h(20).flex().items_center()
-      .rounded(5).border_1().border_color(tone).text_color(t.foreground).hover((el) => el.bg(t.hover)).child(team ? `${n.title} · ${team}` : n.title))),
+      .rounded(5).border_1().border_color(accent ?? t.border).text_color(t.foreground).hover((el) => el.bg(t.hover)).child(team ? `${n.title} · ${team}` : n.title))),
       ...(list.length > 6 ? [div().flex_none().text_color(t.dim).child(`+${list.length - 6} more`)] : [])];
   }
 
@@ -1046,6 +1048,7 @@ export default class WorkGraph extends View {
             this.scrollY = ((this.scrollY + at.y) / z1) * z2 - at.y;
             this.loose = true;
             this.z = z2;
+            this.hold(cx);
             this.setZoom(cx, z2);
             return;
           }

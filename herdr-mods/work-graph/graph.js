@@ -245,9 +245,8 @@ export function startGroups(model, { me, team } = {}) {
 export const rootProject = (terminals) => terminals.filter((t) => t.state === "live" && t.labels?.["tree.role"] === "root")
   .sort((a, b) => (b.created_ms ?? 0) - (a.created_ms ?? 0))[0]?.labels?.["tree.project"] ?? "root";
 
-// The order statuses are counted in, most pressing first: "ready" sits high because work that
-// can start now is the opening to take
-export const STATES = ["needs", "ready", "flight", "waiting", "idle", "blocked", "parked", "done"];
+// Most urgent first: a group shows the first one anything inside it has
+export const STATES = ["needs", "flight", "waiting", "ready", "idle", "blocked", "parked", "done"];
 
 const shortName = (s, words) => {
   const w = String(s ?? "").replace(/\s*\([^)]*\)\s*/g, " ").trim().split(/\s+/).filter(Boolean);
@@ -397,7 +396,9 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
   for (const n of nodes.values()) {
     if (!n.children.length) continue;
     const counts = Object.fromEntries(STATES.map((s) => [s, 0]));
-    for (const k of leavesOf(n.key)) counts[nodes.get(k).state]++;
+    const leaves = leavesOf(n.key);
+    for (const k of leaves) counts[nodes.get(k).state]++;
+    n.total = leaves.length;
     if (n.waiting.length && !n.done) counts.needs++;
     n.counts = counts;
     n.state = n.done ? "done" : STATES.find((s) => counts[s] > 0) ?? "done";
