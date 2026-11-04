@@ -3,7 +3,8 @@
 // everything in it; an expanded one is a frame around its children. Arrows run from each blocker
 // to what it blocks, combined between collapsed cards with a count, in columns by dependency depth
 // among what shows. A leaf is done, needs you (an open ask names it), in flight (its owner session
-// is live), blocked (a blocker isn't done), or ready: nothing blocks it and nobody owns it.
+// is working), blocked (a blocker isn't done), owned but idle (its owner is live and not working),
+// or ready: nothing blocks it and nobody owns it.
 //
 // The level buttons expand everything above that depth (0: projects only); a card's chevron opens
 // or closes that one node, and its body opens its link. Commands work-graph.level0 to level3 and
@@ -17,9 +18,9 @@ import { expand, readFiles, projectList, readGraph, linearIds, fetchLinear, prRe
 
 const REFRESH_MS = 60000;
 // Sizes at 100%; the graph scales them all
-const CARD_W = 208;
-const CARD_H = 76;
-const GAP_X = 52;
+const CARD_W = 204;
+const CARD_H = 72;
+const GAP_X = 48;
 const GAP_Y = 12;
 const LANE_HEAD = 30;
 const GROUP_HEAD = 24;
@@ -30,12 +31,13 @@ const MIN_FIT = 0.6;
 const ZOOMS = [0.6, 0.75, 0.9, 1, 1.15];
 const LEVELS = [0, 1, 2, 3];
 const SPINNER = "mods/work-graph/spinner.svg";
+const LOCK = "mods/work-graph/lock.svg";
 const CHEVRON = (open) => `mods/work-graph/chevron-${open ? "down" : "right"}.svg`;
 
-const WORD = { needs: ["needs you", "need you"], ready: ["ready"], flight: ["in flight"], blocked: ["blocked"], done: ["done"] };
+const WORD = { needs: ["needs you", "need you"], ready: ["ready"], flight: ["in flight"], idle: ["owned, idle"], blocked: ["blocked"], done: ["done"] };
 const word = (s, k) => (k === 1 ? WORD[s][0] : WORD[s][1] ?? WORD[s][0]);
 const SESSION = { working: "working", blocked: "waiting on a dialog" };
-const color = (t, state) => ({ needs: t.blocked, ready: t.ansi2, flight: t.working, blocked: t.dim, done: t.done })[state];
+const color = (t, state) => ({ needs: t.working, ready: t.ansi2, flight: t.accent, idle: t.dim, blocked: t.blocked, done: t.done })[state];
 const countsText = (counts) => STATES.filter((s) => counts[s]).map((s) => `${counts[s]} ${word(s, counts[s])}`).join(", ");
 
 async function readConfig() {
@@ -136,6 +138,8 @@ export default class WorkGraph extends View {
     this.level = Number(localStorage.getItem("level") ?? 1);
     this.open = new Map(Object.entries(JSON.parse(localStorage.getItem("open") ?? "{}")));
     this.viewW = 0;
+    this.scrollX = 0;
+    this.panning = false;
     this.error = null;
     this.busy = false;
     this.loaded = false;
@@ -228,45 +232,68 @@ export default class WorkGraph extends View {
     cx.notify();
   }
 
+  panTo(x, width, maxX) {
+    const thumb = (this.viewW * this.viewW) / width;
+    return Math.max(0, Math.min(maxX, ((x - thumb / 2) / this.viewW) * width));
+  }
+
+  panBar(t, width, maxX) {
+    const thumb = Math.max(24, (this.viewW * this.viewW) / width);
+    const at = (this.scrollX / maxX) * (this.viewW - thumb);
+    return div().id("wg-pan-bar").relative().flex_none().w_full().h(12).border_t(1).border_color(t.border).cursor_pointer()
+      .on_mouse_down("left", (e, cx) => {
+        this.panning = true;
+        this.scrollX = this.panTo(e.local_position?.x ?? 0, width, maxX);
+        cx.notify();
+      })
+      .child(div().absolute().top(3).left(at).w(thumb).h(6).rounded_full().bg(this.panning ? t.muted : t.border).hover((el) => el.bg(t.muted)));
+  }
+
   setZoom(cx, z) {
     this.zoom = z;
     localStorage.setItem("zoom", String(z));
     cx.notify();
   }
 
-  glyph(t, n, u) {
-    const box = h_flex().w(u(10)).h(u(14)).flex_none().items_center().justify_center();
-    if (n.state === "needs") return box.child(div().text_size(u(13)).font_bold().text_color(t.blocked).child("!"));
-    if (n.state === "flight" && n.session?.status === "working") return box.child(svg(SPINNER).size(u(10)).text_color(t.working).spin(900));
-    if (n.state === "done") return box.child(div().text_size(u(11)).text_color(t.done).child("✓"));
-    if (n.state === "blocked") return box.child(div().size(u(7)).rounded_full().border_1().border_color(t.dim));
-    return box.child(div().size(u(7)).rounded_full().bg(color(t, n.state)));
+  // One icon per status: a spinner works, ! needs you, a lock is blocked, a hollow dot is idle,
+  // a green ring can start, a check is done
+  icon(t, state, size) {
+    const box = h_flex().flex_none().w(size).h(size).items_center().justify_center();
+    const c = color(t, state);
+    if (state === "flight") return box.child(svg(SPINNER).size(size * 0.8).text_color(c).spin(900));
+    if (state === "needs") return box.child(div().text_size(size * 1.05).font_bold().text_color(c).child("!"));
+    if (state === "blocked") return box.child(svg(LOCK).size(size * 0.85).text_color(c));
+    if (state === "done") return box.child(div().text_size(size * 0.9).text_color(c).child("✓"));
+    return box.child(div().size(size * 0.55).rounded_full().border_1().border_color(c));
   }
 
-  caption(n, sessions) {
-    if (n.children.length) return countsText(n.counts);
-    const after = (list) => `after ${list.slice(0, 2).map((b) => b.id).join(", ")}${list.length > 2 ? ` +${list.length - 2}` : ""}`;
-    if (n.state === "needs") return `needs you: ${n.waiting.map((a) => a.id).join(", ")}`;
-    if (n.kind === "project") {
-      const live = sessions.projects.get(n.project) ?? [];
-      return live.length ? `${live.length} session${live.length === 1 ? "" : "s"} live${live.some((s) => s.status === "working") ? ", working" : ""}` : "no session live";
-    }
-    if (n.state === "flight") return `${SESSION[n.session.status] ?? "idle"}${n.blockers.length ? `, ${after(n.blockers)}` : ""}`;
-    if (n.state === "blocked") return after(n.blockers);
-    if (n.state === "ready") return "can start now";
-    return n.issue?.stateName === "Canceled" ? "canceled" : n.live?.state === "MERGED" ? "merged" : "done";
+  counts(t, counts, size, gap) {
+    return h_flex().flex_none().gap(gap).items_center().whitespace_nowrap()
+      .children(STATES.filter((s) => counts[s]).map((s) => h_flex().flex_none().gap(size * 0.2).items_center()
+        .child(this.icon(t, s, size))
+        .child(div().text_size(size * 0.95).text_color(s === "done" || s === "idle" ? t.dim : t.muted).child(String(counts[s])))));
   }
 
   tip(n) {
-    const lines = [n.kind === "project" ? n.title : `${n.id}: ${n.title}`];
-    if (n.kind === "project" && n.info.next) lines.push(`Next: ${String(n.info.next).slice(0, 240)}`);
+    const status = {
+      needs: () => `Needs you: ${n.waiting.map((a) => a.id).join(", ")}`,
+      flight: () => `Working${n.owner ? `: ${n.owner}` : ""}`,
+      idle: () => `Owned, ${SESSION[n.session?.status] ?? "idle"}${n.owner ? `: ${n.owner}` : ""}`,
+      blocked: () => `Blocked by ${n.blockers.map((b) => b.id).join(", ")}`,
+      ready: () => "Ready to start",
+      done: () => (n.issue?.stateName === "Canceled" ? "Canceled" : n.live?.state === "MERGED" ? "Merged" : "Done"),
+    };
+    const lines = [`${n.title}${n.tag ? ` · ${n.tag}` : " · no kind set"}`];
+    if (n.fullTitle && n.fullTitle !== n.title) lines.push(n.fullTitle);
+    if (n.kind !== "project") lines.push([n.id, n.pr && n.pr !== n.id ? n.pr : null].filter(Boolean).join(" · "));
+    lines.push(n.children.length ? countsText(n.counts) : status[n.state]());
+    if (n.owner && !["flight", "idle"].includes(n.state)) lines.push(`Owner: ${n.owner}${n.session ? `, ${SESSION[n.session.status] ?? "idle"}` : ", no live session"}`);
+    if (n.blockers.length && n.state !== "blocked") lines.push(`Waits on ${n.blockers.map((b) => b.id).join(", ")}`);
     if (n.issue?.stateName) lines.push(`Linear: ${n.issue.stateName}`);
     if (n.live) lines.push(`${n.pr}: ${n.live.state === "OPEN" && n.live.draft ? "draft" : n.live.state.toLowerCase()}`);
-    if (n.owner) lines.push(`Owner: ${n.owner}${n.session ? `, ${SESSION[n.session.status] ?? "idle"}` : ", no live session"}`);
-    if (n.counts) lines.push(countsText(n.counts));
-    if (n.waiting.length) lines.push(`Needs you: ${n.waiting.map((a) => a.id).join(", ")}`);
-    if (n.blockers.length) lines.push(`Waits on ${n.blockers.map((b) => b.id).join(", ")}`);
+    if (n.kind === "project" && n.info.next) lines.push(`Next: ${String(n.info.next).slice(0, 240)}`);
     if (n.note) lines.push(String(n.note).slice(0, 300));
+    if (n.issue && n.live) lines.push("Click opens the issue, Cmd-click the PR");
     if (n.error) lines.push(n.error);
     return lines.join("\n");
   }
@@ -281,32 +308,32 @@ export default class WorkGraph extends View {
       .child(svg(CHEVRON(this.isOpen(n))).size(u(10)));
   }
 
-  card(t, n, x, y, u, sessions) {
-    const tone = color(t, n.state);
-    const prNumber = n.pr ? n.pr.split("#")[1] : null;
+  // A title of a word or two and its kind, then a short summary on one line: words that don't fit
+  // wrap onto a hidden line, so none is cut. The status is the icon and the card's colour.
+  card(t, n, x, y, u) {
     const group = n.children.length > 0;
-    const highlight = (n.state === "ready" && !group && n.kind !== "project") || n.state === "needs";
-    return v_flex().id(`wg-${n.key}`).absolute().left(x).top(y).w(u(CARD_W)).h(u(CARD_H)).px(u(10)).py(u(7)).gap(u(2)).rounded(u(8))
-      .bg(group ? t.raised : t.surface).border_1().border_color(highlight ? tone : t.border).when(n.state === "done", (el) => el.opacity(0.6))
+    const edge = { flight: t.accent, needs: t.working, ready: t.ansi2 }[n.state] ?? t.border;
+    const words = String(n.summary ?? "").split(/\s+/).filter(Boolean);
+    return v_flex().id(`wg-${n.key}`).absolute().left(x).top(y).w(u(CARD_W)).h(u(CARD_H)).px(u(10)).py(u(7)).gap(u(4)).justify_center().rounded(u(8))
+      .bg(group ? t.raised : t.surface).border_1().border_color(edge).when(n.state === "done", (el) => el.opacity(0.55))
       .cursor_pointer().hover((el) => el.bg(t.hover)).tooltip(this.tip(n))
-      .on_click((_e, cx) => {
-        if (n.link) openTarget(n.link);
+      .on_click((e, cx) => {
+        if (e.modifiers?.platform && n.live?.url) openTarget(n.live.url);
+        else if (n.link) openTarget(n.link);
         else if (group) this.toggle(cx, n);
       })
+      .when(n.state === "blocked", (el) => el.child(div().absolute().left(0).top(u(10)).w(u(3)).h(u(CARD_H - 20)).rounded_full().bg(t.blocked)))
       .child(h_flex().w_full().h(u(16)).gap(u(6)).items_center().whitespace_nowrap()
         .when(group, (el) => el.child(this.chevron(t, n, u)))
-        .child(this.glyph(t, n, u))
-        .child(div().flex_none().text_size(u(11.5)).font_semibold().text_color(t.muted).child(n.kind === "project" ? "project" : n.id))
-        .when(Boolean(prNumber && n.pr !== n.id), (el) => el.child(div().id(`wg-pr-${n.key}`).flex_none().text_size(u(11.5)).text_color(t.accent)
-          .hover((el) => el.underline()).on_click((_e, cx) => {
-            cx.stop_propagation();
-            openTarget(n.live?.url ?? `https://github.com/${n.pr.replace("#", "/pull/")}`);
-          }).child(`#${prNumber}${n.live?.draft ? " draft" : ""}`)))
+        .child(this.icon(t, n.state, u(13)))
+        .child(div().min_w(0).truncate().text_size(u(13)).font_semibold().text_color(n.state === "done" ? t.dim : t.foreground).child(n.title))
         .child(div().flex_1().min_w(0))
-        .child(div().min_w(0).max_w(u(84)).truncate().text_size(u(11)).text_color(t.dim).child(n.owner ?? "")))
-      .child(div().w_full().h(u(32)).overflow_hidden().whitespace_normal().text_size(u(12.5)).line_height(`${u(16)}px`)
-        .text_color(n.state === "done" ? t.dim : t.foreground).when(group, (el) => el.font_semibold()).child(n.title))
-      .child(div().w_full().h(u(15)).truncate().text_size(u(11)).text_color(group ? t.muted : tone).child(this.caption(n, sessions)));
+        .child(n.tag
+          ? div().flex_none().px(u(5)).h(u(15)).flex().items_center().rounded(u(4)).border_1().border_color(t.border).text_size(u(10)).text_color(t.muted).child(n.tag)
+          : div().flex_none().text_size(u(11)).text_color(t.dim).opacity(0.6).child("?")))
+      .when(words.length > 0, (el) => el.child(h_flex().w_full().h(u(16)).flex_wrap().gap_x(u(4)).overflow_hidden()
+        .text_size(u(11.5)).text_color(n.state === "done" ? t.dim : t.muted).children(words.map((w) => div().flex_none().h(u(16)).child(w)))))
+      .when(group, (el) => el.child(this.counts(t, n.counts, u(10), u(8))));
   }
 
   // A frame around an expanded node's children, its header the handle that closes it. Frames
@@ -319,7 +346,7 @@ export default class WorkGraph extends View {
         .on_click((_e, cx) => this.toggle(cx, n))
         .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
         .child(div().flex_none().text_size(u(11.5)).font_semibold().text_color(t.foreground).child(n.title))
-        .child(div().min_w(0).truncate().text_size(u(11)).text_color(color(t, n.state)).child(countsText(n.counts))),
+        .child(this.counts(t, n.counts, u(10), u(7))),
     ];
   }
 
@@ -376,7 +403,7 @@ export default class WorkGraph extends View {
     return [...layers, ...labels];
   }
 
-  canvas(t, model, vis, lay, u, sessions) {
+  canvas(t, model, vis, lay, u) {
     const lanes = lay.lanes.map((l) => {
       const n = model.nodes.get(l.key);
       return div().absolute().left(0).top(u(l.y)).w(u(lay.width)).h(u(l.h)).border_t(1).border_color(t.border)
@@ -385,14 +412,14 @@ export default class WorkGraph extends View {
           .on_click((_e, cx) => this.toggle(cx, n))
           .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
           .child(div().flex_none().text_size(u(12.5)).font_semibold().text_color(t.foreground).child(n.title))
-          .child(div().flex_none().text_size(u(11)).text_color(color(t, n.state)).child(countsText(n.counts)))));
+          .child(this.counts(t, n.counts, u(11), u(8)))));
     });
     const frames = [...lay.boxes].flatMap(([key, box]) => this.frame(t, model.nodes.get(key), box, u));
     return div().relative().flex_none().w(u(lay.width)).h(u(lay.height))
       .children(lanes)
       .children(this.edges(t, model, vis, lay, u))
       .children(frames)
-      .children(vis.cards.map((k) => this.card(t, model.nodes.get(k), u(lay.pos.get(k).x), u(lay.pos.get(k).y), u, sessions)));
+      .children(vis.cards.map((k) => this.card(t, model.nodes.get(k), u(lay.pos.get(k).x), u(lay.pos.get(k).y), u)));
   }
 
   button(t, id, label, active, onClick) {
@@ -413,7 +440,7 @@ export default class WorkGraph extends View {
     return v_flex().px(PAD).pt(10).pb(8).gap(6).border_b(1).border_color(t.border)
       .child(h_flex().gap(14).items_center().whitespace_nowrap()
         .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Work graph"))
-        .children(STATES.filter((s) => counts[s]).map((s) => div().text_size(12).text_color(s === "blocked" || s === "done" ? t.dim : color(t, s)).child(`${counts[s]} ${word(s, counts[s])}`)))
+        .child(this.counts(t, counts, 14, 12))
         .child(div().flex_1())
         .child(div().min_w(0).truncate().text_size(11).text_color(this.error ? t.blocked : t.dim)
           .child(this.busy ? "updating" : this.error ?? ago(this.at)))
@@ -429,13 +456,13 @@ export default class WorkGraph extends View {
         .child(div().flex_none().text_color(ready.length ? t.ansi2 : t.dim).font_semibold().child(ready.length ? "Can start now:" : "Nothing can start now."))
         .children(ready.slice(0, 8).map((n) => div().id(`wg-ready-${n.key}`).flex_none().px(7).h(20).flex().items_center().rounded(5)
           .border_1().border_color(t.ansi2).text_color(t.foreground).cursor_pointer().hover((el) => el.bg(t.hover))
-          .tooltip(this.tip(n)).on_click(() => openTarget(n.link)).child(`${n.id} ${n.title}`)))
+          .tooltip(this.tip(n)).on_click(() => openTarget(n.link)).child(n.title)))
         .when(ready.length > 8, (el) => el.child(div().text_color(t.dim).child(`+${ready.length - 8} more`))));
   }
 
   render() {
     const t = theme();
-    const root = v_flex().id("work-graph").size_full().bg(t.canvas).text_color(t.foreground);
+    const root = v_flex().id("work-graph").size_full().min_h(0).overflow_hidden().bg(t.canvas).text_color(t.foreground);
     if (!this.loaded) return root.child(div().p(PAD).text_color(t.dim).child("Reading the projects."));
     if (!this.projects.length) return root.child(div().p(PAD).text_color(t.dim).child(`No open projects in ${this.folder}.`));
     const sessions = liveSessions(terminals(), spaces());
@@ -444,14 +471,34 @@ export default class WorkGraph extends View {
     const lay = layout(model, vis);
     const z = this.zoom !== "fit" ? Number(this.zoom) || 1 : this.viewW ? Math.max(MIN_FIT, Math.min(1, this.viewW / lay.width)) : 1;
     const u = (x) => Math.round(x * z * 10) / 10;
+    const width = u(lay.width);
+    const maxX = Math.max(0, width - this.viewW);
+    this.scrollX = Math.min(this.scrollX, maxX);
     return root
+      .on_mouse_move((e, cx) => {
+        if (!this.panning) return;
+        this.scrollX = this.panTo(e.local_position.x, width, maxX);
+        cx.notify();
+      })
+      .on_mouse_up("left", () => (this.panning = false))
       .child(this.summary(t, model, z))
-      .child(div().id("wg-scroll").flex_1().min_h(0).overflow_scrollbar()
+      // A native scroller on both axes, or one nested in another, never moves down here, so the
+      // view scrolls natively down and pans across by hand: a sideways swipe or shift-wheel moves
+      // it, and so does the bar below
+      .child(div().id("wg-scroll").flex_1().min_h(0).overflow_y_scrollbar()
         .on_size_change((size, cx) => {
           if (Math.abs(size.width - this.viewW) < 1) return;
           this.viewW = size.width;
           cx.notify();
         })
-        .child(this.canvas(t, model, vis, lay, u, sessions)));
+        .child(div().id("wg-pan").relative().w_full().flex_none().h(u(lay.height)).overflow_hidden()
+          .on_scroll_wheel((e, cx) => {
+            if (Math.abs(e.delta.x) <= Math.abs(e.delta.y) || maxX <= 0) return;
+            cx.stop_propagation();
+            this.scrollX = Math.max(0, Math.min(maxX, this.scrollX - e.delta.x));
+            cx.notify();
+          })
+          .child(this.canvas(t, model, vis, lay, u).absolute().top(0).left(-this.scrollX))))
+      .when(maxX > 0, (el) => el.child(this.panBar(t, width, maxX)));
   }
 }

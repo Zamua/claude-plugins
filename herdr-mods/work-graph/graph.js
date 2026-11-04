@@ -2,8 +2,9 @@
 // coordinator's state file), then the nodes in that project's graph file, nested by `parent`.
 //
 // Graph file: <projects folder>/<project>/graph.json, or the path in the coordinator's `graph`
-// field, as { nodes: [{ id, title, parent, blockedBy: [ids], status ("done"), owner (a session
-// name), asks: [ask ids], note, link, pr }] }. A node without a parent sits directly under its
+// field, as { nodes: [{ id, title (a word or two), kind (one word), summary (five to seven words),
+// parent, blockedBy: [ids], status ("done"), owner (a session name), asks: [ask ids], note, link,
+// pr }] }. A node without a parent sits directly under its
 // project. A blocker id is a node of the same file, `<project>/<id>` for another project's, or a
 // Linear id or owner/repo#n, which are the same node everywhere. A Linear node takes its title,
 // state, sub-issues and `blocks` relations from Linear, and its pull request from the issue's
@@ -204,7 +205,12 @@ export const rootProject = (terminals) => terminals.filter((t) => t.state === "l
 
 // The order statuses are counted in, most pressing first: "ready" sits high because work that
 // can start now is the opening to take
-export const STATES = ["needs", "ready", "flight", "blocked", "done"];
+export const STATES = ["needs", "ready", "flight", "idle", "blocked", "done"];
+
+const shortName = (s, words) => {
+  const w = String(s ?? "").replace(/\s*\([^)]*\)\s*/g, " ").trim().split(/\s+/).filter(Boolean);
+  return w.length <= words ? w.join(" ") : `${w.slice(0, words).join(" ")}…`;
+};
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -269,7 +275,13 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
     n.issue = issues.get(n.key) ?? null;
     n.pr = n.kind === "project" ? null : nodePr(n.raw, n.id, n.issue);
     n.live = n.pr ? prs.get(n.pr) ?? null : null;
-    n.title = n.kind === "project" ? n.info.title : n.raw.title ?? n.issue?.title ?? n.live?.title?.replace(/^[A-Z][A-Z0-9]*-\d+\s+/, "") ?? n.id;
+    const live = n.issue?.title ?? n.live?.title?.replace(/^[A-Z][A-Z0-9]*-\d+\s+/, "") ?? null;
+    const long = n.kind === "project" ? n.info.title : n.raw.title ?? live ?? n.id;
+    // A card's title is a word or two; a longer one, or none, is cut down so the gap shows
+    n.title = n.kind === "project" ? shortName(n.info.title, 3) : shortName(n.raw.title ?? n.id, 2);
+    n.fullTitle = live ?? long;
+    n.tag = n.kind === "project" ? "project" : typeof n.raw.kind === "string" ? n.raw.kind : null;
+    n.summary = n.kind === "project" ? n.info.goal ?? "" : n.raw.summary ?? (n.fullTitle !== n.title ? n.fullTitle : "");
     n.owner = n.raw.owner ?? null;
     n.note = n.raw.note ?? null;
     n.link = n.issue?.url ?? n.live?.url ?? n.raw.link ?? null;
@@ -325,7 +337,9 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
   }
   for (const n of nodes.values()) {
     if (n.children.length) continue;
-    n.state = n.done ? "done" : n.waiting.length ? "needs" : n.session ? "flight" : n.blockers.length ? "blocked" : "ready";
+    // A live owner that isn't working holds the node without moving it
+    const working = n.session?.status === "working";
+    n.state = n.done ? "done" : n.waiting.length ? "needs" : working ? "flight" : n.blockers.length ? "blocked" : n.session ? "idle" : "ready";
   }
   // A group rolls up its leaves; its own open asks count as one more that needs you
   for (const n of nodes.values()) {
