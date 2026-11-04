@@ -99,7 +99,12 @@ symlinked folder. Run it again after a pull.
   pointer on a card fades everything not on its path, what it waits on and what waits on
   it. Each lane is its own DAG. A warning marks a card whose file contradicts itself: a
   blocker in another project, which draws nothing, work started or done before its blockers,
-  or a blocker that holds or sits inside the card; a collapsed card shows it for anything inside. Its i icon opens a popup with the rest and a labelled link to its issue, PR, stack
+  or a blocker that holds or sits inside the card; a collapsed card shows it for anything inside.
+  Resting on a header's count says what its icon and colour mean, and the legend button lists them all.
+  A node's `owner` is a session name, the person's own name, or `team:<name>`, and `status` may be
+  `parked` for deliberately deferred work, drawn grey with a pause icon. The top bar splits unblocked
+  work into what a session can start now, what needs you, and what waits on another team, an owner
+  `team:<name>` or a Linear issue of another team; `me` and `team` in the config name you and your team. Its i icon opens a popup with the rest and a labelled link to its issue, PR, stack
   neighbours, extra links and owner session's pane; a file opens in the mod's own read-only
   viewer, never an editor.
   Open it with `herdr-app do tab.new --mod work-graph`, with the projects folder in

@@ -284,7 +284,16 @@ export default class SessionPrs extends View {
     const options = (Array.isArray(a.options) ? a.options : []).map(optionText);
     const nth = Number(/^option\s*(\d+)\b/i.exec(rec)?.[1]);
     const isRec = (o, k) => (nth ? k === nth - 1 : rec && (o === rec || rec.startsWith(o) || o.startsWith(rec)));
-    const links = [...new Set(`${a.ask ?? ""} ${a.detail ?? ""} ${a.url ?? ""} ${(a.links ?? []).join(" ")}`.match(URL) ?? [])];
+    // An ask's links are URLs or { label, url }; a labelled one stands for the same URL in the text
+    const links = [];
+    const add = (url, label) => {
+      if (url && !links.some((l) => l.url === url)) links.push({ url, label: label || url });
+    };
+    for (const l of [].concat(a.links ?? [])) {
+      if (typeof l === "string") (l.match(URL) ?? []).forEach((u) => add(u));
+      else if (typeof l?.url === "string") add(l.url, typeof l.label === "string" ? l.label : null);
+    }
+    for (const u of `${a.ask ?? ""} ${a.detail ?? ""} ${a.url ?? ""}`.match(URL) ?? []) add(u.replace(/[.,;:]+$/, ""));
     const button = (id, label, primary, action) => h_flex().id(id).h(30).px(12).items_center().rounded(7).cursor_pointer()
       .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised)
       .text_color(primary ? t.solid_foreground : t.foreground).hover((el) => el.opacity(0.88)).on_click(action).child(label);
@@ -302,8 +311,8 @@ export default class SessionPrs extends View {
         .child(div().flex_none().text_size(11).text_color(t.dim).child("Esc")))
       .child(div().text_size(11.5).text_color(t.dim).child([a.project, a.session, due && `due ${due}`, a.created && `asked ${age(Date.parse(a.created))}`].filter(Boolean).join(" · ")))
       .when(Boolean(a.detail), (el) => el.child(div().id("ask-detail").max_h(260).overflow_y_scrollbar().text_size(12.5).line_height("19px").text_color(t.muted).child(a.detail)))
-      .when(links.length > 0, (el) => el.child(v_flex().gap(2).children(links.map((u, k) => div().id(`ask-link-${k}`).truncate().text_size(12)
-        .text_color(t.accent).cursor_pointer().hover((el) => el.underline()).on_click(() => exec("open", [u])).child(u)))))
+      .when(links.length > 0, (el) => el.child(v_flex().gap(2).children(links.map((l, k) => div().id(`ask-link-${k}`).truncate().text_size(12)
+        .text_color(t.accent).cursor_pointer().hover((el) => el.underline()).on_click(() => exec("open", [l.url])).child(l.label)))))
       .child(v_flex().gap(6)
         .children(options.map((o, k) => h_flex().id(`ask-opt-${k}`).min_h(32).px(12).py(6).gap(10).items_start().rounded(7)
           .border_1().border_color(isRec(o, k) ? t.accent : t.input).bg(t.raised)

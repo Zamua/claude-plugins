@@ -3,7 +3,8 @@
 //
 // Graph file: <projects folder>/<project>/graph.json, or the path in the coordinator's `graph`
 // field, as { nodes: [{ id, title (a word or two), kind (one word), summary (five to seven words),
-// parent, blockedBy: [ids], status ("done"), owner (a session name), asks: [ask ids], note, link,
+// parent, blockedBy: [ids], status ("done", or "parked" for work deliberately deferred), owner (a
+// session name, the person's own name, or "team:<name>"), asks: [ask ids], note, link,
 // links: [{ label, url }] (a URL or a file path), pr }] }. A node without a parent sits directly under its
 // project. A blocker id is a node of the same file, or a Linear id or owner/repo#n, which are the
 // same node everywhere. Each project is its own DAG: a blocker in another project, such as
@@ -94,11 +95,11 @@ const fileNodes = (graphs) => [...graphs.values()].flatMap((g) => (Array.isArray
 
 export const linearIds = (graphs) => [...new Set(fileNodes(graphs).map((n) => n.id).filter((id) => LINEAR_ID.test(id)))];
 
-const ISSUE = "identifier title url state{type name} parent{identifier} relations{nodes{type relatedIssue{identifier}}} attachments{nodes{url}}";
+const ISSUE = "identifier title url state{type name} team{name} parent{identifier} relations{nodes{type relatedIssue{identifier}}} attachments{nodes{url}}";
 
 function issueOf(x) {
   return {
-    title: x.title, url: x.url, state: x.state?.type, stateName: x.state?.name, parent: x.parent?.identifier ?? null,
+    title: x.title, url: x.url, state: x.state?.type, stateName: x.state?.name, team: x.team?.name ?? null, parent: x.parent?.identifier ?? null,
     blocks: (x.relations?.nodes ?? []).filter((n) => n.type === "blocks").map((n) => n.relatedIssue?.identifier).filter(Boolean),
     prs: (x.attachments?.nodes ?? []).map((a) => prRef(a.url)).filter(Boolean),
     children: [],
@@ -225,12 +226,28 @@ export function liveSessions(terminals, spaces, records = new Map()) {
   return { byName, projects };
 }
 
+// Unblocked work that isn't done, by who can take it next: `me` is the person's owner name and
+// `team` their own team's name in Linear, so an owner "team:<name>", or an unowned issue of
+// another Linear team, waits on that team
+export function startGroups(model, { me, team } = {}) {
+  const groups = { start: [], you: [], teams: [] };
+  for (const n of model.leaves) {
+    if (n.kind === "project" || n.done || n.parked || n.blockers.length) continue;
+    const owner = typeof n.owner === "string" ? n.owner : "";
+    const other = owner.startsWith("team:") ? owner.slice(5) : !owner && team && n.issue?.team && n.issue.team !== team ? n.issue.team : null;
+    if (n.waiting.length || (me && owner === me)) groups.you.push({ n });
+    else if (other) groups.teams.push({ n, team: other });
+    else if (n.state === "ready") groups.start.push({ n });
+  }
+  return groups;
+}
+
 export const rootProject = (terminals) => terminals.filter((t) => t.state === "live" && t.labels?.["tree.role"] === "root")
   .sort((a, b) => (b.created_ms ?? 0) - (a.created_ms ?? 0))[0]?.labels?.["tree.project"] ?? "root";
 
 // The order statuses are counted in, most pressing first: "ready" sits high because work that
 // can start now is the opening to take
-export const STATES = ["needs", "ready", "flight", "waiting", "idle", "blocked", "done"];
+export const STATES = ["needs", "ready", "flight", "waiting", "idle", "blocked", "parked", "done"];
 
 const shortName = (s, words) => {
   const w = String(s ?? "").replace(/\s*\([^)]*\)\s*/g, " ").trim().split(/\s+/).filter(Boolean);
@@ -368,11 +385,12 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
     n.session = n.kind === "project" ? own.find((s) => s.status === "working") ?? own.find((s) => s.status === "waiting") ?? own[0] ?? null
       : n.owner ? sessions.byName.get(n.owner) ?? null : null;
   }
+  for (const n of nodes.values()) n.parked = !n.done && [n.key, ...n.ancestors].some((k) => nodes.get(k).raw?.status === "parked");
   for (const n of nodes.values()) {
     if (n.children.length) continue;
     // A live owner that isn't working holds the node without moving it
     const working = n.session?.status === "working";
-    n.state = n.done ? "done" : n.waiting.length ? "needs" : working ? "flight" : n.session?.status === "waiting" ? "waiting"
+    n.state = n.done ? "done" : n.parked ? "parked" : n.waiting.length ? "needs" : working ? "flight" : n.session?.status === "waiting" ? "waiting"
       : n.blockers.length ? "blocked" : n.session ? "idle" : "ready";
   }
   // A group rolls up its leaves; its own open asks count as one more that needs you
@@ -385,14 +403,15 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
     n.state = n.done ? "done" : STATES.find((s) => counts[s] > 0) ?? "done";
   }
 
-  // blockedBy means "can't start until it is done", so work that started or finished first, or a
-  // node waiting on its own parent or child, is a mistake in the graph file to show, not to hide
+  // blockedBy means "can't start until it is done", so work in flight, waiting or done first, or a
+  // node waiting on its own parent or child, is a mistake in the graph file to show, not to hide.
+  // An open ask on blocked work is fine: a question can be answered ahead of the work.
   const names = (list) => list.map((b) => b.title).join(", ");
-  const STARTED = { done: "Done", needs: "Needs you", flight: "In flight", waiting: "Waiting" };
   for (const n of nodes.values()) {
-    if (n.kind === "project") continue;
-    const started = n.children.length ? (n.done ? "Done" : null) : STARTED[n.state];
-    if (started && n.blockers.length) n.problems.push(`${started} while ${names(n.blockers)} ${n.blockers.length > 1 ? "aren't" : "isn't"} done`);
+    if (n.kind === "project" || n.parked || !n.blockers.length) continue;
+    const own = n.children.length ? null : n.session?.status;
+    const started = n.done ? "Done" : own === "working" ? "In flight" : own === "waiting" ? "Waiting" : null;
+    if (started) n.problems.push(`${started} while ${names(n.blockers)} ${n.blockers.length > 1 ? "aren't" : "isn't"} done`);
   }
   for (const e of base.values()) {
     const to = nodes.get(e.to);
