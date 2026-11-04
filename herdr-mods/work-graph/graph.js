@@ -1,14 +1,15 @@
-// A work graph: the nodes a graph file lists, with live state from Linear, GitHub and the
-// sessions' state files, the edges from each blocker to what it blocks, and a layout in columns
-// by dependency depth and lanes.
+// All tracked work as a tree of nodes with blocker edges: a node per open project (from its
+// coordinator's state file), then the nodes in that project's graph file, nested by `parent`.
 //
-// Graph file: { title, lanes: [lane names, top to bottom], nodes: [{ id, title, lane, after:
-// [ids of its blockers], owner (a session name), status ("done"), asks: [ask ids], note, link,
-// pr }] }. A node whose id is a Linear identifier (ABC-12) takes its title, state, parent and
-// `blocks` relations from Linear, and its pull request from the issue's GitHub link unless `pr`
-// names one. An id or `pr` of owner/repo#n is read from GitHub; a pull request whose base branch
-// is another node's head branch is blocked by it. A parent issue waits on its sub-issues in the
-// graph without an arrow, since it contains them.
+// Graph file: <projects folder>/<project>/graph.json, or the path in the coordinator's `graph`
+// field, as { nodes: [{ id, title, parent, blockedBy: [ids], status ("done"), owner (a session
+// name), asks: [ask ids], note, link, pr }] }. A node without a parent sits directly under its
+// project. A blocker id is a node of the same file, `<project>/<id>` for another project's, or a
+// Linear id or owner/repo#n, which are the same node everywhere. A Linear node takes its title,
+// state, sub-issues and `blocks` relations from Linear, and its pull request from the issue's
+// GitHub link unless `pr` names one; a listed issue's sub-issues join under it unless a file
+// lists them. A pull request whose base branch is another node's head branch is blocked by it.
+// A node's blockers also block everything inside it.
 
 import { exec, home, readTextFile } from "herdr";
 import { readdir } from "fs/promises";
@@ -19,23 +20,17 @@ const LINEAR_ID = /^[A-Z][A-Z0-9]*-\d+$/;
 const PR_REF = /^([\w.-]+)\/([\w.-]+)#(\d+)$/;
 const PR_URL = /github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/;
 const DONE = ["completed", "canceled"];
+const GRAPH = "graph.json";
+
+const isGlobal = (id) => LINEAR_ID.test(id) || PR_REF.test(id);
 
 export function prRef(s) {
   const m = PR_REF.exec(s ?? "") ?? PR_URL.exec(s ?? "");
   return m ? `${m[1]}/${m[2]}#${m[3]}` : null;
 }
 
-export async function readGraph(path) {
-  try {
-    const text = await readTextFile(expand(path));
-    if (text == null) return { path, error: `No file at ${path}` };
-    return { path, data: JSON.parse(text) };
-  } catch (e) {
-    return { path, error: `Could not read ${path}: ${e?.message ?? e}` };
-  }
-}
-
-// Every session's state file under the projects folder, as `<project>/<session>`
+// Every session's state file under the projects folder, as `<project>/<session>`; a graph file
+// is not one
 export async function readFiles(folder) {
   const files = new Map();
   let dirs = [];
@@ -52,7 +47,7 @@ export async function readFiles(folder) {
     } catch {
       continue;
     }
-    for (const n of names.filter((n) => n.endsWith(".json"))) {
+    for (const n of names.filter((n) => n.endsWith(".json") && n !== GRAPH)) {
       try {
         const text = await readTextFile(`${folder}/${d.name}/${n}`);
         if (text) files.set(`${d.name}/${n.slice(0, -5)}`, JSON.parse(text));
@@ -64,36 +59,96 @@ export async function readFiles(folder) {
   return files;
 }
 
-export const linearIds = (graphs) => [...new Set(graphs.flatMap((g) => g.data?.nodes ?? []).map((n) => n?.id).filter((id) => LINEAR_ID.test(id ?? "")))];
-
-// One Linear call for every issue, through the `linear` CLI's own login
-export async function fetchLinear(ids) {
-  if (!ids.length) return { issues: new Map() };
-  const fields = "identifier title url state{type name} parent{identifier} relations{nodes{type relatedIssue{identifier}}} attachments{nodes{url}}";
-  const query = `query{${ids.map((id, i) => `i${i}:issue(id:${JSON.stringify(id)}){${fields}}`).join(" ")}}`;
-  const r = await exec("linear", ["api", query]);
-  let data = {};
-  try {
-    data = JSON.parse(r.stdout || "{}").data ?? {};
-  } catch {
-    // Reported below
-  }
-  const issues = new Map();
-  ids.forEach((id, i) => {
-    const x = data[`i${i}`];
-    if (x) issues.set(id, {
-      title: x.title, url: x.url, state: x.state?.type, stateName: x.state?.name, parent: x.parent?.identifier ?? null,
-      blocks: (x.relations?.nodes ?? []).filter((n) => n.type === "blocks").map((n) => n.relatedIssue?.identifier).filter(Boolean),
-      prs: (x.attachments?.nodes ?? []).map((a) => prRef(a.url)).filter(Boolean),
+// Open projects in their order: those whose coordinator file has a `title` and isn't closed
+export function projectList(folder, files, rootProject) {
+  const names = [...new Set([...files.keys()].map((k) => k.split("/")[0]))];
+  const out = [];
+  for (const name of names) {
+    if (name === rootProject) continue;
+    const own = files.get(`${name}/${name}`);
+    const [key, lead] = own?.title !== undefined ? [`${name}/${name}`, own]
+      : [...files].find(([k, f]) => k.startsWith(`${name}/`) && f.title !== undefined) ?? [];
+    if (!lead || lead.closed) continue;
+    out.push({
+      name, title: lead.title || name, order: lead.order ?? Infinity, lead: key.split("/")[1],
+      goal: lead.goal, next: Array.isArray(lead.next) ? lead.next[0] : lead.next,
+      graph: lead.graph ? expand(lead.graph) : `${folder}/${name}/${GRAPH}`,
     });
-  });
-  const error = issues.size || !ids.length ? null : (r.stderr?.trim().split("\n")[0] || `linear exited ${r.code}`);
-  return { issues, error };
+  }
+  return out.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
 }
 
-const nodePr = (n, issue) => prRef(n.pr) ?? (PR_REF.test(n.id) ? n.id : null) ?? issue?.prs?.[0] ?? null;
+export async function readGraph(path) {
+  try {
+    const text = await readTextFile(path);
+    if (text == null) return { missing: true };
+    return { data: JSON.parse(text) };
+  } catch (e) {
+    return { error: `Could not read ${path}: ${e?.message ?? e}` };
+  }
+}
 
-export const prRefs = (graphs, issues) => [...new Set(graphs.flatMap((g) => g.data?.nodes ?? []).filter((n) => n?.id).map((n) => nodePr(n, issues.get(n.id))).filter(Boolean))];
+const fileNodes = (graphs) => [...graphs.values()].flatMap((g) => (Array.isArray(g?.data?.nodes) ? g.data.nodes : [])).filter((n) => n && typeof n.id === "string");
+
+export const linearIds = (graphs) => [...new Set(fileNodes(graphs).map((n) => n.id).filter((id) => LINEAR_ID.test(id)))];
+
+const ISSUE = "identifier title url state{type name} parent{identifier} relations{nodes{type relatedIssue{identifier}}} attachments{nodes{url}}";
+
+function issueOf(x) {
+  return {
+    title: x.title, url: x.url, state: x.state?.type, stateName: x.state?.name, parent: x.parent?.identifier ?? null,
+    blocks: (x.relations?.nodes ?? []).filter((n) => n.type === "blocks").map((n) => n.relatedIssue?.identifier).filter(Boolean),
+    prs: (x.attachments?.nodes ?? []).map((a) => prRef(a.url)).filter(Boolean),
+    children: [],
+  };
+}
+
+async function askLinear(ids) {
+  const query = `query{${ids.map((id, i) => `i${i}:issue(id:${JSON.stringify(id)}){${ISSUE} children{nodes{${ISSUE}}}}`).join(" ")}}`;
+  const r = await exec("linear", ["api", query]);
+  let body = {};
+  try {
+    body = JSON.parse(r.stdout || "{}");
+  } catch {
+    // Reported by the caller
+  }
+  return { r, data: body.data ?? null, notFound: (body.errors ?? []).some((e) => /not found/i.test(e.message ?? "")) };
+}
+
+// One Linear call for every listed issue and its sub-issues, through the `linear` CLI's own login.
+// An id Linear doesn't know (an id from another tracker) fails the whole call, so the ids are
+// then asked one by one, and the unknown ones come back as `missing` to leave out next time.
+export async function fetchLinear(ids) {
+  if (!ids.length) return { issues: new Map(), missing: [] };
+  let answers = [];
+  const batch = await askLinear(ids);
+  if (batch.data) answers = ids.map((id, i) => [id, batch.data[`i${i}`]]);
+  else if (batch.notFound) answers = await Promise.all(ids.map(async (id) => [id, (await askLinear([id])).data?.i0 ?? null]));
+  const issues = new Map();
+  const missing = [];
+  for (const [id, x] of answers) {
+    if (!x) {
+      missing.push(id);
+      continue;
+    }
+    const issue = issueOf(x);
+    for (const c of x.children?.nodes ?? []) {
+      issue.children.push(c.identifier);
+      if (!issues.has(c.identifier)) issues.set(c.identifier, issueOf(c));
+    }
+    issues.set(id, issue);
+  }
+  const error = issues.size ? null : (batch.r.stderr?.trim().split("\n")[0] || `linear exited ${batch.r.code}`);
+  return { issues, missing: issues.size ? missing : [], error };
+}
+
+const nodePr = (raw, id, issue) => prRef(raw?.pr) ?? (PR_REF.test(id) ? id : null) ?? issue?.prs?.[0] ?? null;
+
+export function prRefs(graphs, issues) {
+  const refs = fileNodes(graphs).map((n) => nodePr(n, n.id, issues.get(n.id)));
+  for (const issue of issues.values()) refs.push(issue.prs[0]);
+  return [...new Set(refs.filter(Boolean))];
+}
 
 export async function fetchPrs(refs) {
   if (!refs.length) return { prs: new Map() };
@@ -117,122 +172,238 @@ export async function fetchPrs(refs) {
   return { prs, error };
 }
 
-// Open asks from every state file, with the text they are matched on
 export function openAsks(files) {
   const asks = [];
   for (const [key, f] of files) {
     for (const a of Array.isArray(f.asks) ? f.asks : []) {
       if (a?.status !== "open") continue;
-      asks.push({ id: a.id, key, text: [a.ask, a.context, a.title].filter((x) => typeof x === "string").join(" ") });
+      asks.push({ id: a.id, key: `${key}#${a.id}`, project: key.split("/")[0], text: [a.ask, a.context, a.title].filter((x) => typeof x === "string").join(" ") });
     }
   }
   return asks;
 }
 
-const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-// Sessions by name: a terminal's own name, else its tab's
+// Live sessions by name (a terminal's own name, else its tab's), and the projects with any
 export function liveSessions(terminals, spaces) {
   const tabs = new Map(spaces.flatMap((sp) => sp.tabs.filter((tab) => tab.named).map((tab) => [tab.id, tab.name])));
-  const out = new Map();
+  const byName = new Map();
+  const projects = new Map();
   for (const t of terminals) {
     if (t.state !== "live") continue;
+    const s = { address: t.address, status: t.status === "error" ? "blocked" : t.status };
     const name = t.name || tabs.get(t.labels?.["herdr.tab"]);
-    if (name) out.set(name, { address: t.address, status: t.status === "error" ? "blocked" : t.status });
+    if (name) byName.set(name, s);
+    const p = t.labels?.["tree.project"];
+    if (p && t.labels?.["tree.role"]) projects.set(p, [...(projects.get(p) ?? []), s]);
   }
-  return out;
+  return { byName, projects };
 }
 
-// The order statuses are counted and colored in, most pressing first
+export const rootProject = (terminals) => terminals.filter((t) => t.state === "live" && t.labels?.["tree.role"] === "root")
+  .sort((a, b) => (b.created_ms ?? 0) - (a.created_ms ?? 0))[0]?.labels?.["tree.project"] ?? "root";
+
+// The order statuses are counted in, most pressing first: "ready" sits high because work that
+// can start now is the opening to take
 export const STATES = ["needs", "ready", "flight", "blocked", "done"];
 
-export function build(data, issues, prs, asks, sessions) {
-  const raw = (data?.nodes ?? []).filter((n) => n && typeof n.id === "string");
-  const ids = new Set(raw.map((n) => n.id));
-  const nodes = raw.map((n, index) => {
-    const issue = issues.get(n.id) ?? null;
-    const pr = nodePr(n, issue);
-    const live = pr ? prs.get(pr) ?? null : null;
-    const title = n.title ?? issue?.title ?? live?.title?.replace(/^[A-Z][A-Z0-9]*-\d+\s+/, "") ?? n.id;
-    const done = n.status === "done" || DONE.includes(issue?.state) || live?.state === "MERGED";
-    return { ...n, index, issue, pr, live, title, done, lane: n.lane ?? data.title ?? "" };
-  });
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const edges = new Map();
-  const edge = (from, to, kind) => {
-    if (from !== to && byId.has(from) && byId.has(to) && !edges.has(`${from}>${to}`)) edges.set(`${from}>${to}`, { from, to, kind });
+const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export function build({ projects, graphs, issues, prs, asks, sessions }) {
+  const nodes = new Map();
+  const add = (key, n) => {
+    if (!nodes.has(key)) nodes.set(key, { key, children: [], ...n });
+    return nodes.get(key);
   };
-  for (const n of nodes) {
-    for (const a of Array.isArray(n.after) ? n.after : []) edge(a, n.id, "after");
-    for (const b of n.issue?.blocks ?? []) edge(n.id, b, "blocks");
-    if (n.issue?.parent && ids.has(n.issue.parent)) edge(n.id, n.issue.parent, "contains");
+  for (const p of projects) {
+    add(`@${p.name}`, { id: p.name, project: p.name, kind: "project", info: p, raw: { owner: p.lead, note: p.goal }, error: graphs.get(p.name)?.error });
+  }
+  const listed = [];
+  for (const p of projects) {
+    for (const raw of Array.isArray(graphs.get(p.name)?.data?.nodes) ? graphs.get(p.name).data.nodes : []) {
+      if (!raw || typeof raw.id !== "string" || !raw.id) continue;
+      const key = isGlobal(raw.id) ? raw.id : `${p.name}/${raw.id}`;
+      if (nodes.has(key)) continue;
+      listed.push(add(key, { id: raw.id, project: p.name, raw }));
+    }
+  }
+  for (const n of listed) {
+    for (const c of issues.get(n.key)?.children ?? []) if (!nodes.has(c)) add(c, { id: c, project: n.project, raw: {}, linearParent: n.key });
+  }
+
+  const resolve = (ref, project) => {
+    if (typeof ref !== "string" || !ref) return null;
+    if (isGlobal(ref)) return nodes.has(ref) ? ref : null;
+    if (nodes.has(`${project}/${ref}`)) return `${project}/${ref}`;
+    if (ref.includes("/") && nodes.has(ref)) return ref;
+    return nodes.has(`@${ref}`) ? `@${ref}` : null;
+  };
+
+  for (const n of nodes.values()) {
+    if (n.kind === "project") continue;
+    const issue = issues.get(n.key);
+    const linear = n.linearParent ?? (issue?.parent && nodes.get(issue.parent)?.project === n.project ? issue.parent : null);
+    n.parent = resolve(n.raw.parent, n.project) ?? linear ?? `@${n.project}`;
+  }
+  // A parent chain that loops is cut at the project
+  for (const n of nodes.values()) {
+    const seen = new Set([n.key]);
+    for (let p = n.parent; p && !p.startsWith("@"); p = nodes.get(p).parent) {
+      if (seen.has(p)) {
+        n.parent = `@${n.project}`;
+        break;
+      }
+      seen.add(p);
+    }
+  }
+  for (const n of nodes.values()) if (n.parent) nodes.get(n.parent).children.push(n.key);
+  const levelOf = (n) => (n.parent ? levelOf(nodes.get(n.parent)) + 1 : 0);
+  const ancestors = (key) => {
+    const out = [];
+    for (let p = nodes.get(key).parent; p; p = nodes.get(p).parent) out.push(p);
+    return out;
+  };
+
+  for (const n of nodes.values()) {
+    n.level = levelOf(n);
+    n.ancestors = ancestors(n.key);
+    n.issue = issues.get(n.key) ?? null;
+    n.pr = n.kind === "project" ? null : nodePr(n.raw, n.id, n.issue);
+    n.live = n.pr ? prs.get(n.pr) ?? null : null;
+    n.title = n.kind === "project" ? n.info.title : n.raw.title ?? n.issue?.title ?? n.live?.title?.replace(/^[A-Z][A-Z0-9]*-\d+\s+/, "") ?? n.id;
+    n.owner = n.raw.owner ?? null;
+    n.note = n.raw.note ?? null;
+    n.link = n.issue?.url ?? n.live?.url ?? n.raw.link ?? null;
+    n.marked = n.raw.status === "done" || DONE.includes(n.issue?.state) || n.live?.state === "MERGED";
+  }
+
+  const base = new Map();
+  const edge = (from, to) => {
+    if (from && to && from !== to) base.set(`${from}>${to}`, { from, to });
+  };
+  for (const n of nodes.values()) {
+    if (n.kind === "project") continue;
+    for (const b of [].concat(n.raw.blockedBy ?? [], n.raw.after ?? [])) edge(resolve(b, n.project), n.key);
+    for (const b of n.issue?.blocks ?? []) edge(n.key, nodes.has(b) ? b : null);
     if (n.live?.base) {
       const repo = n.pr.split("#")[0];
-      const below = nodes.find((m) => m !== n && m.live?.head === n.live.base && m.pr.split("#")[0] === repo);
-      if (below) edge(below.id, n.id, "stack");
+      const below = [...nodes.values()].find((m) => m !== n && m.live?.head === n.live.base && m.pr.split("#")[0] === repo);
+      if (below) edge(below.key, n.key);
     }
   }
-  const preds = new Map(nodes.map((n) => [n.id, []]));
-  for (const e of edges.values()) preds.get(e.to).push(e.from);
+  const preds = new Map([...nodes.keys()].map((k) => [k, []]));
+  for (const e of base.values()) preds.get(e.to).push(e.from);
 
-  for (const n of nodes) {
-    n.blockers = preds.get(n.id).map((id) => byId.get(id)).filter((m) => !m.done);
-    // Only an issue id or a PR number is distinctive enough to find in an ask's text
+  const leavesOf = (key) => {
+    const n = nodes.get(key);
+    return n.children.length ? n.children.flatMap(leavesOf) : [key];
+  };
+  const done = new Map();
+  const doneOf = (key) => {
+    if (!done.has(key)) {
+      const n = nodes.get(key);
+      done.set(key, n.marked || (n.children.length > 0 && leavesOf(key).every((k) => doneOf(k))));
+    }
+    return done.get(key);
+  };
+
+  const matched = new Set();
+  for (const n of nodes.values()) {
+    if (n.kind === "project") continue;
     const refs = [LINEAR_ID.test(n.id) ? n.id : null, n.pr ? `#${n.pr.split("#")[1]}` : null].filter(Boolean);
     const pattern = refs.length ? new RegExp(refs.map((r) => `(^|[^\\w])${escape(r)}(?![\\w])`).join("|")) : null;
-    n.waiting = Array.isArray(n.asks) ? asks.filter((a) => n.asks.includes(a.id)) : asks.filter((a) => pattern?.test(a.text));
-    n.session = n.owner ? sessions.get(n.owner) ?? null : null;
+    n.waiting = Array.isArray(n.raw.asks) ? asks.filter((a) => n.raw.asks.includes(a.id)) : asks.filter((a) => pattern?.test(a.text));
+    for (const a of n.waiting) matched.add(a.key);
+  }
+  // A project's own open asks that name none of its nodes wait on the project itself
+  for (const n of nodes.values()) if (n.kind === "project") n.waiting = asks.filter((a) => a.project === n.project && !matched.has(a.key));
+
+  for (const n of nodes.values()) {
+    n.done = doneOf(n.key);
+    n.blockers = [...new Set([n.key, ...n.ancestors].flatMap((k) => preds.get(k)))].filter((k) => !doneOf(k)).map((k) => nodes.get(k));
+    n.session = n.kind === "project" ? sessions.projects.get(n.project)?.find((s) => s.status === "working") ?? sessions.projects.get(n.project)?.[0] ?? null
+      : n.owner ? sessions.byName.get(n.owner) ?? null : null;
+  }
+  for (const n of nodes.values()) {
+    if (n.children.length) continue;
     n.state = n.done ? "done" : n.waiting.length ? "needs" : n.session ? "flight" : n.blockers.length ? "blocked" : "ready";
   }
-
-  // Columns: the longest chain of blockers before a node
-  const depth = new Map();
-  const visiting = new Set();
-  const depthOf = (id) => {
-    if (depth.has(id)) return depth.get(id);
-    if (visiting.has(id)) return 0;
-    visiting.add(id);
-    const d = preds.get(id).reduce((m, p) => Math.max(m, depthOf(p) + 1), 0);
-    visiting.delete(id);
-    depth.set(id, d);
-    return d;
-  };
-  nodes.forEach((n) => (n.col = depthOf(n.id)));
-
-  const lanes = [...new Set([...(Array.isArray(data.lanes) ? data.lanes : []), ...nodes.map((n) => n.lane)])]
-    .filter((l) => nodes.some((n) => n.lane === l));
-  const laneIndex = new Map(lanes.map((l, i) => [l, i]));
-  const rows = new Map(lanes.map((l) => [l, 0]));
-  const cols = nodes.reduce((m, n) => Math.max(m, n.col + 1), 0);
-  // Within a lane and column, a node sits near the blockers it follows, so arrows cross less
-  const key = (n) => laneIndex.get(n.lane) * 1000 + n.row;
-  for (let c = 0; c < cols; c++) {
-    for (const lane of lanes) {
-      const here = nodes.filter((n) => n.col === c && n.lane === lane);
-      const mean = (n) => {
-        const ps = preds.get(n.id).map((id) => byId.get(id)).filter((m) => m.row !== undefined);
-        return ps.length ? ps.reduce((s, m) => s + key(m), 0) / ps.length : Infinity;
-      };
-      here.map((n) => [n, mean(n)]).sort((a, b) => a[1] - b[1] || a[0].index - b[0].index).forEach(([n], i) => (n.row = i));
-      rows.set(lane, Math.max(rows.get(lane), here.length));
-    }
+  // A group rolls up its leaves; its own open asks count as one more that needs you
+  for (const n of nodes.values()) {
+    if (!n.children.length) continue;
+    const counts = Object.fromEntries(STATES.map((s) => [s, 0]));
+    for (const k of leavesOf(n.key)) counts[nodes.get(k).state]++;
+    if (n.waiting.length && !n.done) counts.needs++;
+    n.counts = counts;
+    n.state = n.done ? "done" : STATES.find((s) => counts[s] > 0) ?? "done";
   }
-  // An arrow that another path already implies is not drawn, so a blocker points only at its
-  // nearest dependents
-  const next = new Map(nodes.map((n) => [n.id, []]));
-  for (const e of edges.values()) next.get(e.from).push(e.to);
-  const reaches = (from, to, skip) => {
+  return { nodes, base: [...base.values()], projects: projects.map((p) => `@${p.name}`), leaves: [...nodes.values()].filter((n) => !n.children.length) };
+}
+
+// What a given expansion shows: cards (collapsed nodes and leaves), frames (expanded nodes, a
+// project's being its lane), and one edge between two shown nodes for every base edge between
+// what they hold, with a count. An edge another path already implies is not drawn.
+export function visible(model, isOpen) {
+  const { nodes } = model;
+  const opened = (n) => n.children.length > 0 && isOpen(n);
+  const cards = [];
+  const frames = [];
+  const walk = (key) => {
+    const n = nodes.get(key);
+    if (opened(n)) {
+      frames.push(key);
+      n.children.forEach(walk);
+    } else cards.push(key);
+  };
+  model.projects.forEach(walk);
+  const repOf = (key) => {
+    const chain = [...nodes.get(key).ancestors].reverse().concat(key);
+    return chain.find((k) => !opened(nodes.get(k))) ?? key;
+  };
+  const within = (a, b) => a === b || nodes.get(b).ancestors.includes(a) || nodes.get(a).ancestors.includes(b);
+  const agg = new Map();
+  for (const e of model.base) {
+    const from = repOf(e.from);
+    const to = repOf(e.to);
+    if (within(from, to)) continue;
+    const k = `${from}>${to}`;
+    agg.set(k, { from, to, count: (agg.get(k)?.count ?? 0) + 1 });
+  }
+  const next = new Map();
+  for (const e of agg.values()) next.set(e.from, [...(next.get(e.from) ?? []), e.to]);
+  const reaches = (from, to) => {
     const seen = new Set();
-    const stack = next.get(from).filter((id) => id !== skip);
+    const stack = (next.get(from) ?? []).filter((id) => id !== to);
     while (stack.length) {
       const id = stack.pop();
       if (id === to) return true;
       if (seen.has(id)) continue;
       seen.add(id);
-      stack.push(...next.get(id));
+      stack.push(...(next.get(id) ?? []));
     }
     return false;
   };
-  const drawn = [...edges.values()].filter((e) => e.kind !== "contains" && !reaches(e.from, e.to, e.to));
-  return { nodes, byId, edges: drawn, lanes: lanes.map((name) => ({ name, rows: rows.get(name) })), cols };
+  const edges = [...agg.values()].filter((e) => !reaches(e.from, e.to));
+
+  // Columns: the longest chain of shown blockers before a card; an edge into a frame comes
+  // before everything in it, and one out of a frame after everything in it
+  const cardSet = new Set(cards);
+  const cardsIn = (key) => (cardSet.has(key) ? [key] : cards.filter((c) => nodes.get(c).ancestors.includes(key)));
+  const cardPreds = new Map(cards.map((c) => [c, new Set()]));
+  for (const e of agg.values()) {
+    const sources = cardsIn(e.from);
+    for (const c of cardsIn(e.to)) sources.forEach((s) => cardPreds.get(c).add(s));
+  }
+  const col = new Map();
+  const visiting = new Set();
+  const colOf = (c) => {
+    if (col.has(c)) return col.get(c);
+    if (visiting.has(c)) return 0;
+    visiting.add(c);
+    const d = [...cardPreds.get(c)].reduce((m, p) => Math.max(m, colOf(p) + 1), 0);
+    visiting.delete(c);
+    col.set(c, d);
+    return d;
+  };
+  cards.forEach(colOf);
+  return { cards, frames, edges, col, cardPreds };
 }

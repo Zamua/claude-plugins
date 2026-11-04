@@ -27,7 +27,8 @@ export async function readFiles(folder) {
     } catch {
       continue;
     }
-    for (const n of names.filter((n) => n.endsWith(".json"))) {
+    // A project's graph.json is the work-graph mod's, not a session's state
+    for (const n of names.filter((n) => n.endsWith(".json") && n !== "graph.json")) {
       try {
         const text = await readTextFile(`${folder}/${d.name}/${n}`);
         if (text) files.set(`${d.name}/${n.slice(0, -5)}`, JSON.parse(text));
