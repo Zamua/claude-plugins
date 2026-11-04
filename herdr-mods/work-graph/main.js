@@ -9,7 +9,10 @@
 //
 // The level buttons expand everything above that depth (0: projects only); clicking a card that
 // has children opens it, and clicking a frame's header closes it. Resting the pointer on a card
-// fades everything not on its path: what it waits on and what waits on it, across projects too.
+// fades everything not on its path: what it waits on and what waits on it, inside its lane.
+// A warning marks a card whose graph file contradicts itself: a blocker in another lane, work
+// started or finished before its blockers are done, or a blocker that holds or sits inside the
+// node; a collapsed card shows it for anything inside.
 // Its i icon shows its details and a labelled link for each place it can be opened; a file opens
 // in this mod's own read-only viewer, split beside it. Cmd with scroll zooms around the pointer.
 // Commands work-graph.level0 to level3 and work-graph.refresh do the same from a key or a script. props or ~/.config/herdr-app/work-graph.json
@@ -48,6 +51,7 @@ const EASE = { duration: ANIM_MS, easing: "ease-in-out" };
 const moves = (el) => el.transition("left", EASE).transition("top", EASE).transition("width", EASE).transition("height", EASE).transition("opacity", EASE);
 const LOCK = "mods/work-graph/lock.svg";
 const CLOCK = "mods/work-graph/clock.svg";
+const WARN = "mods/work-graph/warn.svg";
 const CHEVRON = (open) => `mods/work-graph/chevron-${open ? "down" : "right"}.svg`;
 const INFO = "mods/work-graph/info.svg";
 // What isn't on the hovered node's path fades to this, quickly
@@ -545,6 +549,11 @@ export default class WorkGraph extends View {
         .when(n.kind === "project" && Boolean(n.info.next), (el) => el.child(row("Next", String(n.info.next).slice(0, 220), t.muted))))
       .when(Boolean(n.note), (el) => el.child(div().text_size(11.5).text_color(t.dim).whitespace_normal().child(String(n.note).replace(URLS, "").slice(0, 280))))
       .when(Boolean(n.error), (el) => el.child(div().text_size(11.5).text_color(t.blocked).whitespace_normal().child(n.error)))
+      .when(n.flagged.length > 0, (el) => el.child(v_flex().gap(3).text_size(11.5).whitespace_normal()
+        .child(h_flex().gap(6).items_center().text_color(t.working).child(svg(WARN).flex_none().size(12)).child("Check the graph file"))
+        .children(n.flagged.slice(0, 6).flatMap((k) => this.model.nodes.get(k).problems.map((p) =>
+          div().text_color(t.foreground).child(k === n.key ? p : `${this.model.nodes.get(k).title}: ${p}`))))
+        .when(n.flagged.length > 6, (el) => el.child(div().text_color(t.dim).child(`and ${n.flagged.length - 6} more inside`)))))
       .child(div().h(1).bg(t.border))
       .child(links.length
         ? v_flex().gap(1).children(links.map((l, i) => h_flex().id(`wg-link-${n.key}-${i}`).h(24).px(6).gap(8).items_center().rounded(5)
@@ -587,14 +596,16 @@ export default class WorkGraph extends View {
   }
 
   // A title of a word or two and its kind, then a short summary on one line: words that don't fit
-  // wrap onto a hidden line, so none is cut. The status is the icon and the card's colour.
+  // wrap onto a hidden line, so none is cut. The status is the icon and the card's colour; a done
+  // card, or a collapsed one with everything in it done, has a green border and stays at full
+  // strength, since fading means only "off the hovered path"
   card(t, n, r, u) {
     const group = n.children.length > 0;
-    const edge = { flight: t.accent, needs: t.working, ready: t.ansi2 }[n.state] ?? t.border;
+    const edge = { flight: t.accent, needs: t.working, ready: t.ansi2, done: t.ansi2 }[n.state] ?? t.border;
     const words = String(n.summary ?? "").split(/\s+/).filter(Boolean);
     const face = v_flex().id(`wg-${n.key}`).relative().size_full().px(u(10)).py(u(7)).gap(u(4)).justify_center().rounded(u(8))
       .bg(group ? t.raised : t.surface).border_1().border_color(edge)
-      .opacity((n.state === "done" ? 0.55 : 1) * (this.dims(n.key) ? DIM : 1)).transition("opacity", FADE)
+      .opacity(this.dims(n.key) ? DIM : 1).transition("opacity", FADE)
       .hover((el) => el.bg(t.hover))
       .when(group, (el) => el.cursor_pointer().on_click((_e, cx) => this.toggle(cx, n)))
       .on_hover(this.pointAt(n.key))
@@ -602,14 +613,15 @@ export default class WorkGraph extends View {
       .child(h_flex().w_full().h(u(16)).gap(u(6)).items_center().whitespace_nowrap()
         .when(group, (el) => el.child(this.chevron(t, n, u)))
         .child(this.icon(t, n.state, u(13)))
-        .child(div().min_w(0).truncate().text_size(u(13)).font_semibold().text_color(n.state === "done" ? t.dim : t.foreground).child(n.title))
+        .child(div().min_w(0).truncate().text_size(u(13)).font_semibold().text_color(t.foreground).child(n.title))
         .child(div().flex_1().min_w(0))
         .child(n.tag
           ? div().flex_none().px(u(5)).h(u(15)).flex().items_center().rounded(u(4)).border_1().border_color(t.border).text_size(u(10)).text_color(t.muted).child(n.tag)
           : div().flex_none().text_size(u(11)).text_color(t.dim).opacity(0.6).child("?")))
       .when(words.length > 0, (el) => el.child(h_flex().w_full().h(u(16)).flex_wrap().gap_x(u(4)).overflow_hidden()
-        .text_size(u(11.5)).text_color(n.state === "done" ? t.dim : t.muted).children(words.map((w) => div().flex_none().h(u(16)).child(w)))))
+        .text_size(u(11.5)).text_color(t.muted).children(words.map((w) => div().flex_none().h(u(16)).child(w)))))
       .when(group, (el) => el.child(this.counts(t, n.counts, u(10), u(8))))
+      .when(n.flagged.length > 0, (el) => el.child(div().absolute().right(u(23)).bottom(u(6)).child(svg(WARN).size(u(12)).text_color(t.working))))
       .child(div().absolute().right(u(5)).bottom(u(4)).child(this.info(t, n, u, `wg-hc-${n.key}`)));
     return moves(div().id(`wg-pos-${n.key}`).absolute().left(r.x).top(r.y).w(r.w).h(r.h).opacity(r.o)).child(face);
   }
@@ -629,6 +641,7 @@ export default class WorkGraph extends View {
         .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
         .child(div().flex_none().text_size(u(11.5)).font_semibold().text_color(t.foreground).child(n.title))
         .child(this.counts(t, n.counts, u(10), u(7)))
+        .when(n.flagged.length > 0, (el) => el.child(svg(WARN).flex_none().size(u(11)).text_color(t.working)))
         .child(this.info(t, n, u, `wg-hf-${n.key}`)));
   }
 
@@ -719,15 +732,13 @@ export default class WorkGraph extends View {
         pts.push(leg.kind === "x" ? [end, at] : [at, end]);
       });
       r.pts = pts.filter((pt, i) => i === 0 || Math.hypot(pt[0] - pts[i - 1][0], pt[1] - pts[i - 1][1]) > 0.5);
-      r.cross = model.nodes.get(r.e.from).project !== model.nodes.get(r.e.to).project;
     }
     this.routed = { sig, list };
     return list;
   }
 
-  // Paths by look: quieter from a finished blocker, thicker when one arrow stands for several
-  // dependencies, faint across projects, and in the accent colour while the pointer is on the
-  // arrow. The hovered card's path is drawn again, plainly, on its own layer, so it can fade in
+  // Paths by look: thicker when one arrow stands for several dependencies, and in the accent colour
+  // while the pointer is on the arrow. The hovered card's path is drawn again, plainly, on its own layer, so it can fade in
   // over the rest as they fade out; the last path stays on it while it fades away.
   edges(t, model, vis, lay, u) {
     const looks = (map) => (look, width, tone) => {
@@ -742,11 +753,9 @@ export default class WorkGraph extends View {
     const hits = [];
     for (const r of this.routes(model, vis, lay)) {
       const e = r.e;
-      const quiet = model.nodes.get(e.from).done;
       const merged = e.list.length > 1;
-      const plain = (pick) => pick(`${quiet}${merged}`, (quiet ? 1 : 1.5) + (merged ? 1 : 0), quiet ? t.border : t.muted);
+      const plain = (pick) => pick(`plain${merged}`, 1.5 + (merged ? 1 : 0), t.muted);
       const st = this.hoverEdge?.key === e.key ? style(`hot${merged}`, 1.75 + (merged ? 1 : 0), t.accent)
-        : r.cross ? style(`cross${merged}`, merged ? 1.5 : 1, t.border)
         : plain(style);
       const pts = r.pts.map(([x, y]) => [u(x), u(y)]);
       trace(st, pts, u(r.tip), u(6), u(4));
@@ -807,6 +816,7 @@ export default class WorkGraph extends View {
           .child(svg(CHEVRON(true)).flex_none().size(u(10)).text_color(t.muted))
           .child(div().flex_none().text_size(u(12.5)).font_semibold().text_color(t.foreground).child(n.title))
           .child(this.counts(t, n.counts, u(11), u(8)))
+          .when(n.flagged.length > 0, (el) => el.child(svg(WARN).flex_none().size(u(12)).text_color(t.working)))
           .child(this.info(t, n, u, `wg-hl-${n.key}`)));
     });
     const frames = [...lay.boxes.keys()].map((key) => [model.nodes.get(key), this.place(`f:${key}`, rects.get(`f:${key}`))]);

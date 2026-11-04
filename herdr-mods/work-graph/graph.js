@@ -5,8 +5,9 @@
 // field, as { nodes: [{ id, title (a word or two), kind (one word), summary (five to seven words),
 // parent, blockedBy: [ids], status ("done"), owner (a session name), asks: [ask ids], note, link,
 // links: [{ label, url }] (a URL or a file path), pr }] }. A node without a parent sits directly under its
-// project. A blocker id is a node of the same file, `<project>/<id>` for another project's, or a
-// Linear id or owner/repo#n, which are the same node everywhere. A Linear node takes its title,
+// project. A blocker id is a node of the same file, or a Linear id or owner/repo#n, which are the
+// same node everywhere. Each project is its own DAG: a blocker in another project, such as
+// `<project>/<id>`, is drawn nowhere and reported on the node that names it. A Linear node takes its title,
 // state, sub-issues and `blocks` relations from Linear, and its pull request from the issue's
 // GitHub link unless `pr` names one; a listed issue's sub-issues join under it unless a file
 // lists them. A pull request whose base branch is another node's head branch is blocked by it.
@@ -314,11 +315,18 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
 
   const base = new Map();
   const edge = (from, to) => {
-    if (from && to && from !== to) base.set(`${from}>${to}`, { from, to });
+    if (from && to && from !== to && nodes.get(from).project === nodes.get(to).project) base.set(`${from}>${to}`, { from, to });
   };
+  for (const n of nodes.values()) n.problems = [];
   for (const n of nodes.values()) {
     if (n.kind === "project") continue;
-    for (const b of [].concat(n.raw.blockedBy ?? [], n.raw.after ?? [])) edge(resolve(b, n.project), n.key);
+    for (const b of [].concat(n.raw.blockedBy ?? [], n.raw.after ?? [])) {
+      const from = resolve(b, n.project);
+      const named = typeof b === "string" && !isGlobal(b) && b.includes("/") ? b.split("/")[0] : null;
+      const project = from ? nodes.get(from).project : named;
+      if (project && project !== n.project) n.problems.push(`Blocked by ${b}, in another lane: each lane is its own graph, so it isn't drawn`);
+      else edge(from, n.key);
+    }
     for (const b of n.issue?.blocks ?? []) edge(n.key, nodes.has(b) ? b : null);
     if (n.live?.base) {
       const repo = n.pr.split("#")[0];
@@ -376,6 +384,25 @@ export function build({ projects, graphs, issues, prs, asks, sessions }) {
     n.counts = counts;
     n.state = n.done ? "done" : STATES.find((s) => counts[s] > 0) ?? "done";
   }
+
+  // blockedBy means "can't start until it is done", so work that started or finished first, or a
+  // node waiting on its own parent or child, is a mistake in the graph file to show, not to hide
+  const names = (list) => list.map((b) => b.title).join(", ");
+  const STARTED = { done: "Done", needs: "Needs you", flight: "In flight", waiting: "Waiting" };
+  for (const n of nodes.values()) {
+    if (n.kind === "project") continue;
+    const started = n.children.length ? (n.done ? "Done" : null) : STARTED[n.state];
+    if (started && n.blockers.length) n.problems.push(`${started} while ${names(n.blockers)} ${n.blockers.length > 1 ? "aren't" : "isn't"} done`);
+  }
+  for (const e of base.values()) {
+    const to = nodes.get(e.to);
+    const from = nodes.get(e.from);
+    if (to.ancestors.includes(e.from)) to.problems.push(`Blocked by ${from.title}, which holds it`);
+    else if (from.ancestors.includes(e.to)) to.problems.push(`Blocked by ${from.title}, inside it`);
+  }
+  // A collapsed card shows the problems of everything inside it
+  for (const n of nodes.values()) n.flagged = [];
+  for (const n of nodes.values()) if (n.problems.length) for (const k of [n.key, ...n.ancestors]) nodes.get(k).flagged.push(n.key);
   return { nodes, base: [...base.values()], projects: projects.map((p) => `@${p.name}`), leaves: [...nodes.values()].filter((n) => !n.children.length) };
 }
 

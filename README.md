@@ -97,7 +97,9 @@ symlinked folder. Run it again after a pull.
   plus `links: [{label, url}]`, where a card shows only `title` (a word or two), `kind` (one
   word) and `summary` (five to seven words), and its status as an icon and colour. Resting the
   pointer on a card fades everything not on its path, what it waits on and what waits on
-  it across projects. Its i icon opens a popup with the rest and a labelled link to its issue, PR, stack
+  it. Each lane is its own DAG. A warning marks a card whose file contradicts itself: a
+  blocker in another project, which draws nothing, work started or done before its blockers,
+  or a blocker that holds or sits inside the card; a collapsed card shows it for anything inside. Its i icon opens a popup with the rest and a labelled link to its issue, PR, stack
   neighbours, extra links and owner session's pane; a file opens in the mod's own read-only
   viewer, never an editor.
   Open it with `herdr-app do tab.new --mod work-graph`, with the projects folder in
