@@ -56,7 +56,9 @@ symlinked folder. Run it again after a pull.
   from the terminals' `tree.role`, `tree.project` and `tree.parent` labels and each
   session's state file. One glyph per row says its status: a spinner works, a dot
   is done, a red hand has open asks, a red ! waits on a dialog. It keeps Herdr's
-  space order in the tree's order. Cmd+W and Cmd+Shift+W ask before closing a tab
+  space order in the tree's order, and `session-tree.next-lead` and `prev-lead`, bound in `keys.json`
+  to Cmd+Option+] and [ under `layout:tree`, step through the root and each project's lead in
+  that order, skipping workers and wrapping at the ends. Cmd+W and Cmd+Shift+W ask before closing a tab
   or pane that holds a live Claude session, a closed root gets a Reopen row that
   resumes it, and `session-tree.new` opens a dialog that starts a session.
 - **[session-prs](herdr-mods/session-prs/)**: tabs over the sessions' state files,

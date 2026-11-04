@@ -73,3 +73,16 @@ export function model(files) {
     .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
   return { root, projects, sessions };
 }
+
+// Where Cmd+Option+] and Cmd+Option+[ go from the focused terminal: the next or previous of the
+// root and each project's lead, in sidebar order, wrapping at the ends. A worker counts as just
+// below its lead, and a terminal outside the tree as below the last project.
+export function stepLead(m, address, dir) {
+  const stops = [m.root, ...m.projects.map((p) => p.lead)].map((s, at) => s && { s, at }).filter(Boolean);
+  if (!stops.length) return null;
+  const me = m.sessions.find((s) => s.address === address);
+  const i = m.projects.findIndex((p) => p.name === me?.project);
+  const at = me?.role === "root" ? 0 : i >= 0 ? i + 1 + (me.role === "worker" ? 0.5 : 0) : m.projects.length + 1;
+  const pick = dir > 0 ? stops.find((x) => x.at > at) ?? stops[0] : [...stops].reverse().find((x) => x.at < at) ?? stops[stops.length - 1];
+  return pick.s;
+}

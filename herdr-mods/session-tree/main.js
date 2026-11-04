@@ -5,7 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { run, theme, props, openOverlay, closeOverlay, watchFolder, window, spaces, exec, setAgentOrder, focused, home, nextCommand, panes, terminals } from "herdr";
-import { folderOf, readFiles, model } from "./state.js";
+import { folderOf, readFiles, model, stepLead } from "./state.js";
 
 const ICON = (name) => `mods/session-tree/${name}.svg`;
 // Every tree row is this tall, so each row's guide lines meet the next row's
@@ -45,6 +45,7 @@ export default class SessionTree extends View {
           const command = await nextCommand();
           if (command === "close" || command === "close-pane") this.guardClose(command === "close-pane");
           if (command === "new") this.openNew();
+          if (command === "next-lead" || command === "prev-lead") focus(stepLead(model(this.files), focused()?.terminal, command === "next-lead" ? 1 : -1));
           cx.notify();
         }
       });
