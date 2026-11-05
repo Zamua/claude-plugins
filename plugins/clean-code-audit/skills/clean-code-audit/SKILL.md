@@ -1,10 +1,10 @@
 ---
-description: Check code against thirteen smells (implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary, change-detector tests, implicit state machines, unnecessary sequential async calls, whole-row loads). Use while designing or implementing a change, for a self-review of a diff before committing or opening a PR, when asked to audit a repo, or when the user triggers /clean-code-audit. Every finding needs a path:line.
+description: Check code against fourteen smells (implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary, change-detector tests, implicit state machines, unnecessary sequential async calls, whole-row loads, behaviour away from its data). Use while designing or implementing a change, for a self-review of a diff before committing or opening a PR, when asked to audit a repo, or when the user triggers /clean-code-audit. Every finding needs a path:line.
 ---
 
 # clean-code-audit
 
-Thirteen smells that make a codebase hard to change safely or needlessly slow on its
+Fourteen smells that make a codebase hard to change safely or needlessly slow on its
 hot paths. This is about structure and hot-path efficiency, not style and not bugs:
 formatting, naming taste and lint rules are out of scope.
 A bug found along the way is reported separately (see "Bugs are not smells").
@@ -15,10 +15,10 @@ Three ways to use it:
   forms, when fixing a smell costs a line instead of a refactor.
 - **Self-review of a diff**: check what the diff added or made worse, before the
   commit or the PR. Not the whole repo.
-- **Repo audit**: rate all thirteen across a codebase, with evidence, and list every
+- **Repo audit**: rate all fourteen across a codebase, with evidence, and list every
   finding with its fix.
 
-## The thirteen smells
+## The fourteen smells
 
 For each: what it is, how to find it, what the fix looks like, and what does not count.
 
@@ -117,12 +117,19 @@ details (status codes, headers, template names), cross-cutting concerns
 
 - **Find it**: read the imports of the domain and use-case layers. Look for
   vendor names, `Response`, status codes, `fetch`, `os`/`fs` calls, and metric or
-  cache calls inside business methods.
+  cache calls inside business methods. Read use-case signatures too: framework
+  paging, ORM or query-builder types in them, and use cases that read the caller's
+  identity, the request or the session from ambient context (a global, a
+  request-scoped store, a framework helper) instead of taking it as a parameter.
 - **Fix**: the domain depends on a narrow port; adapters own vendor detail;
   cross-cutting concerns wrap the use case as decorators or middleware at the
-  composition root. A test that fails on a forbidden import keeps it fixed.
+  composition root. The entry point resolves the caller and passes it in; the
+  port returns the app's own result type (a page of items, not the framework's
+  page object). A test that fails on a forbidden import keeps it fixed.
 - **Not it**: the composition root and adapters, whose job is to know concrete
-  things.
+  things. An application service that opens a transaction or declares caching
+  with the framework's own primitive, with no wrapper of ours around it: the
+  import ban is for the domain layer, not the use cases.
 
 ### 8. Pass-through wrappers
 
@@ -279,9 +286,30 @@ whole shape.
 - **Not it**: a caller that really uses most of the object, a small row where every
   field is used, a cache that is meant to hold the whole entity.
 
+### 14. Behaviour away from its data
+
+A rule that depends only on one object's own fields, living somewhere else: a
+service, handler or helper takes the object and reads its fields to work out
+something about it (an order's total, whether a subscription is active, when a
+card is next due). The type shrinks to a bag of fields, the rule is re-derived at
+each call site, and a change to the type breaks code far from it.
+
+- **Find it**: functions whose only domain parameter is one object and whose body
+  only reads that object's fields; the same derivation from the same fields in
+  two places (grep the field names, and see smell 3); services doing arithmetic
+  or status checks on a type whose own module defines nothing but its shape.
+- **Fix**: move the rule into the domain module next to the type, as a method or
+  a pure function exported beside it, and have callers ask the object instead of
+  reading its fields. The application service keeps the orchestration: loading,
+  saving, calling other contexts.
+- **Not it**: logic that needs other aggregates, I/O or configuration, which
+  belongs in the application service (or takes those as parameters); plain data
+  shapes at a boundary (DTOs, wire types) that are meant to carry no behaviour; a
+  projection computed for one view.
+
 ## Before you write it
 
-The cheap moment to avoid all thirteen is before the code exists. While designing a
+The cheap moment to avoid all fourteen is before the code exists. While designing a
 change, answer these:
 
 1. Where does untrusted input enter, and what typed value does it become there?
@@ -291,8 +319,10 @@ change, answer these:
 4. Is there already a helper that does this? Am I about to copy one?
 5. How many files does this change touch, and would the next change like it touch
    the same number? If so, centralise first, then make the change.
-6. Does any domain or use-case code now import a framework, vendor, or transport
-   type, or call a cache, metric or logger inline?
+6. Does any domain code now import a framework, vendor, or transport type? Does
+   a use case take a framework type in its signature, read the caller from
+   ambient context instead of a parameter, or call a cache, metric or logger
+   inline?
 7. Does the file I am adding to already do several unrelated things?
 8. Would the test I am writing still pass after a refactor that keeps the
    behaviour? If not, it pins the implementation.
@@ -302,10 +332,12 @@ change, answer these:
     cap when it is a loop? Where the order is the contract, is that said?
 11. Does this read fetch only the fields the caller uses, or a whole row for two of
     them?
+12. Does this rule read only one object's own fields? Then it lives next to that
+    object's type, not in the service that calls it.
 
 ## Self-review of a diff
 
-Run through the thirteen against the diff, not the codebase. Report only what the
+Run through the fourteen against the diff, not the codebase. Report only what the
 diff introduces or worsens; a pre-existing smell the diff touches gets one line
 at most, and is not a reason to grow the change. Fix what is cheap now. Anything
 deferred gets named in the PR or the commit summary, never silently left.
@@ -313,7 +345,7 @@ deferred gets named in the PR or the commit summary, never silently left.
 ## Repo audit
 
 1. Read the repo's own docs first (AGENTS.md or CLAUDE.md, README, architecture notes). Judge
-   against the thirteen and against the design the repo says it follows. Drift from
+   against the fourteen and against the design the repo says it follows. Drift from
    its own stated design is a finding.
 2. Skip generated and vendored code, build output, lockfiles and fixtures.
 3. Rate each smell: **clean**, **minor**, **notable**, **severe**. Clean is a
@@ -338,6 +370,7 @@ REPO <name> (<language>, <approx source lines>)
 11. Implicit state machines: notable - <evidence>
 12. Sequential async calls: notable - <evidence>
 13. Whole-row loads: minor - <evidence>
+14. Behaviour away from its data: clean
 Findings, most severe first:
 1. <smell number> <path:line>: <the problem>. Fix: <one line>
 ```
