@@ -75,7 +75,9 @@ symlinked folder. Run it again after a pull.
   the reviews project's PRs the same way, a section per review session. Asks: every
   open ask by project, due soonest first, each with a short id (A1 and up) it keeps
   for good in the root's `ask-ids.json`; a row opens a dialog that numbers the ask's
-  options, so you can name one in chat, such as "A25 option 2". Trackers: each JSON
+  options, so you can name one in chat, such as "A25 option 2". With `{"channel": <command>}` in
+  `session-prs.json`, naming an asks broker's command, an option pressed for an ask whose session
+  has a live channel is sent straight to that session. Trackers: each JSON
   file listed in `~/.config/herdr-app/session-prs.json` as `{"trackers": [path]}`
   gets a read-only tab named by its `title`: the count by status, every gap up top,
   then each section with its items' status, owner, note or what they wait on, and

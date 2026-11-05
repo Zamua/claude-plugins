@@ -4,7 +4,9 @@
 // whose PRs are all merged folded into Done, and stacks bracketed by their base branches or an
 // entry's `stack_on`. PR Reviews: the reviews project's PRs the same way, a section per review
 // session, marked by the person's own review. Asks: every open ask, by project, due soonest first;
-// a row opens a dialog that numbers its options, so the person can name one in chat ("A25 option 2").
+// a row opens a dialog that numbers its options, so the person can name one in chat ("A25 option 2"), or,
+// when `channel` in the config names the asks broker's command and the ask's session has a live channel,
+// press one to send it to that session.
 // Each ask keeps the short id, A1 and up, it was first given, in <root project>/ask-ids.json.
 // With `authored: { owners: [..] }` in ~/.config/herdr-app/session-prs.json, every open PR the
 // person authored under those owners is listed too, from GitHub's search. A PR no session lists
@@ -15,7 +17,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, HoverCard } from "gpui-base";
-import { exec, theme, props, run, layout, watchFolder, openOverlay, closeOverlay, settings, terminals, shared, setShared, readTextFile, writeTextFile } from "herdr";
+import { exec, theme, props, run, layout, watchFolder, openOverlay, closeOverlay, settings, terminals, shared, setShared, readTextFile, writeTextFile, home } from "herdr";
 import { folderOf, readFiles, readConfig } from "./files.js";
 import { readTrackers, trackerTitle, gapCount, trackerBody, trackerDialog } from "./tracker.js";
 import { summaryOf } from "./summary.js";
@@ -122,6 +124,21 @@ function openAsks(files) {
     groups.set(a.project, g);
   }
   return [...groups.values()].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
+}
+
+// The command that reaches the asks broker, from `channel` in this mod's config: a path or an argv.
+// It is used only when the ask's own session has a live channel, so every other ask is answered in chat.
+async function channelFor(a) {
+  const raw = (await readConfig()).channel;
+  const argv = (Array.isArray(raw) ? raw : raw ? [raw] : []).map((x) => (typeof x === "string" && x.startsWith("~") ? home() + x.slice(1) : x));
+  if (!argv.length || !a?.id || !a.session) return null;
+  try {
+    const r = await exec(argv[0], [...argv.slice(1), "sessions"]);
+    const live = JSON.parse(r.stdout || "{}").sessions ?? [];
+    return live.some((s) => s.project === a.project && s.name === a.session) ? argv : null;
+  } catch {
+    return null;
+  }
 }
 
 const optionText = (v) => (typeof v === "string" ? v : v?.label ?? v?.text ?? v?.option ?? JSON.stringify(v));
@@ -277,6 +294,33 @@ export default class SessionPrs extends View {
   initAsk(cx) {
     this.handle = cx.focus_handle();
     this.handle.focus();
+    if (props()?.mode !== "ask") return;
+    this.channel = null;
+    this.sent = null;
+    cx.spawn(async (cx) => {
+      this.channel = await channelFor(props().ask);
+      cx.notify();
+    });
+  }
+
+  // An option pressed in the dialog goes to the session that asked, through the channel's broker
+  choose(a, option) {
+    return (_e, cx) => cx.spawn(async (cx) => {
+      if (this.sent?.state === "sending" || this.sent?.state === "sent") return;
+      this.sent = { option, state: "sending" };
+      cx.notify();
+      const [cmd, ...args] = this.channel;
+      const r = await exec(cmd, [...args, "decide", `${a.project}/${a.session}`, a.id, option, ...(a.short ? ["--a-id", a.short] : [])]);
+      let res = {};
+      try {
+        res = JSON.parse(r.stdout || "{}");
+      } catch {
+        res = {};
+      }
+      this.sent = res.ok ? { option, state: "sent", to: res.delivered ?? [] }
+        : { option, state: "failed", error: res.error || r.stderr?.trim().split("\n")[0] || `exited ${r.code}` };
+      cx.notify();
+    });
   }
 
   askDialog(t) {
@@ -318,13 +362,18 @@ export default class SessionPrs extends View {
         .text_color(t.accent).cursor_pointer().hover((el) => el.underline()).on_click(() => exec("open", [l.url])).child(l.label)))))
       .child(v_flex().gap(6)
         .children(options.map((o, k) => h_flex().id(`ask-opt-${k}`).min_h(32).px(12).py(6).gap(10).items_start().rounded(7)
-          .border_1().border_color(isRec(o, k) ? t.accent : t.input).bg(t.raised)
+          .border_1().border_color(this.sent?.option === o ? t.solid : isRec(o, k) ? t.accent : t.input).bg(t.raised)
+          .when(Boolean(this.channel) && this.sent?.state !== "sent", (el) => el.cursor_pointer().hover((el) => el.bg(t.hover)).on_click(this.choose(a, o)))
           .child(div().w(18).flex_none().font_semibold().text_color(isRec(o, k) ? t.accent : t.dim).child(`${k + 1}.`))
           .child(div().flex_1().min_w(0).child(o))
           .when(isRec(o, k), (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child("Recommended")))))
         .when(Boolean(rec) && !options.includes(rec) && !/^option\s*\d+\.?$/i.test(rec), (el) => el.child(div().text_size(12).text_color(t.muted).child(`Recommendation: ${rec}`)))
-        .when(options.length > 0, (el) => el.child(div().text_size(11.5).text_color(t.dim)
-          .child(`Answer in chat${a.short ? `, e.g. "${a.short} option 1"` : ""}.`))))
+        .when(options.length > 0, (el) => el.child(div().text_size(11.5).text_color(this.sent?.state === "failed" ? t.blocked : t.dim).whitespace_normal()
+          .child(this.sent?.state === "sent" ? `Sent to ${this.sent.to.join(" and ")}.`
+            : this.sent?.state === "failed" ? `Not sent: ${this.sent.error}`
+            : this.sent?.state === "sending" ? "Sending…"
+            : this.channel ? `Press an option to send it to ${a.session}.`
+            : `Answer in chat${a.short ? `, e.g. "${a.short} option 1"` : ""}.`))))
       .child(h_flex().gap(8).pt(4)
         .child(button("ask-open", "Open session", false, () => {
           closeOverlay(props().overlay);
