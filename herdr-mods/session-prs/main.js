@@ -1,5 +1,6 @@
 // Tabs over the sessions' state files, then a tab per tracker file (see tracker.js). PRs: every
-// session's `prs`, one dense row each, projects in their `order`, a section per `group` inside each (ungrouped PRs first), workstreams
+// session's `prs`, one dense row each, its title opening a card with the full title and the summary from its
+// description (see summary.js), projects in their `order`, a section per `group` inside each (ungrouped PRs first), workstreams
 // whose PRs are all merged folded into Done, and stacks bracketed by their base branches or an
 // entry's `stack_on`. PR Reviews: the reviews project's PRs the same way, a section per review
 // session, marked by the person's own review. Asks: every open ask, by project, due soonest first;
@@ -13,13 +14,14 @@
 // hidden.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, v_virtual_list, Scrollbar } from "gpui-base";
+import { v_flex, h_flex, v_virtual_list, Scrollbar, HoverCard } from "gpui-base";
 import { exec, theme, props, run, layout, watchFolder, openOverlay, closeOverlay, settings, terminals, shared, setShared, readTextFile, writeTextFile } from "herdr";
 import { folderOf, readFiles, readConfig } from "./files.js";
 import { readTrackers, trackerTitle, gapCount, trackerBody, trackerDialog } from "./tracker.js";
+import { summaryOf } from "./summary.js";
 
 const REFRESH_MS = 60000;
-const FIELDS = "title url state isDraft reviewDecision mergeable baseRefName headRefName author{login ... on User{name}} " +
+const FIELDS = "title body url state isDraft reviewDecision mergeable baseRefName headRefName author{login ... on User{name}} " +
   "latestOpinionatedReviews(first:30){nodes{state author{login}}} latestReviews(first:30){nodes{state author{login}}} " +
   "commits(last:1){nodes{commit{statusCheckRollup{state}}}} reviewThreads(first:100){nodes{isResolved}}";
 const TABS = [["prs", "PRs"], ["reviews", "PR Reviews"], ["asks", "Asks"]];
@@ -357,7 +359,7 @@ export default class SessionPrs extends View {
       if (data.viewer?.login) localStorage.setItem("viewer", (this.viewer = data.viewer.login));
       const reviews = (nodes) => (nodes ?? []).map((n) => ({ login: n.author?.login, state: n.state }));
       const live = (pr) => ({
-        title: pr.title, url: pr.url, state: pr.state, draft: pr.isDraft, review: pr.reviewDecision, mergeable: pr.mergeable,
+        title: pr.title, summary: summaryOf(pr.body), url: pr.url, state: pr.state, draft: pr.isDraft, review: pr.reviewDecision, mergeable: pr.mergeable,
         base: pr.baseRefName, head: pr.headRefName, author: pr.author ? { login: pr.author.login, name: pr.author.name } : null,
         ci: pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null,
         threads: (pr.reviewThreads?.nodes ?? []).filter((n) => !n.isResolved).length,
@@ -453,7 +455,28 @@ export default class SessionPrs extends View {
       .child(cell(56, word, color))
       .child(div().w(64).flex_none().mr(6).truncate().text_color(t.dim).child(who(pr?.author)))
       .when(p.repo !== this.usualRepo, (el) => el.child(div().flex_none().max_w(110).mr(6).truncate().text_color(t.dim).child(p.repo)))
-      .child(div().flex_1().min_w(0).truncate().text_color(final ? t.dim : t.muted).child(pr?.title ?? p.id));
+      .child(div().flex_1().min_w(0).child(!pr ? div().truncate().text_color(t.dim).child(p.id)
+        : HoverCard.new(`pr-card-${p.id}`).open_delay(450).close_delay(200).anchor("top_left")
+          .trigger(div().w_full().truncate().text_color(final ? t.dim : t.muted).child(pr.title ?? p.id))
+          .content(this.prCard(t, p, pr))));
+  }
+
+  // What a row truncates: the full title, and the summary from the PR's description
+  prCard(t, p, pr) {
+    const lines = (pr.summary ?? "").split("\n");
+    return v_flex().w(380).p(12).gap(6).rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_lg().text_color(t.foreground)
+      .child(div().text_size(11).text_color(t.dim).child(`${p.owner}/${p.repo}#${p.number}`))
+      .child(div().whitespace_normal().text_size(13.5).line_height("19px").font_semibold().child(pr.title ?? p.id))
+      .child(pr.summary
+        ? v_flex().gap(2).text_size(12.5).line_height("18px").text_color(t.muted).children(lines.map((l) => {
+          const bullet = /^(\s*)[-*+]\s+(.*)$/.exec(l);
+          if (!l.trim()) return div().h(4);
+          if (!bullet) return div().whitespace_normal().child(l);
+          return h_flex().items_start().gap(6).pl(bullet[1].length * 4)
+            .child(div().flex_none().text_color(t.dim).child("•"))
+            .child(div().flex_1().min_w(0).whitespace_normal().child(bullet[2]));
+        }))
+        : div().text_size(12).text_color(t.dim).child("No summary in its description."));
   }
 
   // The PRs and Reviews tabs: one flat list of same-height rows, so the visible range says which

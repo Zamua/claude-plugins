@@ -65,7 +65,9 @@ symlinked folder. Run it again after a pull.
   plus one per tracker file. PRs: every session's pull requests, one dense row each, in sections by each
   entry's `group` inside its project, with draft, CI, your approval, author and
   stacks from one GitHub query a minute while it shows; finished workstreams fold
-  into Done, closed PRs drop off, and headers stay pinned while it scrolls. With
+  into Done, closed PRs drop off, and headers stay pinned while it scrolls. Resting on
+  a row's title shows its full title and the Summary section of its description, cached
+  with the row, so it makes no GitHub call. With
   `{"authored": {"owners": [..]}}` in `~/.config/herdr-app/session-prs.json` it also
   lists every open PR you authored under those owners, from the same query's search;
   one no session lists goes where the root's `pr-groups.json` places it, under a
