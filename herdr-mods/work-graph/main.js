@@ -20,14 +20,12 @@
 // in this mod's own read-only viewer, split beside it. Cmd with scroll zooms around the pointer.
 // Commands work-graph.level0 to level3 and work-graph.refresh do the same from a key or a script. props or ~/.config/herdr-app/work-graph.json
 // give { folder }, the projects folder of state files, { records }, the folder where each agent
-// process keeps <pid>.json with its status (~/.claude/sessions unless set), and { me, team }, the
-// person's owner name and Linear team, which sort the top bar's unblocked work into what a session
-// can start, what needs the person, and what waits on another team.
+// process keeps <pid>.json with its status (~/.claude/sessions unless set).
 
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, HoverCard, TextView, Editor, EditorState } from "gpui-base";
 import { exec, run, theme, props, terminals, spaces, watchFolder, readTextFile, home, nextCommand, settings } from "herdr";
-import { expand, readFiles, projectList, readGraph, linearIds, fetchLinear, prRefs, fetchPrs, openAsks, liveSessions, readRecords, rootProject, build, visible, pathOf, startGroups, STATES } from "./graph.js";
+import { expand, readFiles, projectList, readGraph, linearIds, fetchLinear, prRefs, fetchPrs, openAsks, liveSessions, readRecords, rootProject, build, visible, pathOf, STATES } from "./graph.js";
 
 const REFRESH_MS = 60000;
 // Sizes at 100%; the graph scales them all
@@ -89,14 +87,8 @@ const LEGEND = [
   ["flight", "In progress", "Its graph file says in-progress, or its owner session is working or between turns with a background job or a wake set."],
   ["blocked", "Blocked", "A blocker isn't done yet."],
   ["done", "Done", "Finished, merged or closed."],
-  [null, "No colour", "Ready: nothing blocks it and nobody owns it. Owned, idle: its owner session is live with nothing pending. Parked: deferred on purpose, its text grey, and left out of the groups above and the warnings."],
+  [null, "No colour", "Ready: nothing blocks it and nobody owns it. Owned, idle: its owner session is live with nothing pending. Parked: deferred on purpose, its text grey, and left out of the warnings."],
 ];
-// The top bar's groups of unblocked work, named for who takes it next
-const GROUPS = {
-  start: () => ["Can start now", "Unblocked and unstarted, so a session can pick it up: nobody owns it, or its owner session isn't live.", "Nothing can start now."],
-  you: ({ me }) => ["Needs you", `Unblocked, with an open ask or owned by you${me ? ` (owner "${me}")` : ""}.`, "Nothing needs you."],
-  teams: ({ team }) => ["Waiting on another team", `Unblocked, but another team takes it next: owner "team:<name>"${team ? `, or a Linear issue outside ${team}` : ""}. The chip names the team.`, "Nothing waits on another team."],
-};
 const WARN_MEANING = "Its graph file contradicts itself or uses an unknown status word: work in progress, waiting or done before its blockers are, a blocker in another lane, a blocker that holds or sits inside it, or a status other than todo, in-progress, parked or done. Its i popup names each.";
 const tone = (t, state) => ({ needs: t.working, flight: t.accent, waiting: t.accent, blocked: t.blocked, done: t.ansi2 })[state] ?? null;
 const countsText = (counts) => STATES.filter((s) => counts[s]).map((s) => `${counts[s]} ${word(s, counts[s])}`).join(", ");
@@ -269,7 +261,6 @@ export default class WorkGraph extends View {
     cx.spawn(async (cx) => {
       const config = await readConfig();
       this.folder = expand(props()?.folder ?? config.folder ?? "~/projects");
-      this.who = { me: config.me ?? null, team: config.team ?? null };
       await this.load(cx);
       await this.refresh(cx);
       for (;;) {
@@ -570,8 +561,6 @@ export default class WorkGraph extends View {
       .child(div().text_size(13).font_semibold().text_color(t.foreground).child("Legend"))
       .children(LEGEND.map(([s, name, text]) => row(swatch(s), name, text)))
       .child(div().text_size(11.5).text_color(t.muted).whitespace_normal().child("A collapsed card takes the colour of the most urgent card inside it."))
-      .child(div().h(1).bg(t.border))
-      .children(Object.values(GROUPS).map((g) => g(this.who ?? {})).map(([name, text]) => row(null, name, text)))
       .child(div().h(1).bg(t.border))
       .child(row(h_flex().h(14).justify_center().child(svg(WARN).size(12).text_color(t.dim)), "Check the graph file", WARN_MEANING))
       .child(row(h_flex().h(14).justify_center().child(svg(INFO).size(12).text_color(t.dim)), "i", "A card's details and links."))
@@ -925,13 +914,12 @@ export default class WorkGraph extends View {
   summary(t, model, z) {
     const leaves = model.leaves.filter((n) => n.kind !== "project");
     const all = { counts: Object.fromEntries(STATES.map((s) => [s, leaves.filter((n) => n.state === s).length])), total: leaves.length };
-    const groups = startGroups(model, this.who ?? {});
     const step = (dir) => (_e, cx) => {
       const next = dir > 0 ? ZOOMS.find((x) => x > z + 0.001) : [...ZOOMS].reverse().find((x) => x < z - 0.001);
       this.setZoom(cx, next ?? z);
     };
     const handTouched = this.open.size > 0;
-    return v_flex().px(PAD).pt(10).pb(8).gap(6).border_b(1).border_color(t.border)
+    return v_flex().px(PAD).pt(10).pb(8).border_b(1).border_color(t.border)
       .child(h_flex().gap(14).items_center().whitespace_nowrap()
         .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Work graph"))
         .child(this.tallyLine(t, all, 12.5, "wg-xa"))
@@ -946,23 +934,7 @@ export default class WorkGraph extends View {
           .child(this.button(t, "wg-zoom-fit", this.zoom === "fit" ? `fit ${Math.round(z * 100)}%` : `${Math.round(z * 100)}%`, this.zoom === "fit", (_e, cx) => this.setZoom(cx, "fit")))
           .child(this.button(t, "wg-zoom-in", "+", false, step(1))))
         .child(this.explainer("wg-legend", this.button(t, "wg-legend-btn", "legend", false, () => {}), this.legend(t), "top_right"))
-        .child(this.button(t, "wg-refresh", "refresh", false, (_e, cx) => cx.spawn(async (cx) => this.refresh(cx)))))
-      .child(h_flex().gap(8).items_center().flex_wrap().text_size(12)
-        .children(this.group(t, "start", groups.start, null, true))
-        .children(this.group(t, "you", groups.you, t.working))
-        .children(this.group(t, "teams", groups.teams, null)));
-  }
-
-  // One group of chips in the top bar, its label explaining who it waits on; only the one that
-  // needs the person has a colour
-  group(t, key, list, accent, always) {
-    const [label, text, none] = GROUPS[key](this.who ?? {});
-    if (!list.length && !always) return [];
-    const head = this.explainer(`wg-g-${key}`, div().id(`wg-g-${key}-t`).flex_none().text_color(list.length ? accent ?? t.muted : t.dim).font_semibold()
-      .child(list.length ? `${label}:` : none), this.note(t, div(), label, `${list.length} ${list.length === 1 ? "card" : "cards"}`, text));
-    return [head, ...list.slice(0, 6).map(({ n, team }) => this.hover(`wg-gc-${n.key}`, n, div().id(`wg-gc-${n.key}-t`).flex_none().px(7).h(20).flex().items_center()
-      .rounded(5).border_1().border_color(accent ?? t.border).text_color(t.foreground).hover((el) => el.bg(t.hover)).child(team ? `${n.title} · ${team}` : n.title))),
-      ...(list.length > 6 ? [div().flex_none().text_color(t.dim).child(`+${list.length - 6} more`)] : [])];
+        .child(this.button(t, "wg-refresh", "refresh", false, (_e, cx) => cx.spawn(async (cx) => this.refresh(cx)))));
   }
 
   render() {

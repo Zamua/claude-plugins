@@ -107,9 +107,7 @@ symlinked folder. Run it again after a pull.
   Resting on a header's line lists every status inside, and the legend button explains the colours.
   A node's `owner` is a session name, the person's own name, or `team:<name>`, and `status` is one of
   `todo`, `in-progress`, `parked` (deliberately deferred, drawn with grey text) or `done`; any other
-  word gets a warning. Needs you and blocked come from asks and blockers, never from `status`. The top bar splits unblocked
-  work into what a session can start now, what needs you, and what waits on another team, an owner
-  `team:<name>` or a Linear issue of another team; `me` and `team` in the config name you and your team. Its i icon opens a popup with the rest and a labelled link to its issue, PR, stack
+  word gets a warning. Needs you and blocked come from asks and blockers, never from `status`. Its i icon opens a popup with the rest and a labelled link to its issue, PR, stack
   neighbours, extra links and owner session's pane; a file opens in the mod's own read-only
   viewer, never an editor.
   Open it with `herdr-app do tab.new --mod work-graph`, with the projects folder in

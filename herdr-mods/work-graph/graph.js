@@ -96,11 +96,11 @@ const fileNodes = (graphs) => [...graphs.values()].flatMap((g) => (Array.isArray
 
 export const linearIds = (graphs) => [...new Set(fileNodes(graphs).map((n) => n.id).filter((id) => LINEAR_ID.test(id)))];
 
-const ISSUE = "identifier title url state{type name} team{name} parent{identifier} relations{nodes{type relatedIssue{identifier}}} attachments{nodes{url}}";
+const ISSUE = "identifier title url state{type name} parent{identifier} relations{nodes{type relatedIssue{identifier}}} attachments{nodes{url}}";
 
 function issueOf(x) {
   return {
-    title: x.title, url: x.url, state: x.state?.type, stateName: x.state?.name, team: x.team?.name ?? null, parent: x.parent?.identifier ?? null,
+    title: x.title, url: x.url, state: x.state?.type, stateName: x.state?.name, parent: x.parent?.identifier ?? null,
     blocks: (x.relations?.nodes ?? []).filter((n) => n.type === "blocks").map((n) => n.relatedIssue?.identifier).filter(Boolean),
     prs: (x.attachments?.nodes ?? []).map((a) => prRef(a.url)).filter(Boolean),
     children: [],
@@ -225,22 +225,6 @@ export function liveSessions(terminals, spaces, records = new Map()) {
     if (p && t.labels?.["tree.role"]) projects.set(p, [...(projects.get(p) ?? []), s]);
   }
   return { byName, projects };
-}
-
-// Unblocked work that isn't done, by who can take it next: `me` is the person's owner name and
-// `team` their own team's name in Linear, so an owner "team:<name>", or an unowned issue of
-// another Linear team, waits on that team
-export function startGroups(model, { me, team } = {}) {
-  const groups = { start: [], you: [], teams: [] };
-  for (const n of model.leaves) {
-    if (n.kind === "project" || n.done || n.parked || n.blockers.length) continue;
-    const owner = typeof n.owner === "string" ? n.owner : "";
-    const other = owner.startsWith("team:") ? owner.slice(5) : !owner && team && n.issue?.team && n.issue.team !== team ? n.issue.team : null;
-    if (n.waiting.length || (me && owner === me)) groups.you.push({ n });
-    else if (other) groups.teams.push({ n, team: other });
-    else if (n.state === "ready") groups.start.push({ n });
-  }
-  return groups;
 }
 
 export const rootProject = (terminals) => terminals.filter((t) => t.state === "live" && t.labels?.["tree.role"] === "root")
