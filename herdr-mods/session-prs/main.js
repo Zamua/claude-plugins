@@ -307,8 +307,9 @@ export default class SessionPrs extends View {
       .w_full().p(18).gap(12).bg(t.popover).text_color(t.foreground).text_size(13)
       .child(h_flex().items_start().gap(10)
         .when(Boolean(a.short), (el) => el.child(div().flex_none().text_size(15).font_semibold().text_color(t.accent).child(a.short)))
-        .child(div().flex_1().min_w(0).text_size(15).font_semibold().child(a.ask ?? a.id ?? ""))
+        .child(div().flex_1().min_w(0).text_size(15).font_semibold().child(a.title ?? a.ask ?? a.id ?? ""))
         .child(div().flex_none().text_size(11).text_color(t.dim).child("Esc")))
+      .when(Boolean(a.title && a.ask), (el) => el.child(div().text_size(13.5).line_height("20px").child(a.ask)))
       .child(div().text_size(11.5).text_color(t.dim).child([a.project, a.session, due && `due ${due}`, a.created && `asked ${age(Date.parse(a.created))}`].filter(Boolean).join(" · ")))
       .when(Boolean(a.detail), (el) => el.child(div().id("ask-detail").max_h(260).overflow_y_scrollbar().text_size(12.5).line_height("19px").text_color(t.muted).child(a.detail)))
       .when(links.length > 0, (el) => el.child(v_flex().gap(2).children(links.map((l, k) => div().id(`ask-link-${k}`).truncate().text_size(12)
@@ -703,16 +704,17 @@ export default class SessionPrs extends View {
         return h_flex().id(`ask-${a.key}`).h(ROW).px(12).gap(8).items_center().whitespace_nowrap().rounded(5).cursor_pointer()
           .hover((el) => el.bg(t.hover))
           .on_click(() => openOverlay({ mod: "session-prs", kind: "dialog", width: 640, props: { mode: "ask", ask: a, folder: props()?.folder } }))
-          .child(div().w(36).flex_none().text_color(t.dim).child(a.short ?? ""))
-          .child(div().w(70).flex_none().text_color(tone === "late" ? t.blocked : tone === "soon" ? t.ansi3 : t.dim).child(due))
-          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(a.ask ?? a.id ?? ""))
-          .child(div().id(`ask-s-${a.key}`).w(96).flex_none().truncate().text_color(t.dim).cursor_pointer()
+          .child(div().w(32).flex_none().text_color(t.dim).child(a.short ?? ""))
+          // The due date and the asking session take room only when they say something the row doesn't
+          .when(Boolean(due), (el) => el.child(div().flex_none().text_color(tone === "late" ? t.blocked : tone === "soon" ? t.ansi3 : t.dim).child(due)))
+          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(a.title ?? a.ask ?? a.id ?? ""))
+          .when(Boolean(a.session) && a.session !== a.project, (el) => el.child(div().id(`ask-s-${a.key}`).max_w(96).flex_none().truncate().text_color(t.dim).cursor_pointer()
             .hover((el) => el.text_color(t.foreground))
             .on_click((_e, cx) => {
               cx.stop_propagation();
               this.focusSession(a.project, a.session);
             })
-            .child(a.session));
+            .child(a.session)));
       }),
     ]);
     return v_flex().id("ask-list").flex_1().min_h(0).py(4).overflow_y_scrollbar().children(rows);
