@@ -572,7 +572,7 @@ export default class WorkGraph extends View {
   statusLine(n) {
     if (n.children.length) return null;
     return {
-      needs: `Needs you: ${n.waiting.map((a) => a.id).join(", ")}`,
+      needs: `Needs you: ${n.waiting.map((a) => a.title ?? a.id).join(", ")}`,
       flight: n.session?.status === "working" ? "Working" : "In progress",
       parked: "Parked",
       waiting: `Owned, ${SESSION.waiting}`,

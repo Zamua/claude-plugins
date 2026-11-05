@@ -181,7 +181,7 @@ export function openAsks(files) {
   for (const [key, f] of files) {
     for (const a of Array.isArray(f.asks) ? f.asks : []) {
       if (a?.status !== "open") continue;
-      asks.push({ id: a.id, key: `${key}#${a.id}`, project: key.split("/")[0], text: [a.ask, a.context, a.title].filter((x) => typeof x === "string").join(" ") });
+      asks.push({ id: a.id, title: typeof a.title === "string" ? a.title : null, key: `${key}#${a.id}`, project: key.split("/")[0], text: [a.ask, a.context, a.title].filter((x) => typeof x === "string").join(" ") });
     }
   }
   return asks;
