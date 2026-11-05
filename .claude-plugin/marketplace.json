@@ -23,7 +23,7 @@
     {
       "name": "clean-code-audit",
       "source": "./plugins/clean-code-audit",
-      "description": "Check code against thirteen smells: implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary, change-detector tests, implicit state machines, unnecessary sequential async calls, and whole-row loads. A guide while implementing, a checklist for self-reviewing a diff, and a method for auditing a repo with path:line evidence and a complete, severity-ordered list of fixes."
+      "description": "Check code against fourteen smells: implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary, change-detector tests, implicit state machines, unnecessary sequential async calls, whole-row loads, and behaviour away from its data. A guide while implementing, a checklist for self-reviewing a diff, and a method for auditing a repo with path:line evidence and a complete, severity-ordered list of fixes."
     }
   ]
 }
