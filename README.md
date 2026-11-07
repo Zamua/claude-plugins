@@ -36,14 +36,9 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
   and reviews in a tab per section, and any board another process writes as JSON, such as a rollout, named
   in `~/.config/board/boards.json`. `/board` toggles the pane, `/board <name>` opens
   it on one board, `/board <name> clear` empties one.
-- **[clean-code-audit](plugins/clean-code-audit/)**: fourteen smells that make code
-  hard to change safely or slow on its hot paths, from implicit coupling and illegal
-  states to validation deep inside instead of at the boundary, tests that pin the
-  implementation, lifecycles that live only in scattered flags, independent awaits
-  run one after another, whole rows loaded for a few fields, and rules kept away
-  from the data they read. Use it as a
-  set of questions while designing a change, as a checklist when self-reviewing a
-  diff, or to audit a whole repo with path:line evidence and every fix it calls for.
+- **[code-review](plugins/code-review/)**: review ownership and approach first,
+  then system design, implementation and the fourteen clean-code smells. Use it
+  before or during implementation, to review a diff or PR, or to audit a repo.
 
 ## Herdr mods
 

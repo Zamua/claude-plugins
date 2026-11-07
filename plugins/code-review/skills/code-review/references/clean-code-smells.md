@@ -1,22 +1,4 @@
----
-description: Check code against fourteen smells (implicit coupling, layer-first folders, duplication, representable illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, validation not at the boundary, change-detector tests, implicit state machines, unnecessary sequential async calls, whole-row loads, behaviour away from its data). Use while designing or implementing a change, for a self-review of a diff before committing or opening a PR, when asked to audit a repo, or when the user triggers /clean-code-audit. Every finding needs a path:line.
----
-
-# clean-code-audit
-
-Fourteen smells that make a codebase hard to change safely or needlessly slow on its
-hot paths. This is about structure and hot-path efficiency, not style and not bugs:
-formatting, naming taste and lint rules are out of scope.
-A bug found along the way is reported separately (see "Bugs are not smells").
-
-Three ways to use it:
-
-- **While implementing**: ask the questions in "Before you write it" as the design
-  forms, when fixing a smell costs a line instead of a refactor.
-- **Self-review of a diff**: check what the diff added or made worse, before the
-  commit or the PR. Not the whole repo.
-- **Repo audit**: rate all fourteen across a codebase, with evidence, and list every
-  finding with its fix.
+# Clean-code smells
 
 ## The fourteen smells
 
@@ -334,54 +316,3 @@ change, answer these:
     them?
 12. Does this rule read only one object's own fields? Then it lives next to that
     object's type, not in the service that calls it.
-
-## Self-review of a diff
-
-Run through the fourteen against the diff, not the codebase. Report only what the
-diff introduces or worsens; a pre-existing smell the diff touches gets one line
-at most, and is not a reason to grow the change. Fix what is cheap now. Anything
-deferred gets named in the PR or the commit summary, never silently left.
-
-## Repo audit
-
-1. Read the repo's own docs first (AGENTS.md or CLAUDE.md, README, architecture notes). Judge
-   against the fourteen and against the design the repo says it follows. Drift from
-   its own stated design is a finding.
-2. Skip generated and vendored code, build output, lockfiles and fixtures.
-3. Rate each smell: **clean**, **minor**, **notable**, **severe**. Clean is a
-   valid and welcome rating; do not pad.
-4. Every claim carries a `path:line` or a path plus a measurement. No evidence, no
-   claim.
-5. End with the complete list of findings, most severe first, each with its
-   concrete fix in one line. No top-N cut: every finding that holds up is listed,
-   and a short list is the right answer for clean code.
-6. Verify the top findings yourself before reporting them, especially when a
-   subagent did the audit: open the file and confirm the line says what the
-   finding claims.
-
-Report shape, one line per smell:
-
-```
-REPO <name> (<language>, <approx source lines>)
-1. Implicit coupling: notable - <evidence, path:line>
-...
-9. Errors/validation at the boundary: minor - <evidence>
-10. Change-detector tests: clean
-11. Implicit state machines: notable - <evidence>
-12. Sequential async calls: notable - <evidence>
-13. Whole-row loads: minor - <evidence>
-14. Behaviour away from its data: clean
-Findings, most severe first:
-1. <smell number> <path:line>: <the problem>. Fix: <one line>
-```
-
-For several repos, one read-only subagent per repo works well; give each the list
-above and the evidence rule, and keep the reports short.
-
-## Bugs are not smells
-
-An audit often turns up real defects: a validator nobody calls, a handler wired to
-a dependency that is always null, a value computed in one place and ignored in
-another. Report those first and separately from the ratings, mark which ones you
-confirmed by reading the code, and treat them with the urgency of a bug rather
-than a refactor.
