@@ -84,7 +84,7 @@ Follow the changed paths and apply the remaining relevant clean-code checks:
 
 - Representable illegal states
 - God files
-- Pass-through wrappers
+- Shallow modules
 - Errors and validation not at the boundary
 - Implicit state machines
 - Unnecessary sequential async calls

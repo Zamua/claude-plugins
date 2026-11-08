@@ -1,7 +1,7 @@
 {
   "name": "code-review",
   "description": "Review code in layers, starting with ownership and approach, then system design, implementation and the existing fourteen clean-code smells. Use before or during implementation, for diff and PR reviews, and for codebase audits.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": {
     "name": "Zamua"
   },

@@ -113,18 +113,37 @@ details (status codes, headers, template names), cross-cutting concerns
   with the framework's own primitive, with no wrapper of ours around it: the
   import ban is for the domain layer, not the use cases.
 
-### 8. Pass-through wrappers
+### 8. Shallow modules
 
-Functions or classes that forward to another with the same arguments and add no
-meaning: indirection without abstraction.
+A module whose interface is about as complex as what it hides, so callers pay
+for the abstraction and are spared no work. A deep module has a small interface
+over a lot of behaviour; a shallow one exposes nearly every decision it makes.
+The extreme case is a pass-through wrapper: a function or class that forwards
+to another with the same arguments and adds no meaning. Other forms: a class
+whose public methods mirror its private steps one for one; a feature split into
+many small classes that every caller must build and wire in the right order; an
+interface that leaks its internals, so callers must know the call sequence, the
+defaults or the intermediate types to use it; parameters that push onto every
+caller a decision the module could make itself.
 
-- **Find it**: bodies that are one call with the same parameters, op tables of
-  `(x) => this.y(x)`, interface methods implemented as stubs only to satisfy a
-  port, aliases of other functions.
-- **Fix**: call the target directly, or make the wrapper earn its place (a
-  translation, a narrower type, a policy).
-- **Not it**: an adapter that translates between two models, or a port method
-  whose implementation happens to be short today.
+- **Find it**: compare each module's interface with its body. Count what a
+  caller must know (public methods, parameters, types, call order) against the
+  decisions hidden behind it. Look for bodies that are one call with the same
+  parameters, op tables of `(x) => this.y(x)`, interface methods implemented as
+  stubs only to satisfy a port, aliases of other functions; callers that repeat
+  the same multi-call setup around the module (with smell 1's "call A before
+  B"); arguments every caller computes the same way; a helper or test library
+  whose every use carries the same boilerplate.
+- **Fix**: deepen it. Fold the steps every caller repeats into the module, pick
+  defaults so the common case needs no configuration, hide intermediate types,
+  and merge classes that are always used together. Delete a pass-through and call
+  the target directly, or make it earn its place (a translation, a narrower type,
+  a policy).
+- **Not it**: an adapter that translates between two models; a port method whose
+  implementation happens to be short today; a small function whose name states a
+  rule its body only computes, which hides a decision and is deep for its size;
+  modules split out of a god file (smell 5) that each hide something of their
+  own.
 
 ### 9. Errors and validation not at the boundary
 
@@ -316,3 +335,5 @@ change, answer these:
     them?
 12. Does this rule read only one object's own fields? Then it lives next to that
     object's type, not in the service that calls it.
+13. Does this module's interface hide more than it exposes? Will every caller
+    repeat the same steps or arguments around it?
