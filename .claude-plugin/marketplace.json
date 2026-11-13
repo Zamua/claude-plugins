@@ -29,6 +29,20 @@
       "name": "clean-copy",
       "source": "./plugins/clean-copy",
       "description": "Cut interface copy that shouldn't exist: captions that restate a label, hints that pre-empt a worry the user never had, warnings left over from a fixed bug. Use when writing or reviewing any user-facing string, or when asked to tighten copy."
+    },
+    {
+      "name": "modern-web-guidance",
+      "source": {
+        "source": "github",
+        "repo": "GoogleChrome/modern-web-guidance",
+        "sha": "4dd968349e54ca45a05dd5c818fb035c9054b022"
+      },
+      "description": "Current web platform best practices for HTML, CSS and client-side JavaScript, by Google Chrome.",
+      "author": {
+        "name": "Google Chrome"
+      },
+      "homepage": "https://github.com/GoogleChrome/modern-web-guidance",
+      "license": "Apache-2.0"
     }
   ]
 }
