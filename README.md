@@ -39,6 +39,10 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
 - **[code-review](plugins/code-review/)**: review ownership and approach first,
   then system design, implementation and the fourteen clean-code smells. Use it
   before or during implementation, to review a diff or PR, or to audit a repo.
+- **[clean-copy](plugins/clean-copy/)**: cut interface copy that shouldn't exist,
+  before polishing what stays. Use it when writing or reviewing labels, hints,
+  empty states, toasts, confirmations and button text. Adapted from a skill by
+  Rachel ([@chaotictransfem](https://x.com/chaotictransfem)).
 
 ## Herdr mods
 
