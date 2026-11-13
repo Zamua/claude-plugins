@@ -11,38 +11,11 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
 
 ## Plugins
 
-- **[telegram](plugins/telegram/)**: multiplex ONE Telegram bot token across
-  MANY concurrent agent conversations, routed by forum topics. Ordinary topics
-  use foreground Claude Code with provider routing; fresh topics may instead be
-  harness-locked to Google's official Antigravity CLI, with a separate dynamic
-  model/effort picker and a persistent, drop-in-ready Herdr session that keeps
-  the same Antigravity conversation across relaunches.
-
-- **[pr-review-board](plugins/pr-review-board/)**: react to a pull request with
-  an emoji and a background Claude reviews it. A local poller spawns one review
-  agent per changeset in its own herdr workspace, which writes a plain-English
-  report linked to the code it calls out. It ends by
-  proposing a numbered list of comments and posts only the ones you pick.
-  Approves only when you say so, never pushes. Its board draws in the
-  [board](plugins/board/) pane.
-
-- **[board](plugins/board/)**: one pane beside the chat holding every board,
-  with a row of buttons to switch between them, each showing how many items wait
-  on you. The session board Claude keeps current, the pull requests this session
-  raised with GitHub's live state, the pr-review-board review this session runs,
-  one tree of everything you work on from your goals down to the sessions and
-  pull requests doing it, where a root session starts and coordinates the
-  others and sees every ask waiting on you and every session's pull requests
-  and reviews in a tab per section, and any board another process writes as JSON, such as a rollout, named
-  in `~/.config/board/boards.json`. `/board` toggles the pane, `/board <name>` opens
-  it on one board, `/board <name> clear` empties one.
-- **[code-review](plugins/code-review/)**: review ownership and approach first,
-  then system design, implementation and the fourteen clean-code smells. Use it
-  before or during implementation, to review a diff or PR, or to audit a repo.
-- **[clean-copy](plugins/clean-copy/)**: cut interface copy that shouldn't exist,
-  before polishing what stays. Use it when writing or reviewing labels, hints,
-  empty states, toasts, confirmations and button text. Adapted from a skill by
-  Rachel ([@chaotictransfem](https://x.com/chaotictransfem)).
+- **[telegram](plugins/telegram/)**: route one Telegram bot's forum topics to many concurrent agent conversations.
+- **[pr-review-board](plugins/pr-review-board/)**: react to a pull request with an emoji and a background Claude reviews it, posting only the comments you pick.
+- **[board](plugins/board/)**: one pane beside the chat that holds every board, with a button per board showing how many items wait on you.
+- **[code-review](plugins/code-review/)**: review code from ownership and approach down to the fourteen clean-code smells.
+- **[clean-copy](plugins/clean-copy/)**: cut interface copy that shouldn't exist, adapted from a skill by Rachel ([@chaotictransfem](https://x.com/chaotictransfem)).
 
 ## Herdr mods
 
