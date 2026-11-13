@@ -15,7 +15,13 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
 - **[pr-review-board](plugins/pr-review-board/)**: react to a pull request with an emoji and a background Claude reviews it, posting only the comments you pick.
 - **[board](plugins/board/)**: one pane beside the chat that holds every board, with a button per board showing how many items wait on you.
 - **[code-review](plugins/code-review/)**: review code from ownership and approach down to the fourteen clean-code smells.
+
+## Found plugins
+
+Plugins by other people that are worth keeping. Each is either a copy under `plugins/` with credit, or a reference to the author's repository pinned to a commit, so an update is a deliberate change here.
+
 - **[clean-copy](plugins/clean-copy/)**: cut interface copy that shouldn't exist, adapted from a skill by Rachel ([@chaotictransfem](https://x.com/chaotictransfem)).
+- **[modern-web-guidance](https://github.com/GoogleChrome/modern-web-guidance)**: current web platform best practices for HTML, CSS and client-side JavaScript, by Google Chrome (pinned reference).
 
 ## Herdr mods
 
