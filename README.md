@@ -24,78 +24,11 @@ Panels for the [Herdr app](https://herdr.dev), in [herdr-mods/](herdr-mods/).
 links the layouts; Herdr refuses symlinked mod code and serves no icons through a
 symlinked folder. Run it again after a pull.
 
-- **[session-tree](herdr-mods/session-tree/)**: a sidebar of a tree of Claude
-  sessions, root first, then each project's coordinator with its workers under it,
-  from the terminals' `tree.role`, `tree.project` and `tree.parent` labels and each
-  session's state file. One glyph per row says its status: a spinner works, a dot
-  is done, a red hand has open asks, a red ! waits on a dialog. It keeps Herdr's
-  space order in the tree's order, and `session-tree.next-lead` and `prev-lead`, bound in `keys.json`
-  to Cmd+Option+] and [ under `layout:tree`, step through the root and each project's lead in
-  that order, skipping workers and wrapping at the ends. Cmd+W and Cmd+Shift+W ask before closing a tab
-  or pane that holds a live Claude session, a closed root gets a Reopen row that
-  resumes it, and `session-tree.new` opens a dialog that starts a session.
-- **[session-prs](herdr-mods/session-prs/)**: tabs over the sessions' state files,
-  plus one per tracker file. PRs: every session's pull requests, one dense row each, in sections by each
-  entry's `group` inside its project, with draft, CI, your approval, author and
-  stacks from one GitHub query a minute while it shows; finished workstreams fold
-  into Done, closed PRs drop off, and headers stay pinned while it scrolls. Resting on
-  a row's title shows its full title and the Summary section of its description, cached
-  with the row, so it makes no GitHub call. With
-  `{"authored": {"owners": [..]}}` in `~/.config/herdr-app/session-prs.json` it also
-  lists every open PR you authored under those owners, from the same query's search;
-  one no session lists goes where the root's `pr-groups.json` places it, under a
-  project and section or a named workstream, else under Untracked at the top. Reviews:
-  the reviews project's PRs the same way, a section per review session. Asks: every
-  open ask by project, due soonest first, each with a short id (A1 and up) it keeps
-  for good in the root's `ask-ids.json`; a row opens a dialog that numbers the ask's
-  options, so you can name one in chat, such as "A25 option 2". With `{"channel": <command>}` in
-  `session-prs.json`, naming an asks broker's command, an option pressed for an ask whose session
-  has a live channel is sent straight to that session. Trackers: each JSON
-  file listed in `~/.config/herdr-app/session-prs.json` as `{"trackers": [path]}`
-  gets a read-only tab named by its `title`: the count by status, every gap up top,
-  then each section with its items' status, owner, note or what they wait on, and
-  per-environment values; a row opens the item's detail and links.
-- **[work-graph](herdr-mods/work-graph/)**: a read-only DAG of all tracked work that
-  zooms, for a pane or tab of its own. Each open project is a lane, and inside it the
-  nodes of the project's `graph.json` nest by `parent`: steps, then issues, then PRs and
-  small tasks. A collapsed node is one card that takes the most urgent status inside it; an
-  expanded one is a frame around its children, its header one line such as "3 of 9 done · 1 needs you". Arrows run
-  from each blocker to what it blocks, combined into one thicker arrow between collapsed cards,
-  in columns by dependency depth. A leaf is done, needs you (an open ask names it), in
-  flight (its owner session is working), waiting (its owner has a background job or a wake
-  pending), blocked, owned but idle, or ready to start now. A card shows its status as one bar on its
-  left in one of four colours, needs you, in progress, blocked and done, and nothing for the rest. It opens at
-  level 1, each lane's top-level cards. Level buttons, or `work-graph.level0` to `level3`, expand
-  everything to a depth, clicking a card opens or closes one node, and Cmd with scroll zooms
-  around the pointer, everything scaling together; opening or closing animates,
-  a card growing into its frame as its children come out of it, the opened node held in place. Linear issues
-  (through the `linear` CLI) bring their state, sub-issues, `blocks` relations and PR
-  links, and GitHub brings PR state and stacks by base branch: a stacked PR merges after the one
-  below it, a dashed arrow that orders the stack and blocks nothing, and an open PR counts as in progress; a project with no graph
-  file is one card from its state file. The graph file is
-  `<projects>/<project>/graph.json`, or the coordinator's `graph` field, as
-  `{"nodes": [{id, title, kind, summary, parent, blockedBy, status, owner, asks, note, link, pr}]}`,
-  plus `links: [{label, url}]`, where a card shows only `title` (a word or two), `kind` (one
-  word) and `summary` (five to seven words), and its status bar. Resting the
-  pointer on a card fades everything not on its path, what it waits on and what waits on
-  it. Each lane is its own DAG. A warning marks a card whose file contradicts itself: a
-  blocker in another project, which draws nothing, work started or done before its blockers,
-  or a blocker that holds or sits inside the card; a collapsed card shows it for anything inside.
-  Resting on a header's line lists every status inside, and the legend button explains the colours.
-  A node's `owner` is a session name, the person's own name, or `team:<name>`, and `status` is one of
-  `todo`, `in-progress`, `parked` (deliberately deferred, drawn with grey text) or `done`; any other
-  word gets a warning. Needs you and blocked come from asks and blockers, never from `status`. Its i icon opens a popup with the rest and a labelled link to its issue, PR, stack
-  neighbours, extra links and owner session's pane; a file opens in the mod's own read-only
-  viewer, never an editor.
-  Open it with `herdr-app do tab.new --mod work-graph`, with the projects folder in
-  `~/.config/herdr-app/work-graph.json` as `{"folder": "~/projects"}`.
-- **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the
-  session tree as its sidebar and the PRs pane beside the terminals, toggled with
-  Cmd+Shift+R once `keys.json` binds it.
-- **[quiet-toast](herdr-mods/quiet-toast/)**: drops Herdr's "an agent finished"
-  toasts and keeps the rest, by patching Herdr's own toast mod, since no setting
-  picks which toasts show. Herdr restores its mod on every start; `apply.sh --agent`
-  adds a launchd agent that patches it again each time, and `--undo` reverses either.
+- **[session-tree](herdr-mods/session-tree/)**: a sidebar tree of Claude sessions, root first, with one glyph per row for its status.
+- **[session-prs](herdr-mods/session-prs/)**: tabs listing every session's pull requests, reviews, open asks and tracker files.
+- **[work-graph](herdr-mods/work-graph/)**: a read-only, zoomable graph of all tracked work and what blocks what.
+- **[tree layout](herdr-mods/layouts/tree.json)**: Herdr's main layout with the session tree as its sidebar and the PRs pane beside the terminals.
+- **[quiet-toast](herdr-mods/quiet-toast/)**: drops Herdr's "an agent finished" toasts and keeps the rest.
 
 ## License
 
