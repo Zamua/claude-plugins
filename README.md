@@ -12,7 +12,6 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
 ## Plugins
 
 - **[telegram](plugins/telegram/)**: route one Telegram bot's forum topics to many concurrent agent conversations.
-- **[pr-review-board](plugins/pr-review-board/)**: react to a pull request with an emoji and a background Claude reviews it, posting only the comments you pick.
 - **[board](plugins/board/)**: one pane beside the chat that holds every board, with a button per board showing how many items wait on you.
 - **[code-review](plugins/code-review/)**: review code from ownership and approach down to the fourteen clean-code smells.
 

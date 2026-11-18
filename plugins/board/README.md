@@ -15,7 +15,7 @@ you.
 | --- | --- | --- |
 | `session` | the goal, where things stand, next steps, open questions, decisions, links, ideas and topics | Claude, through `mcp__board__session` |
 | `prs` | the pull requests this session raised, each stack bottom first, with GitHub's live state | Claude, through `mcp__board__prs`; `gh pr create` and `gh stack submit` add theirs on their own |
-| `review` | the [pr-review-board](../pr-review-board/) review this session runs | the review agent's `board.json` |
+| `review` | the pr-review-board review this session runs | the review agent's `board.json` |
 | `work` | everything you work on as one tree, from your goals down to the sessions and pull requests doing it | Claude, through `mcp__board__work`, plus the trackers it reads |
 | `decisions` | in the root session, every ask waiting on you, with its options and a recommendation | any session, through `mcp__board__work` |
 | `all prs` | in the root session, every session's pull requests, a tab per work-view section | the work tree and every session's prs board |
@@ -202,7 +202,7 @@ Grow the partner network
 - `all prs` holds every pull request the tree places, whoever wrote it, with the prs view's live state; what needs
   you comes first, and the merged and closed fold behind a count. Open ones placed nowhere get an Unplaced tab. While
   it is shown it asks GitHub for them through the prs view's shared cache.
-- `all reviews` holds every running [pr-review-board](../pr-review-board/) review and every board a session wrote by
+- `all reviews` holds every running pr-review-board review and every board a session wrote by
   hand, read from that plugin's own files. A line marks a review ✓ once its open pull requests are approved and ◆ once
   they merged, then says what it waits on: comments for you to pick, or its comments and your other threads on its
   open pull requests that wait on their author, `reviewing` while nothing is posted. Then its open pull requests, how
